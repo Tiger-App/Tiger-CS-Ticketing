@@ -170,12 +170,18 @@ BEGIN TRY
     END;
 
     -- 1c. Report the state found (informational) so a half-applied earlier attempt is visible in the output.
-    PRINT N'  history: ' + CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M1) THEN N'M1 recorded' ELSE N'M1 pending' END
-        + N' | ' + CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M2) THEN N'M2 recorded' ELSE N'M2 pending' END
-        + N' | ' + CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M3) THEN N'M3 recorded' ELSE N'M3 pending' END;
-    PRINT N'  objects: TicketInteractionHandlers=' + CASE WHEN OBJECT_ID(N'dbo.TicketInteractionHandlers', N'U') IS NULL THEN N'absent' ELSE N'PRESENT' END
-        + N' | Tickets.CreatedByEmployeeId=' + CASE WHEN COL_LENGTH(N'dbo.Tickets', N'CreatedByEmployeeId') IS NULL THEN N'absent' ELSE N'PRESENT' END
-        + N' | TicketWorkflowEvents.TransferReasonCode=' + CASE WHEN COL_LENGTH(N'dbo.TicketWorkflowEvents', N'TransferReasonCode') IS NULL THEN N'absent' ELSE N'PRESENT' END;
+    --     (PRINT cannot contain a subquery, so the state is gathered into variables first.)
+    DECLARE @h1 nvarchar(10), @h2 nvarchar(10), @h3 nvarchar(10);
+    SELECT @h1 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M1) THEN N'recorded' ELSE N'pending' END,
+           @h2 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M2) THEN N'recorded' ELSE N'pending' END,
+           @h3 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M3) THEN N'recorded' ELSE N'pending' END;
+    PRINT N'  history: M1 ' + @h1 + N' | M2 ' + @h2 + N' | M3 ' + @h3;
+
+    DECLARE @o1 nvarchar(10), @o2 nvarchar(10), @o3 nvarchar(10);
+    SET @o1 = CASE WHEN OBJECT_ID(N'dbo.TicketInteractionHandlers', N'U') IS NULL THEN N'absent' ELSE N'PRESENT' END;
+    SET @o2 = CASE WHEN COL_LENGTH(N'dbo.Tickets', N'CreatedByEmployeeId') IS NULL THEN N'absent' ELSE N'PRESENT' END;
+    SET @o3 = CASE WHEN COL_LENGTH(N'dbo.TicketWorkflowEvents', N'TransferReasonCode') IS NULL THEN N'absent' ELSE N'PRESENT' END;
+    PRINT N'  objects: TicketInteractionHandlers=' + @o1 + N' | Tickets.CreatedByEmployeeId=' + @o2 + N' | TicketWorkflowEvents.TransferReasonCode=' + @o3;
 
     SELECT @n = COUNT_BIG(*) FROM dbo.Tickets;
     PRINT N'  Tickets rows: ' + CONVERT(nvarchar(20), @n);
