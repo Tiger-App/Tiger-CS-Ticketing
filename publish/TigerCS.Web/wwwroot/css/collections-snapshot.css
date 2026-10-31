@@ -23,7 +23,7 @@
 
 .receivables-metrics--five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .receivables-table--instalments th.num, .receivables-table--instalments td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.receivables-results { min-height: 4rem; }
+.receivables-results { min-height: 4rem;}
 .receivables-results[aria-busy="true"] { opacity: .85; }
 .receivables-results__loading { padding: 1.5rem 1rem; color: var(--color-text-secondary); }
 @media (max-width: 960px) { .receivables-metrics--five { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
@@ -37,3 +37,28 @@
 .unit-detail[hidden] { display: none; }
 .receivables-table--nested { font-size: .9em; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+/* By unit: months in the row */
+.unit-months { list-style: none; margin: .15rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .1rem; }
+.unit-month { display: flex; justify-content: space-between; gap: .75rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.unit-month__name { color: var(--color-text-secondary); }
+.receivables-table--units td { vertical-align: top; }
+.receivables-help, .snapshot-status__details { margin: .25rem 0 .5rem; font-size: .85rem; color: var(--color-text-secondary); }
+.receivables-help > summary, .snapshot-status__details > summary { cursor: pointer; }
+.snapshot-status { margin-bottom: .25rem; }
+
+/* Compact summary tiles and unit table */
+.receivables-metrics--five { gap: .5rem; margin-bottom: .5rem; }
+.receivables-metrics--five .panel { padding: .45rem .75rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .5rem; }
+.receivables-metrics--five .panel strong { font-size: 1.15rem; }
+.receivables-table--units td:nth-child(2) { white-space: nowrap; }
+.receivables-amount--overdue { color: var(--color-danger, #b3261e); }
+
+/* Receivables / Campaigns: short load problem line, red overdue instalments, campaign table */
+.load-problem { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem .9rem; }
+.load-problem .snapshot-status__load { margin-top: 0; }
+.instalment-row--overdue > td { color: var(--color-danger, #b3261e); background: #fdf1f0; }
+.instalment-row--overdue .receivables-amount { color: inherit; }
+.receivables-table--units td.num, .campaigns-table td.num, .campaigns-table th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.receivables-meta--review { color: var(--color-danger, #b3261e); }
+.receivables-meta--missing { color: var(--color-text-secondary, #6b7280); font-style: italic; }

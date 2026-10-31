@@ -25,7 +25,7 @@ namespace TigerCS.Api.Controllers;
 /// </para>
 /// </summary>
 /// <param name="ConversationId">Required. Genesys' conversation id — the idempotency key: the same value always resolves to the same ticket.</param>
-/// <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "SocialMedia" (case-insensitive). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</param>
+/// <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; "Twitter" and "X" are accepted as SocialMedia). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</param>
 /// <param name="InteractionId">Genesys' interaction id, where it differs from the conversation id.</param>
 /// <param name="ParticipantId">Genesys' customer-participant id, where available.</param>
 /// <param name="CommunicationId">Genesys' communication id, where available.</param>
@@ -554,7 +554,7 @@ internal static class GenesysContractMapper
 
         if (!TryParseChannel(request.Channel, out var channel))
         {
-            error = $"Unsupported channel '{request.Channel}'. Expected Phone, LiveChat (or WebsiteChat / WebMessaging), WhatsApp or SocialMedia.";
+            error = $"Unsupported channel '{request.Channel}'. Expected Phone, LiveChat (or WebsiteChat / WebMessaging), WhatsApp, Instagram, Facebook or SocialMedia.";
             return false;
         }
 
@@ -605,7 +605,10 @@ internal static class GenesysContractMapper
     private static readonly Dictionary<string, GenesysChannel> ChannelAliases = new(StringComparer.OrdinalIgnoreCase)
     {
         ["LiveChat"] = GenesysChannel.WebsiteChat,
-        ["WebMessaging"] = GenesysChannel.WebsiteChat
+        ["WebMessaging"] = GenesysChannel.WebsiteChat,
+        // Genesys' other social message types land on the generic social channel.
+        ["Twitter"] = GenesysChannel.SocialMedia,
+        ["X"] = GenesysChannel.SocialMedia
     };
 
     internal static bool TryParseChannel(string? value, out GenesysChannel channel)

@@ -369,6 +369,27 @@
             <summary>Export the full filtered list. Review mode is for internal review; Genesys mode refuses any unresolved row,
             an unscheduled or non-current date, and internal legal referrals. CSV is returned in an internal JSON envelope.</summary>
         </member>
+        <member name="T:TigerCS.Api.Controllers.CollectionsReconciliationController">
+            <summary>
+            Reconciliation of the receivables snapshot with a fresh read of the configured PACT procedure. Reading the result is cheap and never contacts PACT; a run is started only by
+            an explicit POST (one at a time, with a cooldown), so page views can never trigger one. Internal routes called server-side by the Web application as the signed-in user.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReconciliationController.#ctor(TigerCS.Application.Modules.Collections.Reconciliation.FinancialReconciliationService)">
+            <summary>
+            Reconciliation of the receivables snapshot with a fresh read of the configured PACT procedure. Reading the result is cheap and never contacts PACT; a run is started only by
+            an explicit POST (one at a time, with a cooldown), so page views can never trigger one. Internal routes called server-side by the Web application as the signed-in user.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReconciliationController.Overview(System.Threading.CancellationToken)">
+            <summary>The source gate (why the financial source is or is not reconciled), the latest run with its per-unit differences, and recent runs.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReconciliationController.Run(System.Guid,System.Threading.CancellationToken)">
+            <summary>One run by id (poll it after starting one).</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReconciliationController.Start(TigerCS.Api.Controllers.CollectionsReconciliationController.StartRequest,System.Threading.CancellationToken)">
+            <summary>Starts a reconciliation in the background. 409 while one is running or was started in the last two minutes.</summary>
+        </member>
         <member name="T:TigerCS.Api.Controllers.CollectionsReviewController">
             <summary>
             Collections review and approval: filtered stored records, explicit refresh jobs, approval of an exact list and upload to
@@ -1132,8 +1153,10 @@
              <param name="UnitNumber">The unit number the customer typed into the chat form, where collected.</param>
              <param name="Subject">A short subject the channel collected, where available — becomes the ticket's request summary.</param>
              <param name="RequestType">The request type the bot identified, when it already has one. Validated, then its department routing, automatic assignment and SLA policy are applied. Omit it (or send it blank) when unknown: the ticket then awaits classification in the human follow-up queue, and the bot can send it later on <c>PATCH</c>.</param>
+             <param name="ServiceRequestId">Identifies ONE distinct service request inside the conversation (e.g. <c>documents</c>, <c>leasing</c>) — chosen by the caller, any stable string up to 64 characters. Each (<c>conversationId</c>, <c>serviceRequestId</c>) pair is its own idempotent ticket: a second distinct request in the same conversation creates its own ticket, a retry of the same pair returns the original. Omit it and the whole conversation is one ticket, as before.</param>
+             <param name="HumanFollowUpRequired">true when this request needs a person (apartment leasing, a complaint). The ticket is then never closed by the chatbot inactivity rules, by <c>closedByAi</c> or by document delivery — only by an employee through the normal TigerCS workflow.</param>
         </member>
-        <member name="M:TigerCS.Api.Controllers.GenesysInquiryRequest.#ctor(System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.DateTime},System.Nullable{System.Int32},System.String,System.String,System.String,System.String,TigerCS.Api.Controllers.GenesysRequestTypePart)">
+        <member name="M:TigerCS.Api.Controllers.GenesysInquiryRequest.#ctor(System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.DateTime},System.Nullable{System.Int32},System.String,System.String,System.String,System.String,TigerCS.Api.Controllers.GenesysRequestTypePart,System.String,System.Nullable{System.Boolean})">
              <summary>
              The <b>transport</b> shape of an inbound Genesys inquiry — the outermost
              edge of the integration, and the only place a Genesys-facing wire format
@@ -1174,6 +1197,8 @@
              <param name="UnitNumber">The unit number the customer typed into the chat form, where collected.</param>
              <param name="Subject">A short subject the channel collected, where available — becomes the ticket's request summary.</param>
              <param name="RequestType">The request type the bot identified, when it already has one. Validated, then its department routing, automatic assignment and SLA policy are applied. Omit it (or send it blank) when unknown: the ticket then awaits classification in the human follow-up queue, and the bot can send it later on <c>PATCH</c>.</param>
+             <param name="ServiceRequestId">Identifies ONE distinct service request inside the conversation (e.g. <c>documents</c>, <c>leasing</c>) — chosen by the caller, any stable string up to 64 characters. Each (<c>conversationId</c>, <c>serviceRequestId</c>) pair is its own idempotent ticket: a second distinct request in the same conversation creates its own ticket, a retry of the same pair returns the original. Omit it and the whole conversation is one ticket, as before.</param>
+             <param name="HumanFollowUpRequired">true when this request needs a person (apartment leasing, a complaint). The ticket is then never closed by the chatbot inactivity rules, by <c>closedByAi</c> or by document delivery — only by an employee through the normal TigerCS workflow.</param>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysInquiryRequest.ConversationId">
             <summary>Required. Genesys' conversation id — the idempotency key: the same value always resolves to the same ticket.</summary>
@@ -1238,6 +1263,12 @@
         <member name="P:TigerCS.Api.Controllers.GenesysInquiryRequest.RequestType">
             <summary>The request type the bot identified, when it already has one. Validated, then its department routing, automatic assignment and SLA policy are applied. Omit it (or send it blank) when unknown: the ticket then awaits classification in the human follow-up queue, and the bot can send it later on <c>PATCH</c>.</summary>
         </member>
+        <member name="P:TigerCS.Api.Controllers.GenesysInquiryRequest.ServiceRequestId">
+            <summary>Identifies ONE distinct service request inside the conversation (e.g. <c>documents</c>, <c>leasing</c>) — chosen by the caller, any stable string up to 64 characters. Each (<c>conversationId</c>, <c>serviceRequestId</c>) pair is its own idempotent ticket: a second distinct request in the same conversation creates its own ticket, a retry of the same pair returns the original. Omit it and the whole conversation is one ticket, as before.</summary>
+        </member>
+        <member name="P:TigerCS.Api.Controllers.GenesysInquiryRequest.HumanFollowUpRequired">
+            <summary>true when this request needs a person (apartment leasing, a complaint). The ticket is then never closed by the chatbot inactivity rules, by <c>closedByAi</c> or by document delivery — only by an employee through the normal TigerCS workflow.</summary>
+        </member>
         <member name="T:TigerCS.Api.Controllers.GenesysRequestTypePart">
             <summary>
             The request type the bot identified. Send <c>requestTypeId</c> (preferred) or
@@ -1261,6 +1292,13 @@
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysRequestTypePart.Name">
             <summary>The request type's exact name (case-insensitive). Refused as ambiguous if more than one department has it.</summary>
+        </member>
+        <member name="T:TigerCS.Api.Controllers.GenesysRequestTypePartConverter">
+            <summary>
+            Accepts the request type either as the documented object (<c>{"requestTypeId":17}</c> / <c>{"name":"Leasing"}</c>) or as a bare string,
+            which is read as the request type's <b>name</b> (<c>"requestType": "Leasing"</c>). The name still has to match a configured request type
+            exactly — nothing is guessed from it.
+            </summary>
         </member>
         <member name="T:TigerCS.Api.Controllers.GenesysConversationEndRequest">
             <summary>The transport shape of a conversation-end report, with the transcript available up to that moment. See <see cref="T:TigerCS.Api.Controllers.GenesysInquiryRequest"/> for why this record exists at the edge.</summary>
@@ -1345,8 +1383,9 @@
             <param name="DepartmentId">The responsible department after routing.</param>
             <param name="AssignedEmployeeId">The employee the automatic assignment chose; null means the department queue.</param>
             <param name="ClassificationDetail">Why the ticket is awaiting classification, when it is.</param>
+            <param name="ServiceRequestId">The service request this ticket is for, echoed back when one was sent.</param>
         </member>
-        <member name="M:TigerCS.Api.Controllers.GenesysInquiryAcceptedResponse.#ctor(System.String,System.String,System.Int64,System.String,System.String,System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Guid},System.String)">
+        <member name="M:TigerCS.Api.Controllers.GenesysInquiryAcceptedResponse.#ctor(System.String,System.String,System.Int64,System.String,System.String,System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Guid},System.String,System.String)">
             <summary>What the ingestion endpoint answers — always naming the ticket, so a retry and the original call are indistinguishable to the caller.</summary>
             <param name="Outcome">"TicketCreated" or "AlreadyIngested".</param>
             <param name="ConversationId">The conversation this refers to, echoed back.</param>
@@ -1357,6 +1396,7 @@
             <param name="DepartmentId">The responsible department after routing.</param>
             <param name="AssignedEmployeeId">The employee the automatic assignment chose; null means the department queue.</param>
             <param name="ClassificationDetail">Why the ticket is awaiting classification, when it is.</param>
+            <param name="ServiceRequestId">The service request this ticket is for, echoed back when one was sent.</param>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysInquiryAcceptedResponse.Outcome">
             <summary>"TicketCreated" or "AlreadyIngested".</summary>
@@ -1384,6 +1424,9 @@
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysInquiryAcceptedResponse.ClassificationDetail">
             <summary>Why the ticket is awaiting classification, when it is.</summary>
+        </member>
+        <member name="P:TigerCS.Api.Controllers.GenesysInquiryAcceptedResponse.ServiceRequestId">
+            <summary>The service request this ticket is for, echoed back when one was sent.</summary>
         </member>
         <member name="T:TigerCS.Api.Controllers.GenesysConversationEndResponse">
             <summary>What the conversation-end endpoint answers. <paramref name="TicketStatus"/> is included deliberately: it shows that ending a conversation did NOT close the ticket.</summary>
@@ -1478,8 +1521,9 @@
              requested or assigned, or the conversation ended, in which case no timer runs.
              <b>Omit it</b> to leave the timer as it is.
              </param>
+             <param name="HumanFollowUpRequired">true = this ticket needs a person: both chatbot inactivity clocks stop for good and neither <c>closedByAi</c> nor document delivery may close it afterwards. Sticky — only an employee resolves/closes it through the TigerCS workflow. <b>Omit it</b> (or false) to change nothing.</param>
         </member>
-        <member name="M:TigerCS.Api.Controllers.GenesysTicketUpdateRequest.#ctor(System.String,System.String,System.String,TigerCS.Api.Controllers.GenesysConversationEndPart,TigerCS.Api.Controllers.GenesysHandoffPart,System.Nullable{System.DateTime},TigerCS.Api.Controllers.GenesysRoutingPart,TigerCS.Api.Controllers.GenesysCustomerConfirmationPart,System.Nullable{System.Boolean},TigerCS.Api.Controllers.GenesysRequestTypePart,System.Nullable{System.Boolean},System.Nullable{System.Boolean},System.Collections.Generic.IReadOnlyList{TigerCS.Api.Controllers.GenesysTranscriptMessageRequest})">
+        <member name="M:TigerCS.Api.Controllers.GenesysTicketUpdateRequest.#ctor(System.String,System.String,System.String,TigerCS.Api.Controllers.GenesysConversationEndPart,TigerCS.Api.Controllers.GenesysHandoffPart,System.Nullable{System.DateTime},TigerCS.Api.Controllers.GenesysRoutingPart,TigerCS.Api.Controllers.GenesysCustomerConfirmationPart,System.Nullable{System.Boolean},TigerCS.Api.Controllers.GenesysRequestTypePart,System.Nullable{System.Boolean},System.Nullable{System.Boolean},System.Collections.Generic.IReadOnlyList{TigerCS.Api.Controllers.GenesysTranscriptMessageRequest},System.Nullable{System.Boolean})">
              <summary>
              The one Genesys update body. Every part is optional and independently
              idempotent — send only what changed, and resend freely.
@@ -1536,6 +1580,7 @@
              requested or assigned, or the conversation ended, in which case no timer runs.
              <b>Omit it</b> to leave the timer as it is.
              </param>
+             <param name="HumanFollowUpRequired">true = this ticket needs a person: both chatbot inactivity clocks stop for good and neither <c>closedByAi</c> nor document delivery may close it afterwards. Sticky — only an employee resolves/closes it through the TigerCS workflow. <b>Omit it</b> (or false) to change nothing.</param>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysTicketUpdateRequest.ConversationId">
             <summary>Required. Must resolve to an interaction on the ticket in the route.</summary>
@@ -1604,6 +1649,9 @@
             <c>ended.transcript</c> repeating them create no duplicates. It does not end the conversation. A human agent opening the ticket sees
             everything delivered so far. Only a <c>HumanAgent</c> line can record First Response — never <c>VirtualAgent</c>. <b>Omit it</b> when there is nothing new.
             </summary>
+        </member>
+        <member name="P:TigerCS.Api.Controllers.GenesysTicketUpdateRequest.HumanFollowUpRequired">
+            <summary>true = this ticket needs a person: both chatbot inactivity clocks stop for good and neither <c>closedByAi</c> nor document delivery may close it afterwards. Sticky — only an employee resolves/closes it through the TigerCS workflow. <b>Omit it</b> (or false) to change nothing.</summary>
         </member>
         <member name="T:TigerCS.Api.Controllers.LenientNullableBoolConverter">
             <summary>
@@ -2174,11 +2222,16 @@
         <member name="M:TigerCS.Api.Controllers.GenesysController.Ingest(TigerCS.Api.Controllers.GenesysInquiryRequest,System.Threading.CancellationToken)">
              <summary>Create — or reuse — the one ticket for a Genesys conversation, on any channel.</summary>
              <remarks>
-             <b>Idempotent on <c>conversationId</c>.</b> The first accepted event
-             for a conversation creates a ticket; every retry or duplicate returns
-             that same ticket with outcome <c>AlreadyIngested</c> and creates
-             nothing. A unique index on the conversation id makes this hold under
-             concurrent delivery, not merely under sequential retries.
+             <b>Idempotent on <c>conversationId</c> + <c>serviceRequestId</c>.</b> The
+             first accepted event for that pair creates a ticket; every retry or
+             duplicate returns that same ticket with outcome <c>AlreadyIngested</c>
+             and creates nothing. A unique index on the pair makes this hold under
+             concurrent delivery, not merely under sequential retries. A conversation
+             can carry several distinct service requests (documents, then apartment
+             leasing): send a different <c>serviceRequestId</c> for each and each gets
+             its own ticket with its own lifecycle. <b>Without a
+             <c>serviceRequestId</c> the conversation is one ticket</b>, exactly as
+             before — a second request under the same conversation id returns the first ticket.
             
              <para>
              <b>This endpoint means exactly one thing:</b> create or reuse the
@@ -2652,6 +2705,12 @@
             <param name="minTotal">With <c>view=units</c> only: keep units whose total (Due + Overdue) is GREATER than this value; omit for no minimum. <c>minAmount</c> is not applied per instalment in the unit view.</param>
             <param name="cancellationToken">Request cancellation.</param>
         </member>
+        <member name="M:TigerCS.Api.Controllers.PactReceivablesController.SnapshotStatus(System.Threading.CancellationToken)">
+            <summary>
+            Per-company state of the local receivables snapshot (Loading / Ready / Stale / Failed / NeverLoaded / Stuck, last good refresh, failure text). A few hundred bytes; the pages poll this
+            while a refresh runs instead of re-reading the list. Never starts a refresh.
+            </summary>
+        </member>
         <member name="M:TigerCS.Api.Controllers.PactReceivablesController.Towers(System.Threading.CancellationToken)">
             <summary>Active towers (number and name) for the tower dropdown. Read from the local table; PACT is not contacted.</summary>
         </member>
@@ -2890,6 +2949,28 @@
             <response code="409">Not pending, or a lost concurrency race.</response>
             <response code="410">The request expired.</response>
         </member>
+        <member name="T:TigerCS.Api.Controllers.PublicTicketReviewsController">
+            <summary>
+            The server side of the public customer satisfaction review page. Anonymous by design — the customer arrives from an email
+            link — so the review token in the request body is the only credential, and everything is validated here, never trusted from
+            the page. The token travels in the body (not the URL) so it does not end up in request logs.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.PublicTicketReviewsController.#ctor(TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewAppService)">
+            <summary>
+            The server side of the public customer satisfaction review page. Anonymous by design — the customer arrives from an email
+            link — so the review token in the request body is the only credential, and everything is validated here, never trusted from
+            the page. The token travels in the body (not the URL) so it does not end up in request logs.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.PublicTicketReviewsController.Lookup(TigerCS.Application.Modules.CustomerReviews.Dto.ReviewTokenRequestDto,System.Threading.CancellationToken)">
+            <summary>Checks a review link. Read-only: it never records a review, so link scanners that open it change nothing.</summary>
+            <response code="200">The link's status (<c>Valid</c>, <c>Expired</c>, <c>AlreadySubmitted</c> or <c>Invalid</c>); the ticket number only for a genuine link.</response>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.PublicTicketReviewsController.Submit(TigerCS.Application.Modules.CustomerReviews.Dto.SubmitTicketReviewRequestDto,System.Threading.CancellationToken)">
+            <summary>Submits the review: a 1–5 rating and an optional comment. Accepted once per ticket; a repeat never changes the stored review.</summary>
+            <response code="200">The outcome — <c>Submitted</c>, <c>Invalid</c>, <c>Expired</c>, <c>AlreadySubmitted</c>, <c>InvalidRating</c> or <c>InvalidComment</c>.</response>
+        </member>
         <member name="T:TigerCS.Api.Controllers.ReportsController">
             <summary>
             Management reports. Read-only, and restricted to the CS Manager tier
@@ -2962,7 +3043,7 @@
             §4.1 permission matrix grants ticket-Create to exactly these two roles.
             </summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.TicketsController.#ctor(TigerCS.Application.Modules.Ticketing.Services.TicketCreationAppService,TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService,TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentAppService,TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService,TigerCS.Application.Modules.Ticketing.Services.TicketNoteAppService,TigerCS.Application.Modules.Ticketing.Services.TicketReconciliationAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerHistoryAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerProfileAppService,TigerCS.Application.Modules.Ticketing.Services.TicketApprovalAppService,TigerCS.Application.Modules.Ticketing.Services.TicketInteractionQueryAppService,TigerCS.Application.Modules.Ticketing.Services.TicketClassificationAppService)">
+        <member name="M:TigerCS.Api.Controllers.TicketsController.#ctor(TigerCS.Application.Modules.Ticketing.Services.TicketCreationAppService,TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService,TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentAppService,TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService,TigerCS.Application.Modules.Ticketing.Services.TicketNoteAppService,TigerCS.Application.Modules.Ticketing.Services.TicketReconciliationAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerHistoryAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerProfileAppService,TigerCS.Application.Modules.Ticketing.Services.TicketApprovalAppService,TigerCS.Application.Modules.Ticketing.Services.TicketInteractionQueryAppService,TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewQueryAppService,TigerCS.Application.Modules.Ticketing.Services.TicketClassificationAppService)">
             <summary>
             Items 3–8 of this increment's scope, plus a later business-rule change:
             a single ticket-creation path for every IntakeRecord. Customer
@@ -3070,6 +3151,17 @@
             </remarks>
             <param name="ticketId">The ticket whose conversation history to fetch.</param>
             <response code="200">The ticket's interactions, oldest first, each with its transcript (possibly empty).</response>
+            <response code="404">No such ticket, or it is not visible to the caller.</response>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.TicketsController.GetReviews(System.Int64,System.Threading.CancellationToken)">
+            <summary>The ticket's customer satisfaction reviews — one entry per review cycle (original resolution, then each reopen). Staff only.</summary>
+            <remarks>
+            Read from the persisted review store. A cycle is <c>Reviewed</c> only once the customer submitted a rating; a requested but
+            unanswered cycle is <c>Pending</c> and carries no rating. Test-mode reviews are flagged <c>IsTest</c>. Review tokens are
+            never returned. Visible to exactly the callers who can see the ticket itself.
+            </remarks>
+            <param name="ticketId">The ticket.</param>
+            <response code="200">The ticket's review cycles (possibly empty).</response>
             <response code="404">No such ticket, or it is not visible to the caller.</response>
         </member>
         <member name="M:TigerCS.Api.Controllers.TicketsController.Classify(System.Int64,TigerCS.Application.Modules.Ticketing.Dto.ClassifyTicketRequestDto,System.Threading.CancellationToken)">

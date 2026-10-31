@@ -11,7 +11,7 @@ public sealed record SeedRequest(bool Seed, SeedTarget Target, bool AllowUntrust
 /// <summary>Pure decisions of the seeder, kept free of I/O so they can be tested without a database.</summary>
 public static class SeedSafety
 {
-    public const string Server = "TGAESHJDBP02";
+    public const string Server = "10.10.10.124";
     public const string SeedTestDatabase = "TigerCS_Ticketing_SeedTest";
     public const string ProductionDatabase = "TigerCS_Ticketing_Prod";
 

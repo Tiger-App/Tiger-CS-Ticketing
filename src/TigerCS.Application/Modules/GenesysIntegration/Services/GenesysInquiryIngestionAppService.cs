@@ -593,6 +593,8 @@ public sealed class GenesysInquiryIngestionAppService(
             GenesysChannel.WebsiteChat => "Website chat started via Genesys",
             GenesysChannel.WhatsApp => "WhatsApp conversation started via Genesys",
             GenesysChannel.SocialMedia => "Social media conversation started via Genesys",
+            GenesysChannel.Instagram => "Instagram conversation started via Genesys",
+            GenesysChannel.Facebook => "Facebook conversation started via Genesys",
             _ => "Customer inquiry received via Genesys"
         };
     }

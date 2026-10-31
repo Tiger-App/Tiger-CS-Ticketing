@@ -924,6 +924,41 @@
         <member name="F:TigerCS.Domain.Modules.Collections.FinancialPaymentStatus.Rejected">
             <summary>Rejected by verification.</summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.ReconLine">
+            <summary>One unpaid instalment as one side of a reconciliation sees it (remaining amount, due day).</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.ReconLine.#ctor(System.String,System.Int64,System.String,System.String,System.DateOnly,System.Decimal)">
+            <summary>One unpaid instalment as one side of a reconciliation sees it (remaining amount, due day).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds">
+            <summary>The kinds of difference a reconciliation reports. Each is a different question for the person who investigates it.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.MissingInSnapshot">
+            <summary>The source holds an unpaid instalment the snapshot does not: the snapshot is missing money (or is older than the source).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.MissingInSource">
+            <summary>The snapshot holds an instalment the source no longer has: it was paid / cancelled after the snapshot, or the snapshot is wrong.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.AmountMismatch">
+            <summary>Same instalment on both sides with different remaining amounts (a partial payment since the snapshot, rounding beyond the tolerance, or a calculation difference).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.DueDateMismatch">
+            <summary>Same voucher on both sides with different due dates; when the two dates fall in different months the instalment is Due on one side and Overdue on the other.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.ReconComparison">
+            <summary>Outcome of comparing the two sides for ONE company. <c>Matches</c> is true only when every unit agrees within the tolerance.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.ReconComparison.#ctor(System.Int32,System.Int32,System.Int32,System.Int32,System.Decimal,System.Decimal,System.Int32,System.Int32,System.Int32,System.Int32,System.Decimal,System.Collections.Generic.IReadOnlyList{TigerCS.Domain.Modules.Collections.ReconUnitDiff},System.Boolean,System.Int32,System.Int32)">
+            <summary>Outcome of comparing the two sides for ONE company. <c>Matches</c> is true only when every unit agrees within the tolerance.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.FinancialReconciler">
+            <summary>
+            Compares the unpaid instalments the local snapshot holds with a fresh, independent read of the same PACT procedure, unit by unit and instalment by instalment.
+            Both sides are first reduced by the SAME validity rules the snapshot applies when it publishes (remaining amount &gt; 0 at 4 decimals, a real unit id and code,
+            no '*' cancelled units, a customer id), restricted to the same due-date window, so a difference is a real difference and not a rule mismatch.
+            Due / Overdue are measured against the Dubai month of <c>today</c>, exactly as the pages do (Overdue = due before its first day, Due = inside it).
+            </summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Collections.UnpaidInstalmentFact">
             <summary>
             One unpaid instalment, <b>already established as unpaid</b> by the caller from
@@ -1298,6 +1333,41 @@
             reviewers. A needs-review reason is a data problem a person could resolve; an exclusion is a policy decision that
             keeps the record out of a send; a warning is shown but does not block.
             </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.CustomerReviews.TicketReview">
+            <summary>
+            The customer's satisfaction review of a ticket: a 1–5 star rating and an optional comment. At most one exists per ticket
+            cycle and environment kind (unique index on <c>TicketId, ReopenCycle, IsTest</c>), so a second submission — a double click,
+            a replayed request, a second email — can never overwrite or duplicate it.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.CustomerReviews.TicketReview.IsTest">
+            <summary>
+            True when submitted through a Test-mode link. Production satisfaction reporting always filters on <c>IsTest = false</c>,
+            so UAT reviews cannot contaminate customer statistics.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.CustomerReviews.TicketReviewInvitation">
+             <summary>
+             One secure review link issued to a customer in a Resolved or Closed email. The link carries a random token; only its
+             SHA-256 hash is stored, so a database read never yields a usable link, and a tampered or guessed token simply matches no
+             row. The token is bound to one ticket and one reopen cycle and expires.
+            
+             <para>
+             An invitation never records a rating itself — opening the link (a GET, which email security scanners also do) changes
+             nothing. The rating is committed only by an explicit submission, which creates the single <see cref="T:TigerCS.Domain.Modules.CustomerReviews.TicketReview"/> for
+             the ticket's cycle.
+             </para>
+             </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.CustomerReviews.TicketReviewInvitation.TokenHashLength">
+            <summary>SHA-256 digest length in bytes.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.CustomerReviews.TicketReviewInvitation.ReopenCycle">
+            <summary>The ticket's <c>ReopenCount</c> when the link was issued. A reopened ticket is reviewed again for its new cycle.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.CustomerReviews.TicketReviewInvitation.IsTest">
+            <summary>True when issued by a Test-mode notification: the resulting review is kept out of production statistics.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.CustomerVerification.ContactReference">
             <summary>
@@ -4702,9 +4772,12 @@
              </para>
             
              <para>
-             <b>One Genesys conversation is exactly one interaction, on exactly one
-             ticket</b> (Genesys integration phase 1). <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysConversationId"/>
-             is unique across the whole table (filtered unique index), which is the
+             <b>One Genesys service request is exactly one interaction, on exactly one
+             ticket.</b> A conversation may carry several distinct service requests
+             (documents, then leasing), each with its own <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysServiceRequestId"/>
+             and its own ticket. (<see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysConversationId"/>, <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysServiceRequestId"/>)
+             is unique (filtered unique index) — a conversation whose caller sends no
+             service request id keeps the original rule of exactly one — which is the
              database-level half of "a retried or duplicated Genesys event never
              creates a second ticket": the application checks first, and a lost race
              surfaces as a unique-constraint violation the caller treats as "already
@@ -4743,6 +4816,22 @@
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.CalledNumber">
             <summary>The company/destination number the interaction arrived on (Genesys side), or null — never used by Ticketing for routing.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysServiceRequestId">
+            <summary>
+            Which distinct service request of the Genesys conversation this interaction (and therefore its ticket) belongs to — the caller's own
+            identifier (e.g. "documents", "leasing-1"), stored verbatim. Null on every row created before multiple tickets per conversation
+            existed and on any conversation whose caller sends none: such a conversation keeps its original "one conversation, one ticket" rule.
+            (<see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysConversationId"/>, <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysServiceRequestId"/>) is the unique idempotency identity of a Genesys ticket.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.RequiresHumanFollowUp">
+            <summary>
+            The ticket behind this interaction needs a person to work it (a leasing request, a complaint — anything the AI cannot complete).
+            While true, no chatbot clock may close the ticket: neither inactivity rule tracks it, the AI cannot close it and document delivery
+            leaves it alone. It ends only through the authorized TigerCS workflow (resolve / close by an employee). Distinct from an open
+            <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketAgentHandoff"/> (the queue of human work): this records that the ticket is human work at all.
+            </summary>
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysAgentUserId">
             <summary>
@@ -4823,11 +4912,17 @@
         <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.CreateLocal(System.Int64,System.Byte,System.String,System.DateTime,System.Boolean)">
             <summary>A Face-to-Face / locally-created interaction: channel and phone the agent entered; every Genesys field stays null, by construction.</summary>
         </member>
-        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.CreateFromGenesys(System.Int64,System.Byte,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.DateTime},System.String,System.DateTime,System.Boolean,System.String,System.String)">
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.CreateFromGenesys(System.Int64,System.Byte,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.DateTime},System.String,System.DateTime,System.Boolean,System.String,System.String,System.String,System.Boolean)">
             <summary>
             A Genesys-provided interaction. Only the conversation id is mandatory —
             every other field is optional until the Genesys API contract is
             finalized, and absent values are stored as null rather than guessed.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.MarkRequiresHumanFollowUp">
+            <summary>
+            Marks the ticket as human work: from now on no chatbot clock or automatic completion may close it. Stops both inactivity clocks.
+            Idempotent; returns true when this call changed anything. It is never undone by Genesys — a person resolves or closes the ticket.
             </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.End(System.DateTime,System.String)">

@@ -924,6 +924,41 @@
         <member name="F:TigerCS.Domain.Modules.Collections.FinancialPaymentStatus.Rejected">
             <summary>Rejected by verification.</summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.ReconLine">
+            <summary>One unpaid instalment as one side of a reconciliation sees it (remaining amount, due day).</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.ReconLine.#ctor(System.String,System.Int64,System.String,System.String,System.DateOnly,System.Decimal)">
+            <summary>One unpaid instalment as one side of a reconciliation sees it (remaining amount, due day).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds">
+            <summary>The kinds of difference a reconciliation reports. Each is a different question for the person who investigates it.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.MissingInSnapshot">
+            <summary>The source holds an unpaid instalment the snapshot does not: the snapshot is missing money (or is older than the source).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.MissingInSource">
+            <summary>The snapshot holds an instalment the source no longer has: it was paid / cancelled after the snapshot, or the snapshot is wrong.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.AmountMismatch">
+            <summary>Same instalment on both sides with different remaining amounts (a partial payment since the snapshot, rounding beyond the tolerance, or a calculation difference).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.DueDateMismatch">
+            <summary>Same voucher on both sides with different due dates; when the two dates fall in different months the instalment is Due on one side and Overdue on the other.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.ReconComparison">
+            <summary>Outcome of comparing the two sides for ONE company. <c>Matches</c> is true only when every unit agrees within the tolerance.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.ReconComparison.#ctor(System.Int32,System.Int32,System.Int32,System.Int32,System.Decimal,System.Decimal,System.Int32,System.Int32,System.Int32,System.Int32,System.Decimal,System.Collections.Generic.IReadOnlyList{TigerCS.Domain.Modules.Collections.ReconUnitDiff},System.Boolean,System.Int32,System.Int32)">
+            <summary>Outcome of comparing the two sides for ONE company. <c>Matches</c> is true only when every unit agrees within the tolerance.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.FinancialReconciler">
+            <summary>
+            Compares the unpaid instalments the local snapshot holds with a fresh, independent read of the same PACT procedure, unit by unit and instalment by instalment.
+            Both sides are first reduced by the SAME validity rules the snapshot applies when it publishes (remaining amount &gt; 0 at 4 decimals, a real unit id and code,
+            no '*' cancelled units, a customer id), restricted to the same due-date window, so a difference is a real difference and not a rule mismatch.
+            Due / Overdue are measured against the Dubai month of <c>today</c>, exactly as the pages do (Overdue = due before its first day, Due = inside it).
+            </summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Collections.UnpaidInstalmentFact">
             <summary>
             One unpaid instalment, <b>already established as unpaid</b> by the caller from
@@ -1298,6 +1333,41 @@
             reviewers. A needs-review reason is a data problem a person could resolve; an exclusion is a policy decision that
             keeps the record out of a send; a warning is shown but does not block.
             </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.CustomerReviews.TicketReview">
+            <summary>
+            The customer's satisfaction review of a ticket: a 1–5 star rating and an optional comment. At most one exists per ticket
+            cycle and environment kind (unique index on <c>TicketId, ReopenCycle, IsTest</c>), so a second submission — a double click,
+            a replayed request, a second email — can never overwrite or duplicate it.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.CustomerReviews.TicketReview.IsTest">
+            <summary>
+            True when submitted through a Test-mode link. Production satisfaction reporting always filters on <c>IsTest = false</c>,
+            so UAT reviews cannot contaminate customer statistics.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.CustomerReviews.TicketReviewInvitation">
+             <summary>
+             One secure review link issued to a customer in a Resolved or Closed email. The link carries a random token; only its
+             SHA-256 hash is stored, so a database read never yields a usable link, and a tampered or guessed token simply matches no
+             row. The token is bound to one ticket and one reopen cycle and expires.
+            
+             <para>
+             An invitation never records a rating itself — opening the link (a GET, which email security scanners also do) changes
+             nothing. The rating is committed only by an explicit submission, which creates the single <see cref="T:TigerCS.Domain.Modules.CustomerReviews.TicketReview"/> for
+             the ticket's cycle.
+             </para>
+             </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.CustomerReviews.TicketReviewInvitation.TokenHashLength">
+            <summary>SHA-256 digest length in bytes.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.CustomerReviews.TicketReviewInvitation.ReopenCycle">
+            <summary>The ticket's <c>ReopenCount</c> when the link was issued. A reopened ticket is reviewed again for its new cycle.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.CustomerReviews.TicketReviewInvitation.IsTest">
+            <summary>True when issued by a Test-mode notification: the resulting review is kept out of production statistics.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.CustomerVerification.ContactReference">
             <summary>
@@ -3387,6 +3457,16 @@
              </para>
              </summary>
         </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.CreatedByEmployeeId">
+            <summary>
+            The employee who created the ticket (the account that called ticket creation — for a Genesys inquiry that is the integration
+            account). Write-once and never moved by assignment or department transfer, which is what lets a creator keep following their ticket
+            <b>read-only</b> after it has been handed to another department. Null on tickets that predate the column and have no creation audit.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.RecordCreator(System.Guid)">
+            <summary>Records who created the ticket. Write-once: a second, different creator is ignored (returns false).</summary>
+        </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.CategoryId">
              <summary>
              The ticket's business classification — <b>null while the ticket is
@@ -3768,6 +3848,15 @@
             (new Genesys tickets get theirs at creation); a ticket that already
             has a priority is never touched — a default must not overwrite a
             priority anyone set, and re-ingesting a conversation must not reset it.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.ApplyCategoryFromRequestType(System.Int32)">
+            <summary>
+            Records the Category that pairs with the request type the system just
+            applied (Genesys classification). Unlike <see cref="M:TigerCS.Domain.Modules.Ticketing.Ticket.Classify(System.Int32,System.Byte)"/> this does
+            not judge priority and may replace a category the system itself set when
+            the AI refines the request type; the calling service decides that a
+            person has not chosen the current category.
             </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.ReclassifyRequestType(System.Int32,System.Int32)">
@@ -4702,9 +4791,12 @@
              </para>
             
              <para>
-             <b>One Genesys conversation is exactly one interaction, on exactly one
-             ticket</b> (Genesys integration phase 1). <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysConversationId"/>
-             is unique across the whole table (filtered unique index), which is the
+             <b>One Genesys service request is exactly one interaction, on exactly one
+             ticket.</b> A conversation may carry several distinct service requests
+             (documents, then leasing), each with its own <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysServiceRequestId"/>
+             and its own ticket. (<see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysConversationId"/>, <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysServiceRequestId"/>)
+             is unique (filtered unique index) — a conversation whose caller sends no
+             service request id keeps the original rule of exactly one — which is the
              database-level half of "a retried or duplicated Genesys event never
              creates a second ticket": the application checks first, and a lost race
              surfaces as a unique-constraint violation the caller treats as "already
@@ -4743,6 +4835,22 @@
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.CalledNumber">
             <summary>The company/destination number the interaction arrived on (Genesys side), or null — never used by Ticketing for routing.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysServiceRequestId">
+            <summary>
+            Which distinct service request of the Genesys conversation this interaction (and therefore its ticket) belongs to — the caller's own
+            identifier (e.g. "documents", "leasing-1"), stored verbatim. Null on every row created before multiple tickets per conversation
+            existed and on any conversation whose caller sends none: such a conversation keeps its original "one conversation, one ticket" rule.
+            (<see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysConversationId"/>, <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysServiceRequestId"/>) is the unique idempotency identity of a Genesys ticket.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.RequiresHumanFollowUp">
+            <summary>
+            The ticket behind this interaction needs a person to work it (a leasing request, a complaint — anything the AI cannot complete).
+            While true, no chatbot clock may close the ticket: neither inactivity rule tracks it, the AI cannot close it and document delivery
+            leaves it alone. It ends only through the authorized TigerCS workflow (resolve / close by an employee). Distinct from an open
+            <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketAgentHandoff"/> (the queue of human work): this records that the ticket is human work at all.
+            </summary>
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteraction.GenesysAgentUserId">
             <summary>
@@ -4823,11 +4931,17 @@
         <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.CreateLocal(System.Int64,System.Byte,System.String,System.DateTime,System.Boolean)">
             <summary>A Face-to-Face / locally-created interaction: channel and phone the agent entered; every Genesys field stays null, by construction.</summary>
         </member>
-        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.CreateFromGenesys(System.Int64,System.Byte,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.DateTime},System.String,System.DateTime,System.Boolean,System.String,System.String)">
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.CreateFromGenesys(System.Int64,System.Byte,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.DateTime},System.String,System.DateTime,System.Boolean,System.String,System.String,System.String,System.Boolean)">
             <summary>
             A Genesys-provided interaction. Only the conversation id is mandatory —
             every other field is optional until the Genesys API contract is
             finalized, and absent values are stored as null rather than guessed.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.MarkRequiresHumanFollowUp">
+            <summary>
+            Marks the ticket as human work: from now on no chatbot clock or automatic completion may close it. Stops both inactivity clocks.
+            Idempotent; returns true when this call changed anything. It is never undone by Genesys — a person resolves or closes the ticket.
             </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.TicketInteraction.End(System.DateTime,System.String)">
@@ -4943,6 +5057,63 @@
             recorded end time. The application layer treats this as "already
             processed" and answers idempotently rather than as a failure.
             </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource">
+            <summary>
+            Which Genesys event named the agent that a <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler"/> row records. Stored for audit and so that evidence
+            of different strength is never confused: every value here is a statement by Genesys that the agent <b>is connected to / handling</b>
+            the interaction. A ringing/alerting event, a queue membership, or a handoff <i>assignment</i> is never one of these (see
+            <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler"/>).
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.Inquiry">
+            <summary>The ticket-creating event named the handling agent (a call answered / chat accepted before the ticket was made).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.Routing">
+            <summary>A routing update named the agent now <b>connected</b> to the interaction — the event that records a transfer.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.Update">
+            <summary>A ticket update named the handling agent.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.ConversationEnd">
+            <summary>The conversation-end event named the handling agent.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.Legacy">
+            <summary>Copied from <c>TicketInteractions.HandledByUserId</c> when this table was introduced — the single handler the integration recorded before per-agent history existed.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler">
+             <summary>
+             One Ticketing user who <b>actually handled</b> a Genesys interaction. An interaction can have several (a call transferred from one
+             agent to another is handled by both), which <c>TicketInteractions.HandledByUserId</c> — first handler only, apply-if-absent — cannot
+             express. This table is the source of truth for "did this user handle a Genesys interaction on this ticket", and therefore for the
+             CS Agent's right to see the ticket.
+            
+             <para>
+             <b>What is, and is not, proof of handling.</b> A row is written only when Genesys reports that an agent is <i>connected</i> to or
+             handling the interaction (<see cref="T:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource"/>) and that agent's Genesys User ID resolves, server-side, through
+             <c>AspNetUsers.GenesysUserId</c> to an active Ticketing user. It is never written for: a ringing/alerting event (those never reach
+             TigerCS), a queue or department membership, a handoff work-item assignment, the Genesys agent-screen-pop launch (which may fire while
+             the interaction is still alerting), or an agent id that does not map to a user (a bot or an unmapped agent). Rows are append-only
+             and unique per (interaction, user), so a redelivered event writes nothing.
+             </para>
+            
+             <para>
+             <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.TicketId"/> is denormalized from the interaction on purpose: the visibility predicate runs on every ticket query and
+             should be a single index seek on (<see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.HandledByUserId"/>, <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.TicketId"/>), not a join through the interaction.
+             </para>
+             </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.HandledByUserId">
+            <summary>The Ticketing user (<c>AspNetUsers.Id</c>) that handled the interaction — resolved on the server, never client-supplied.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.GenesysAgentUserId">
+            <summary>The Genesys User ID exactly as Genesys sent it, kept next to the user it resolved to so the row stays auditable if the mapping later changes.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.ConnectedAtUtc">
+            <summary>When Genesys says the agent connected, where it supplied a time. Null when it did not — <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.RecordedAtUtc"/> is then the only clock.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.RecordedAtUtc">
+            <summary>When Ticketing recorded the row (its own clock).</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.InteractionMessageSender">
             <summary>Who authored one transcript message of an interaction.</summary>
@@ -5303,6 +5474,63 @@
             same reason as the handoff events, so it needs no schema change.
             </summary>
         </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred">
+            <summary>
+            The ticket changed hands: a department transfer, a reassignment from one
+            employee to another, or an escalation. The structured facts (reason,
+            from/to department, receiving employee) live in the typed columns of
+            the event; the acting employee is <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ActorEmployeeId"/>
+            (null = the system, e.g. automatic request-type routing). A Genesys
+            call transfer never writes this event — that is queue/agent routing of
+            the call, recorded on the interaction and the audit trail, and says
+            nothing about whether the agent could resolve the issue.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.GenesysAgentConnected">
+            <summary>
+            A mapped Genesys agent first took the customer's interaction (the first handler). Recorded with the agent in
+            <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ToEmployeeId"/> and no transfer reason: this is who answered, not a hand-over.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.GenesysCallTransferred">
+            <summary>
+            Genesys moved a live conversation from one agent to another. History only: it carries no transfer reason, is
+            never an escalation and is not counted as a ticket transfer — whether the first agent could resolve the issue is
+            a judgement only an explicit TigerCS transfer or escalation records. The previous agent, when mapped, is the
+            actor; the receiving agent, when mapped, is <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ToEmployeeId"/>; unmapped agents
+            are preserved verbatim in the note.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.TicketTransferReason">
+            <summary>
+            Why a ticket changed hands. Only <see cref="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.UnableToResolve"/> and
+            <see cref="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.NeedsEscalation"/> count as escalations; every other reason is a
+            plain transfer, and <see cref="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.SystemRouting"/> is the system moving a
+            ticket to the department its request type is configured for — never an
+            agent's judgement.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.Unspecified">
+            <summary>The caller gave no structured reason (older clients, pre-tracking data).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.UnableToResolve">
+            <summary>The handling agent could not resolve the customer's issue.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.NeedsEscalation">
+            <summary>The issue needs a more senior or specialist owner.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.WrongDepartment">
+            <summary>The ticket was in the wrong department.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.CustomerRequest">
+            <summary>The customer asked for a different person or department.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.SystemRouting">
+            <summary>Automatic request-type routing moved the ticket.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.Other">
+            <summary>Any other reason; the free-text note says which.</summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent">
             <summary>
             One typed, append-only workflow event of a ticket — the trustworthy
@@ -5326,6 +5554,31 @@
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.Note">
             <summary>Short human context (e.g. the recorded reason) — display only; consumers key on <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.EventType"/> and <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.OccurredAtUtc"/>, never on this text.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.TransferReasonCode">
+            <summary><see cref="T:TigerCS.Domain.Modules.Ticketing.TicketTransferReason"/> as a byte, for <see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> only; null for every other event type.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.FromDepartmentId">
+            <summary>The department the ticket left (<see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> only).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ToDepartmentId">
+            <summary>The department that holds the ticket after the transfer (<see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> only).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ToEmployeeId">
+            <summary>The employee who received the ticket, when one did; null when it went to a department queue (<see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> only).</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ForTransfer(System.Int64,System.DateTime,System.Nullable{System.Guid},TigerCS.Domain.Modules.Ticketing.TicketTransferReason,System.Int32,System.Int32,System.Nullable{System.Guid},System.String,System.Guid)">
+            <summary>The one way a <see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> event is built, so its structured columns can never be half-filled.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.WithOwnership(System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Guid})">
+            <summary>
+            Records where ownership landed for an event whose TYPE already says why it happened (a reopen, a handoff accept,
+            a Genesys agent change). Deliberately leaves <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.TransferReasonCode"/> null, so such an event can never be
+            read as an escalation or counted as a transfer.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.IsEscalation">
+            <summary>True for the two reasons that mean the handling agent passed the ticket up rather than simply moving it.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.WellKnownChannels">
             <summary>

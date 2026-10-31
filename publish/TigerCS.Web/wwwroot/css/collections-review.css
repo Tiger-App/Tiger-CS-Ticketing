@@ -17,7 +17,6 @@ tr.shared-phone td { background: rgba(191, 135, 0, .12); }
 @media (max-width: 720px) { .review-tiles .tile { flex: 1 1 40%; } }
 
 /* One-page approval on Collections Campaigns */
-.campaign-approve { display: flex; flex-wrap: wrap; gap: 0.75rem 1rem; align-items: center; margin: 0 0 1rem; }
 .send-verdict { font-weight: 600; padding: 0.5rem 0.75rem; border-radius: 6px; border-left: 4px solid currentColor; }
 .send-verdict--success { color: #146c43; background: #e8f5ee; }
 .send-verdict--partial { color: #8a5a00; background: #fff4de; }

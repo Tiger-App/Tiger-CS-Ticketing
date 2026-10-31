@@ -20,8 +20,12 @@ public enum GenesysChannel
 
     WhatsApp = 3,
 
-    /// <summary>A social-media direct message (Instagram, Facebook, X, …) that Genesys routes as one conversation.</summary>
-    SocialMedia = 4
+    /// <summary>A social-media direct message (X, …) that Genesys routes as one conversation and that has no channel of its own.</summary>
+    SocialMedia = 4,
+
+    Instagram = 5,
+
+    Facebook = 6
 }
 
 /// <summary>

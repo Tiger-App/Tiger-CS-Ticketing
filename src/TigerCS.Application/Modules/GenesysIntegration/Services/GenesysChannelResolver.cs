@@ -30,6 +30,8 @@ public static class GenesysChannelResolver
         GenesysChannel.WebsiteChat => "LIVE_CHAT",
         GenesysChannel.WhatsApp => "WHATSAPP",
         GenesysChannel.SocialMedia => "SOCIAL_DM",
+        GenesysChannel.Instagram => "INSTAGRAM",
+        GenesysChannel.Facebook => "FACEBOOK",
         _ => throw new ArgumentOutOfRangeException(nameof(channel), channel, "Unknown normalized Genesys channel.")
     };
 }
