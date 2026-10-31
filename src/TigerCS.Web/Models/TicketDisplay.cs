@@ -59,7 +59,7 @@ public static class TicketDisplay
     public static string AssignedToLabel(
         Guid? currentOwnerEmployeeId, string? ownerName, int currentDepartmentId, string? departmentName)
         => currentOwnerEmployeeId is not { } ownerId
-            ? departmentName is null ? UnknownDepartmentQueueLabel : $"{departmentName} Queue"
+            ? departmentName is null ? UnknownDepartmentQueueLabel : $"{departmentName} Queue (Unassigned)"
             : ownerName ?? $"Employee #{ownerId.ToString()[..8]}";
 
     /// <summary>True when the ticket sits in its department queue rather than with a named employee — for styling only, never for the label text.</summary>

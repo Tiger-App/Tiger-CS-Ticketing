@@ -1175,7 +1175,7 @@ public sealed class TicketDetailsModel(
         CanAssign = TicketActions.CanAssign(ActionContext);
         CanChangeStatus = TicketActions.CanChangeStatus(ActionContext) && StatusTargets.Count > 0;
         CanResolve = TicketActions.CanResolve(ActionContext);
-        CanClose = TicketActions.CanClose(Viewer?.Roles);
+        CanClose = TicketActions.CanCloseTicket(ActionContext);
         CanEscalate = TicketActions.CanEscalate(ActionContext);
         CanEscalateToLevel4 = TicketActions.CanEscalateToLevel4(ActionContext);
 

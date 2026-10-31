@@ -1,5 +1,6 @@
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
+using TigerCS.Application.Modules.Reporting.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
 using TigerCS.Domain.Modules.Ticketing;
@@ -26,7 +27,13 @@ public enum AutoAssignmentOutcome
     ConfiguredAssigneeNotInDepartment,
 
     /// <summary>The ticket was assigned to the rule's primary assignee.</summary>
-    AssignedToPrimary
+    AssignedToPrimary,
+
+    /// <summary>The ticket was assigned to the next eligible employee in the department's Round Robin rotation.</summary>
+    AssignedRoundRobin,
+
+    /// <summary>Round Robin found no eligible active employee — the ticket stays in the department queue, visibly unassigned.</summary>
+    NoEligibleEmployee
 }
 
 /// <summary>
@@ -45,7 +52,10 @@ public enum AutoAssignmentTrigger
     DepartmentTransfer,
 
     /// <summary>A request type was classified onto an existing ticket that was already in the responsible department (so no transfer happened); the rule for that request type is evaluated.</summary>
-    RequestTypeClassified
+    RequestTypeClassified,
+
+    /// <summary>A Call Center user selected a category that belongs to another department; the ticket was routed there.</summary>
+    CategoryRouted
 }
 
 /// <summary>The outcome plus what was assigned, for the caller's response/logging. <paramref name="TeamMemberEmployeeIds"/> carries the configured team members (excluding the primary) for a team rule.</summary>
@@ -85,7 +95,8 @@ public sealed class TicketAutoAssignmentService(
     IDepartmentWorkflowSettingsRepository departmentWorkflowSettingsRepository,
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     ITicketAssignmentRepository ticketAssignmentRepository,
-    IAuditEntryWriter auditWriter)
+    IAuditEntryWriter auditWriter,
+    IAssignmentRotationRepository? rotationRepository = null)
 {
     /// <summary>
     /// Runs inside the caller's creation transaction, after the ticket row
@@ -117,6 +128,11 @@ public sealed class TicketAutoAssignmentService(
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoRuleConfigured,
                 "No active assignment rule configured", trigger, correlationId, cancellationToken);
+        }
+
+        if (rule.Mode == AssignmentMode.RoundRobin)
+        {
+            return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, trigger, rule.RequestTypeAssignmentRuleId, cancellationToken);
         }
 
         if (rule.Mode == AssignmentMode.DepartmentQueue || rule.PrimaryEmployeeId is not { } primaryEmployeeId)
@@ -160,6 +176,90 @@ public sealed class TicketAutoAssignmentService(
             correlationId, cancellationToken);
 
         return new AutoAssignmentResult(AutoAssignmentOutcome.AssignedToPrimary, primaryEmployeeId, teamMembers);
+    }
+
+    /// <summary>True when the employee is an active member of the Call Center department.</summary>
+    public async Task<bool> IsCallCenterMemberAsync(Guid employeeId, CancellationToken cancellationToken = default) =>
+        (await userDepartmentAssignmentRepository.GetByEmployeeIdAsync(employeeId, cancellationToken))
+            .Any(a => string.Equals(a.Department?.Code, TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>A Call Center user handing a ticket to a department they do not themselves belong to — the case round-robin routing serves (a member of that department self-assigns instead).</summary>
+    public async Task<bool> IsCallCenterRoutingAsync(Guid employeeId, int departmentId, CancellationToken cancellationToken = default) =>
+        await IsCallCenterMemberAsync(employeeId, cancellationToken)
+        && !await userDepartmentAssignmentRepository.ExistsAsync(employeeId, departmentId, cancellationToken);
+
+    /// <summary>
+    /// Call Center category routing: the ticket is already in the category's department; assign it to the next employee in that
+    /// department's rotation — unless a configured request-type rule already decided (a specific assignee, an explicit queue, or
+    /// assignment disabled), which always wins, or the ticket already has an owner. <paramref name="configured"/> is the result of
+    /// <see cref="ApplyAsync"/> for the same ticket. Same single engine, same audit trail.
+    /// </summary>
+    public async Task<AutoAssignmentResult> ApplyCategoryRoutingAsync(
+        Ticket ticket, AutoAssignmentResult configured, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default)
+    {
+        if (ticket.CurrentOwnerEmployeeId is not null
+            || configured.Outcome is not (AutoAssignmentOutcome.NoRequestType or AutoAssignmentOutcome.NoRuleConfigured
+                or AutoAssignmentOutcome.ConfiguredAssigneeNotInDepartment))
+        {
+            return configured;
+        }
+
+        var settings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(ticket.CurrentDepartmentId, cancellationToken);
+        if (settings is { AllowAssignment: false })
+        {
+            return configured;
+        }
+
+        return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, AutoAssignmentTrigger.CategoryRouted, ruleId: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Assigns to the next eligible active member of the ticket's CURRENT department. The persisted cursor is row-locked for the
+    /// caller's transaction, so concurrent assignments serialize and never pick the same slot; no eligible member (or no rotation
+    /// store) leaves the ticket in the department queue with the reason audited — never a guess.
+    /// </summary>
+    private async Task<AutoAssignmentResult> AssignRoundRobinAsync(
+        Ticket ticket, DateTime nowUtc, Guid correlationId, AutoAssignmentTrigger trigger, int? ruleId, CancellationToken cancellationToken)
+    {
+        var ruleText = ruleId is { } id ? $"Rule {id}" : "Category routing";
+        if (rotationRepository is null)
+        {
+            return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
+                $"{ruleText}: Round Robin is not available", trigger, correlationId, cancellationToken);
+        }
+
+        var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(
+            ticket.CurrentDepartmentId, activeEmployeesOnly: true, cancellationToken);
+        var eligible = members.Select(m => m.EmployeeId).Distinct().ToList();
+        if (eligible.Count == 0)
+        {
+            return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
+                $"{ruleText}: no eligible active employee in department {ticket.CurrentDepartmentId}; Status=Unassigned",
+                trigger, correlationId, cancellationToken);
+        }
+
+        var rotation = await rotationRepository.GetForUpdateAsync(ticket.CurrentDepartmentId, nowUtc, cancellationToken);
+        var next = DepartmentAssignmentRotation.PickNext(rotation.LastAssignedEmployeeId, eligible)!.Value;
+        rotation.Advance(next, nowUtc);
+
+        var previousOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;
+        ticket.AssignTo(next);
+
+        var currentAssignment = await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken);
+        currentAssignment?.MarkSuperseded();
+        await ticketAssignmentRepository.AddAsync(
+            new TicketAssignment(ticket.TicketId, next, ticket.CurrentDepartmentId, nowUtc, assigningActorEmployeeId: null),
+            cancellationToken);
+
+        await auditWriter.WriteAsync(
+            actorEmployeeId: null,
+            "AutoAssign", "Ticket", ticket.TicketId.ToString(),
+            beforeValue: previousOwnerEmployeeId?.ToString(),
+            afterValue: $"AssignedEmployeeId={next};DepartmentId={ticket.CurrentDepartmentId};Mode={AssignmentMode.RoundRobin};"
+                + $"{(ruleId is { } r ? $"RuleId={r};" : string.Empty)}Trigger={trigger}",
+            correlationId, cancellationToken);
+
+        return new AutoAssignmentResult(AutoAssignmentOutcome.AssignedRoundRobin, next);
     }
 
     /// <summary>

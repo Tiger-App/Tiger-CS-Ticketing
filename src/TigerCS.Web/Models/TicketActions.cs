@@ -152,6 +152,10 @@ public static class TicketActions
         viewerRoles is not null
         && (viewerRoles.Any(TicketRoleSets.Close.Contains) || AuthorizationOverride.AppliesTo(viewerRoles));
 
+    /// <summary>Close, including the ticket's current assignee — who may close it whatever their role or department (read-only roles excepted).</summary>
+    public static bool CanCloseTicket(TicketActionContext? context) =>
+        context is { } c && (CanClose(c.ViewerRoles) || (c.IsCurrentOwner && !c.IsReadOnlyViewer));
+
     /// <summary>
     /// Mirrors <c>TicketLifecycleAppService.IsResolveAuthorizedAsync</c>:
     /// <see cref="TicketRoleSets.Resolve"/> (Department Employee/Department
@@ -175,6 +179,11 @@ public static class TicketActions
         }
 
         if (c.OverrideApplies)
+        {
+            return true;
+        }
+
+        if (c.IsCurrentOwner && !c.IsReadOnlyViewer)
         {
             return true;
         }

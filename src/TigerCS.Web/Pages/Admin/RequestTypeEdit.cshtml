@@ -226,7 +226,7 @@
             <section class="panel admin-form-panel" aria-labelledby="assignment-title">
                 <div class="panel__header">
                     <h2 class="panel__title" id="assignment-title">Routing</h2>
-                    <span class="panel__hint">Current: <strong>@(r.AssignmentRule is null ? $"{r.DepartmentName} Queue (no rule configured)" : r.AssignmentRule.Mode switch { AssignmentMode.SpecificEmployee => r.AssignmentRule.PrimaryEmployeeName, AssignmentMode.Team => $"{r.AssignmentRule.TeamName ?? "Team"} — primary {r.AssignmentRule.PrimaryEmployeeName}", _ => $"{r.DepartmentName} Queue" })</strong></span>
+                    <span class="panel__hint">Current: <strong>@(r.AssignmentRule is null ? $"{r.DepartmentName} Queue (no rule configured)" : r.AssignmentRule.Mode switch { AssignmentMode.SpecificEmployee => r.AssignmentRule.PrimaryEmployeeName, AssignmentMode.Team => $"{r.AssignmentRule.TeamName ?? "Team"} — primary {r.AssignmentRule.PrimaryEmployeeName}", AssignmentMode.RoundRobin => $"{r.DepartmentName} Round Robin", _ => $"{r.DepartmentName} Queue" })</strong></span>
                 </div>
                 <form method="post" asp-page-handler="Assignment" asp-route-id="@r.RequestTypeId" class="admin-form">
                     <fieldset class="form-section">
@@ -238,6 +238,7 @@
                                     <option value="@AssignmentMode.DepartmentQueue">Department Queue (department head assigns)</option>
                                     <option value="@AssignmentMode.SpecificEmployee">Specific Employee</option>
                                     <option value="@AssignmentMode.Team">Team (one primary owner plus members)</option>
+                                    <option value="@AssignmentMode.RoundRobin">Round Robin (next eligible employee in rotation)</option>
                                 </select>
                             </div>
                             <div class="form-group">

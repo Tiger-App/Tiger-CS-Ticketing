@@ -370,13 +370,16 @@ public sealed class TicketLifecycleAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
         }
 
-        if (!AuthorizationGate.Evaluate(callerRoles, () => callerRoles.Any(TicketRoleSets.Close.Contains)))
+        // Whoever the ticket is currently assigned to may close it, whatever their role or department; everyone else needs
+        // the CS-layer role. A read-only caller never qualifies through ownership.
+        var isCurrentOwner = IsCurrentOwner(callerEmployeeId, callerRoles, ticket);
+        if (!AuthorizationGate.Evaluate(callerRoles, () => isCurrentOwner || callerRoles.Any(TicketRoleSets.Close.Contains)))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
 
         // Close is a cross-department right of the CS layer; a CS Agent may use it only on a ticket they can see.
-        if (!await TicketVisibilityRule.PassesAgentScopeAsync(
+        if (!isCurrentOwner && !await TicketVisibilityRule.PassesAgentScopeAsync(
                 userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
@@ -1123,6 +1126,12 @@ public sealed class TicketLifecycleAppService(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
         AuthorizationGate.EvaluateAsync(callerRoles, async () =>
         {
+            // The current assignee may always resolve, regardless of role or department.
+            if (IsCurrentOwner(callerEmployeeId, callerRoles, ticket))
+            {
+                return true;
+            }
+
             if (!callerRoles.Any(TicketRoleSets.Resolve.Contains))
             {
                 return false;
@@ -1135,4 +1144,8 @@ public sealed class TicketLifecycleAppService(
 
             return ticket.CurrentOwnerEmployeeId == callerEmployeeId;
         });
+
+    /// <summary>The user the ticket is currently assigned to — the rule behind owner-based Resolve/Close. Read-only roles never qualify.</summary>
+    private static bool IsCurrentOwner(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket) =>
+        !Roles.IsReadOnlyCaller(callerRoles) && ticket.CurrentOwnerEmployeeId == callerEmployeeId;
 }

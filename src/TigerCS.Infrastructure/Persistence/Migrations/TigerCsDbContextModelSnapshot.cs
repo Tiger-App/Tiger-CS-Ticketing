@@ -2262,6 +2262,28 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("Channels", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation", b =>
+                {
+                    b.Property<int>("DepartmentId")
+                        .HasColumnType("int");
+
+                    b.Property<Guid?>("LastAssignedEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("DepartmentId");
+
+                    b.ToTable("DepartmentAssignmentRotations", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.DepartmentCustomerLookupSource", b =>
                 {
                     b.Property<int>("DepartmentCustomerLookupSourceId")
@@ -4121,6 +4143,15 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("TicketSlaInstanceId")
                         .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Department", null)
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 

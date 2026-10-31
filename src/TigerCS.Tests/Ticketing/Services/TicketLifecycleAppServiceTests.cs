@@ -196,14 +196,14 @@ public class TicketLifecycleAppServiceTests
     }
 
     [Fact]
-    public async Task ResolveAsync_ByCsAgent_ReturnsForbidden_Issue022ResolveIsDepartmentOnly()
+    public async Task ResolveAsync_ByCsAgentWhoIsNotTheAssignee_ReturnsForbidden_ResolveIsDepartmentOrAssigneeOnly()
     {
         var f = CreateService();
         var owner = Guid.NewGuid();
         var ticket = await SeedInProgressTicketAsync(f.Tickets, owner);
 
         var result = await f.Service.ResolveAsync(
-            owner, [Roles.CsAgent], ticket.TicketId,
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
             new ResolveTicketRequestDto("Resolved", "Fixed it.", null, null, []));
 
         Assert.Equal(TicketMutationOutcome.Forbidden, result.Outcome);
@@ -263,7 +263,7 @@ public class TicketLifecycleAppServiceTests
     }
 
     [Fact]
-    public async Task CloseAsync_ByDepartmentEmployee_ReturnsForbidden_Issue022CloseIsCsLayerOnly()
+    public async Task CloseAsync_ByDepartmentEmployeeWhoIsNotTheAssignee_ReturnsForbidden_CloseIsCsLayerOrAssigneeOnly()
     {
         var f = CreateService();
         var owner = Guid.NewGuid();
@@ -272,7 +272,7 @@ public class TicketLifecycleAppServiceTests
             owner, [Roles.DepartmentEmployee], ticket.TicketId,
             new ResolveTicketRequestDto("Resolved", "Fixed it.", null, null, []));
 
-        var result = await f.Service.CloseAsync(owner, [Roles.DepartmentEmployee], ticket.TicketId, new CloseTicketRequestDto([]));
+        var result = await f.Service.CloseAsync(Guid.NewGuid(), [Roles.DepartmentEmployee], ticket.TicketId, new CloseTicketRequestDto([]));
 
         Assert.Equal(TicketMutationOutcome.Forbidden, result.Outcome);
         Assert.Equal(TicketStatus.Resolved, ticket.TicketStatus);
@@ -1256,5 +1256,53 @@ public class TicketLifecycleAppServiceTests
         Assert.Equal(OtherDepartmentId, reopened.ToDepartmentId);
         Assert.Null(reopened.ToEmployeeId);
         Assert.False(reopened.IsEscalation);
+    }
+
+    // ---- Resolve / Close: the assignee, whatever their role or department ----
+
+    [Theory]
+    [InlineData(Roles.DepartmentEmployee)]
+    [InlineData(Roles.CsAgent)]
+    [InlineData(Roles.GeneralManager)]
+    public async Task Assignee_InAnyDepartmentAndRole_CanResolveAndClose(string role)
+    {
+        var f = CreateService();
+        var owner = Guid.NewGuid();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, owner, departmentId: 7);
+
+        var resolved = await f.Service.ResolveAsync(
+            owner, [role], ticket.TicketId, new ResolveTicketRequestDto("Resolved", "Payment confirmed.", null, null, []));
+        Assert.Equal(TicketMutationOutcome.Success, resolved.Outcome);
+
+        var closed = await f.Service.CloseAsync(owner, [role], ticket.TicketId, new CloseTicketRequestDto([]));
+        Assert.Equal(TicketMutationOutcome.Success, closed.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+    }
+
+    [Fact]
+    public async Task UnrelatedDepartmentEmployee_CannotResolveOrClose()
+    {
+        var f = CreateService();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, Guid.NewGuid(), departmentId: 7);
+        var stranger = Guid.NewGuid();
+
+        var resolve = await f.Service.ResolveAsync(
+            stranger, [Roles.DepartmentEmployee], ticket.TicketId, new ResolveTicketRequestDto("Resolved", "x", null, null, []));
+        Assert.Equal(TicketMutationOutcome.Forbidden, resolve.Outcome);
+
+        var close = await f.Service.CloseAsync(stranger, [Roles.DepartmentEmployee], ticket.TicketId, new CloseTicketRequestDto([]));
+        Assert.Equal(TicketMutationOutcome.Forbidden, close.Outcome);
+    }
+
+    [Fact]
+    public async Task ReadOnlyRole_NeverGainsResolveThroughOwnership()
+    {
+        var f = CreateService();
+        var owner = Guid.NewGuid();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, owner, departmentId: 7);
+
+        var resolve = await f.Service.ResolveAsync(
+            owner, [Roles.ChairmanCeo], ticket.TicketId, new ResolveTicketRequestDto("Resolved", "x", null, null, []));
+        Assert.Equal(TicketMutationOutcome.Forbidden, resolve.Outcome);
     }
 }

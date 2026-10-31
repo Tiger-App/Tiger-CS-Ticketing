@@ -249,7 +249,7 @@ public sealed class AdminRequestTypeAppService(
         }
 
         var errors = new List<string>();
-        if (request.Mode != AssignmentMode.DepartmentQueue)
+        if (request.Mode is not (AssignmentMode.DepartmentQueue or AssignmentMode.RoundRobin))
         {
             if (request.PrimaryEmployeeId is not { } primaryId || primaryId == Guid.Empty)
             {
@@ -294,6 +294,7 @@ public sealed class AdminRequestTypeAppService(
             rule = request.Mode switch
             {
                 AssignmentMode.DepartmentQueue => RequestTypeAssignmentRule.ForDepartmentQueue(requestTypeId, request.IsActive),
+                AssignmentMode.RoundRobin => RequestTypeAssignmentRule.ForRoundRobin(requestTypeId, request.IsActive),
                 AssignmentMode.SpecificEmployee => RequestTypeAssignmentRule.ForSpecificEmployee(requestTypeId, request.PrimaryEmployeeId!.Value, request.IsActive),
                 _ => RequestTypeAssignmentRule.ForTeam(
                     requestTypeId, request.PrimaryEmployeeId!.Value, request.MemberEmployeeIds ?? [], request.TeamName, request.IsActive)
@@ -579,6 +580,11 @@ public sealed class AdminRequestTypeAppService(
 
     private async Task<string> DescribeAssignmentAsync(RequestTypeAssignmentRule? rule, string departmentName, CancellationToken cancellationToken)
     {
+        if (rule is { IsActive: true, Mode: AssignmentMode.RoundRobin })
+        {
+            return $"{departmentName} (Round Robin)";
+        }
+
         if (rule is null || !rule.IsActive || rule.Mode == AssignmentMode.DepartmentQueue || rule.PrimaryEmployeeId is not { } primaryId)
         {
             return $"{departmentName} Queue";

@@ -28,5 +28,11 @@ public enum AssignmentMode : byte
     /// the existing one-owner accountability model — plus the further team
     /// members as configured participants.
     /// </summary>
-    Team = 3
+    Team = 3,
+
+    /// <summary>
+    /// Fair automatic distribution: tickets rotate through the department's eligible (active) employees using a persisted
+    /// per-department cursor. Needs no configured employee. No eligible employee → department queue, visibly unassigned.
+    /// </summary>
+    RoundRobin = 4
 }

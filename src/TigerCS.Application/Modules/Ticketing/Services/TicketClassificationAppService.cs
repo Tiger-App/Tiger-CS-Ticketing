@@ -64,7 +64,10 @@ public sealed class TicketClassificationAppService(
     SlaDueDateService slaDueDateService,
     TimeProvider timeProvider,
     ITicketInteractionHandlerRepository? handlerRepository = null,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    IServiceIdentityRegistry? serviceIdentities = null,
+    IDepartmentRepository? departmentRepository = null,
+    TicketAutoAssignmentService? autoAssignmentService = null,
+    ITicketWorkflowEventRepository? workflowEventRepository = null)
 {
     public async Task<TicketMutationResult> ClassifyAsync(
         Guid callerEmployeeId,
@@ -128,11 +131,23 @@ public sealed class TicketClassificationAppService(
         // The department is already settled — the inquiry resolved it before
         // the ticket existed. Classification names the request, it does not
         // re-route the ticket; a category from another department would do
-        // exactly that silently.
+        // exactly that silently. The one deliberate exception: a ticket sitting
+        // in the Call Center (the first human queue) is routed to the department
+        // that owns the category the Call Center user selected.
+        var routeToCategoryDepartment = false;
         if (category.DepartmentId != ticket.CurrentDepartmentId)
         {
-            return TicketMutationResult.Failure(TicketMutationOutcome.CategoryDepartmentMismatch);
+            if (departmentRepository is null || autoAssignmentService is null
+                || !await IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
+                || await departmentRepository.GetByIdAsync(category.DepartmentId, cancellationToken) is not { IsActive: true })
+            {
+                return TicketMutationResult.Failure(TicketMutationOutcome.CategoryDepartmentMismatch);
+            }
+
+            routeToCategoryDepartment = true;
         }
+
+        var requestTypeDepartmentId = routeToCategoryDepartment ? category.DepartmentId : ticket.CurrentDepartmentId;
 
         if (await priorityRepository.GetByIdAsync(request.PriorityId, cancellationToken) is null)
         {
@@ -152,7 +167,7 @@ public sealed class TicketClassificationAppService(
                 return TicketMutationResult.Failure(TicketMutationOutcome.NotAllowedForRequestType);
             }
 
-            if (requestType.DepartmentId != ticket.CurrentDepartmentId)
+            if (requestType.DepartmentId != requestTypeDepartmentId)
             {
                 return TicketMutationResult.Failure(TicketMutationOutcome.NotAllowedForRequestType);
             }
@@ -200,6 +215,34 @@ public sealed class TicketClassificationAppService(
             {
                 ticket.ClassifyRequestType(requestType.RequestTypeId);
                 ticket.PinWorkflowVersion(workflowVersion.WorkflowTemplateId);
+            }
+
+            if (routeToCategoryDepartment)
+            {
+                // Department follows the category; TransferToDepartment clears the previous owner, then the one assignment
+                // engine (rule first, rotation otherwise) picks the next eligible employee or leaves the department queue.
+                var fromDepartmentId = ticket.CurrentDepartmentId;
+                var fromOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;
+                ticket.TransferToDepartment(category.DepartmentId);
+                await auditWriter.WriteAsync(
+                    callerEmployeeId, "Transfer", "Ticket", ticket.TicketId.ToString(),
+                    beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId={fromOwnerEmployeeId?.ToString() ?? "DepartmentQueue"}",
+                    afterValue: $"DepartmentId={category.DepartmentId};Reason=Call Center selected category {category.CategoryId}",
+                    correlationId, cancellationToken);
+
+                var configured = await autoAssignmentService!.ApplyAsync(
+                    ticket, now, correlationId, AutoAssignmentTrigger.CategoryRouted, cancellationToken);
+                await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, configured, now, correlationId, cancellationToken);
+
+                if (workflowEventRepository is not null)
+                {
+                    await workflowEventRepository.AddAsync(
+                        TicketWorkflowEvent.ForTransfer(
+                            ticket.TicketId, now, callerEmployeeId, TicketTransferReason.Unspecified,
+                            fromDepartmentId, category.DepartmentId, ticket.CurrentOwnerEmployeeId,
+                            "Call Center category routing", correlationId),
+                        cancellationToken);
+                }
             }
 
             if (hadRunningPeriod)
@@ -271,4 +314,10 @@ public sealed class TicketClassificationAppService(
 
         return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
     }
+
+    private async Task<bool> IsCallCenterDepartmentAsync(int departmentId, CancellationToken cancellationToken) =>
+        departmentRepository is not null
+        && await departmentRepository.GetByIdAsync(departmentId, cancellationToken) is { } department
+        && string.Equals(department.Code, TigerCS.Application.Modules.Reporting.Services.TeamPerformanceAppService.CallCenterDepartmentCode,
+            StringComparison.OrdinalIgnoreCase);
 }

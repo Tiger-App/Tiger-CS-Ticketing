@@ -145,16 +145,19 @@ public sealed class TicketActionVisibilityTests
     [InlineData(Roles.CsManager)]
     [InlineData(Roles.CsSupervisor)]
     [InlineData(Roles.CsAgent)]
-    public void Resolve_IsNeverOfferedToTheCsLayer_EvenAsTheTicketsOwnerInItsOwnDepartment(string csRole)
+    public void Resolve_IsOfferedToTheCsLayerOnlyWhenTheyAreTheAssignee(string csRole)
     {
         // The reported repro: a CS Manager who IS the assignee, on a ticket in
         // a department they belong to. TicketRoleSets.Resolve excludes the CS
         // layer outright (ISSUE-022's Resolve/Close split), so neither
         // ownership nor membership may rescue it. CS resolves nothing; CS
         // closes and reopens.
+        // Updated rule: whoever the ticket is assigned to may resolve it, so the
+        // assignee is offered Resolve; a CS user who is NOT the assignee is not.
         var context = Context(Owner, [csRole], currentOwner: Owner, viewerDepartmentIds: [TicketDepartmentId]);
-
-        Assert.False(TicketActions.CanResolve(context));
+        Assert.True(TicketActions.CanResolve(context));
+        Assert.False(TicketActions.CanResolve(
+            Context(Owner, [csRole], currentOwner: Stranger, viewerDepartmentIds: [TicketDepartmentId])));
 
         // ... and the actions the CS layer DOES hold are untouched.
         Assert.True(TicketActions.CanReopen([csRole]));
@@ -210,7 +213,6 @@ public sealed class TicketActionVisibilityTests
     }
 
     [Theory]
-    [InlineData(Roles.GeneralManager)]
     [InlineData(Roles.ChairmanCeo)]
     [InlineData(Roles.ReportingUser)]
     public void Resolve_IsNotOfferedToRolesOutsideTheResolveSet(string role)
@@ -343,7 +345,7 @@ public sealed class TicketActionVisibilityTests
         {
             Assert.True(TicketActions.CanClose([csRole]));
             Assert.False(TicketActions.CanResolve(
-                Context(Owner, [csRole], currentOwner: Owner, viewerDepartmentIds: [TicketDepartmentId])));
+                Context(Owner, [csRole], currentOwner: Stranger, viewerDepartmentIds: [TicketDepartmentId])));
         }
 
         foreach (var departmentRole in new[] { Roles.DepartmentEmployee, Roles.DepartmentHead })
@@ -371,7 +373,7 @@ public sealed class TicketActionVisibilityTests
         var model = await RenderAsync(Owner, [Roles.CsManager], ticketOwner: Owner, TicketDepartmentId);
 
         Assert.NotNull(model.Ticket);
-        Assert.False(model.CanResolve);
+        Assert.True(model.CanResolve); // the assignee may resolve, whatever their role
 
         // The CS layer's own lifecycle authority is unchanged by this fix.
         Assert.True(model.CanTransfer);
@@ -391,7 +393,7 @@ public sealed class TicketActionVisibilityTests
         Assert.False(model.CanAssign);
         Assert.False(model.CanTransfer);
         Assert.False(model.CanReopen);
-        Assert.False(model.CanClose);
+        Assert.True(model.CanClose); // the assignee may close, whatever their department/role
     }
 
     [Fact]

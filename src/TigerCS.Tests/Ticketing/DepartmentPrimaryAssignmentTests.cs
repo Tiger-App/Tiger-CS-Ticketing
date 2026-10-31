@@ -43,7 +43,7 @@ public class DepartmentPrimaryAssignmentTests
         Assert.Null(ticket.CurrentOwnerEmployeeId);
 
         Assert.Equal(
-            "Facility Management Queue",
+            "Facility Management Queue (Unassigned)",
             TicketDisplay.AssignedToLabel(
                 ticket.CurrentOwnerEmployeeId, ownerName: null,
                 ticket.CurrentDepartmentId, "Facility Management"));
@@ -104,7 +104,7 @@ public class DepartmentPrimaryAssignmentTests
         Assert.Equal(DepartmentC, ticket.CurrentDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Equal(
-            "Collections Queue",
+            "Collections Queue (Unassigned)",
             TicketDisplay.AssignedToLabel(ticket.CurrentOwnerEmployeeId, ownerName: null, ticket.CurrentDepartmentId, "Collections"));
 
         // OriginatingDepartmentId stays write-once — transfer moves only the

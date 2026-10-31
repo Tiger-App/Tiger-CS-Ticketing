@@ -488,8 +488,8 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
         Assert.Equal(HttpStatusCode.OK, resolveResponse.StatusCode);
         var afterResolve = await resolveResponse.Content.ReadFromJsonAsync<TicketDetailDto>();
 
-        // A Department Employee may never close (ISSUE-022).
-        var forbiddenClose = await workerClient.PostAsJsonAsync(
+        // A department user who is neither the assignee nor CS may not close (the assignee may — covered in the lifecycle tests).
+        var forbiddenClose = await deptHeadClient.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/close", new CloseTicketRequestDto(Convert.FromBase64String(afterResolve!.RowVersion)));
         Assert.Equal(HttpStatusCode.Forbidden, forbiddenClose.StatusCode);
 

@@ -85,6 +85,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
 
     public DbSet<TicketAssignment> TicketAssignments => Set<TicketAssignment>();
 
+    public DbSet<DepartmentAssignmentRotation> DepartmentAssignmentRotations => Set<DepartmentAssignmentRotation>();
+
     public DbSet<TicketResolution> TicketResolutions => Set<TicketResolution>();
 
     public DbSet<TicketNote> TicketNotes => Set<TicketNote>();
@@ -196,6 +198,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new TicketRequesterSnapshotConfiguration());
         builder.ApplyConfiguration(new TicketStatusHistoryConfiguration());
         builder.ApplyConfiguration(new TicketAssignmentConfiguration());
+        builder.ApplyConfiguration(new DepartmentAssignmentRotationConfiguration());
         builder.ApplyConfiguration(new TicketResolutionConfiguration());
         builder.ApplyConfiguration(new TicketNoteConfiguration());
 

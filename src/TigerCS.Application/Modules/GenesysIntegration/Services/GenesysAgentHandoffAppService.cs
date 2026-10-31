@@ -1,5 +1,6 @@
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
+using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -54,7 +55,9 @@ public sealed class GenesysAgentHandoffAppService(
     ITicketRepository ticketRepository,
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IDepartmentRepository? departmentRepository = null,
+    ITicketAssignmentRepository? ticketAssignmentRepository = null)
 {
     public async Task<GenesysHandoffResult> RequestAsync(
         Guid callerEmployeeId, GenesysHandoffRequestDto request, CancellationToken cancellationToken = default)
@@ -143,6 +146,16 @@ public sealed class GenesysAgentHandoffAppService(
         // WaitingForAgent — and the work list.
         var agentId = request.AgentAvailable ? NullIfBlank(request.AgentId) : null;
 
+        // A human was requested: Call Center is the first human queue. A ticket nobody owns yet (and that is not already a
+        // deliberate agent-to-agent transfer) moves there; its previous department stays in the audit trail. A ticket a person
+        // already owns is left with them.
+        var callCenter = await ResolveCallCenterRoutingAsync(ticket, trigger, cancellationToken);
+        var routedFromDepartmentId = ticket.CurrentDepartmentId;
+        if (callCenter is not null)
+        {
+            ticket.TransferToDepartment(callCenter.DepartmentId);
+        }
+
         // The ticket's CURRENT department, not its originating one: work
         // follows a transferred ticket.
         var handoff = new TicketAgentHandoff(
@@ -166,6 +179,28 @@ public sealed class GenesysAgentHandoffAppService(
         interaction.RecordAgentIfAbsent(request.AgentId, request.AgentName);
 
         var requestCorrelationId = Guid.NewGuid();
+        if (callCenter is not null)
+        {
+            await auditWriter.WriteAsync(
+                actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: $"DepartmentId={routedFromDepartmentId};AssignedEmployeeId=DepartmentQueue",
+                afterValue: $"DepartmentId={callCenter.DepartmentId};Reason=Human agent requested — routed to Call Center",
+                requestCorrelationId, cancellationToken);
+
+            if (ticketAssignmentRepository is not null
+                && await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken) is { } currentAssignment)
+            {
+                currentAssignment.MarkSuperseded();
+            }
+
+            await workflowEventRepository.AddAsync(
+                TicketWorkflowEvent.ForTransfer(
+                    ticket.TicketId, requestedAtUtc, actorEmployeeId: null, TicketTransferReason.SystemRouting,
+                    routedFromDepartmentId, callCenter.DepartmentId, toEmployeeId: null,
+                    "Human agent requested — Call Center first", requestCorrelationId),
+                cancellationToken);
+        }
+
         await workflowEventRepository.AddAsync(
             new TicketWorkflowEvent(
                 ticket.TicketId, WorkflowEventType.HandoffRequested, requestedAtUtc, actorEmployeeId: null,
@@ -205,6 +240,23 @@ public sealed class GenesysAgentHandoffAppService(
         return new GenesysHandoffResult(
             GenesysHandoffOutcome.HandoffRecorded, handoff.TicketAgentHandoffId,
             ticket.TicketId, ticket.TicketNumber, handoff.Status.ToString());
+    }
+
+    /// <summary>The Call Center department when this handoff must route the ticket there; null when it must not (already there, owned by a person, closed, an explicit agent transfer, or no Call Center configured).</summary>
+    private async Task<Domain.Modules.IdentityAndAccess.Department?> ResolveCallCenterRoutingAsync(
+        Ticket ticket, HandoffTrigger? trigger, CancellationToken cancellationToken)
+    {
+        if (departmentRepository is null
+            || ticket.TicketStatus == TicketStatus.Closed
+            || ticket.CurrentOwnerEmployeeId is not null
+            || trigger == HandoffTrigger.AgentTransfer)
+        {
+            return null;
+        }
+
+        var callCenter = (await departmentRepository.ListAsync(activeOnly: true, cancellationToken)).FirstOrDefault(d =>
+            string.Equals(d.Code, Reporting.Services.TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase));
+        return callCenter is null || callCenter.DepartmentId == ticket.CurrentDepartmentId ? null : callCenter;
     }
 
     /// <summary>

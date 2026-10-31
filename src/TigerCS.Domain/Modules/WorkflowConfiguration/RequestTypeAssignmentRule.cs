@@ -79,6 +79,10 @@ public class RequestTypeAssignmentRule
     public static RequestTypeAssignmentRule ForDepartmentQueue(int requestTypeId, bool isActive = true) =>
         new(requestTypeId, AssignmentMode.DepartmentQueue, primaryEmployeeId: null, teamName: null, isActive);
 
+    /// <summary>Round Robin across the ticket's department's eligible employees; no employee is configured.</summary>
+    public static RequestTypeAssignmentRule ForRoundRobin(int requestTypeId, bool isActive = true) =>
+        new(requestTypeId, AssignmentMode.RoundRobin, primaryEmployeeId: null, teamName: null, isActive);
+
     public static RequestTypeAssignmentRule ForSpecificEmployee(int requestTypeId, Guid primaryEmployeeId, bool isActive = true)
     {
         if (primaryEmployeeId == Guid.Empty)

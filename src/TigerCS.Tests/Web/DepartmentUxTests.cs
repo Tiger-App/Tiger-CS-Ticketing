@@ -169,7 +169,7 @@ public sealed class DepartmentUxTests
         Assert.NotNull(model.Ticket);
         Assert.Equal("Facility Management", model.DepartmentName);
         Assert.Equal("Facility Management", TicketDisplay.AssignedDepartmentLabel(model.Ticket!.CurrentDepartmentId, model.DepartmentName));
-        Assert.Equal("Facility Management Queue", TicketDisplay.AssignedToLabel(null, null, model.Ticket.CurrentDepartmentId, model.DepartmentName));
+        Assert.Equal("Facility Management Queue (Unassigned)", TicketDisplay.AssignedToLabel(null, null, model.Ticket.CurrentDepartmentId, model.DepartmentName));
     }
 
     [Fact]
@@ -383,7 +383,7 @@ public sealed class DepartmentUxTests
     {
         Assert.Equal("Facility Management", TicketDisplay.AssignedDepartmentLabel(1, "Facility Management"));
         Assert.Equal("Unknown department", TicketDisplay.AssignedDepartmentLabel(1, null));
-        Assert.Equal("Facility Management Queue", TicketDisplay.AssignedToLabel(null, null, 1, "Facility Management"));
+        Assert.Equal("Facility Management Queue (Unassigned)", TicketDisplay.AssignedToLabel(null, null, 1, "Facility Management"));
         Assert.Equal("Department queue", TicketDisplay.AssignedToLabel(null, null, 1, null));
     }
 

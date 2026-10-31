@@ -205,6 +205,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ITicketRequesterSnapshotRepository, TicketRequesterSnapshotRepository>();
         services.AddScoped<ITicketStatusHistoryRepository, TicketStatusHistoryRepository>();
         services.AddScoped<ITicketAssignmentRepository, TicketAssignmentRepository>();
+        services.AddScoped<IAssignmentRotationRepository, AssignmentRotationRepository>();
         services.AddScoped<ITicketResolutionRepository, TicketResolutionRepository>();
         services.AddScoped<ITicketNoteRepository, TicketNoteRepository>();
         services.AddScoped<ITicketingUnitOfWork, TicketingUnitOfWork>();

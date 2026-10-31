@@ -364,6 +364,20 @@ public sealed class TicketCreationAppService(
         var automatic = await autoAssignmentService.ApplyAsync(
             ticket, now, correlationId, AutoAssignmentTrigger.TicketCreated, cancellationToken);
 
+        // Call Center is the first human queue: when a Call Center user opens a ticket for another department and no rule
+        // decided, that department's rotation picks the next eligible employee (the department queue, visibly unassigned,
+        // when nobody is eligible). Same engine as every other automatic assignment.
+        if (request.GenesysContext is null
+            && request.AssignToDepartmentQueue != true
+            && callerRoles is not null
+            && ticket.CurrentOwnerEmployeeId is null
+            && (automatic.Outcome is AutoAssignmentOutcome.NoRequestType or AutoAssignmentOutcome.NoRuleConfigured
+                or AutoAssignmentOutcome.ConfiguredAssigneeNotInDepartment)
+            && await autoAssignmentService.IsCallCenterRoutingAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
+        {
+            automatic = await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, automatic, now, correlationId, cancellationToken);
+        }
+
         // A CS Agent who creates a ticket by hand owns it — so they can see and work it — unless they chose the Department Queue, a
         // configured rule already decided, or someone is already assigned. Genesys-created tickets (a GenesysContext) are never self-assigned:
         // there the agent's access comes from handling the interaction.
