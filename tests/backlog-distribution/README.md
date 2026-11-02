@@ -1,35 +1,36 @@
 # Backlog-distribution validation suite
 
 Validates `Preview_…`, `Execute_…` and `Rollback_TigerCS_PROD_CallCenterBacklogDistribution*.sql` on a **real, disposable SQL Server 2022** container.
+Rule under test: **every Open ticket (assigned or not, any department) → Call Center → one eligible CS Agent** (the agent who answered the call if eligible, otherwise Round Robin);
+InProgress / Pending / Resolved / Closed tickets, pending approvals and live AI conversations are never touched; the previous assignment row is retired (history kept); rollback restores the previous owner, department and assignment.
 It never touches Production: the scripts' own guard requires a database named `TigerCS_Ticketing_Prod`, which this suite creates **inside its own container**.
 
 ```bash
 tests/backlog-distribution/setup_test_db.sh        # container + real schema (repo migrations) + fixture + backup
-python3 tests/backlog-distribution/run_tests.py     # all tests (T01-T14); optional filter: run_tests.py t04 t07
+python3 tests/backlog-distribution/run_tests.py     # all tests; optional filter: run_tests.py t04 t07
 SCALE_N=50000 python3 tests/backlog-distribution/run_tests.py t10
 ```
+(`TIGERSQL_CONTAINER` / `TIGERSQL_SA_PASSWORD` select another container.) Last full run: **193 checks, 193 passed** (incl. 20,000 extra tickets).
 
-* Schema = the repo's own migration scripts. The expected Round Robin deal is recomputed by an **independent Python oracle** (canonical GUID text order == .NET `Guid` order); nothing is graded against its own T-SQL.
-* The fixture (`01_seed.sql`) has 72 eligible and 12 held-back tickets in 5 departments (one inactive): pending approvals, live AI conversations, a ticket with both, and eligible look-alikes (decided approvals; AI conversations that ended, were closed for inactivity, need a human, have an open handoff or were taken by an agent). It also has tickets whose originating department differs from the current one, unclassified tickets, owned / legacy / data-drift / Resolved / Closed tickets that must never be touched, and 3 eligible CS Agents plus a Department Employee (in the pool only with `@CsAgentRoleOnly = 0`), deactivated, locked, service, read-only and supervisory accounts. Agent GUIDs are chosen so .NET order differs from SQL Server's native `uniqueidentifier` order.
-* Mutation checks (remove one safeguard, confirm a test fails) were run for: SQL-native GUID ordering, ignoring pending approvals in Execute / Preview, ignoring active AI conversations, the post-write approval re-check, locking of agent rows, the held-back gate counts, and the CS-Agent-only filter — all eight caught.
+* Schema = the repo's own migration scripts. The expected plan is recomputed by an **independent Python oracle** (canonical GUID text order == .NET `Guid` order); nothing is graded against its own T-SQL. The seven approval values are read from the Preview (the plan fingerprint is the Preview's own checksum; the other six are also asserted against the oracle).
+* The fixture (`01_seed.sql`): 40 Open tickets in the plan (15 `E-`, 4 `F-` carrying approval/AI history, 6 `X-OWN-FIN` + 2 `X-LEGACY` + 3 `X-DRIFT` already owned or with legacy assignment data, 10 `K-` ownership/answering-agent cases), 7 of them already in CC; 33 move. Held back: 3 pending approvals, 2 live AI conversations. Not touched: InProgress / Pending (assigned and not), Resolved, Closed. Answering-agent cases: kept-as-is, moved unowned, moved from another owner, handler ineligible (→ Round Robin), newest ticket is an answering-agent ticket. Agent GUIDs are chosen so .NET order differs from SQL Server's native `uniqueidentifier` order.
+* **Mutation checks** (sabotage one rule, confirm a test fails): 16 mutants of Execute/Rollback — all caught (see the runbook §11).
+* A second, independent layer — `src/TigerCS.Tests/Ticketing/TakeOwnership/BulkDistributionEndToEndSqlServerTests.cs` — runs these same scripts on the application's own EF schema (needs `TIGERCS_TEST_SQL_SERVER`) and drives the real API.
 
 | Test | Proves |
 |---|---|
-| T01 | Preview is read-only (table digests unchanged), matches the oracle for all 62 tickets, blocks on unconfirmed / empty / mistyped service-account list |
+| T01 / T01b | Preview is read-only (also as a plain `db_datareader`), plan/action/basis and per-agent distribution = oracle, blockers on unconfirmed / empty / mistyped service-account list |
 | T02 | `@DryRun = 1` performs and validates everything, then leaves the database byte-identical |
-| T03 | Every commit gate refuses (missing counts, wrong ticket / moved / agent count, unconfirmed or mistyped service ids, wrong database name) and changes nothing |
-| T04 | Commit: owners = oracle, all in CC, originating dept / request type / category / priority / status / SLA / created preserved, exactly one current assignment each, Transfer + AutoAssign audit, `TicketTransferred/SystemRouting` event per moved ticket, 23 non-eligible tickets byte-identical, history untouched, spread ≤ 1, no ineligible account used, cursor = last agent; second run refused |
-| T05 | Rollback of an untouched batch restores the **exact** pre-batch `Tickets` table; assignment rows retired not deleted; audit/events only grow; cursor restored; second rollback refused |
-| T06 / T06b | Rollback skips (byte-identical) tickets that were reassigned, worked (status / note / handler / first response / later event) or transferred out; `@IncludeWorked` relaxes only the "worked" test |
-| T07 | A second concurrent run fails on the application lock; a concurrent "assign this ticket" blocks and then updates 0 rows; the unique index rejects a duplicate current assignment |
-| T08 | A ticket taken by a human between preview and run aborts the run (counts no longer match) and the human's ownership survives |
-| T09 | Cursor mid-list / at end / on an ineligible agent / single agent all equal the oracle; CC assignment disabled, no agent, CC inactive abort |
-| T11 | **Pending approvals**: held back and listed separately (with approval type / date; a ticket that is also an AI conversation listed once); decided approvals do NOT block; held-back rows, their approvals, assignments, audit and events byte-identical after commit; rollback cannot reach them |
-| T11b | An approval decided / newly requested between preview and run changes the counts and refuses the run |
-| T12 | **Active AI conversations**: held back; ended / inactivity-closed / flagged-for-human / open-handoff / taken-by-agent are eligible; interaction, handoff and approval tables byte-identical; a new interaction or approval after the batch makes rollback skip the ticket |
-| T13 | **Concurrent safeguards**: approval / AI conversation created mid-run (before the update → whole run aborts, Msg 50340/50341; after the update → the competing writer waits / loses the deadlock); agent locked out mid-run aborts (50342); agent deactivation blocked until commit; live-intake cursor lock waits and reads the advanced cursor; no excluded account owns anything; one owner and one current assignment per batch ticket |
-| T14 | `@CsAgentRoleOnly` 1 / 0 and `@IncludeLiveAiConversations` 0 / 1 each equal the oracle; Preview and Execute must agree (a mismatch changes the counts and refuses the run); pending approvals stay held back either way |
-| T10 | 20,072 tickets: preview 0.5 s, commit ≈13 s, rollback ≈2 s, oracle match, spread ≤ 1, held-back tickets still unowned, 100,000 closed tickets untouched |
-| T01b | The Preview runs and reports READY under a plain `db_datareader` login, which cannot write |
-
-Not covered by this fixture: tickets with a `RequestTypeId` (compared NULL-safe, none seeded), live Genesys traffic, Production data volumes/indexes beyond the T10 shape.
+| T03 | Every commit gate refuses (each of the seven values missing or wrong, unconfirmed / mistyped service ids, wrong database name) and changes nothing |
+| T04 | Commit: owners = oracle, Open only, preserved fields, one current assignment each, assignment history only grows, audit with previous state, events, KEPT / outside-plan tickets byte-identical, cursor = last Round Robin agent; second run refused |
+| T05 | Rollback of an untouched batch restores the **exact** pre-batch `Tickets` table and the set of current assignments; history intact; cursor restored |
+| T06 / T06b | Rollback skips (byte-identical) tickets that were reassigned, worked, transferred, or had only their owner column changed; `@IncludeWorked` relaxes only the "worked" test |
+| T07 | Concurrency and **ownership protection**: second run fails on the lock; competing assign and the previous owner's stale-version save wait, then change 0 rows; unique index |
+| T08 | A person taking a ticket between Preview and run refuses the run (reassigned count) |
+| T09 | Cursor mid-list / at end / on an ineligible agent / single agent equal the oracle; CC assignment disabled / no agent / CC inactive abort |
+| T11 / T11b / T12 | Pending approvals and live AI conversations are held back, listed, untouched; decided / ended / human-flagged / taken ones are in the plan; changes between Preview and run refuse the run |
+| T13 | Concurrent safeguards: approval / AI conversation created mid-run aborts the whole run; agent locked out aborts; deactivation blocked until commit; live-intake cursor lock waits |
+| T14 | `@CsAgentRoleOnly` and `@IncludeLiveAiConversations` each equal the oracle; Preview and Execute must agree |
+| T15 | The final rules: Open only, assigned included, KEEP, answering agent / ineligible answering agent, legacy repair, previous owner holds a superseded row, My Tickets |
+| T16 | A second run cannot double-assign |
+| T10 | Scale: 20,000 extra tickets (5,040 Open in plan): preview 0.5 s, commit 1.7 s, rollback 1.1 s, oracle match, closed tickets untouched |

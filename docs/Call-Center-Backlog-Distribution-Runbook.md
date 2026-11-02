@@ -208,32 +208,24 @@ One thing to plan: Execute aborts the whole run if any planned ticket changed af
 * Service-account detection depends on the ids supplied.
 
 ## 11. Validation on SQL Server (what is proven, and what is not)
-The three scripts were run against a **real SQL Server 2022 (Developer, Linux container)**, schema built from this repository's own migration scripts. **160 checks, 160 passed**, repeated from a freshly rebuilt container (`tests/backlog-distribution/setup_test_db.sh`, then `run_tests.py`). The expected deal and the hold-back rules are recomputed by an **independent Python oracle** from raw rows, not by the SQL under test.
-Validation found and fixed defects in the earlier, never-run drafts — including a variable collision (`@n`/`@N`, case-insensitive) that stopped the script compiling on SQL Server, and an illegal aggregate with an outer reference in Rollback (Msg 8124) — that **are still present in the version merged to `main` by #143/#144**; this change replaces them.
+The three scripts were run against a **real SQL Server 2022 (Developer, Linux container)**. **193 checks, 193 passed** (`tests/backlog-distribution/run_tests.py`, including a 20,000-extra-ticket scale run: Preview 0.5 s, dry run 2.1 s, commit 1.7 s for 5,040 Open tickets, rollback 1.1 s). The expected plan (who gets which ticket, KEEP/ASSIGN/REASSIGN, answering agent vs Round Robin) is recomputed by an **independent Python oracle** from raw rows, not by the SQL under test.
+A second, independent layer runs the **same real scripts on the application's own EF schema** and drives the **real API** (`BulkDistributionEndToEndSqlServerTests`, §8).
+**Mutation checks:** 16 deliberate sabotages of the scripts (non-Open tickets included; owned tickets excluded; pending approvals not held back; answering agent ignored; KEEP never detected; previous assignment not retired; status changed; each of the two new gates removed; cursor advanced by answering-agent tickets; audit missing the previous state; the post-write approval re-check removed; rollback not restoring the previous owner / department / assignment row; rollback ignoring a later owner change) — **all 16 caught**. Two of them first *survived* and exposed weak spots in the fixture/tests (the newest ticket was not an answering-agent ticket; no case changed only the owner column), which were fixed and re-run.
 
 | Proven | |
 |---|---|
-| Preview | read-only (table digests unchanged); plan = oracle for every ticket; runs under a plain `db_datareader` login that cannot write; held-back tickets listed separately and absent from the plan; blocks on an unconfirmed / empty / mistyped service-account list |
-| Dry run / gates | `@DryRun = 1` leaves the database byte-identical; each missing or wrong approval — incl. both held-back counts — and a wrong database name refuse and change nothing |
-| Pending approvals | pending → held back; approved / rejected / cancelled → still eligible; pending + AI counted once; held-back rows, approvals, interactions, handoffs byte-identical after commit; an approval decided or newly requested after the preview changes the counts and refuses the run |
-| Active AI | live AI-only → held back; ended / inactivity-closed / flagged for human / open handoff / taken by an agent → eligible; AI tables untouched; `@IncludeLiveAiConversations = 1` includes them only when Preview and Execute agree and the counts match |
-| Pool | `@CsAgentRoleOnly` 1 and 0 both equal the oracle; deactivated / locked / service / read-only / supervisory accounts never receive tickets |
-| Commit | owners = oracle; all in CC; originating dept / request type / category / priority / status / SLA / created preserved; exactly one current assignment each; audit + `TicketTransferred/SystemRouting` events; non-eligible tickets byte-identical; spread ≤ 1 |
-| Rollback | untouched batch → the exact pre-batch `Tickets` table; reassigned / worked / transferred / newly-approved / new-interaction tickets skipped byte-for-byte; history only grows |
-| Scale | 20,072 eligible (16,066 moved) + 100,000 closed: preview 0.5 s, commit ≈ 13 s, rollback ≈ 2 s |
+| Preview | read-only (table digests unchanged); plan, action and basis = oracle for every ticket; per-agent distribution table = oracle; runs under a plain `db_datareader` login that cannot write; held-back tickets listed separately and absent from the plan; blocks on an unconfirmed / empty / mistyped service-account list |
+| Scope | only Open tickets; InProgress / Pending assigned tickets byte-identical; Open owned tickets reassigned; legacy owner-without-row and row-without-owner tickets repaired; pending approvals and live AI conversations untouched (rows, approvals, interactions, handoffs byte-identical) |
+| Answering agent | a ticket answered by an eligible agent goes to that agent; answered by an ineligible (deactivated) person → Round Robin; such tickets do not move the cursor; the cursor ends on the last *Round Robin* agent |
+| Dry run / gates | `@DryRun = 1` leaves the database byte-identical; each missing or wrong approval value — incl. the two held-back counts, the **reassigned count** and the **plan fingerprint** — and a wrong database name refuse and change nothing |
+| Commit | owners = oracle; all in CC; originating dept / request type / category / priority / **status (Open)** / SLA / created preserved; exactly one current assignment each; **assignment history only grows** (every previous row still there; exactly the previous current rows retired); `Transfer` + `AutoAssign` audit (recording previous owner / department / assignment) + `TicketTransferred/SystemRouting` events; KEPT tickets byte-identical; non-plan tickets byte-identical; Round Robin spread ≤ 1 |
+| Ownership protection | a competing "assign this ticket" and the previous owner's stale-row-version save both **wait for the batch and then change 0 rows**; a person assigning a ticket after the Preview refuses the run (reassigned count / fingerprint); a second concurrent run fails on the application lock; the unique index rejects a duplicate current assignment; an agent locked out / deactivated mid-run aborts or is blocked |
+| Rollback | untouched batch → the exact pre-batch `Tickets` table, identical set of current assignments, assignment history intact; reassigned / worked / transferred / owner-only-changed / newly-approved / new-interaction tickets are skipped byte-for-byte; `@IncludeWorked` relaxes only the "worked" test; second rollback refused |
 
-**Concurrent-assignment safeguards** (each has a test; a mutation check proves the test fails when the safeguard is removed):
+**Not proven:** Production data, volume, indexes and real ticket shapes; the Production SQL Server version/compatibility level (needs `STRING_AGG`, level ≥ 130); real Genesys traffic; real users in a browser. The first run on Production-like data must be the restored-copy rehearsal (§3 step 5).
 
-| Race | Outcome |
-|---|---|
-| Second run while one is running | Fails immediately on the application lock; nothing written |
-| A human assigns a candidate ticket mid-run | Blocks until commit, then updates 0 rows — cannot overwrite the batch's owner |
-| A duplicate *current* assignment | Rejected by the unique filtered index |
-| Pending approval / AI conversation created on a planned ticket **between selection and the update** | Post-write re-check aborts the **whole** run (Msg 50340 / 50341); nothing changed |
-| Same, **after** the update (ticket rows exclusively locked) | The competing insert waits on the ticket's foreign key and loses (deadlock victim, Msg 1205) or waits for the commit; no batch ticket ends up with a pre-commit pending approval |
-| A new owner is locked out mid-run | Re-check aborts the whole run (Msg 50342) |
-| An agent is deactivated mid-run | Blocked until the batch commits (agent rows are locked) |
-| Live Call Center intake (same cursor lock as the app) | Waits for the batch, then reads the advanced cursor |
-| Backlog changes between preview and run | Counts differ → abort; re-preview and re-approve |
-
-**Not proven:** your Production server (version / compatibility level, volume, indexes), real Genesys traffic, tickets carrying a `RequestTypeId` (not seeded; compared NULL-safe), the C# application. The "active AI conversation" definition is an interpretation of the schema (§2.1) — the Preview's held-back list is where you confirm it.
+## 12. Future tickets (no manual claiming)
+Not changed by the one-time batch — the application does it:
+* A ticket that needs a person is **routed to the Call Center at creation and given to exactly one CS Agent by Round Robin** (`TicketCreationAppService` → `AssignCallCenterIntakeAsync`). **Changed in this work:** that Call Center Round Robin now deals to **CS Agents only** (previously CS Agent, Department Employee and Department Head), the same pool as this batch, because only CS Agents can Transfer as owner (`CallCenterIntakeCsAgentOnlyTests`). Other departments keep their own Round Robin pool. If the Call Center has no eligible CS Agent, the ticket stays visibly in the Call Center queue — never guessed onto someone else; **make sure every intended agent holds the CS Agent role before deploying.**
+* A Genesys call **answered by a mapped, eligible Call Center agent** is assigned **directly to that agent**, not Round Robin (`GenesysAnsweringAgentRoutingTests`, #148); Round Robin is used only when a human was requested and nobody accepted. This is the same rule the batch applies to existing tickets.
+* A ticket owned by a human is never overwritten by a later Genesys event (`HumanOwnerKept`).

@@ -1,0 +1,133 @@
+SAMPLE OUTPUT - Preview_TigerCS_PROD_CallCenterBacklogDistribution_ReadOnly.sql
+=================================================================
+THIS IS NOT PRODUCTION DATA. It is the Preview run against the disposable TEST FIXTURE (tests/backlog-distribution/01_seed.sql) in a throw-away
+SQL Server container, to show what the approver receives. The real Production counts exist only when someone with read access runs the script
+on TigerCS_Ticketing_Prod (runbook section 3a). Nothing was run against Production.
+Result sets in order: 1 verdict | 2 Open tickets by department | 2b held back | 3 exclusions | 3b WHO LOSES TICKETS | 4 agents | 5 EXPECTED DISTRIBUTION PER AGENT |
+6 the seven approval values | 7 exact plan.
+=================================================================
+
+Server|Database|PreviewAtUtc|CallCenterDepartmentId|EligibleAgents|OpenTickets_InPlan|TicketsChanged|TicketsMovedIntoCC|TicketsAlreadyCorrect_Kept|NoOwnerBefore_Assigned|Reassigned_FromAnotherOwner|ToTheAnsweringAgent|HeldBack_PendingApproval|HeldBack_ActiveAiConversation|RotationCursor_LastAssignedEmployeeId|Verdict
+------|--------|------------|----------------------|--------------|------------------|--------------|------------------|--------------------------|----------------------|---------------------------|-------------------|------------------------|-----------------------------|-------------------------------------|-------
+d597ca267012|TigerCS_Ticketing_Prod|2026-11-02 18:14:54.4577876|1|3|40|38|33|2|25|13|6|3|2|NULL|READY
+ServiceIdsNotFound
+------------------
+OriginalDepartmentCode|OriginalDepartmentName|DepartmentIsActive|NoOwnerNow|OwnedNow|OpenTickets|Action
+----------------------|----------------------|------------------|----------|--------|-----------|------
+** TOTAL **|NULL|NULL|25|15|40|NULL
+FIN|Finance|1|5|9|14|MOVE to CC + assign
+SUP|Support|1|12|0|12|MOVE to CC + assign
+CC|Call Center|1|1|6|7|already in CC - (re)assign only
+LEG|Legal|1|5|0|5|MOVE to CC + assign
+OLD|Retired Dept|0|2|0|2|MOVE to CC + assign
+DepartmentCode|DepartmentName|HeldBack_PendingApproval|HeldBack_ActiveAiOnly|HeldBackTotal
+--------------|--------------|------------------------|---------------------|-------------
+** TOTAL **|NULL|3|2|5
+SUP|Support|1|1|2
+FIN|Finance|2|0|2
+LEG|Legal|0|1|1
+TicketId|TicketNumber|Status|CurrentDepartment|HeldBackBecause|Also|PendingApprovals|CreatedAtUtc
+--------|------------|------|-----------------|---------------|----|----------------|------------
+104|H-APR-4|Open|FIN|PENDING APPROVAL||Accounting (since 2026-10-31 18:06)|2026-09-01 08:19:00.0000000
+107|H-BOTH-1|Open|FIN|PENDING APPROVAL|also has an active AI conversation|Accounting (since 2026-10-31 18:06)|2026-09-01 08:22:00.0000000
+101|H-APR-1|Open|SUP|PENDING APPROVAL||Accounting (since 2026-10-31 18:06)|2026-09-01 08:16:00.0000000
+99|H-AI-4|Open|LEG|ACTIVE AI CONVERSATION||NULL|2026-09-01 08:14:00.0000000
+96|H-AI-1|Open|SUP|ACTIVE AI CONVERSATION||NULL|2026-09-01 08:11:00.0000000
+ResolvedOrClosed_Excluded|ActiveButNotOpen_Excluded_InProgressOrPending|OpenNoOwnerButHasCurrentAssignment_DataDrift_InPlan_Repaired|OpenOwnerButNoAssignmentRow_Legacy_InPlan|TicketsWithMoreThanOneCurrentAssignment_MustBe0
+-------------------------|---------------------------------------------|------------------------------------------------------------|-----------------------------------------|-----------------------------------------------
+8|68|3|2|0
+WithRequestType_Preserved|Unclassified|SlaBreached_ClockUntouched|WithDecidedApprovalHistory_Kept|AlreadyTransferredBefore_OriginatingDeptKept
+-------------------------|------------|--------------------------|-------------------------------|--------------------------------------------
+0|32|3|1|1
+PreviousOwner|UserName|Roles|OpenTicketsLost|LeavingTheirDepartment|Note
+-------------|--------|-----|---------------|----------------------|----
+FINEMP Person|finemp@test|Department Employee|9|9|
+A1 Person|a1@test|CS Agent|2|0|is also a Call Center agent in the pool
+A3 Person|a3@test|CS Agent|1|0|is also a Call Center agent in the pool
+DEACT Person|deact@test|CS Agent|1|0|
+RotationPosition|DisplayName|UserName|EmployeeId|Roles|RoundRobin|CursorMark|ActiveTicketsOwnedNow
+----------------|-----------|--------|----------|-----|----------|----------|---------------------
+1|A1 Person|a1@test|00000000-0000-0000-0000-000000000002|CS Agent|ELIGIBLE||6
+2|A2 Person|a2@test|00000000-0000-0000-0001-000000000000|CS Agent|ELIGIBLE||2
+3|A3 Person|a3@test|7A000000-0000-0000-0000-000000000001|CS Agent|ELIGIBLE||1
+-|CHAIR Person|chair@test|A3000000-0000-0000-0000-000000000001|Chairman/CEO|excluded: no operational role (read-only / supervisory / admin)||0
+-|DE Person|de@test|F0000000-0000-0000-0000-000000000009|Department Employee|excluded by @CsAgentRoleOnly: engine-eligible but no CS Agent role (cannot Transfer as owner)||0
+-|DEACT Person|deact@test|A4000000-0000-0000-0000-000000000001|CS Agent|excluded: deactivated||1
+-|LOCK Person|lock@test|A5000000-0000-0000-0000-000000000001|CS Agent|excluded: locked out||0
+-|RO Person|ro@test|A2000000-0000-0000-0000-000000000001|Reporting User|excluded: no operational role (read-only / supervisory / admin)||0
+-|SUPV Person|supv@test|A1000000-0000-0000-0000-000000000001|CS Supervisor|excluded: no operational role (read-only / supervisory / admin)||0
+-|SVC Person|svc@test|A6000000-0000-0000-0000-000000000001|CS Agent|excluded: service account||0
+UserName|DisplayName|PossibleServiceAccount_ReviewManually
+--------|-----------|-------------------------------------
+RotationPosition|DisplayName|UserName|OpenTicketsToOwn|ByRoundRobin|AsAnsweringAgent|FromOtherDepartments|AlreadyTheirs_Kept|TakenFromAnotherOwner|OpenOwnedBefore|OpenOwnedAfter_Estimated|Note
+----------------|-----------|--------|----------------|------------|----------------|--------------------|------------------|---------------------|---------------|------------------------|----
+1|A1 Person|a1@test|14|12|2|12|0|6|2|14|<- first to receive by Round Robin
+2|A2 Person|a2@test|13|11|2|9|2|4|2|13|
+3|A3 Person|a3@test|13|11|2|12|0|3|1|13|
+MinPerAgent|MaxPerAgent|RoundRobinSpread_MustBeAtMost1|RoundRobinTickets|AnsweringAgentTickets|Agents
+-----------|-----------|------------------------------|-----------------|---------------------|------
+11|12|1|34|6|3
+OriginalDepartmentCode|ReceivingAgent|Tickets
+----------------------|--------------|-------
+CC|A1 Person|2
+CC|A2 Person|4
+CC|A3 Person|1
+FIN|A1 Person|6
+FIN|A2 Person|3
+FIN|A3 Person|5
+LEG|A1 Person|3
+LEG|A2 Person|1
+LEG|A3 Person|1
+OLD|A2 Person|1
+OLD|A3 Person|1
+SUP|A1 Person|3
+SUP|A2 Person|4
+SUP|A3 Person|5
+ApprovedTicketCount|ApprovedTransferCount|ApprovedAgentCount|ApprovedHeldBackPendingApprovalCount|ApprovedHeldBackActiveAiCount|ApprovedReassignedCount|ApprovedPlanFingerprint
+-------------------|---------------------|------------------|------------------------------------|-----------------------------|-----------------------|-----------------------
+40|33|3|3|2|13|24773969
+DealOrder|TicketId|TicketNumber|Status|CreatedAtUtc|FromDepartment|ToDepartment|WouldBeAssignedTo|UserName|PlanAction|Basis|CurrentOwnerLosingIt
+---------|--------|------------|------|------------|--------------|------------|-----------------|--------|----------|-----|--------------------
+1|71|X-OWN-FIN-1|Open|2026-09-01 08:00:00.0000000|FIN|CC|A1 Person|a1@test|REASSIGN|round robin|FINEMP Person
+2|72|X-OWN-FIN-2|Open|2026-09-01 08:00:00.0000000|FIN|CC|A2 Person|a2@test|REASSIGN|round robin|FINEMP Person
+3|73|X-OWN-FIN-3|Open|2026-09-01 08:00:00.0000000|FIN|CC|A3 Person|a3@test|REASSIGN|round robin|FINEMP Person
+4|74|X-OWN-FIN-4|Open|2026-09-01 08:00:00.0000000|FIN|CC|A1 Person|a1@test|REASSIGN|round robin|FINEMP Person
+5|75|X-OWN-FIN-5|Open|2026-09-01 08:00:00.0000000|FIN|CC|A2 Person|a2@test|REASSIGN|round robin|FINEMP Person
+6|76|X-OWN-FIN-6|Open|2026-09-01 08:00:00.0000000|FIN|CC|A3 Person|a3@test|REASSIGN|round robin|FINEMP Person
+7|81|X-LEGACY-1|Open|2026-09-01 08:00:00.0000000|FIN|CC|A1 Person|a1@test|REASSIGN|round robin|FINEMP Person
+8|82|X-LEGACY-2|Open|2026-09-01 08:00:00.0000000|FIN|CC|A2 Person|a2@test|REASSIGN|round robin|FINEMP Person
+9|83|X-DRIFT-1|Open|2026-09-01 08:00:00.0000000|SUP|CC|A3 Person|a3@test|ASSIGN|round robin|(none)
+10|84|X-DRIFT-2|Open|2026-09-01 08:00:00.0000000|SUP|CC|A1 Person|a1@test|ASSIGN|round robin|(none)
+11|85|X-DRIFT-3|Open|2026-09-01 08:00:00.0000000|SUP|CC|A2 Person|a2@test|ASSIGN|round robin|(none)
+12|86|F-AIEND-1|Open|2026-09-01 08:01:00.0000000|SUP|CC|A3 Person|a3@test|ASSIGN|round robin|(none)
+13|89|F-AIHUM-1|Open|2026-09-01 08:04:00.0000000|LEG|CC|A1 Person|a1@test|ASSIGN|round robin|(none)
+14|92|F-AITAKEN-1|Open|2026-09-01 08:07:00.0000000|FIN|CC|A1 Person|a1@test|ASSIGN|answering agent|(none)
+15|93|F-DEC-1|Open|2026-09-01 08:08:00.0000000|SUP|CC|A2 Person|a2@test|ASSIGN|round robin|(none)
+16|36|E-0036|Open|2026-09-01 08:19:00.0000000|FIN|CC|A3 Person|a3@test|ASSIGN|round robin|(none)
+17|108|K-CCDEACT-1|Open|2026-09-01 11:21:00.0000000|CC|CC (no move)|A1 Person|a1@test|REASSIGN|round robin|DEACT Person
+18|109|K-CCOWN-1|Open|2026-09-01 11:22:00.0000000|CC|CC (no move)|A2 Person|a2@test|REASSIGN|round robin|A1 Person
+19|110|K-CCOWN-2|Open|2026-09-01 11:23:00.0000000|CC|CC (no move)|A3 Person|a3@test|REASSIGN|round robin|A1 Person
+20|111|K-CCOWN-3|Open|2026-09-01 11:24:00.0000000|CC|CC (no move)|A1 Person|a1@test|REASSIGN|round robin|A3 Person
+21|112|K-KEEP-1|Open|2026-09-01 11:25:00.0000000|CC|CC (no move)|A2 Person|a2@test|KEEP|answering agent|A2 Person
+22|113|K-KEEP-2|Open|2026-09-01 11:26:00.0000000|CC|CC (no move)|A2 Person|a2@test|KEEP|answering agent|A2 Person
+23|114|K-PIN-1|Open|2026-09-01 11:27:00.0000000|SUP|CC|A3 Person|a3@test|ASSIGN|answering agent|(none)
+24|116|K-PIN-3|Open|2026-09-01 11:29:00.0000000|FIN|CC|A1 Person|a1@test|REASSIGN|answering agent|FINEMP Person
+25|117|K-PINBAD-1|Open|2026-09-01 11:30:00.0000000|LEG|CC|A2 Person|a2@test|ASSIGN|round robin|(none)
+26|28|E-0028|Open|2026-09-02 08:26:00.0000000|FIN|CC|A3 Person|a3@test|ASSIGN|round robin|(none)
+27|20|E-0020|Open|2026-09-03 08:33:00.0000000|SUP|CC|A1 Person|a1@test|ASSIGN|round robin|(none)
+28|56|E-0056|Open|2026-09-03 08:52:00.0000000|OLD|CC|A2 Person|a2@test|ASSIGN|round robin|(none)
+29|12|E-0012|Open|2026-09-04 08:40:00.0000000|SUP|CC|A3 Person|a3@test|ASSIGN|round robin|(none)
+30|48|E-0048|Open|2026-09-04 08:59:00.0000000|LEG|CC|A1 Person|a1@test|ASSIGN|round robin|(none)
+31|4|E-0004|Open|2026-09-05 08:47:00.0000000|CC|CC (no move)|A2 Person|a2@test|ASSIGN|round robin|(none)
+32|40|E-0040|Open|2026-09-05 09:06:00.0000000|FIN|CC|A3 Person|a3@test|ASSIGN|round robin|(none)
+33|32|E-0032|Open|2026-09-06 09:13:00.0000000|FIN|CC|A1 Person|a1@test|ASSIGN|round robin|(none)
+34|24|E-0024|Open|2026-09-07 09:20:00.0000000|SUP|CC|A2 Person|a2@test|ASSIGN|round robin|(none)
+35|60|E-0060|Open|2026-09-07 09:39:00.0000000|OLD|CC|A3 Person|a3@test|ASSIGN|round robin|(none)
+36|52|E-0052|Open|2026-09-08 08:05:00.0000000|LEG|CC|A1 Person|a1@test|ASSIGN|round robin|(none)
+37|16|E-0016|Open|2026-09-08 09:27:00.0000000|SUP|CC|A2 Person|a2@test|ASSIGN|round robin|(none)
+38|44|E-0044|Open|2026-09-09 08:12:00.0000000|LEG|CC|A3 Person|a3@test|ASSIGN|round robin|(none)
+39|8|E-0008|Open|2026-09-09 09:34:00.0000000|SUP|CC|A1 Person|a1@test|ASSIGN|round robin|(none)
+40|115|K-PIN-2|Open|2026-10-01 08:00:00.0000000|SUP|CC|A3 Person|a3@test|ASSIGN|answering agent|(none)
+CursorWouldMoveTo|EmployeeId
+-----------------|----------
+A1 Person|00000000-0000-0000-0000-000000000002
