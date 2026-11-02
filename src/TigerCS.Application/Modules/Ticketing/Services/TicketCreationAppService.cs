@@ -375,7 +375,7 @@ public sealed class TicketCreationAppService(
                 or AutoAssignmentOutcome.ConfiguredAssigneeNotInDepartment)
             && await autoAssignmentService.IsCallCenterRoutingAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
         {
-            automatic = await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, automatic, now, correlationId, cancellationToken);
+            automatic = await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, automatic, now, correlationId, cancellationToken: cancellationToken);
         }
 
         // A CS Agent who creates a ticket by hand owns it — so they can see and work it — unless they chose the Department Queue, a

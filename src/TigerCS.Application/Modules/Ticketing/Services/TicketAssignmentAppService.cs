@@ -1,9 +1,10 @@
-using TigerCS.Application.Abstractions;
+﻿using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
+using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
@@ -146,7 +147,12 @@ public sealed class TicketAssignmentAppService(
         return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
     }
 
-    /// <summary>PR correction: transfer authority is CS Manager only — every other role (including Department Head and CS Supervisor, who retain Assign authority) is forbidden.</summary>
+    /// <summary>
+    /// Transfer authority is the Call Center layer, scoped per ticket — never global: a CS Manager may transfer any ticket; a CS Agent or
+    /// CS Supervisor only a ticket currently assigned to them, and a CS Supervisor also a ticket of a department they belong to.
+    /// Department Head, Department Employee and every other role are forbidden. After the move, the target department's rule or Round Robin
+    /// picks the assignee (never a random employee).
+    /// </summary>
     public async Task<TicketMutationResult> TransferAsync(
         Guid callerEmployeeId,
         IReadOnlyCollection<string> callerRoles,
@@ -160,7 +166,14 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
         }
 
-        if (!AuthorizationGate.Evaluate(callerRoles, () => callerRoles.Any(TicketRoleSets.Transfer.Contains)))
+        var transferAuthorized = await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
+            callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains)
+            || (callerRoles.Any(TicketRoleSets.Transfer.Contains)
+                && (ticket.CurrentOwnerEmployeeId == callerEmployeeId
+                    || (callerRoles.Contains(Roles.CsSupervisor)
+                        && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken)))));
+
+        if (!transferAuthorized)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
@@ -263,8 +276,12 @@ public sealed class TicketAssignmentAppService(
             // (no rule, rule targets someone outside department C, settings
             // disable assignment) leaves the ticket in the NEW department's
             // queue — audited, and never a randomly picked employee.
-            await autoAssignmentService.ApplyAsync(
+            var configured = await autoAssignmentService.ApplyAsync(
                 ticket, now, correlationId, AutoAssignmentTrigger.DepartmentTransfer, cancellationToken);
+
+            // No rule decided: the target department's Round Robin picks among its eligible active operational users.
+            await autoAssignmentService.ApplyCategoryRoutingAsync(
+                ticket, configured, now, correlationId, AutoAssignmentTrigger.DepartmentTransfer, cancellationToken);
         }
 
         // Ticket transfer tracking: one typed event per transfer — who moved it, to which department and (when one took

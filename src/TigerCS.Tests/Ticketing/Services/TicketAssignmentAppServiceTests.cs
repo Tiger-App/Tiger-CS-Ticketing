@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
@@ -281,13 +282,15 @@ public class TicketAssignmentAppServiceTests
         Assert.Equal(1, f.UnitOfWork.TransactionsRolledBack);
     }
 
-    // ---- Transfer authorization matrix (PR correction): CS Manager only,
-    // plus System Administrator via the ADR-0024 central override ----
+    // ---- Transfer authorization matrix: the Call Center layer, scoped per ticket (CS Manager any ticket;
+    // CS Agent/Supervisor their own ticket; Supervisor also within a department they belong to),
+    // plus System Administrator via the ADR-0024 central override. Here the caller is a member of the
+    // ticket's department but NOT its owner. ----
     public static IEnumerable<object[]> TransferRoleMatrix() =>
     [
         [Roles.CsAgent, false],
         [Roles.DepartmentEmployee, false],
-        [Roles.CsSupervisor, false],
+        [Roles.CsSupervisor, true],
         [Roles.DepartmentHead, false],
         [Roles.CsManager, true],
         [Roles.GeneralManager, false],
@@ -323,6 +326,72 @@ public class TicketAssignmentAppServiceTests
         {
             Assert.Equal(2, ticket.CurrentDepartmentId);
             Assert.Equal(0, f.UnitOfWork.SaveChangesCallCount);
+        }
+    }
+
+    [Theory]
+    [InlineData(Roles.CsAgent, true, true)]          // owner: may transfer their own ticket
+    [InlineData(Roles.CsSupervisor, true, true)]
+    [InlineData(Roles.CsAgent, false, false)]        // not owner, even as a department member: refused
+    [InlineData(Roles.CsSupervisor, false, false)]   // not owner, not a member: refused (no global reach)
+    [InlineData(Roles.DepartmentHead, true, false)]  // owner but not a Call Center role
+    [InlineData(Roles.DepartmentEmployee, true, false)]
+    [InlineData(Roles.ChairmanCeo, true, false)]
+    public async Task TransferAsync_IsScopedToTicketsTheCallCenterUserOwns(string role, bool isOwner, bool expectSuccess)
+    {
+        var f = CreateService();
+        var ticket = await SeedTicketAsync(f.Tickets, departmentId: 2);
+        var caller = Guid.NewGuid();
+        ticket.AssignTo(isOwner ? caller : Guid.NewGuid());
+        var target = f.Departments.AddDepartment("Collections " + role, "COL-" + role[..3]);
+
+        var result = await f.Service.TransferAsync(
+            caller, [role], ticket.TicketId, new TransferTicketRequestDto(target.DepartmentId, "Wrong team", []));
+
+        Assert.Equal(expectSuccess ? TicketMutationOutcome.Success : TicketMutationOutcome.Forbidden, result.Outcome);
+        Assert.Equal(expectSuccess ? target.DepartmentId : 2, ticket.CurrentDepartmentId);
+    }
+
+    [Fact]
+    public async Task TransferAsync_ByCsAgent_RoundRobinsToAnEligibleOperationalUserOfTheTargetDepartment()
+    {
+        var f = CreateService();
+        var agent = Guid.NewGuid();
+        var ticket = await SeedTicketAsync(f.Tickets, departmentId: 2);
+        ticket.AssignTo(agent);
+        var target = f.Departments.AddDepartment("Collections", "COL");
+        var eligible = Guid.NewGuid();
+        var supervisor = Guid.NewGuid();
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(eligible, target.DepartmentId, true, DateTime.UtcNow, null));
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(supervisor, target.DepartmentId, true, DateTime.UtcNow, null));
+        var roles = new FakeUserRoleReader().Add(eligible, Roles.DepartmentEmployee).Add(supervisor, Roles.CsSupervisor);
+        var rotation = new Dictionary<int, DepartmentAssignmentRotation>();
+        var autoAssignment = new TicketAutoAssignmentService(
+            f.Rules, f.WorkflowSettings, f.DepartmentAssignments, f.Assignments, f.Audit,
+            new RotationStub(rotation), f.Departments, roles);
+        var service = new TicketAssignmentAppService(
+            f.Tickets, f.Assignments, f.DepartmentAssignments, f.Departments, f.UnitOfWork, f.Audit, TimeProvider.System,
+            f.WorkflowSettings, autoAssignment);
+
+        var result = await service.TransferAsync(
+            agent, [Roles.CsAgent], ticket.TicketId, new TransferTicketRequestDto(target.DepartmentId, "Wrong team", []));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(target.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(eligible, ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Trigger=DepartmentTransfer") && e.AfterValue.Contains("RoundRobin"));
+    }
+
+    private sealed class RotationStub(Dictionary<int, DepartmentAssignmentRotation> rows) : IAssignmentRotationRepository
+    {
+        public Task<DepartmentAssignmentRotation> GetForUpdateAsync(int departmentId, DateTime nowUtc, CancellationToken cancellationToken = default)
+        {
+            if (!rows.TryGetValue(departmentId, out var row))
+            {
+                rows[departmentId] = row = new DepartmentAssignmentRotation(departmentId, nowUtc);
+            }
+
+            return Task.FromResult(row);
         }
     }
 

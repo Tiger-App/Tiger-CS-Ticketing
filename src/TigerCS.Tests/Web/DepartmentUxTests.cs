@@ -1,4 +1,4 @@
-// TigerCS.Web is referenced under an alias — see TigerCS.Tests.csproj.
+﻿// TigerCS.Web is referenced under an alias — see TigerCS.Tests.csproj.
 extern alias TigerCsWeb;
 
 using System.Net;
@@ -257,20 +257,54 @@ public sealed class DepartmentUxTests
         Assert.Equal(["Collections", "Registration"], model.TransferTargets.Select(d => d.Name));
     }
 
-    [Fact]
-    public void TicketActions_CanTransfer_MirrorsTheApiTransferRoleSetPlusTheAdminOverride()
-    {
-        Assert.True(TicketActions.CanTransfer([Roles.CsManager]));
-        Assert.True(TicketActions.CanTransfer([Roles.SystemAdministrator]));
+    private static TicketActionContext TransferContext(string role, bool owner, bool member) =>
+        new([role], Viewer, owner ? Viewer : Guid.NewGuid(), CurrentDept, member ? [CurrentDept] : []);
 
-        Assert.False(TicketActions.CanTransfer([Roles.CsAgent]));
-        Assert.False(TicketActions.CanTransfer([Roles.CsSupervisor]));
-        Assert.False(TicketActions.CanTransfer([Roles.DepartmentHead]));
-        Assert.False(TicketActions.CanTransfer([Roles.DepartmentEmployee]));
-        Assert.False(TicketActions.CanTransfer([Roles.GeneralManager]));
-        Assert.False(TicketActions.CanTransfer([Roles.ChairmanCeo]));
-        Assert.False(TicketActions.CanTransfer([Roles.ReportingUser]));
-        Assert.False(TicketActions.CanTransfer([]));
+    private static readonly Guid Viewer = Guid.NewGuid();
+    private const int CurrentDept = 7;
+
+    [Fact]
+    public void TicketActions_CanCloseTicket_MirrorsTheApiRule_OwnerAnyRole_OtherwiseCsSupervisorManager_NeverUnscopedAgent()
+    {
+        // The assignee closes their own ticket whatever their role or department.
+        foreach (var role in new[] { Roles.DepartmentEmployee, Roles.DepartmentHead, Roles.CsAgent, Roles.CsSupervisor, Roles.GeneralManager })
+        {
+            Assert.True(TicketActions.CanCloseTicket(TransferContext(role, owner: true, member: false)));
+        }
+
+        // Not the assignee: CS Supervisor/Manager yes; a CS Agent (needs ticket access the UI cannot see) and department roles no.
+        Assert.True(TicketActions.CanCloseTicket(TransferContext(Roles.CsSupervisor, owner: false, member: false)));
+        Assert.True(TicketActions.CanCloseTicket(TransferContext(Roles.CsManager, owner: false, member: false)));
+        Assert.True(TicketActions.CanCloseTicket(TransferContext(Roles.SystemAdministrator, owner: false, member: false)));
+        Assert.False(TicketActions.CanCloseTicket(TransferContext(Roles.CsAgent, owner: false, member: false)));
+        Assert.False(TicketActions.CanCloseTicket(TransferContext(Roles.DepartmentHead, owner: false, member: true)));
+        Assert.False(TicketActions.CanCloseTicket(TransferContext(Roles.ChairmanCeo, owner: true, member: true)));
+    }
+
+    [Fact]
+    public void TicketActions_CanTransfer_MirrorsTheApiScopedTransferRule()
+    {
+        // Manager and the admin override: any ticket.
+        Assert.True(TicketActions.CanTransfer(TransferContext(Roles.CsManager, owner: false, member: false)));
+        Assert.True(TicketActions.CanTransfer(TransferContext(Roles.SystemAdministrator, owner: false, member: false)));
+
+        // CS Agent / Supervisor: a ticket they own.
+        Assert.True(TicketActions.CanTransfer(TransferContext(Roles.CsAgent, owner: true, member: false)));
+        Assert.True(TicketActions.CanTransfer(TransferContext(Roles.CsSupervisor, owner: true, member: false)));
+        // ...a Supervisor also within a department they belong to; an Agent does not.
+        Assert.True(TicketActions.CanTransfer(TransferContext(Roles.CsSupervisor, owner: false, member: true)));
+        Assert.False(TicketActions.CanTransfer(TransferContext(Roles.CsAgent, owner: false, member: true)));
+
+        // No global reach for unrelated tickets.
+        Assert.False(TicketActions.CanTransfer(TransferContext(Roles.CsAgent, owner: false, member: false)));
+        Assert.False(TicketActions.CanTransfer(TransferContext(Roles.CsSupervisor, owner: false, member: false)));
+
+        // Every other role is refused even as owner/member.
+        foreach (var role in new[] { Roles.DepartmentHead, Roles.DepartmentEmployee, Roles.GeneralManager, Roles.ChairmanCeo, Roles.ReportingUser })
+        {
+            Assert.False(TicketActions.CanTransfer(TransferContext(role, owner: true, member: true)));
+        }
+
         Assert.False(TicketActions.CanTransfer(null));
     }
 

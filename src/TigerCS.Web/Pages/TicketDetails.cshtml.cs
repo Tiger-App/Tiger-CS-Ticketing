@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TigerCS.Application.Modules.Administration.Dto;
@@ -968,7 +968,7 @@ public sealed class TicketDetailsModel(
         ClassifyNotice = ClassifyNotice.For(
             ClassifyOptions,
             TicketDisplay.AssignedDepartmentLabel(ticket.CurrentDepartmentId, nameResolver.TryGetDepartmentName(ticket.CurrentDepartmentId)),
-            Viewer, TicketActions.CanTransfer(Viewer?.Roles));
+            Viewer, TicketActions.CanTransfer(ActionContext));
 
         var current = ticket.PriorityId ?? 4;
         ClassifyPriorities = Enumerable.Range(1, current).Select(p => (byte)p).ToList();
@@ -1200,7 +1200,7 @@ public sealed class TicketDetailsModel(
     /// </summary>
     private async Task LoadTransferTargetsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
-        CanTransfer = TicketActions.CanTransfer(Viewer?.Roles);
+        CanTransfer = TicketActions.CanTransfer(ActionContext);
         TransferTargets = [];
         TransferTargetsUnavailable = false;
 
