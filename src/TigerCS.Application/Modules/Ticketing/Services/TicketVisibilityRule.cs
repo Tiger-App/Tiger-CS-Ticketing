@@ -176,6 +176,12 @@ public static class TicketVisibilityRule
 
             if (!IsRestrictedCsAgent(callerRoles, callerEmployeeId, serviceIdentities))
             {
+                // The employee a ticket is currently assigned to can always open and work it (read-only roles never own tickets).
+                if (ticket.CurrentOwnerEmployeeId == callerEmployeeId && !Roles.IsReadOnlyCaller(callerRoles))
+                {
+                    return TicketAccessLevel.Full;
+                }
+
                 return await CanViewDepartmentAsync(
                     userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket.CurrentDepartmentId, serviceIdentities, cancellationToken)
                     ? TicketAccessLevel.Full

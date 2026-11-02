@@ -53,7 +53,7 @@ public class PermissionDomainTests
     [Fact]
     public void Roles_combine_as_a_union()
     {
-        var union = RolePermissionDefaults.ForRoles([Roles.ReportingUser, Roles.CsAgent]);
+        var union = RolePermissionDefaults.ForRoles([Roles.ChairmanCeo, Roles.CsAgent]);
         Assert.Contains(Permissions_ReportsView, union);
         Assert.Contains(TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsCreate, union);
     }
@@ -107,5 +107,41 @@ public class PermissionDomainTests
     {
         Assert.Throws<ArgumentException>(() =>
             new UserPermissionOverride(Guid.NewGuid(), "Nope.Nope", PermissionEffect.Deny, null, DateTime.UtcNow));
+    }
+
+    [Fact]
+    public void The_catalog_has_the_expected_28_permissions_including_resolve_and_transfer()
+    {
+        Assert.Equal(28, PermissionCatalog.All.Count);
+        Assert.True(PermissionCatalog.IsKnown(TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsResolve));
+        Assert.True(PermissionCatalog.IsKnown(TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransfer));
+    }
+
+    private static IEnumerable<string> RolesWith(string permission) =>
+        Roles.All.Where(r => RolePermissionDefaults.ForRole(r).Contains(permission));
+
+    /// <summary>The baselines must restate the role sets the services enforce - if one drifts, this fails.</summary>
+    [Fact]
+    public void Ticket_action_baselines_match_the_roles_the_services_enforce()
+    {
+        const string ns = "TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions";
+        _ = ns;
+        var sets = new (string Permission, IEnumerable<string> Enforced)[]
+        {
+            (TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsResolve, TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.Resolve),
+            (TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsClose, TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.Close),
+            (TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransfer, TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.Transfer),
+            (TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsReopen, TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.Reopen),
+            (TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsAssign,
+                TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.AssignCrossDepartment
+                    .Concat(TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.AssignWithinOwnDepartment))
+        };
+
+        foreach (var (permission, enforced) in sets)
+        {
+            Assert.True(
+                enforced.OrderBy(r => r).SequenceEqual(RolesWith(permission).Where(r => r != Roles.SystemAdministrator).OrderBy(r => r)),
+                $"{permission}: baseline {string.Join(", ", RolesWith(permission))} != enforced {string.Join(", ", enforced)} (+System Administrator)");
+        }
     }
 }

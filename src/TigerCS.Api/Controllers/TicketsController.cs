@@ -394,7 +394,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/transfer")]
-    [RequirePermission(Permissions.TicketsAssign)]
+    [RequirePermission(Permissions.TicketsTransfer)]
     [Tags(OpenApiTags.Transfer)]
     public async Task<IActionResult> Transfer(long ticketId, [FromBody] TransferTicketRequestDto request, CancellationToken cancellationToken)
     {
@@ -470,7 +470,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/resolution")]
-    [RequirePermission(Permissions.TicketsEdit)]
+    [RequirePermission(Permissions.TicketsResolve)]
     [Tags(OpenApiTags.TicketLifecycle)]
     public async Task<IActionResult> Resolve(long ticketId, [FromBody] ResolveTicketRequestDto request, CancellationToken cancellationToken)
     {

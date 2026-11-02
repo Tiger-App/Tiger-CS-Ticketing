@@ -1,3 +1,4 @@
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using TigerCS.Infrastructure.Http;
 using TigerCS.Web.Models;
@@ -45,6 +46,8 @@ var apiBaseUrl = builder.Configuration.GetSection(TigerCsApiOptions.SectionName)
 // outgoing call here, never sent to the client as readable data.
 builder.Services.AddTransient<BearerTokenHandler>();
 builder.Services.AddScoped<TicketNameResolver>();
+builder.Services.AddScoped<ViewerAccessService>();
+builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, ViewerPermissionHandler>();
 
 // AuthApiClient signs in/out and changes the caller's own password. Login
 // and Screen Pop run before any session exists (the handler then attaches
@@ -120,8 +123,11 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 
 builder.Services.AddAuthorization(options =>
 {
-    options.AddPolicy(AdministrationPolicy.Name, policy => policy.RequireRole(AdministrationPolicy.RequiredRole));
-    options.AddPolicy(ReportsPolicy.Name, policy => policy.RequireRole(ReportsPolicy.AllowedRoles));
+    // Page gates follow the same decision as the Api: the role rule or an explicit grant, and never a denial. Display-side only.
+    options.AddPolicy(AdministrationPolicy.Name, policy => policy.RequireAuthenticatedUser().AddRequirements(
+        new ViewerPermissionRequirement([AdministrationPolicy.RequiredRole], Permissions.AdminUsersView, Permissions.AdminConfigurationView)));
+    options.AddPolicy(ReportsPolicy.Name, policy => policy.RequireAuthenticatedUser().AddRequirements(
+        new ViewerPermissionRequirement(ReportsPolicy.AllowedRoles, Permissions.ReportsView)));
 });
 
 var app = builder.Build();

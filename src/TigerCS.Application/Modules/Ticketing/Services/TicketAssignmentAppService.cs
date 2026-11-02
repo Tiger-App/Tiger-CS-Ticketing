@@ -1,6 +1,9 @@
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
+using TigerCS.Application.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
@@ -23,7 +26,10 @@ public sealed class TicketAssignmentAppService(
     TimeProvider timeProvider,
     IDepartmentWorkflowSettingsRepository departmentWorkflowSettingsRepository,
     TicketAutoAssignmentService autoAssignmentService,
-    ITicketWorkflowEventRepository? workflowEventRepository = null)
+    ITicketWorkflowEventRepository? workflowEventRepository = null,
+    IUserPermissionOverrideRepository? permissionOverrides = null,
+    ITicketInteractionHandlerRepository? handlerRepository = null,
+    IServiceIdentityRegistry? serviceIdentities = null)
 {
     /// <summary>
     /// PR correction — the caller's role alone decides Assign authority now;
@@ -160,7 +166,25 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
         }
 
-        if (!AuthorizationGate.Evaluate(callerRoles, () => callerRoles.Any(TicketRoleSets.Transfer.Contains)))
+        // An explicit denial of Tickets.Transfer always blocks, the System Administrator included.
+        var transferOverride = await CallerPermissionOverrides.GetAsync(permissionOverrides, callerEmployeeId, Permissions.TicketsTransfer, cancellationToken);
+        if (transferOverride == PermissionEffect.Deny)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
+        }
+
+        var hasTransferRole = callerRoles.Any(TicketRoleSets.Transfer.Contains);
+        var transferGranted = transferOverride == PermissionEffect.Grant && !Roles.IsReadOnlyCaller(callerRoles);
+        if (!AuthorizationGate.Evaluate(callerRoles, () => hasTransferRole || transferGranted))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
+        }
+
+        // A grant stands in for the CS Manager role only. CS Manager is cross-department by role; someone transferring by grant alone
+        // must still be able to modify THIS ticket (their department / a ticket they handle) - the grant never widens visibility.
+        if (!hasTransferRole && !AuthorizationOverride.AppliesTo(callerRoles)
+            && !await TicketVisibilityRule.CanModifyTicketAsync(
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }

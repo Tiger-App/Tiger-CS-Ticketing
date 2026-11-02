@@ -1,6 +1,7 @@
 using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Web.Models;
 
@@ -40,13 +41,28 @@ public sealed record TicketActionContext(
     Guid ViewerEmployeeId,
     Guid? CurrentOwnerEmployeeId,
     int CurrentDepartmentId,
-    IReadOnlyCollection<int> ViewerDepartmentIds)
+    IReadOnlyCollection<int> ViewerDepartmentIds,
+    IReadOnlySet<string>? ViewerGrantedPermissions = null,
+    IReadOnlySet<string>? ViewerDeniedPermissions = null)
 {
+    /// <summary>The viewer's explicit denial of <paramref name="permission"/> (employee override, from GET /api/users/me): the Api refuses it whatever the role, ownership or System Administrator override says, so no control for it is ever offered.</summary>
+    public bool IsDenied(string permission) => ViewerDeniedPermissions?.Contains(permission) == true;
+
+    /// <summary>The viewer's explicit grant of <paramref name="permission"/>. A grant stands in for the role requirement only; ownership, department scope, visibility and status rules still apply.</summary>
+    public bool IsGranted(string permission) => ViewerGrantedPermissions?.Contains(permission) == true && !IsReadOnlyViewer;
+
     /// <summary>ADR-0024's override, read from its single central definition rather than naming the role here.</summary>
     public bool OverrideApplies => AuthorizationOverride.AppliesTo(ViewerRoles);
 
     /// <summary>The Api's <c>ticket.CurrentOwnerEmployeeId == callerEmployeeId</c>.</summary>
     public bool IsCurrentOwner => CurrentOwnerEmployeeId is { } owner && owner == ViewerEmployeeId;
+
+    /// <summary>True for roles that see tickets in every department (CS Supervisor/Manager, General Manager, Chairman/CEO, System Administrator) - a grant used by them is already within their ticket visibility. CS Agent is excluded: its visibility is per ticket.</summary>
+    public bool SeesTicketsAcrossDepartments =>
+        ViewerRoles.Any(r => r != Roles.CsAgent && TicketRoleSets.CrossDepartmentView.Contains(r));
+
+    /// <summary>Whether a granted permission may be exercised on this ticket: the ticket is in the viewer's department or in a department the viewer's role sees across.</summary>
+    public bool TicketWithinGrantScope => BelongsToCurrentDepartment || SeesTicketsAcrossDepartments;
 
     /// <summary>The Api's <c>userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId)</c>.</summary>
     public bool BelongsToCurrentDepartment => ViewerDepartmentIds.Contains(CurrentDepartmentId);
@@ -136,6 +152,19 @@ public static class TicketActions
         && (viewerRoles.Any(TicketRoleSets.Transfer.Contains) || AuthorizationOverride.AppliesTo(viewerRoles));
 
     /// <summary>
+    /// Transfer including the viewer's own overrides: never when Tickets.Transfer is denied; otherwise the role rule above, or an
+    /// explicit grant for a viewer who belongs to the ticket's current department (a grant never widens ticket visibility).
+    /// </summary>
+    public static bool CanTransferTicket(TicketActionContext? context) =>
+        context is { } c
+        && !c.IsDenied(Permissions.TicketsTransfer)
+        && (CanTransfer(c.ViewerRoles) || (c.IsGranted(Permissions.TicketsTransfer) && c.TicketWithinGrantScope));
+
+    /// <summary>Reopen including the viewer's own overrides (a denial hides it; Reopen has no grant path in the services).</summary>
+    public static bool CanReopenTicket(TicketActionContext? context) =>
+        context is { } c && !c.IsDenied(Permissions.TicketsReopen) && CanReopen(c.ViewerRoles);
+
+    /// <summary>
     /// Whether a Close control is worth rendering. Reads the Api's own
     /// <see cref="TicketRoleSets.Close"/> (CS Agent/CS Supervisor/CS Manager —
     /// the other half of ISSUE-022's Resolve/Close split) plus ADR-0024's
@@ -154,7 +183,12 @@ public static class TicketActions
 
     /// <summary>Close, including the ticket's current assignee — who may close it whatever their role or department (read-only roles excepted).</summary>
     public static bool CanCloseTicket(TicketActionContext? context) =>
-        context is { } c && (CanClose(c.ViewerRoles) || (c.IsCurrentOwner && !c.IsReadOnlyViewer));
+        context is { } c
+        && !c.IsDenied(Permissions.TicketsClose)
+        && (CanClose(c.ViewerRoles)
+            || (c.IsCurrentOwner && !c.IsReadOnlyViewer)
+            // A grant replaces the CS-layer role only; the viewer must still belong to the ticket's department.
+            || (c.IsGranted(Permissions.TicketsClose) && c.TicketWithinGrantScope));
 
     /// <summary>
     /// Mirrors <c>TicketLifecycleAppService.IsResolveAuthorizedAsync</c>:
@@ -178,6 +212,11 @@ public static class TicketActions
             return false;
         }
 
+        if (c.IsDenied(Permissions.TicketsResolve))
+        {
+            return false;
+        }
+
         if (c.OverrideApplies)
         {
             return true;
@@ -188,12 +227,14 @@ public static class TicketActions
             return true;
         }
 
-        if (!c.HasAnyRole(TicketRoleSets.Resolve))
+        var hasRole = c.HasAnyRole(TicketRoleSets.Resolve);
+        if (!hasRole && !c.IsGranted(Permissions.TicketsResolve))
         {
             return false;
         }
 
-        return c.HasRole(Roles.DepartmentHead) ? c.BelongsToCurrentDepartment : c.IsCurrentOwner;
+        // Role or grant satisfies the permission; scope still applies (a grant alone is scoped like a Department Head).
+        return c.HasRole(Roles.DepartmentHead) || !hasRole ? c.BelongsToCurrentDepartment : c.IsCurrentOwner;
     }
 
     /// <summary>
@@ -233,6 +274,7 @@ public static class TicketActions
 
     public static bool CanAssign(TicketActionContext? context) =>
         context is { } c
+        && !c.IsDenied(Permissions.TicketsAssign)
         && (c.OverrideApplies
             || c.HasAnyRole(TicketRoleSets.AssignCrossDepartment)
             || (c.HasAnyRole(TicketRoleSets.AssignWithinOwnDepartment) && c.BelongsToCurrentDepartment));
@@ -251,6 +293,7 @@ public static class TicketActions
     /// </summary>
     public static bool CanChangeStatus(TicketActionContext? context) =>
         context is { } c
+        && !c.IsDenied(Permissions.TicketsEdit)
         && (c.OverrideApplies
             || (c.IsCurrentOwner && !c.IsReadOnlyViewer)
             || c.HasAnyRole(TicketRoleSets.CrossDepartmentSupervisory)

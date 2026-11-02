@@ -968,7 +968,7 @@ public sealed class TicketDetailsModel(
         ClassifyNotice = ClassifyNotice.For(
             ClassifyOptions,
             TicketDisplay.AssignedDepartmentLabel(ticket.CurrentDepartmentId, nameResolver.TryGetDepartmentName(ticket.CurrentDepartmentId)),
-            Viewer, TicketActions.CanTransfer(Viewer?.Roles));
+            Viewer, TicketActions.CanTransferTicket(ActionContext));
 
         var current = ticket.PriorityId ?? 4;
         ClassifyPriorities = Enumerable.Range(1, current).Select(p => (byte)p).ToList();
@@ -1168,7 +1168,9 @@ public sealed class TicketDetailsModel(
                 Viewer.EmployeeId,
                 ticket.CurrentOwnerEmployeeId,
                 ticket.CurrentDepartmentId,
-                [.. nameResolver.OwnDepartments.Select(d => d.DepartmentId)]);
+                [.. nameResolver.OwnDepartments.Select(d => d.DepartmentId)],
+                nameResolver.OwnPermissions.Granted,
+                nameResolver.OwnPermissions.Denied);
 
         StatusTargets = TicketStatusTransitions.AllowedTargetsFrom(ticket.TicketStatus);
 
@@ -1200,7 +1202,7 @@ public sealed class TicketDetailsModel(
     /// </summary>
     private async Task LoadTransferTargetsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
-        CanTransfer = TicketActions.CanTransfer(Viewer?.Roles);
+        CanTransfer = TicketActions.CanTransferTicket(ActionContext);
         TransferTargets = [];
         TransferTargetsUnavailable = false;
 
@@ -1233,7 +1235,7 @@ public sealed class TicketDetailsModel(
     /// </summary>
     private async Task LoadReopenTargetsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
-        CanReopen = TicketActions.CanReopen(Viewer?.Roles);
+        CanReopen = TicketActions.CanReopenTicket(ActionContext);
         ReopenTargets = [];
         ReopenTargetsUnavailable = false;
 

@@ -23,29 +23,34 @@ public static class RolePermissionDefaults
     private static readonly IReadOnlyDictionary<string, IReadOnlySet<string>> Map =
         new Dictionary<string, IReadOnlySet<string>>(StringComparer.Ordinal)
         {
+            // Each list restates the role sets the existing services already enforce
+            // (TicketRoleSets, SlaRoleSets, PolicyNames). Ownership-based rights (the assigned employee
+            // may resolve / close / work their own ticket) are ticket-level and are not role baselines.
             [Roles.CsAgent] = Set(
-                TicketsView, TicketsCreate, TicketsEdit, TicketsReopen, TicketsEscalate,
+                TicketsView, TicketsCreate, TicketsEdit, TicketsClose, TicketsReopen, TicketsEscalate,
                 CustomersView, CustomersSend, CollectionsView, CampaignsView, DashboardView,
                 InteractionsView, InteractionsEdit),
             [Roles.CsSupervisor] = Set(
-                TicketsView, TicketsCreate, TicketsEdit, TicketsAssign, TicketsApprove, TicketsClose, TicketsReopen, TicketsEscalate,
-                CustomersView, CustomersSend, CollectionsView, CampaignsView, DashboardView,
+                TicketsView, TicketsCreate, TicketsEdit, TicketsAssign, TicketsClose, TicketsReopen, TicketsEscalate,
+                CustomersView, CustomersSend, CollectionsView, CollectionsSend, CampaignsView, DashboardView,
                 InteractionsView, InteractionsEdit),
             [Roles.DepartmentEmployee] = Set(
-                TicketsView, TicketsEdit, TicketsEscalate, CustomersView, DashboardView),
+                TicketsView, TicketsEdit, TicketsResolve, TicketsApprove, TicketsEscalate, CustomersView, DashboardView),
             [Roles.DepartmentHead] = Set(
-                TicketsView, TicketsEdit, TicketsAssign, TicketsApprove, TicketsClose, TicketsEscalate,
+                TicketsView, TicketsEdit, TicketsAssign, TicketsResolve, TicketsApprove, TicketsEscalate,
                 CustomersView, DashboardView),
             [Roles.CsManager] = Set(
-                TicketsView, TicketsEdit, TicketsAssign, TicketsApprove, TicketsClose, TicketsReopen, TicketsEscalate,
+                TicketsView, TicketsEdit, TicketsAssign, TicketsTransfer, TicketsApprove, TicketsClose, TicketsReopen, TicketsEscalate,
                 CustomersView, CustomersSend, CollectionsView, CollectionsEdit, CollectionsSend,
                 CampaignsView, CampaignsExport, ReportsView, DashboardView, InteractionsView, InteractionsEdit),
             [Roles.GeneralManager] = Set(
-                TicketsView, TicketsEdit, TicketsAssign, TicketsApprove, TicketsClose, TicketsReopen, TicketsEscalate,
+                TicketsView, TicketsEdit, TicketsApprove, TicketsEscalate,
                 CustomersView, CollectionsView, CampaignsView, CampaignsExport, ReportsView, DashboardView),
             [Roles.ChairmanCeo] = Set(
                 TicketsView, CustomersView, CollectionsView, CampaignsView, ReportsView, DashboardView),
-            [Roles.ReportingUser] = Set(ReportsView, DashboardView),
+            // ReportsRead (the API policy) admits CS Manager, General Manager and Chairman/CEO only, so Reporting User has no Reports.View
+            // baseline even though its role description mentions reports; granting it is the supported way to open reports for that role.
+            [Roles.ReportingUser] = Set(DashboardView),
             [Roles.SystemAdministrator] = Set([.. PermissionCatalog.All.Select(p => p.Key)])
         };
 
