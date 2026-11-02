@@ -224,3 +224,44 @@ The three scripts were run against a **real SQL Server 2022 (Developer, Linux co
 **Mutation checks** (a safeguard removed, a test must fail — all caught): Open-only filter widened; denial filter removed; rollback not re-activating the previous row; rollback restoring no owner; superseded-rows check removed.
 
 **Not proven:** your Production server (version / compatibility level, volume, indexes), real Genesys traffic, tickets carrying a `RequestTypeId` (compared NULL-safe, none seeded), the C# application (no .NET SDK here; C# unchanged), and whether the "active AI conversation" interpretation (§2.1) matches your data — the Preview's held-back list is where you confirm it.
+
+## 12. Investigation: Production Preview held back 146 of 159 Open tickets as "ACTIVE AI CONVERSATION"
+
+**Production Preview (reported):** 159 Open · 13 eligible · **146 held back as active AI** · 5 eligible agents (so 0 held back for a pending approval).
+
+### 12.1 Why this happens (from the code and the rule, not yet from Production data)
+The hold-back test is *"a Genesys interaction exists with `EndedAtUtc IS NULL` and `InactivityClosedAtUtc IS NULL` (and no human flag, no handler, no open handoff)"*. It never asks **how long ago** anything happened. A conversation becomes "ended" only when
+* Genesys calls the conversation-end endpoint (`GenesysConversationEndAppService`, which sets `EndedAtUtc`), or
+* the chatbot-inactivity sweep sets `InactivityClosedAtUtc` (10 min for Website/Chatbot, 5 min awaiting reply; **phone is not covered**).
+
+If either feed never ran for historical conversations (or the data was imported / created through an integration that records only the start), every one of them is "live" for ever. **92% of the Open backlog flagged is consistent with exactly that**, but only the diagnostic below can prove it: it needs the real timestamps.
+
+### 12.2 The read-only diagnostic — `Diagnose_TigerCS_PROD_ActiveAiConversations_ReadOnly.sql`
+SELECT only (temp tables), `READ UNCOMMITTED`, runs under `db_datareader`, aborts on any other database. It uses the **same** active-AI test as the Preview and adds the evidence the rule ignores: last activity (interaction stamps, transcript messages, handoff/Genesys events), human evidence (HumanAgent line, interaction-handler row, first human response, handoff row, agent events), ended interactions, transcript and conversation-id presence. Each flagged ticket gets exactly one state:
+
+| State | Meaning | Treatment |
+|---|---|---|
+| `HUMAN_TOUCHED_NOT_FLAGGED` | a person took part but the row still says AI | human work → eligible under `@TreatHumanTouchedAiAsHistorical = 1` |
+| `GENUINELY_ACTIVE` | last activity within `@RecentMinutes` (60) | **stays protected** |
+| `SILENT_BUT_UNDER_THRESHOLD` | silent longer than that but not longer than `@StaleAfterHours` (24) | **stays protected** |
+| `STALE_NO_END_EVENT` | silent longer than `@StaleAfterHours`, no human evidence | historical, end event missing → eligible under `@StaleAiAfterHours` |
+
+Result sets: (1) headline (flagged, also pending approval, owned, eligible); **(2) counts by conversation state × channel**; **(3) counts by reason** (no end event, no transcript, no conversation id, phone still live, chat silent past 10 min but never closed, ended interaction present / newer than the live row, human evidence kinds, agent id stored); (4) age histogram + ticket creation month (a sharp cut-off date shows when an end feed stopped or began); **(5) projection of eligible tickets for 1 h / 6 h / 24 h / 3 d / 7 d / 30 d thresholds**; (6) missing / incomplete records among Open tickets (no interaction row, no start time, ended without reason, live rows on non-Open tickets) and Genesys interactions per month never ended (is "never ended" the norm?); (7) every flagged ticket with state, age and evidence (ticket numbers only).
+**Tickets with no `TicketInteractions` row at all are never held back by the rule**; they are already counted as eligible (set 6 reports how many).
+
+### 12.3 Recommended correction (nothing is written to Production data)
+1. **Do not touch the rule and do not edit `TicketInteractions`.** Marking rows as ended would invent end times and change what the app shows and how the inactivity/AI-closure code treats the ticket.
+2. **Add two explicit, reviewable switches to Preview and Execute, both OFF by default** (they classify in memory, with the *same* SQL as the diagnostic):
+   * `@StaleAiAfterHours` (NULL = off; recommended starting value **24**, chosen from set 5 of the diagnostic) — an active-AI conversation silent for longer than this with **no** human evidence is treated as an ended historical conversation;
+   * `@TreatHumanTouchedAiAsHistorical` (0 = off) — a ticket where a person demonstrably took part is human work (the runbook already put human work in scope).
+   Both must be identical in Preview and Execute; because they change the counts, an Execute with the old approved numbers is **refused** (tested). Genuinely active and recently silent conversations keep their protection; pending approvals stay held back either way; the Preview lists every ticket whose protection was lifted (`ReclassifiedAs`, silent hours, outcome).
+3. **Safety net during the run:** a *new* interaction created on a "stale" ticket while Execute runs is treated as a live conversation and aborts the whole run (Msg 50341, tested).
+4. **Root cause (separate change, not part of this PR):** make sure Genesys sends the conversation-end event for every chat and call, and give phone interactions an inactivity/end sweep; then `NeverEnded` in set 6 stops growing. Until then new tickets are unaffected by this batch.
+5. **Residual risk:** a conversation silent for > 24 h that the customer resumes later after the move is handled by the Call Center owner (a person) instead of the AI. The 24 h default and the per-ticket list are there to make that call explicit.
+
+### 12.4 Updated Preview — how to get the numbers
+1. Run the diagnostic; send all result sets. Pick the threshold from set 5.
+2. Run the Preview with `@StaleAiAfterHours = <h>` (and optionally `@TreatHumanTouchedAiAsHistorical = 1`). Verdict row now also shows `StaleAiTreatedAsEnded` / `HumanTouchedAiTreatedAsHuman`; `HeldBack_ActiveAiConversation` is what remains protected.
+3. Approve the six numbers **and** the two switch values; use the identical values in Execute.
+
+**Production figures are not available to this session**, so the projected counts for the 146 cannot be stated here: they come from set 5 and the re-run Preview. What *is* proven (SQL Server 2022, scenarios: 5-minute-old chat, 12 h silent, 3-day stale chat, 2-day stale phone call, old conversation with a message 30 min ago, HumanAgent line, handler row, stale + pending approval, stale + later ended conversation, ticket with no interaction row): the diagnostic counts equal an independent oracle, switches off = unchanged counts, each switch combination = oracle, interactions/messages/handlers/approvals byte-identical after commit, rollback restores the tickets.

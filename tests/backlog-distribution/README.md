@@ -5,7 +5,7 @@ It never touches Production: the scripts' own guard requires a database named `T
 
 ```bash
 tests/backlog-distribution/setup_test_db.sh        # container + real schema (repo migrations) + fixture + backup
-python3 tests/backlog-distribution/run_tests.py     # all tests (T01-T17); optional filter: run_tests.py t04 t07
+python3 tests/backlog-distribution/run_tests.py     # all tests (T01-T18); optional filter: run_tests.py t04 t07
 SCALE_N=50000 python3 tests/backlog-distribution/run_tests.py t10
 ```
 
@@ -38,3 +38,4 @@ Not covered by this fixture: tickets with a `RequestTypeId` (compared NULL-safe,
 | T15 | **Owned tickets**: 24 replaced across 7 kinds of previous owner; previous rows retained and retired; legacy / drift handled; CC tickets re-dealt; My Tickets per agent; Resolve/Close prerequisites; rollback restores owners and rows |
 | T16 | Explicit denial excludes an agent (default commit proves it), switch off includes it, no `UserPermissionOverrides` table works |
 | T17 | `@ReassignTicketsAlreadyOwnedByEligibleCcAgent = 0` leaves CC tickets owned by a pool agent byte-identical; gates must match |
+| T18 | **Stale / human-touched "active AI" conversations**: the read-only diagnostic equals an independent oracle (states, headline, 24 h projection) and writes nothing; Preview / Execute switches `@StaleAiAfterHours`, `@TreatHumanTouchedAiAsHistorical` equal the oracle (off = unchanged, old approved counts refused); genuinely active, recently silent, recent-message and pending-approval tickets stay byte-identical; no conversation record modified; a new conversation created mid-run aborts (Msg 50341) |
