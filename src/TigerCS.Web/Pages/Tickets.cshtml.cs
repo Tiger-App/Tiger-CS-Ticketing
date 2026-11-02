@@ -5,6 +5,7 @@ using Microsoft.Extensions.Primitives;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
+using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Web.Models;
 using TigerCS.Web.Services;
 using TigerCS.Web.Services.Api;
@@ -65,6 +66,15 @@ public sealed class TicketsModel(
     public int? RequestTypeId { get; set; }
     public bool ActiveOnly { get; set; }
     public bool InDepartmentQueue { get; set; }
+
+    /// <summary>"Available to take": only the unassigned, human-handling tickets a Call Center agent may take ownership of (the queue endpoint's <c>availableToTake</c> filter).</summary>
+    public bool AvailableToTake { get; set; }
+
+    /// <summary>
+    /// Whether the "Available to take" filter is offered: a CS Agent whose ticket list is the narrow per-ticket one (everyone else already sees,
+    /// or has no claim on, the pool). The Api decides what the filter returns; for a non-agent it can only narrow.
+    /// </summary>
+    public bool OffersAvailableToTakeFilter => View == TicketsView.Queue && TicketVisibilityRule.IsRestrictedCsAgent(Viewer?.Roles ?? []);
     public bool SlaBreached { get; set; }
     public bool DueToday { get; set; }
     public string? BacklogAge { get; set; }
@@ -214,7 +224,8 @@ public sealed class TicketsModel(
         bool slaBreached = false, bool dueToday = false, string? backlogAge = null, bool pendingApproval = false,
         DateOnly? createdFrom = null, DateOnly? createdTo = null, bool unclassified = false, bool escalated = false, string? closureCategory = null, DateOnly? closedFrom = null, DateOnly? closedTo = null,
         string? view = null, string? sla = null, string? assignee = null,
-        bool mineOnly = false, bool unassignedOnly = false, bool includeResolved = false, bool createdByMe = false)
+        bool mineOnly = false, bool unassignedOnly = false, bool includeResolved = false, bool createdByMe = false,
+        bool availableToTake = false)
     {
         Viewer = CurrentUser.FromPrincipal(User);
         CanCreateTicket = TicketCreationPolicy.AppliesTo(Viewer);
@@ -265,6 +276,7 @@ public sealed class TicketsModel(
         RequestTypeId = requestTypeId;
         ActiveOnly = activeOnly;
         InDepartmentQueue = inDepartmentQueue;
+        AvailableToTake = availableToTake && View == TicketsView.Queue;
         SlaBreached = slaBreached;
         DueToday = dueToday;
         BacklogAge = backlogAge;
@@ -385,7 +397,7 @@ public sealed class TicketsModel(
             ChannelId, RequestTypeId,
             ActiveOnly ? true : null, InDepartmentQueue ? true : null, SlaBreached ? true : null, DueToday ? true : null,
             BacklogAge, PendingApproval ? true : null, CreatedFrom, CreatedTo, Unclassified ? true : null, ClosureCategory, ClosedFrom, ClosedTo,
-            CreatedByMe ? true : null, Escalated ? true : null);
+            CreatedByMe ? true : null, Escalated ? true : null, AvailableToTake ? true : null);
 
         var result = await ticketsApiClient.GetQueueAsync(request, cancellationToken);
         Outcome = result.Outcome;

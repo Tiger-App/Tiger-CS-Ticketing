@@ -31,6 +31,7 @@ public sealed class TicketsApiClient(HttpClient httpClient, ILogger<TicketsApiCl
         if (request.Unclassified == true) query["unclassified"] = "true";
         if (request.CreatedByMe == true) query["createdByMe"] = "true";
         if (request.Escalated == true) query["escalated"] = "true";
+        if (request.AvailableToTake == true) query["availableToTake"] = "true";
         if (!string.IsNullOrWhiteSpace(request.ClosureCategory)) query["closureCategory"] = request.ClosureCategory;
         if (request.ClosedFrom is DateOnly closedFrom) query["closedFrom"] = closedFrom.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
         if (request.ClosedTo is DateOnly closedTo) query["closedTo"] = closedTo.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
@@ -47,6 +48,9 @@ public sealed class TicketsApiClient(HttpClient httpClient, ILogger<TicketsApiCl
 
     public Task<ApiResult<TicketDetailDto>> AssignAsync(long ticketId, AssignTicketRequestDto request, CancellationToken cancellationToken) =>
         PostAsync<AssignTicketRequestDto, TicketDetailDto>($"api/tickets/{ticketId}/assignment", request, cancellationToken);
+
+    public Task<ApiResult<TicketDetailDto>> TakeOwnershipAsync(long ticketId, TakeOwnershipRequestDto request, CancellationToken cancellationToken) =>
+        PostAsync<TakeOwnershipRequestDto, TicketDetailDto>($"api/tickets/{ticketId}/ownership", request, cancellationToken);
 
     public Task<ApiResult<TicketDetailDto>> ClassifyAsync(long ticketId, ClassifyTicketRequestDto request, CancellationToken cancellationToken) =>
         PostAsync<ClassifyTicketRequestDto, TicketDetailDto>($"api/tickets/{ticketId}/classification", request, cancellationToken);

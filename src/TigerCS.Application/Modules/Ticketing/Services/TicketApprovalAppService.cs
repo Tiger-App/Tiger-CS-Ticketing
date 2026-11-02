@@ -74,7 +74,8 @@ public sealed class TicketApprovalAppService(
     ReopenEligibilityService reopenEligibilityService,
     ITicketInteractionHandlerRepository? handlerRepository = null,
     IServiceIdentityRegistry? serviceIdentities = null,
-    IEmployeeRepository? employeeRepository = null)
+    IEmployeeRepository? employeeRepository = null,
+    TicketClaimPolicy? claimPolicy = null)
 {
     /// <summary>Provisional: which department-side roles may decide a department-targeted approval when the requirement names no narrowing role. Deliberately the two department-scoped roles only — never CS-layer, never broad.</summary>
     public static readonly IReadOnlyCollection<string> DepartmentTargetDefaultApproverRoles =
@@ -520,7 +521,7 @@ public sealed class TicketApprovalAppService(
         // Nothing broader: it grants this view only, only while a cycle
         // addressed to the caller is pending.
         var access = await TicketVisibilityRule.GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy);
         var canView = access != TicketAccessLevel.None;
 
         // A creator who may only READ the ticket (it is in another department) is offered no approval action: every flag below is false

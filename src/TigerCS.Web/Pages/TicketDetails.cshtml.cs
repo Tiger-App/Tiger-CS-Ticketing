@@ -223,6 +223,13 @@ public sealed class TicketDetailsModel(
     /// <summary>Whether a Close control is worth rendering — mirrors TicketLifecycleAppService.CloseAsync's role-only rule. The ticket being Resolved is a separate, lifecycle condition.</summary>
     public bool CanClose { get; private set; }
 
+    /// <summary>
+    /// Whether "Take Ownership" is offered: the server's own answer (<c>TicketDetailDto.CanTakeOwnership</c>), computed by the very policy the
+    /// <c>POST /ownership</c> endpoint applies - Call Center agent, ticket unassigned/active/human-handling, no explicit Deny - so the control
+    /// is never shown for something the Api would refuse, and never hidden when it would accept it.
+    /// </summary>
+    public bool CanTakeOwnership => Ticket?.CanTakeOwnership == true;
+
     /// <summary>Whether an Escalate control is worth rendering — true when either escalation tier is open to the viewer.</summary>
     public bool CanEscalate { get; private set; }
 
@@ -419,6 +426,7 @@ public sealed class TicketDetailsModel(
     [BindProperty] public StatusInput Status { get; set; } = new();
     [BindProperty] public ResolveInput Resolve { get; set; } = new();
     [BindProperty] public RowVersionInput Close { get; set; } = new();
+    [BindProperty] public RowVersionInput TakeOwnership { get; set; } = new();
     [BindProperty] public ReopenInput Reopen { get; set; } = new();
     [BindProperty] public EscalateInput Escalate { get; set; } = new();
     [BindProperty] public DowngradeRequestInput DowngradeRequest { get; set; } = new();
@@ -662,6 +670,19 @@ public sealed class TicketDetailsModel(
             new ResolveTicketRequestDto(Resolve.ResolutionOutcome, Resolve.ResolutionNote, null, Resolve.DuplicateOfTicketId, rowVersion),
             cancellationToken);
         return await HandleMutationAsync(result, "resolve", "Ticket resolved.", cancellationToken);
+    }
+
+    public async Task<IActionResult> OnPostTakeOwnershipAsync(long id, CancellationToken cancellationToken)
+    {
+        TicketId = id;
+        if (!TryDecodeRowVersion(TakeOwnership.RowVersionBase64, out var rowVersion))
+        {
+            return await ReloadWithErrorAsync("takeOwnership", "Could not read the ticket's current version. Reloading.", cancellationToken);
+        }
+
+        var result = await ticketsApiClient.TakeOwnershipAsync(id, new TakeOwnershipRequestDto(rowVersion), cancellationToken);
+        return await HandleMutationAsync(
+            result, "takeOwnership", "You now own this ticket. It has moved to the Call Center; Resolve, Close and Transfer are available according to its status.", cancellationToken);
     }
 
     public async Task<IActionResult> OnPostCloseAsync(long id, CancellationToken cancellationToken)
@@ -1120,6 +1141,7 @@ public sealed class TicketDetailsModel(
         };
         Resolve = new ResolveInput { RowVersionBase64 = Ticket.RowVersion, ResolutionOutcome = "Resolved" };
         Close = new RowVersionInput { RowVersionBase64 = Ticket.RowVersion };
+        TakeOwnership = new RowVersionInput { RowVersionBase64 = Ticket.RowVersion };
         Reopen = new ReopenInput
         {
             RowVersionBase64 = Ticket.RowVersion,

@@ -180,6 +180,10 @@ Live check after execution (UI, as one real receiving CS Agent): My Tickets list
 5. **Decisions:** (a) `@ReassignTicketsAlreadyOwnedByEligibleCcAgent` (§2.1), (b) `@ExcludeAgentsWithTicketDenials`, (c) `@CsAgentRoleOnly`, (d) the held-back definitions — confirm against the Preview's list, (e) Genesys unflagged-ticket policy (§1.3), (f) backup/window owner, (g) communication to the employees who lose tickets.
 6. **The SQL has an automated suite (§11); the C# test suite was not run** (no .NET SDK in the authoring environment) and C# is unchanged.
 
+## 9a. Interaction with "Take Ownership" (manual claim of the same tickets)
+Call Center agents can now take ownership of unassigned tickets themselves ([Call-Center-Take-Ownership.md](Call-Center-Take-Ownership.md)). It uses the **same eligibility** as this batch (active, no owner, no current assignment, no pending approval, no active AI conversation), so the two never double-assign: a claimed ticket is owned and simply drops out of the plan, and **Rollback never touches a claim** (it is keyed on this batch's `AutoAssign` audit rows).
+One thing to plan: Execute re-checks every planned row and aborts the whole run if any ticket changed after the Preview, so a claim made between Preview and Execute aborts the run (safe, rolled back — re-preview and re-approve). **Set `TicketClaim__Enabled=false` (config + API recycle, no redeploy) for the Preview → Execute window** and re-enable afterwards.
+
 ## 10. Residual risks
 * Backlog drift between preview and execution — execution aborts unless counts equal the approved numbers; re-preview and re-approve.
 * **People lose work they own.** FIN / ACC / LEG / … employees will see Open tickets they own disappear, **including tickets they have already answered** (the Preview counts `AlreadyAnsweredByAPerson_StillOpen`). The new owner gets no notification and no context beyond the ticket itself. Communicate before the window.

@@ -113,7 +113,7 @@ public sealed record TicketsContext(TicketsView View, string Href)
         "departmentId", "priorityId", "ticketStatus", "verificationStatus", "ownerEmployeeId", "search",
         "sortBy", "sortDir", "page", "pageSize", "channelId", "requestTypeId", "activeOnly", "inDepartmentQueue",
         "slaBreached", "dueToday", "backlogAge", "pendingApproval", "unclassified", "escalated", "closureCategory", "closedFrom", "closedTo", "createdFrom", "createdTo", "sla",
-        "mineOnly", "unassignedOnly", "includeResolved", "createdByMe",
+        "mineOnly", "unassignedOnly", "includeResolved", "createdByMe", "availableToTake",
     };
 
     /// <summary>The cookie value for the current workspace request: its own query string, with the resolved view made explicit.</summary>
