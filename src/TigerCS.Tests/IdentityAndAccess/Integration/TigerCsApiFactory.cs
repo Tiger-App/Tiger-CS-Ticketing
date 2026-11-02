@@ -59,6 +59,12 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
     /// <summary>Extra test-only service registrations, applied last (e.g. a fixed clock for one module).</summary>
     public Action<IServiceCollection>? ExtraServices { get; init; }
 
+    /// <summary>
+    /// When set, the host runs against THIS real SQL Server database (schema created from the EF model) instead of the InMemory provider - for the few tests
+    /// whose subject is a database-level guarantee or a SQL script run against the application's own schema. Default null = InMemory, as for every other test.
+    /// </summary>
+    public string? SqlServerConnectionString { get; init; }
+
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         // Explicit, deterministic environment name — distinct from "Development"
@@ -177,6 +183,12 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
                 services.Remove(descriptor);
             }
 
+            if (SqlServerConnectionString is { Length: > 0 } sqlServer)
+            {
+                services.AddDbContext<TigerCsDbContext>(options => options.UseSqlServer(sqlServer));
+            }
+            else
+            {
             services.AddDbContext<TigerCsDbContext>(options => options
                 .UseInMemoryDatabase(DatabaseName)
                 // The InMemory provider does not support real transactions
@@ -191,6 +203,7 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
                 // enforcement elsewhere in this codebase (see
                 // CustomerVerificationUnitOfWork's remarks).
                 .ConfigureWarnings(w => w.Ignore(InMemoryEventId.TransactionIgnoredWarning)));
+            }
 
             // CrmBuyerHttpGateway (Program.cs -> AddTigerCsIntegrations) is a
             // real HTTP client with no test/mock provider switch of its own

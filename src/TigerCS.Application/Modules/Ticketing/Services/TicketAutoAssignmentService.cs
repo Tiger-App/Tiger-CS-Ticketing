@@ -359,6 +359,24 @@ public sealed class TicketAutoAssignmentService(
         var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(
             ticket.CurrentDepartmentId, activeEmployeesOnly: true, cancellationToken);
         var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), cancellationToken);
+
+        // The Call Center works tickets through CS Agents: only they hold Transfer as the owner (a Department Employee could Resolve and Close a Call Center
+        // ticket but not pass it on, which is the whole point of the Call Center), so Round Robin there deals to CS Agents only - the same pool the one-time backlog
+        // distribution uses by default, so the backlog and every future ticket are handled by the same people under the same rule.
+        if (eligible.Count > 0 && roleReader is not null && await IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken))
+        {
+            var csAgents = new List<Guid>();
+            foreach (var candidate in eligible)
+            {
+                if ((await roleReader.GetRolesAsync(candidate, cancellationToken)).Contains(Roles.CsAgent, StringComparer.Ordinal))
+                {
+                    csAgents.Add(candidate);
+                }
+            }
+
+            eligible = csAgents;
+        }
+
         if (eligible.Count == 0)
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,

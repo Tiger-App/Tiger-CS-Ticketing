@@ -1,5 +1,5 @@
 /*
- Test fixture for the Call Center backlog-distribution scripts. DISPOSABLE SQL SERVER ONLY (database must be named TigerCS_Ticketing_Prod
+ Test fixture for the Call Center backlog-distribution scripts (the plan = every OPEN ticket, assigned or not, minus pending approvals and live AI conversations). DISPOSABLE SQL SERVER ONLY (database must be named TigerCS_Ticketing_Prod
  inside a throw-away container - the scripts' own name guard requires it). Schema comes from the repo's real migration scripts, not from this file.
 
  Hold-back fixtures: H-APR-* pending approval, H-AI-* active AI conversation, H-BOTH-1 both (all HELD); F-* carry decided approvals / ended or human-flagged or handed-off or taken AI conversations (all ELIGIBLE).
@@ -144,5 +144,37 @@ INSERT dbo.AuditEntries (ActorEmployeeId, Action, EntityType, EntityId, BeforeVa
 SELECT NULL, N'Create', N'Ticket', CONVERT(nvarchar(100), TicketId), NULL, N'seed', NEWID(), CreatedAtUtc FROM dbo.Tickets;
 INSERT dbo.TicketWorkflowEvents (TicketId, EventType, OccurredAtUtc, ActorEmployeeId, Note, CorrelationId, FromDepartmentId, ToDepartmentId, TransferReasonCode)
 SELECT TicketId, 17, DATEADD(hour, 1, CreatedAtUtc), NULL, N'earlier routing', NEWID(), @CC, CurrentDepartmentId, 5 FROM dbo.Tickets WHERE TicketNumber IN (N'E-0007', N'E-0008', N'E-0009', N'E-0010', N'E-0011');
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- OWNERSHIP / ANSWERING-AGENT FIXTURES (all Open; the plan includes tickets that already have an owner)
+-- ---------------------------------------------------------------------------------------------------------------------
+DECLARE @A2 uniqueidentifier = '00000000-0000-0000-0001-000000000000', @A3 uniqueidentifier = '7a000000-0000-0000-0000-000000000001', @DEACT uniqueidentifier = 'a4000000-0000-0000-0000-000000000001';
+DECLARE @Own TABLE (n nvarchar(20), orig int, cur int, owner uniqueidentifier, st tinyint);
+INSERT @Own VALUES
+ -- KEEP candidates: in CC, owned by the agent who ANSWERED the call (so the answering-agent rule re-deals them to the same person)
+ (N'K-KEEP-1', @CC, @CC, @A2, 1), (N'K-KEEP-2', @CC, @CC, @A2, 1),
+ -- answering agent in another department, unowned (pinned + moved) and owned by a Finance employee (pinned + moved + reassigned)
+ (N'K-PIN-1', @SUP, @SUP, NULL, 1), (N'K-PIN-2', @SUP, @SUP, NULL, 1), (N'K-PIN-3', @FIN, @FIN, @FinEmp, 1),
+ -- the person who answered is NOT eligible (deactivated): falls back to Round Robin
+ (N'K-PINBAD-1', @LEG, @LEG, NULL, 1),
+ -- Open tickets already in the Call Center, owned by an agent but not answered by anyone: re-dealt by Round Robin (may land on the same person = KEEP)
+ (N'K-CCOWN-1', @CC, @CC, @A1, 1), (N'K-CCOWN-2', @CC, @CC, @A1, 1), (N'K-CCOWN-3', @CC, @CC, @A3, 1), (N'K-CCDEACT-1', @CC, @CC, @DEACT, 1),
+ -- NOT Open: assigned work in progress / pending is never touched
+ (N'X-INP-1', @FIN, @FIN, @FinEmp, 2), (N'X-INP-2', @SUP, @SUP, @FinEmp, 2), (N'X-PEN-1', @LEG, @LEG, @FinEmp, 3), (N'X-PEN-2', @FIN, @FIN, @FinEmp, 4);
+INSERT dbo.Tickets (TicketNumber, OriginatingDepartmentId, CurrentDepartmentId, CurrentOwnerEmployeeId, CategoryId, PriorityId, TicketStatus, VerificationStatus, EscalationLevel, SlaState, RequestSummary, ReopenCount, CreatedAtUtc)
+SELECT n, orig, cur, owner, NULL, NULL, st, 0, 0, 1, N'ownership fixture', 0, DATEADD(minute, 200 + ROW_NUMBER() OVER (ORDER BY n), @Base) FROM @Own;
+-- every owned fixture ticket has a current assignment row for its owner in its department (a real, consistent assignment)
+INSERT dbo.TicketAssignments (TicketId, AssignedEmployeeId, AssignedDepartmentId, AssignedAtUtc, AssigningActorEmployeeId, IsCurrent)
+SELECT TicketId, CurrentOwnerEmployeeId, CurrentDepartmentId, DATEADD(day, -2, SYSUTCDATETIME()), CASE WHEN TicketNumber LIKE N'K-CC%' THEN NULL ELSE CurrentOwnerEmployeeId END, 1
+FROM dbo.Tickets WHERE (TicketNumber LIKE N'K-%' OR TicketNumber LIKE N'X-INP-%' OR TicketNumber LIKE N'X-PEN-%') AND CurrentOwnerEmployeeId IS NOT NULL;
+-- originating Genesys interactions (Source 2, ended so they are not "active AI") with the person who ANSWERED recorded as the handler
+INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, RequiresHumanFollowUp, EndedAtUtc, HandledByUserId)
+SELECT t.TicketId, 1, 2, 1, N'0500000009', N'conv-' + t.TicketNumber, DATEADD(day, -5, SYSUTCDATETIME()), 0, DATEADD(day, -4, SYSUTCDATETIME()),
+       CASE WHEN t.TicketNumber IN (N'K-KEEP-1', N'K-KEEP-2') THEN @A2 WHEN t.TicketNumber IN (N'K-PIN-1', N'K-PIN-2') THEN @A3
+            WHEN t.TicketNumber = N'K-PIN-3' THEN @A1 WHEN t.TicketNumber = N'K-PINBAD-1' THEN @DEACT END
+FROM dbo.Tickets t WHERE t.TicketNumber IN (N'K-KEEP-1', N'K-KEEP-2', N'K-PIN-1', N'K-PIN-2', N'K-PIN-3', N'K-PINBAD-1');
+
+-- the NEWEST Open ticket is an answering-agent ticket: if the rotation cursor were moved by those tickets it would end on A3 instead of the last Round Robin agent
+UPDATE dbo.Tickets SET CreatedAtUtc = DATEADD(day, 30, @Base) WHERE TicketNumber = N'K-PIN-2';
 
 SELECT (SELECT COUNT(*) FROM dbo.Tickets) AS Tickets, (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketNumber LIKE N'E-%' OR TicketNumber LIKE N'F-%') AS Eligible, (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketNumber LIKE N'H-%') AS HeldBack, (SELECT COUNT(*) FROM dbo.Employees) AS Employees;
