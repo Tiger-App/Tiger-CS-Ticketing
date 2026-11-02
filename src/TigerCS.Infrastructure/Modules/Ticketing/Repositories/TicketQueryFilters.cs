@@ -37,7 +37,7 @@ internal static class TicketQueryFilters
     /// </summary>
     public static IQueryable<Ticket> VisibleTo(
         this IQueryable<Ticket> tickets, TigerCsDbContext dbContext, IReadOnlyCollection<int>? departmentIds, Guid? agentEmployeeId,
-        bool includeCreated = true, bool createdOnly = false, Guid? ownerEmployeeId = null)
+        bool includeCreated = true, bool createdOnly = false, Guid? ownerEmployeeId = null, bool includeClaimable = false)
     {
         if (agentEmployeeId is not { } agentId)
         {
@@ -56,20 +56,70 @@ internal static class TicketQueryFilters
         }
 
         var departments = departmentIds?.ToList() ?? [];
-        if (includeCreated)
-        {
-            return tickets.Where(t =>
-                t.CurrentOwnerEmployeeId == agentId
+        Expression<Func<Ticket, bool>> visible = includeCreated
+            ? t => t.CurrentOwnerEmployeeId == agentId
                 || t.CreatedByEmployeeId == agentId
                 || dbContext.TicketInteractionHandlers.Any(h => h.TicketId == t.TicketId && h.HandledByUserId == agentId)
-                || departments.Contains(t.CurrentDepartmentId));
-        }
+                || departments.Contains(t.CurrentDepartmentId)
+            : t => t.CurrentOwnerEmployeeId == agentId
+                || dbContext.TicketInteractionHandlers.Any(h => h.TicketId == t.TicketId && h.HandledByUserId == agentId)
+                || departments.Contains(t.CurrentDepartmentId);
 
-        return tickets.Where(t =>
-            t.CurrentOwnerEmployeeId == agentId
-            || dbContext.TicketInteractionHandlers.Any(h => h.TicketId == t.TicketId && h.HandledByUserId == agentId)
-            || departments.Contains(t.CurrentDepartmentId));
+        // Call Center agents also SEE (read-only) the unassigned human-handling tickets they may take ownership of. This only widens the
+        // list for a caller the application service has already proven eligible; the same predicate gates the Take Ownership action.
+        return tickets.Where(includeClaimable ? visible.OrElse(AvailableToTake(dbContext)) : visible);
     }
+
+    /// <summary>
+    /// THE definition of a ticket a Call Center agent may take ownership of - used by the list scope, the "available to take" filter and the
+    /// single-ticket check, so what is listed, what is openable and what can be claimed can never drift apart. It mirrors the held-back rules of
+    /// the Call Center backlog distribution (<c>Preview/Execute_TigerCS_PROD_CallCenterBacklogDistribution</c>) so a manual claim and the planned
+    /// bulk assignment never disagree about which tickets are theirs:
+    /// <list type="bullet">
+    /// <item>active lifecycle only (Open, InProgress, PendingCustomer, legacy PendingThirdParty) - Resolved and Closed are excluded;</item>
+    /// <item>nobody owns it and it has no current assignment row - a ticket owned by another employee is never claimable;</item>
+    /// <item>no pending approval (<see cref="HasPendingApproval"/>) - moving it would pull it out from under its approvers;</item>
+    /// <item>not an active AI conversation (<see cref="HasActiveAiConversation"/>) - moving it would switch off AI closure / chatbot inactivity.</item>
+    /// </list>
+    /// </summary>
+    public static Expression<Func<Ticket, bool>> AvailableToTake(TigerCsDbContext dbContext)
+    {
+        var pendingApproval = HasPendingApproval(dbContext);
+        var activeAi = HasActiveAiConversation(dbContext);
+        var notPending = pendingApproval.Not();
+        var notAi = activeAi.Not();
+        Expression<Func<Ticket, bool>> core = t =>
+            (t.TicketStatus == TicketStatus.Open
+                || t.TicketStatus == TicketStatus.InProgress
+                || t.TicketStatus == TicketStatus.PendingCustomer
+                || t.TicketStatus == TicketStatus.PendingThirdParty)
+            && t.CurrentOwnerEmployeeId == null
+            && !dbContext.TicketAssignments.Any(a => a.TicketId == t.TicketId && a.IsCurrent);
+        return core.AndAlso(notPending).AndAlso(notAi);
+    }
+
+    /// <summary>The ticket has an approval waiting for a decision (<c>TicketApprovals.Status = Pending</c>).</summary>
+    public static Expression<Func<Ticket, bool>> HasPendingApproval(TigerCsDbContext dbContext) =>
+        t => dbContext.TicketApprovals.Any(a => a.TicketId == t.TicketId && a.Status == ApprovalStatus.Pending);
+
+    /// <summary>
+    /// An ACTIVE AI conversation, exactly as the backlog distribution defines it: a Genesys-sourced interaction that is not ended, not closed for
+    /// inactivity, needs no human follow-up and was not taken by a person - and no interaction on the ticket is flagged for human follow-up, and
+    /// there is no open human handoff (Waiting / Assigned / InProgress). Anything that needs or already has a person is human work.
+    /// </summary>
+    public static Expression<Func<Ticket, bool>> HasActiveAiConversation(TigerCsDbContext dbContext) =>
+        t => dbContext.TicketInteractions.Any(i =>
+                i.TicketId == t.TicketId
+                && i.Source == InteractionContextSource.Genesys
+                && i.EndedAtUtc == null
+                && i.InactivityClosedAtUtc == null
+                && !i.RequiresHumanFollowUp
+                && i.HandledByUserId == null)
+            && !dbContext.TicketInteractions.Any(i => i.TicketId == t.TicketId && i.RequiresHumanFollowUp)
+            && !dbContext.TicketAgentHandoffs.Any(h => h.TicketId == t.TicketId
+                && (h.Status == AgentHandoffStatus.WaitingForAgent
+                    || h.Status == AgentHandoffStatus.Assigned
+                    || h.Status == AgentHandoffStatus.InProgress));
 
     /// <summary>
     /// "Active" throughout: the non-terminal lifecycle statuses — Open,

@@ -42,6 +42,26 @@ public sealed class TicketingUnitOfWork(TigerCsDbContext dbContext) : ITicketing
         {
             throw new DuplicateWriteException(ex);
         }
+        catch (DbUpdateException ex) when (IsDeadlockVictim(ex))
+        {
+            // SQL Server chose this transaction as the deadlock victim and has already rolled it back whole: nothing was written. Two requests
+            // wrote the same ticket at the same moment - the same situation as a lost row-version race, so it gets the same answer (409, reload
+            // and retry) instead of an unhandled 500.
+            throw new TicketConcurrentlyModifiedException(ex);
+        }
+    }
+
+    private static bool IsDeadlockVictim(DbUpdateException ex)
+    {
+        for (var inner = ex.InnerException; inner is not null; inner = inner.InnerException)
+        {
+            if (inner is SqlException { Number: 1205 })
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool IsUniqueConstraintViolation(DbUpdateException ex)

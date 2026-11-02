@@ -1035,6 +1035,25 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
         Assert.Equal(workerId, updated!.CurrentOwnerEmployeeId);
     }
 
+    /// <summary>
+    /// Take Ownership is the one ticket action the ADR-0024 override does NOT open: it moves a ticket into the Call Center and assigns it to
+    /// the CALLER, so the caller must themselves be an active Call Center agent. A System Administrator is not one, and gets 403 with the ticket
+    /// untouched - they keep Assign / Transfer, with which they can place the ticket with any Call Center agent.
+    /// </summary>
+    [Fact]
+    public async Task TakeOwnership_IsRefused_BecauseTheCallerMustThemselvesBeACallCenterAgent_AndTheTicketIsUntouched()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+        var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
+
+        var response = await client.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/ownership", new TakeOwnershipRequestDto(RowVersionOf(ticket)));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        var after = await _factory.GetTicketAsync(ticket.TicketId);
+        Assert.Equal(ticket.CurrentDepartmentId, after!.CurrentDepartmentId);
+        Assert.Equal(ticket.CurrentOwnerEmployeeId, after.CurrentOwnerEmployeeId);
+    }
+
     [Fact]
     public async Task TransferTicket_Returns200()
     {

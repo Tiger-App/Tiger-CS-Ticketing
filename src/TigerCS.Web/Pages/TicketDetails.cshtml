@@ -76,7 +76,19 @@ else
             </div>
         }
 
-        @if (Model.IsReadOnlyAccess)
+        @if (Model.CanTakeOwnership)
+        {
+            @* In a department queue with no assignee, human-handling: the Call Center agent may review it read-only and take it. Shown from the
+               server's own CanTakeOwnership answer (the policy the Api applies), so this control and the endpoint cannot disagree. *@
+            <div class="alert alert-info" role="status" id="take-ownership-notice">
+                <span>This ticket is waiting in the <strong>@(Model.DepartmentName ?? "its department")</strong> queue with no assignee. It is read-only for you until you take ownership. Taking it moves it to the Call Center and assigns it to you; its status, SLA, classification and history are kept.</span>
+                <form method="post" asp-page-handler="TakeOwnership" id="action-take-ownership" data-action="take-ownership">
+                    <input type="hidden" asp-for="TakeOwnership.RowVersionBase64" />
+                    <button type="submit" class="btn btn-gold btn-sm">Take Ownership</button>
+                </form>
+            </div>
+        }
+        else if (Model.IsReadOnlyAccess)
         {
             <div class="alert alert-info" role="status" id="read-only-notice">
                 <span>You created this ticket and can follow its progress, but it belongs to another department, so it is read-only for you.</span>

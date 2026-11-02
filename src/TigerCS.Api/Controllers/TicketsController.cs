@@ -38,7 +38,8 @@ public class TicketsController(
     TicketApprovalAppService ticketApprovalAppService,
     TicketInteractionQueryAppService ticketInteractionQueryAppService,
     TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewQueryAppService ticketReviewQueryAppService,
-    TicketClassificationAppService ticketClassificationAppService) : ControllerBase
+    TicketClassificationAppService ticketClassificationAppService,
+    TicketClaimAppService ticketClaimAppService) : ControllerBase
 {
     /// <summary>Create a ticket from an IntakeRecord. CS Agent/CS Supervisor only.</summary>
     /// <remarks>
@@ -373,6 +374,44 @@ public class TicketsController(
         }
 
         var result = await ticketAssignmentAppService.AssignAsync(employeeId.Value, GetRoles(), ticketId, request, cancellationToken);
+        return ToActionResult(result);
+    }
+
+    /// <summary>Take ownership of an unassigned ticket (Call Center agents).</summary>
+    /// <remarks>
+    /// A Call Center agent takes an unassigned, human-handling ticket that is still in another department: it moves to the Call Center and is
+    /// assigned exclusively to the caller. Status, SLA, classification, originating department and all history are preserved; the move is
+    /// audited and recorded as a workflow transfer event. Afterwards the caller is an ordinary owner (Resolve / Close / Transfer follow the
+    /// existing rules). Refused (never taken) when another employee owns the ticket, when it is Resolved or Closed, when an AI conversation is
+    /// still handling it, or when an approval is pending. Two agents racing for one ticket: exactly one wins, the other gets 409.
+    /// </remarks>
+    /// <param name="ticketId">The ticket to take.</param>
+    /// <param name="request">Optionally the rowVersion you read (a stale value is a 409).</param>
+    /// <response code="200">The ticket, now in the Call Center and assigned to the caller.</response>
+    /// <response code="403">The caller is not an eligible Call Center agent (or an explicit Deny applies).</response>
+    /// <response code="404">No such ticket, or it is not visible to the caller.</response>
+    /// <response code="409">Somebody else owns it, or another request changed it first.</response>
+    /// <response code="422">The ticket cannot be taken: Resolved/Closed, active AI conversation, or pending approval.</response>
+    [ProducesResponseType<TicketDetailDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
+    [HttpPost("{ticketId:long}/ownership")]
+    [RequirePermission(Permissions.TicketsEdit)]
+    [PermitReadOnlyTicketAccess]
+    [Tags(OpenApiTags.Assignment)]
+    public async Task<IActionResult> TakeOwnership(
+        long ticketId, [FromBody] TakeOwnershipRequestDto? request, CancellationToken cancellationToken)
+    {
+        var employeeId = GetEmployeeId();
+        if (employeeId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await ticketClaimAppService.TakeOwnershipAsync(
+            employeeId.Value, GetRoles(), ticketId, request ?? new TakeOwnershipRequestDto(), cancellationToken);
         return ToActionResult(result);
     }
 
@@ -1011,6 +1050,30 @@ public class TicketsController(
             type: "https://tigercs.internal/problems/ticket-closed",
             title: "Ticket is closed",
             detail: "This ticket is Closed and no longer accepts assignment, transfer, status changes, resolution, or closing.",
+            statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.TicketAlreadyOwned => Problem(
+            type: "https://tigercs.internal/problems/ticket-already-owned",
+            title: "Ticket already has an owner",
+            detail: "Another employee already owns this ticket, so it cannot be taken over. Reload the list.",
+            statusCode: StatusCodes.Status409Conflict),
+
+        TicketMutationOutcome.ClaimNotAllowedForStatus => Problem(
+            type: "https://tigercs.internal/problems/claim-not-allowed-for-status",
+            title: "Ticket cannot be taken",
+            detail: "Resolved and Closed tickets are never taken over.",
+            statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.ClaimBlockedByActiveAiConversation => Problem(
+            type: "https://tigercs.internal/problems/claim-blocked-by-active-ai",
+            title: "An AI conversation is handling this ticket",
+            detail: "The ticket is still being handled by an AI conversation. It can be taken once a person is needed or the conversation ends.",
+            statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.ClaimBlockedByPendingApproval => Problem(
+            type: "https://tigercs.internal/problems/claim-blocked-by-pending-approval",
+            title: "An approval is pending on this ticket",
+            detail: "The ticket stays with its approvers until the pending approval is decided.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
 
         TicketMutationOutcome.EmployeeNotInDepartment => Problem(

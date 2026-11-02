@@ -26,6 +26,7 @@
         requestTypeId = Model.RequestTypeId,
         activeOnly = Model.ActiveOnly ? "true" : null,
         inDepartmentQueue = Model.InDepartmentQueue ? "true" : null,
+        availableToTake = Model.AvailableToTake ? "true" : null,
         slaBreached = Model.SlaBreached ? "true" : null,
         dueToday = Model.DueToday ? "true" : null,
         backlogAge = Model.BacklogAge,
@@ -101,6 +102,17 @@
                 <option value="">Any SLA</option>
                 <option value="breached" selected="@(Model.SlaFilterValue == "breached")">Breached</option>
                 <option value="dueToday" selected="@(Model.SlaFilterValue == "dueToday")">Due today</option>
+            </select>
+        </div>
+    }
+
+    @if (Model.OffersAvailableToTakeFilter)
+    {
+        <div class="field-group">
+            <label class="field-label" for="availableToTake">Ownership</label>
+            <select class="field-select" id="availableToTake" name="availableToTake" data-autosubmit>
+                <option value="">All tickets I can see</option>
+                <option value="true" selected="@Model.AvailableToTake">Available to take (no assignee)</option>
             </select>
         </div>
     }

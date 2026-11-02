@@ -20,11 +20,21 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
     {
         var filtered = dbContext.Tickets.AsQueryable();
 
-        filtered = filtered.VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.OwnerVisibilityEmployeeId);
+        filtered = filtered.VisibleTo(
+            dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope,
+            ownerEmployeeId: query.OwnerVisibilityEmployeeId, includeClaimable: query.IncludeClaimable);
 
         if (query.DepartmentId is { } departmentId)
         {
-            filtered = filtered.Where(t => t.CurrentDepartmentId == departmentId);
+            // The Call Center filter of an eligible agent also lists what they could take (it is already inside their scope above).
+            filtered = query.DepartmentFilterIncludesClaimable
+                ? filtered.Where(TicketQueryFilters.AvailableToTake(dbContext).OrElse(t => t.CurrentDepartmentId == departmentId))
+                : filtered.Where(t => t.CurrentDepartmentId == departmentId);
+        }
+
+        if (query.AvailableToTakeOnly)
+        {
+            filtered = filtered.Where(TicketQueryFilters.AvailableToTake(dbContext));
         }
 
         if (query.CreatedByEmployeeId is { } createdBy)

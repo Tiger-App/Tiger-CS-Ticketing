@@ -153,7 +153,8 @@ public static class TicketVisibilityRule
         IReadOnlyCollection<string> callerRoles,
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        TicketClaimPolicy? claimPolicy = null)
     {
         ArgumentNullException.ThrowIfNull(userDepartmentAssignmentRepository);
         ArgumentNullException.ThrowIfNull(ticket);
@@ -211,6 +212,15 @@ public static class TicketVisibilityRule
                 return TicketAccessLevel.ReadOnly;
             }
 
+            // An eligible Call Center agent may OPEN (never change) an unassigned, human-handling ticket of any department, to review it
+            // before taking ownership of it (TicketClaimPolicy). Read paths pass the policy; modification checks never do.
+            if (claimPolicy is not null
+                && ticket.CurrentOwnerEmployeeId is null
+                && (await claimPolicy.DecideAsync(callerEmployeeId, callerRoles, ticket.TicketId, cancellationToken)).Allowed)
+            {
+                return TicketAccessLevel.ReadOnly;
+            }
+
             return TicketAccessLevel.None;
         }
     }
@@ -223,9 +233,10 @@ public static class TicketVisibilityRule
         IReadOnlyCollection<string> callerRoles,
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        TicketClaimPolicy? claimPolicy = null) =>
         await GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken)
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy)
         != TicketAccessLevel.None;
 
     /// <summary>
