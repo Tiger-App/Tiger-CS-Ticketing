@@ -5,13 +5,14 @@ It never touches Production: the scripts' own guard requires a database named `T
 
 ```bash
 tests/backlog-distribution/setup_test_db.sh        # container + real schema (repo migrations) + fixture + backup
-python3 tests/backlog-distribution/run_tests.py     # all tests (T01-T14); optional filter: run_tests.py t04 t07
+python3 tests/backlog-distribution/run_tests.py     # all tests (T01-T17); optional filter: run_tests.py t04 t07
 SCALE_N=50000 python3 tests/backlog-distribution/run_tests.py t10
 ```
 
 * Schema = the repo's own migration scripts. The expected Round Robin deal is recomputed by an **independent Python oracle** (canonical GUID text order == .NET `Guid` order); nothing is graded against its own T-SQL.
-* The fixture (`01_seed.sql`) has 72 eligible and 12 held-back tickets in 5 departments (one inactive): pending approvals, live AI conversations, a ticket with both, and eligible look-alikes (decided approvals; AI conversations that ended, were closed for inactivity, need a human, have an open handoff or were taken by an agent). It also has tickets whose originating department differs from the current one, unclassified tickets, owned / legacy / data-drift / Resolved / Closed tickets that must never be touched, and 3 eligible CS Agents plus a Department Employee (in the pool only with `@CsAgentRoleOnly = 0`), deactivated, locked, service, read-only and supervisory accounts. Agent GUIDs are chosen so .NET order differs from SQL Server's native `uniqueidentifier` order.
-* Mutation checks (remove one safeguard, confirm a test fails) were run for: SQL-native GUID ordering, ignoring pending approvals in Execute / Preview, ignoring active AI conversations, the post-write approval re-check, locking of agent rows, the held-back gate counts, and the CS-Agent-only filter — all eight caught.
+* The fixture (`01_seed.sql`, counts hand-stated in its header): 99 eligible Open tickets (62 unowned, 10 with approval/AI history, 3 with a stale current assignment, **24 owned** by an active employee of another department, a deactivated / locked / service-account owner, the supervisor, an eligible CC agent, or with no assignment row), 14 held back (8 pending approval, 6 live AI, owned and unowned), and decoys that must never be touched: InProgress / Pending / Resolved / Closed tickets, owned and unowned. Agents: A1-A3 eligible CS Agents, A4 has an explicit DENY of Tickets.Resolve, plus a Department Employee, deactivated, locked, service, read-only and supervisory accounts. Agent GUIDs are chosen so .NET order differs from SQL Server's native `uniqueidentifier` order.
+* Scope under test: every Open ticket, owned or not; previous owners replaced with history kept; rollback restores previous owner, department and previous current assignment row.
+* Mutation checks (remove a safeguard, confirm a test fails): Open-only filter, denial filter, rollback re-activation of the previous row, rollback owner restore, superseded-rows check - all caught.
 
 | Test | Proves |
 |---|---|
@@ -33,3 +34,7 @@ SCALE_N=50000 python3 tests/backlog-distribution/run_tests.py t10
 | T01b | The Preview runs and reports READY under a plain `db_datareader` login, which cannot write |
 
 Not covered by this fixture: tickets with a `RequestTypeId` (compared NULL-safe, none seeded), live Genesys traffic, Production data volumes/indexes beyond the T10 shape.
+
+| T15 | **Owned tickets**: 24 replaced across 7 kinds of previous owner; previous rows retained and retired; legacy / drift handled; CC tickets re-dealt; My Tickets per agent; Resolve/Close prerequisites; rollback restores owners and rows |
+| T16 | Explicit denial excludes an agent (default commit proves it), switch off includes it, no `UserPermissionOverrides` table works |
+| T17 | `@ReassignTicketsAlreadyOwnedByEligibleCcAgent = 0` leaves CC tickets owned by a pool agent byte-identical; gates must match |

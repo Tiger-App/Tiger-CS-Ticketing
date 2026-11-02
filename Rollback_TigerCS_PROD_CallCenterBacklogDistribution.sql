@@ -4,29 +4,31 @@
  Database : TigerCS_Ticketing_Prod          *** NOT EXECUTED - ONLY FOR USE AFTER Execute_... HAS COMMITTED AND ROLLBACK IS APPROVED ***
 
  Undoes ONLY the work of ONE backlog-distribution batch (@BatchId = the CorrelationId printed by the execution script and stored on every
- AuditEntries / TicketWorkflowEvents row it wrote). The working set is read from the batch's own audit rows, then re-verified per ticket.
+ AuditEntries / TicketWorkflowEvents row it wrote). The working set is read from the batch's own per-ticket AutoAssign audit rows, which record
+ the PREVIOUS owner, PREVIOUS current assignment row and PREVIOUS department of every ticket, then re-verified per ticket.
 
  Each ticket is classified from its CURRENT state:
    ROLLBACK  - it is STILL exactly as the batch left it:
-                 * owner = the agent the batch assigned, department = Call Center, status Open/InProgress/Pending (not Resolved/Closed)
+                 * owner = the agent the batch assigned, department = Call Center, status still Open (a started / resolved ticket was worked)
                  * the batch's assignment row is still the ONE current row, and no later assignment row exists (no reassignment / transfer since)
+                 * the previous current assignment row (when there was one) still exists, retired
                  * nobody has worked it since the batch: no first human response, no status-history row (any status change / pending / resolve),
                    no note, no interaction-handler record, no NEW interaction (e.g. a new AI/customer conversation), no NEW approval request and no
                  other workflow event (transfer, handoff, reopen, Genesys event ...) after the batch
    SKIP      - anything else. It is listed with the reason and left EXACTLY as found: a human owns that work now.
                (@IncludeWorked = 1 lifts only the "nobody worked it" test, only with explicit approval; owner / department / assignment checks always apply.)
 
- For each ROLLBACK ticket (original state = unowned, no current assignment, in its original department):
-   * Tickets.CurrentOwnerEmployeeId -> NULL
-   * Tickets.CurrentDepartmentId    -> the department it was in before the batch (taken from the batch's TicketTransferred event; unchanged for
-                                       tickets that were already in Call Center)
+ For each ROLLBACK ticket the pre-batch state is restored:
+   * Tickets.CurrentOwnerEmployeeId -> the PREVIOUS owner (NULL when the ticket was unowned)
+   * Tickets.CurrentDepartmentId    -> the department it was in before the batch
    * the batch's TicketAssignments row -> IsCurrent = 0 (retired, kept for history - NEVER deleted)
-   * + 1 'Transfer' audit row and + 1 TicketTransferred/SystemRouting workflow event (CC -> original) for a ticket that had been moved
-   * + 1 'AutoAssignRollback' audit row
+   * the previous current assignment row (if the ticket had one) -> IsCurrent = 1 again, so the previous owner owns it with its original history
+   * + 1 'Transfer' audit row (CC -> original) for a ticket that had been moved, + 1 'AutoAssignRollback' audit row, and + 1 TicketTransferred/SystemRouting
+     workflow event (CC -> original, receiving employee = the previous owner) for a ticket that had been moved or had an owner
  Round Robin cursor is restored to its pre-batch value IF no ticket has been dealt from it since (otherwise left alone - a cursor position is harmless).
  NEVER touched: OriginatingDepartmentId, RequestTypeId, category, priority, status, SLA, history, notes, approvals, interactions (incl. AI conversations), notifications.
  The tickets the batch HELD BACK (pending approval / active AI conversation) were never part of the batch, so rollback cannot reach them.
- NEVER deleted or edited: any audit row, workflow event, status history, assignment row.
+ NEVER deleted or edited: any audit row, workflow event, status history, assignment row (only the IsCurrent flag flips).
 
  HOW TO RUN: set @BatchId, run with @DryRun = 1 (default; shows what would roll back / be skipped, then rolls back), review, set @DryRun = 0.
 ================================================================================
@@ -66,28 +68,38 @@ DECLARE @BatchAfter nvarchar(max) = (SELECT AfterValue FROM @BatchRow);
 DECLARE @CursorAfter uniqueidentifier = TRY_CONVERT(uniqueidentifier, SUBSTRING(@BatchAfter, 24, 36));   -- 'LastAssignedEmployeeId=' is 23 chars
 DECLARE @ExpectedTickets int = TRY_CONVERT(int, SUBSTRING(@BatchAfter, CHARINDEX(N';Tickets=', @BatchAfter) + 9,
                                                          CHARINDEX(N';Agents=', @BatchAfter) - CHARINDEX(N';Tickets=', @BatchAfter) - 9));
+DECLARE @ExpectedReassigned int = TRY_CONVERT(int, SUBSTRING(@BatchAfter, CHARINDEX(N';Reassigned=', @BatchAfter) + 12, 20));
 DECLARE @ExpectedMoved int = TRY_CONVERT(int, SUBSTRING(@BatchAfter, CHARINDEX(N';Moved=', @BatchAfter) + 7,
                                                        CHARINDEX(N';DepartmentId=', @BatchAfter) - CHARINDEX(N';Moved=', @BatchAfter) - 7));
-IF @CcId IS NULL OR @CursorAfter IS NULL OR @ExpectedTickets IS NULL OR @ExpectedMoved IS NULL
+IF @CcId IS NULL OR @CursorAfter IS NULL OR @ExpectedTickets IS NULL OR @ExpectedMoved IS NULL OR @ExpectedReassigned IS NULL
     THROW 50404, 'ABORTED: could not read the batch row (department / cursor / ticket counts).', 1;
 PRINT N'Guard passed: database [' + DB_NAME() + N'], BatchId=' + CONVERT(nvarchar(36), @BatchId) + N', DryRun=' + CAST(@DryRun AS nvarchar(1)) + N', RollbackId=' + CONVERT(nvarchar(36), @RollbackId);
 
--- Working set = the per-ticket AutoAssign audit rows of THIS batch (ticket id from EntityId, agent from AfterValue) + the pre-batch department from
--- the batch's own TicketTransferred event (absent for a ticket that was already in Call Center).
-CREATE TABLE #Work (TicketId bigint NOT NULL PRIMARY KEY, AgentId uniqueidentifier NOT NULL, FromDepartmentId int NULL, Decision varchar(60) NULL, Reason nvarchar(300) NULL);
-INSERT #Work (TicketId, AgentId)
-SELECT TRY_CONVERT(bigint, a.EntityId), TRY_CONVERT(uniqueidentifier, SUBSTRING(a.AfterValue, 20, 36))   -- 'AssignedEmployeeId=' is 19 chars
-FROM dbo.AuditEntries AS a
-WHERE a.AuditEntryId >= @BatchAuditId - 10000000 AND a.AuditEntryId < @BatchAuditId
-  AND a.CorrelationId = @BatchId AND a.Action = N'AutoAssign' AND a.EntityType = N'Ticket'
-  AND a.AfterValue LIKE N'AssignedEmployeeId=%Trigger=BacklogDistribution%';
-IF EXISTS (SELECT 1 FROM #Work w WHERE w.AgentId IS NULL) OR (SELECT COUNT(*) FROM #Work) <> @ExpectedTickets
+-- Working set = the per-ticket AutoAssign audit rows of THIS batch: ticket id from EntityId, agent from AfterValue, and from BeforeValue
+-- 'PreviousOwnerId=<guid|none>;PreviousAssignmentId=<id|none>;PreviousDepartmentId=<id>' the state to restore.
+CREATE TABLE #Work (TicketId bigint NOT NULL PRIMARY KEY, AgentId uniqueidentifier NOT NULL, FromDepartmentId int NULL, PrevOwnerId uniqueidentifier NULL, PrevAssignmentId bigint NULL,
+                    ParseOk bit NOT NULL DEFAULT 0, Decision varchar(60) NULL, Reason nvarchar(300) NULL);
+INSERT #Work (TicketId, AgentId, FromDepartmentId, PrevOwnerId, PrevAssignmentId, ParseOk)
+SELECT x.TicketId, x.AgentId, x.PrevDept,
+       TRY_CONVERT(uniqueidentifier, NULLIF(x.PrevOwnerTxt, N'none')), TRY_CONVERT(bigint, NULLIF(x.PrevAsgTxt, N'none')),
+       CASE WHEN x.TicketId IS NOT NULL AND x.AgentId IS NOT NULL AND x.PrevDept IS NOT NULL
+             AND (x.PrevOwnerTxt = N'none' OR TRY_CONVERT(uniqueidentifier, x.PrevOwnerTxt) IS NOT NULL)
+             AND (x.PrevAsgTxt = N'none' OR TRY_CONVERT(bigint, x.PrevAsgTxt) IS NOT NULL) THEN 1 ELSE 0 END
+FROM (SELECT TRY_CONVERT(bigint, a.EntityId) AS TicketId,
+             TRY_CONVERT(uniqueidentifier, SUBSTRING(a.AfterValue, 20, 36)) AS AgentId,                                  -- 'AssignedEmployeeId=' is 19 chars
+             SUBSTRING(a.BeforeValue, 17, CHARINDEX(N';PreviousAssignmentId=', a.BeforeValue) - 17) AS PrevOwnerTxt,       -- 'PreviousOwnerId=' is 16 chars
+             SUBSTRING(a.BeforeValue, CHARINDEX(N';PreviousAssignmentId=', a.BeforeValue) + 22,
+                       CHARINDEX(N';PreviousDepartmentId=', a.BeforeValue) - CHARINDEX(N';PreviousAssignmentId=', a.BeforeValue) - 22) AS PrevAsgTxt,
+             TRY_CONVERT(int, SUBSTRING(a.BeforeValue, CHARINDEX(N';PreviousDepartmentId=', a.BeforeValue) + 22, 20)) AS PrevDept
+      FROM dbo.AuditEntries AS a
+      WHERE a.AuditEntryId >= @BatchAuditId - 10000000 AND a.AuditEntryId < @BatchAuditId
+        AND a.CorrelationId = @BatchId AND a.Action = N'AutoAssign' AND a.EntityType = N'Ticket'
+        AND a.AfterValue LIKE N'AssignedEmployeeId=%Trigger=BacklogDistribution%'
+        AND a.BeforeValue LIKE N'PreviousOwnerId=%;PreviousAssignmentId=%;PreviousDepartmentId=%') x;
+IF EXISTS (SELECT 1 FROM #Work w WHERE w.ParseOk = 0) OR (SELECT COUNT(*) FROM #Work) <> @ExpectedTickets
     THROW 50405, 'ABORTED: the per-ticket audit rows found do not match the ticket count recorded by the batch row (or could not be parsed).', 1;
-
-UPDATE w SET FromDepartmentId = e.FromDepartmentId
-FROM #Work w JOIN dbo.TicketWorkflowEvents e ON e.TicketId = w.TicketId AND e.CorrelationId = @BatchId AND e.EventType = 17;
-IF (SELECT COUNT(*) FROM #Work WHERE FromDepartmentId IS NOT NULL) <> @ExpectedMoved
-    THROW 50406, 'ABORTED: the batch TicketTransferred events found do not match the number of moved tickets recorded by the batch row.', 1;
+IF (SELECT COUNT(*) FROM #Work WHERE FromDepartmentId <> @CcId) <> @ExpectedMoved OR (SELECT COUNT(*) FROM #Work WHERE PrevOwnerId IS NOT NULL) <> @ExpectedReassigned
+    THROW 50406, 'ABORTED: the previous departments / owners recorded per ticket do not match the moved / reassigned counts recorded by the batch row.', 1;
 
 BEGIN TRY
     BEGIN TRANSACTION;
@@ -106,9 +118,10 @@ BEGIN TRY
             WHEN t.CurrentDepartmentId <> @CcId                      THEN 'SKIP'
             WHEN t.CurrentOwnerEmployeeId IS NULL                    THEN 'SKIP'
             WHEN t.CurrentOwnerEmployeeId <> w.AgentId               THEN 'SKIP'
-            WHEN t.TicketStatus NOT IN (1, 2, 3, 4)                  THEN 'SKIP'
+            WHEN t.TicketStatus <> 1                                 THEN 'SKIP'
             WHEN cur.n <> 1 OR cur.RowOk = 0                         THEN 'SKIP'
             WHEN later.n > 0                                         THEN 'SKIP'
+            WHEN w.PrevAssignmentId IS NOT NULL AND prev.n = 0       THEN 'SKIP'
             WHEN @IncludeWorked = 0 AND worked.n > 0                 THEN 'SKIP'
             ELSE 'ROLLBACK' END,
         Reason = CASE
@@ -116,9 +129,10 @@ BEGIN TRY
             WHEN t.CurrentDepartmentId <> @CcId                      THEN N'transferred out of Call Center since the batch'
             WHEN t.CurrentOwnerEmployeeId IS NULL                    THEN N'no owner now (already released)'
             WHEN t.CurrentOwnerEmployeeId <> w.AgentId               THEN N'owner changed since the batch (reassigned) - human ownership preserved'
-            WHEN t.TicketStatus NOT IN (1, 2, 3, 4)                  THEN N'Resolved/Closed since the batch'
+            WHEN t.TicketStatus <> 1                                 THEN N'no longer Open (work started / resolved / closed since the batch)'
             WHEN cur.n <> 1 OR cur.RowOk = 0                         THEN N'current assignment is not the batch row'
             WHEN later.n > 0                                         THEN N'a later assignment row exists'
+            WHEN w.PrevAssignmentId IS NOT NULL AND prev.n = 0       THEN N'the previous owner''s assignment row is missing or current again - cannot restore it safely'
             WHEN @IncludeWorked = 0 AND worked.n > 0                 THEN N'worked since the batch (' + CONVERT(nvarchar(10), worked.n) + N' activity records) - not reverted'
             ELSE N'still exactly as the batch left it' END
     FROM #Work AS w
@@ -130,6 +144,7 @@ BEGIN TRY
                                                      AND a.AssignedAtUtc = @BatchAt AND a.AssignedDepartmentId = @CcId))
                              THEN 0 ELSE 1 END AS RowOk) AS cur
     OUTER APPLY (SELECT COUNT(*) AS n FROM dbo.TicketAssignments a WHERE a.TicketId = w.TicketId AND a.AssignedAtUtc > @BatchAt) AS later
+    OUTER APPLY (SELECT COUNT(*) AS n FROM dbo.TicketAssignments a WHERE a.TicketAssignmentId = w.PrevAssignmentId AND a.TicketId = w.TicketId AND a.IsCurrent = 0) AS prev
     OUTER APPLY (SELECT (SELECT COUNT(*) FROM dbo.TicketStatusHistory h WHERE h.TicketId = w.TicketId AND h.OccurredAtUtc > @BatchAt)
                       + (SELECT COUNT(*) FROM dbo.TicketNotes n WHERE n.TicketId = w.TicketId AND n.CreatedAtUtc > @BatchAt)
                       + (SELECT COUNT(*) FROM dbo.TicketInteractionHandlers ih WHERE ih.TicketId = w.TicketId AND ih.RecordedAtUtc > @BatchAt)
@@ -139,13 +154,14 @@ BEGIN TRY
                       + CASE WHEN t.FirstHumanResponseAtUtc > @BatchAt THEN 1 ELSE 0 END AS n) AS worked;
 
     DECLARE @ToRollback int = (SELECT COUNT(*) FROM #Work WHERE Decision = 'ROLLBACK');
-    DECLARE @ToRollbackMoved int = (SELECT COUNT(*) FROM #Work WHERE Decision = 'ROLLBACK' AND FromDepartmentId IS NOT NULL);
+    DECLARE @ToRollbackMoved int = (SELECT COUNT(*) FROM #Work WHERE Decision = 'ROLLBACK' AND FromDepartmentId <> @CcId);
+    DECLARE @ToRollbackOwned int = (SELECT COUNT(*) FROM #Work WHERE Decision = 'ROLLBACK' AND PrevOwnerId IS NOT NULL);
 
     IF @ToRollback > 0
     BEGIN
         DECLARE @Now datetime2 = SYSUTCDATETIME(), @n int;
 
-        UPDATE t SET CurrentOwnerEmployeeId = NULL, CurrentDepartmentId = ISNULL(w.FromDepartmentId, t.CurrentDepartmentId)
+        UPDATE t SET CurrentOwnerEmployeeId = w.PrevOwnerId, CurrentDepartmentId = w.FromDepartmentId
         FROM dbo.Tickets t JOIN #Work w ON w.TicketId = t.TicketId AND w.Decision = 'ROLLBACK'
         WHERE t.CurrentOwnerEmployeeId = w.AgentId AND t.CurrentDepartmentId = @CcId;
         SET @n = @@ROWCOUNT;
@@ -158,6 +174,14 @@ BEGIN TRY
         SET @n = @@ROWCOUNT;
         IF @n <> @ToRollback THROW 50421, 'ABORTED: assignment row count mismatch while retiring batch assignments.', 1;
 
+        -- the previous owner's assignment row becomes current again (flag only; the row itself is untouched)
+        UPDATE a SET IsCurrent = 1
+        FROM dbo.TicketAssignments a JOIN #Work w ON w.TicketId = a.TicketId AND w.Decision = 'ROLLBACK' AND a.TicketAssignmentId = w.PrevAssignmentId
+        WHERE a.IsCurrent = 0;
+        SET @n = @@ROWCOUNT;
+        IF @n <> (SELECT COUNT(*) FROM #Work WHERE Decision = 'ROLLBACK' AND PrevAssignmentId IS NOT NULL)
+            THROW 50422, 'ABORTED: assignment row count mismatch while restoring the previous owner''s assignment rows.', 1;
+
         -- Audit: the department move back (moved tickets only), then the release of the assignment (every rolled-back ticket)
         INSERT dbo.AuditEntries (ActorEmployeeId, Action, EntityType, EntityId, BeforeValue, AfterValue, CorrelationId, OccurredAtUtc)
         SELECT NULL, N'Transfer', N'Ticket', CONVERT(nvarchar(100), w.TicketId),
@@ -165,19 +189,20 @@ BEGIN TRY
                N'DepartmentId=' + CONVERT(nvarchar(20), w.FromDepartmentId) + N';Reason=Rollback of one-time backlog redistribution;Trigger=BacklogDistributionRollback;RolledBackBatchId='
                  + LOWER(CONVERT(nvarchar(36), @BatchId)),
                @RollbackId, @Now
-        FROM #Work w WHERE w.Decision = 'ROLLBACK' AND w.FromDepartmentId IS NOT NULL;
+        FROM #Work w WHERE w.Decision = 'ROLLBACK' AND w.FromDepartmentId <> @CcId;
 
         INSERT dbo.AuditEntries (ActorEmployeeId, Action, EntityType, EntityId, BeforeValue, AfterValue, CorrelationId, OccurredAtUtc)
         SELECT NULL, N'AutoAssignRollback', N'Ticket', CONVERT(nvarchar(100), w.TicketId), LOWER(CONVERT(nvarchar(36), w.AgentId)),
-               N'DepartmentQueue;DepartmentId=' + CONVERT(nvarchar(20), ISNULL(w.FromDepartmentId, @CcId)) + N';Reason=Rollback of backlog distribution;RolledBackBatchId='
+               CASE WHEN w.PrevOwnerId IS NULL THEN N'DepartmentQueue' ELSE N'RestoredOwnerId=' + LOWER(CONVERT(nvarchar(36), w.PrevOwnerId)) END
+                 + N';DepartmentId=' + CONVERT(nvarchar(20), w.FromDepartmentId) + N';Reason=Rollback of backlog distribution;RolledBackBatchId='
                  + LOWER(CONVERT(nvarchar(36), @BatchId)),
                @RollbackId, @Now
         FROM #Work w WHERE w.Decision = 'ROLLBACK';
 
         INSERT dbo.TicketWorkflowEvents (TicketId, EventType, OccurredAtUtc, ActorEmployeeId, TicketApprovalId, Note, CorrelationId,
                                          FromDepartmentId, ToDepartmentId, ToEmployeeId, TransferReasonCode)
-        SELECT w.TicketId, 17, @Now, NULL, NULL, N'Rollback of one-time backlog redistribution', @RollbackId, @CcId, w.FromDepartmentId, NULL, 5
-        FROM #Work w WHERE w.Decision = 'ROLLBACK' AND w.FromDepartmentId IS NOT NULL;
+        SELECT w.TicketId, 17, @Now, NULL, NULL, N'Rollback of one-time backlog redistribution', @RollbackId, @CcId, w.FromDepartmentId, w.PrevOwnerId, 5
+        FROM #Work w WHERE w.Decision = 'ROLLBACK' AND (w.FromDepartmentId <> @CcId OR w.PrevOwnerId IS NOT NULL);
     END;
 
     -- cursor: restore only if no ticket has been dealt since the batch (otherwise leave it; a position in the cycle is harmless)
@@ -193,26 +218,29 @@ BEGIN TRY
     INSERT dbo.AuditEntries (ActorEmployeeId, Action, EntityType, EntityId, BeforeValue, AfterValue, CorrelationId, OccurredAtUtc)
     VALUES (NULL, N'BacklogDistributionRollbackBatch', N'DepartmentAssignmentRotation', CONVERT(nvarchar(100), @CcId),
             LOWER(CONVERT(nvarchar(36), @CursorNow)),
-            N'RolledBack=' + CONVERT(nvarchar(20), @ToRollback) + N';DepartmentRestored=' + CONVERT(nvarchar(20), @ToRollbackMoved)
+            N'RolledBack=' + CONVERT(nvarchar(20), @ToRollback) + N';DepartmentRestored=' + CONVERT(nvarchar(20), @ToRollbackMoved) + N';PreviousOwnerRestored=' + CONVERT(nvarchar(20), @ToRollbackOwned)
             + N';Skipped=' + CONVERT(nvarchar(20), (SELECT COUNT(*) FROM #Work WHERE Decision = 'SKIP'))
             + N';Cursor=' + @CursorAction + N';BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId)),
             @RollbackId, SYSUTCDATETIME());
 
-    -- validation: every rolled-back ticket is unowned, has no current assignment and is back in its pre-batch department
-    IF EXISTS (SELECT 1 FROM #Work w JOIN dbo.Tickets t ON t.TicketId = w.TicketId WHERE w.Decision = 'ROLLBACK' AND t.CurrentOwnerEmployeeId IS NOT NULL)
-        THROW 50430, 'VALIDATION FAILED: a rolled-back ticket still has an owner.', 1;
-    IF EXISTS (SELECT 1 FROM #Work w JOIN dbo.TicketAssignments a ON a.TicketId = w.TicketId AND a.IsCurrent = 1 WHERE w.Decision = 'ROLLBACK')
-        THROW 50431, 'VALIDATION FAILED: a rolled-back ticket still has a current assignment.', 1;
+    -- validation: every rolled-back ticket has its previous owner, previous department and exactly the previous current assignment (none if it had none)
     IF EXISTS (SELECT 1 FROM #Work w JOIN dbo.Tickets t ON t.TicketId = w.TicketId
-               WHERE w.Decision = 'ROLLBACK' AND w.FromDepartmentId IS NOT NULL AND t.CurrentDepartmentId <> w.FromDepartmentId)
+               WHERE w.Decision = 'ROLLBACK' AND ((t.CurrentOwnerEmployeeId IS NULL AND w.PrevOwnerId IS NOT NULL) OR (t.CurrentOwnerEmployeeId IS NOT NULL AND (w.PrevOwnerId IS NULL OR t.CurrentOwnerEmployeeId <> w.PrevOwnerId))))
+        THROW 50430, 'VALIDATION FAILED: a rolled-back ticket does not carry its previous owner.', 1;
+    IF EXISTS (SELECT 1 FROM #Work w WHERE w.Decision = 'ROLLBACK'
+               AND ((w.PrevAssignmentId IS NULL AND EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = w.TicketId AND a.IsCurrent = 1))
+                 OR (w.PrevAssignmentId IS NOT NULL AND (SELECT COUNT(*) FROM dbo.TicketAssignments a WHERE a.TicketId = w.TicketId AND a.IsCurrent = 1) <> 1)
+                 OR (w.PrevAssignmentId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketAssignmentId = w.PrevAssignmentId AND a.IsCurrent = 1))))
+        THROW 50431, 'VALIDATION FAILED: a rolled-back ticket does not have exactly its previous current assignment (or none, if it had none).', 1;
+    IF EXISTS (SELECT 1 FROM #Work w JOIN dbo.Tickets t ON t.TicketId = w.TicketId
+               WHERE w.Decision = 'ROLLBACK' AND t.CurrentDepartmentId <> w.FromDepartmentId)
         THROW 50432, 'VALIDATION FAILED: a rolled-back ticket is not back in its original department.', 1;
-    IF EXISTS (SELECT 1 FROM #Work w JOIN dbo.Tickets t ON t.TicketId = w.TicketId
-               WHERE w.Decision = 'SKIP' AND t.CurrentOwnerEmployeeId IS NULL AND EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = w.TicketId AND a.IsCurrent = 1))
-        THROW 50433, 'VALIDATION FAILED: a skipped ticket is in an inconsistent owner/assignment state.', 1;
+    IF EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.IsCurrent = 1 GROUP BY a.TicketId HAVING COUNT(*) > 1)
+        THROW 50433, 'VALIDATION FAILED: a ticket has more than one current assignment.', 1;
 
     -- report
     SELECT CASE WHEN @DryRun = 1 THEN 'DRY RUN - will be ROLLED BACK' ELSE 'COMMITTING' END AS Mode, @BatchId AS BatchId, @RollbackId AS RollbackId,
-           (SELECT COUNT(*) FROM #Work) AS TicketsInBatch, @ToRollback AS ToRollBack, @ToRollbackMoved AS DepartmentRestoredFor,
+           (SELECT COUNT(*) FROM #Work) AS TicketsInBatch, @ToRollback AS ToRollBack, @ToRollbackMoved AS DepartmentRestoredFor, @ToRollbackOwned AS PreviousOwnerRestoredFor,
            (SELECT COUNT(*) FROM #Work WHERE Decision = 'SKIP') AS SkippedKeepOwner, @CursorAction AS RotationCursor;
     SELECT Decision, Reason, COUNT(*) AS Tickets FROM #Work GROUP BY Decision, Reason ORDER BY Decision, COUNT(*) DESC;
     SELECT e.DisplayName AS Agent, SUM(CASE WHEN w.Decision = 'ROLLBACK' THEN 1 ELSE 0 END) AS RolledBack, SUM(CASE WHEN w.Decision = 'SKIP' THEN 1 ELSE 0 END) AS SkippedKept
