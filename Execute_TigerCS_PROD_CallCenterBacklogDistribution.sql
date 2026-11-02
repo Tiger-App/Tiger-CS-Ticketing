@@ -3,42 +3,49 @@
  Execute_TigerCS_PROD_CallCenterBacklogDistribution.sql
  Database : TigerCS_Ticketing_Prod          *** NOT EXECUTED - REQUIRES WRITTEN APPROVAL BEFORE @DryRun = 0 ***
 
- ONE-TIME redistribution of the existing backlog (confirmed business decision):
-   every UNOWNED Open / InProgress / Pending ticket from EVERY department is moved into the Call Center (CC) and given to exactly ONE eligible
-   Call Center agent, using the Round Robin rules and persisted cursor of the existing engine (see Preview_..._ReadOnly.sql for the full rules).
+ ONE-TIME redistribution (explicitly approved scope - replaces the narrower scope of PR #143/#144):
+   EVERY ticket with Status = OPEN from EVERY department - unowned OR currently owned by another employee - is moved into the Call Center (CC) and given
+   to exactly ONE eligible Call Center agent, using the Round Robin rules and persisted cursor of the existing engine (see Preview_..._ReadOnly.sql).
    Plain Round Robin: no workload balancing. Future tickets are unaffected: no application code, configuration or workflow is changed.
+   The previous owner is REPLACED, never erased: the previous current TicketAssignments row is kept (IsCurrent = 0, exactly like TicketAssignmentAppService
+   does on a reassignment), and the previous owner / assignment id / department are recorded in AuditEntries and in the TicketTransferred event.
+   NOT TOUCHED: InProgress / Pending / Resolved / Closed tickets.
    HELD BACK and never touched: tickets with a PENDING APPROVAL (TicketApprovals.Status = 1) and tickets with an ACTIVE AI CONVERSATION (a live Genesys
-   interaction nobody has taken and that needs no human) - they are listed by the preview and their counts are commit gates.
+   interaction nobody has taken and that needs no human) - listed by the preview; their counts are commit gates.
 
  PER ELIGIBLE TICKET IT WRITES (all in ONE transaction, all-or-nothing):
-   * dbo.Tickets                        CurrentDepartmentId -> CC (only if it was elsewhere) and CurrentOwnerEmployeeId -> the dealt agent
-   * dbo.TicketAssignments              +1 current row (AssignedDepartmentId = CC, AssigningActorEmployeeId = NULL = system), exactly like AutoAssign
-   * dbo.AuditEntries                   +1 'Transfer' row for a ticket that changes department (system actor, same wording style as the app's
-                                           Call-Center-first routing) and +1 'AutoAssign' row (engine format + Trigger=BacklogDistribution;BatchId=...)
-   * dbo.TicketWorkflowEvents           +1 'TicketTransferred' event (reason SystemRouting, system actor, From -> CC, ToEmployeeId = agent) for a ticket that
-                                           changes department. SystemRouting is the app's own "system moved it" reason: not counted as an agent transfer,
-                                           not an escalation, and does not affect a Genesys handler's rights.
+   * dbo.Tickets                        CurrentDepartmentId -> CC (only if it was elsewhere) and CurrentOwnerEmployeeId -> the dealt agent, in ONE UPDATE
+   * dbo.TicketAssignments              previous current row -> IsCurrent = 0 (kept; never deleted or edited otherwise) and +1 current row
+                                           (AssignedDepartmentId = CC, AssigningActorEmployeeId = NULL = system), exactly like AutoAssign
+   * dbo.AuditEntries                   +1 'Transfer' row for a ticket that changes department (system actor) and +1 'AutoAssign' row for EVERY ticket
+                                           (engine format + Trigger=BacklogDistribution;BatchId=...; BeforeValue = PreviousOwnerId / PreviousAssignmentId / PreviousDepartmentId)
+   * dbo.TicketWorkflowEvents           +1 'TicketTransferred' event (reason SystemRouting, system actor, From -> CC, ToEmployeeId = agent, note names the previous owner)
+                                           for a ticket that changes department OR had an owner (a reassignment). SystemRouting is the app's own "system moved it"
+                                           reason: not an agent transfer, not an escalation, does not affect a Genesys handler's rights.
    and once per batch:
    * dbo.AuditEntries                   +1 'BacklogDistributionBatch' row (rotation cursor before/after, counts) - the rollback anchor
    * dbo.DepartmentAssignmentRotations  CC cursor advanced to the last agent dealt (as the engine does)
  NEVER CHANGED (proved by an in-transaction before/after comparison): OriginatingDepartmentId, RequestTypeId, CategoryId, PriorityId, TicketStatus,
-   SlaState, EscalationLevel, VerificationStatus, CreatedAtUtc. Not written at all: status history, SLA instances/pauses, interactions, notes,
-   resolutions, approvals, notifications/outbox, any ticket that already has an owner or a current assignment, Resolved/Closed tickets.
+   SlaState, EscalationLevel, VerificationStatus, CreatedAtUtc, and every pre-existing assignment row except its IsCurrent flag. Not written at all: status history,
+   SLA instances/pauses, interactions, notes, resolutions, approvals, notifications/outbox, any non-Open ticket.
  No schema change. No notification is emitted (an assignment never emitted one in the app; avoids a bulk burst to agents).
 
  SAFETY:
    * DB-name guard; hard abort on any schema difference it depends on (incl. the unique filtered index "one current assignment per ticket").
    * @DryRun = 1 (DEFAULT): performs every write, runs every validation, prints the result sets, then ROLLS BACK.
-   * COMMIT GATES (all required for @DryRun = 0): @ApprovedTicketCount, @ApprovedTransferCount, @ApprovedAgentCount, @ApprovedHeldBackPendingApprovalCount and
-     @ApprovedHeldBackActiveAiCount must equal what the run computes (copy the five numbers from the preview); service-account exclusions confirmed (@ServiceIdsConfirmed = 1 AND ids listed, or @NoServiceAccountsExist = 1) and every
-     listed id must be a real employee; no earlier batch present.
+   * COMMIT GATES (all required for @DryRun = 0): @ApprovedTicketCount, @ApprovedTransferCount, @ApprovedReassignedCount, @ApprovedAgentCount,
+     @ApprovedHeldBackPendingApprovalCount and @ApprovedHeldBackActiveAiCount must equal what the run computes (copy the six numbers from the preview);
+     service-account exclusions confirmed (@ServiceIdsConfirmed = 1 AND ids listed, or @NoServiceAccountsExist = 1) and every listed id must be a real
+     employee; no earlier batch present.
    * Concurrency: sp_getapplock (blocks a second concurrent run); the CC rotation row is locked UPDLOCK/ROWLOCK exactly like the live app, so live
-     intake serializes behind this run; candidate tickets are locked UPDLOCK/ROWLOCK, re-checked in the UPDATE (owner IS NULL, same department, same
-     RowVersion) and the run aborts if even one row differs; the filtered unique index makes a duplicate current assignment impossible. The candidate and agent
-     rows stay locked to commit, and AFTER the writes (rows now exclusively locked, so a competing writer must wait or has already committed) the run re-checks
-     that no planned ticket gained a pending approval or an active AI conversation and that every new owner is STILL an eligible agent - any change aborts the run.
-   * Idempotent: a second run finds no unowned tickets (they now have owners) and an earlier batch blocks it anyway.
-   * Rollback of ONLY this batch: Rollback_TigerCS_PROD_CallCenterBacklogDistribution.sql with this run's @BatchId (printed + stored in AuditEntries).
+     intake serializes behind this run; candidate tickets are locked UPDLOCK/ROWLOCK, re-checked in the UPDATE (still Open, same owner, same department,
+     same RowVersion) and the run aborts if even one row differs - so a person's concurrent reassignment either completes first (counts then differ and the
+     run is refused) or fails on the RowVersion; the filtered unique index makes a duplicate current assignment impossible; the superseded assignment rows
+     must be exactly the rows read at selection. The candidate and agent rows stay locked to commit, and AFTER the writes the run re-checks that no planned
+     ticket gained a pending approval or an active AI conversation and that every new owner is STILL an eligible agent - any change aborts the run.
+   * Idempotent: a second run is refused by the earlier batch's audit row.
+   * Rollback of ONLY this batch: Rollback_TigerCS_PROD_CallCenterBacklogDistribution.sql with this run's @BatchId (printed + stored in AuditEntries);
+     it restores the previous owner, previous department and the previous current assignment row of every ticket nobody has touched since.
 
  HOW TO RUN (SSMS, ONE batch, no GO):  1) Full backup.  2) Run with defaults (@DryRun = 1) on a restored copy first.
    3) After sign-off fill the gates below and set @DryRun = 0 in the approved window.
@@ -54,6 +61,7 @@ SET LOCK_TIMEOUT 20000;                 -- fail fast (20 s) instead of hanging b
 DECLARE @DryRun                  bit              = 1;     -- 1 = do everything, then ROLL BACK (default).  0 = COMMIT.
 DECLARE @ApprovedTicketCount     int              = NULL;  -- commit gate: preview "ApprovedTicketCount"
 DECLARE @ApprovedTransferCount   int             = NULL;  -- commit gate: preview "ApprovedTransferCount" (tickets that change department)
+DECLARE @ApprovedReassignedCount int             = NULL;  -- commit gate: preview "ApprovedReassignedCount" (eligible tickets that currently have an owner - the owner is replaced)
 DECLARE @ApprovedAgentCount      int              = NULL;  -- commit gate: preview "ApprovedAgentCount"
 DECLARE @ApprovedHeldBackPendingApprovalCount int = NULL;  -- commit gate: preview "ApprovedHeldBackPendingApprovalCount" (tickets left alone: pending approval)
 DECLARE @ApprovedHeldBackActiveAiCount        int = NULL;  -- commit gate: preview "ApprovedHeldBackActiveAiCount" (tickets left alone: active AI conversation only)
@@ -61,6 +69,8 @@ DECLARE @ServiceIdsConfirmed     bit              = 0;     -- commit gate: set 1
 DECLARE @NoServiceAccountsExist  bit              = 0;     -- commit gate alternative: 1 ONLY if confirmed that no service/integration accounts exist (list stays empty)
 DECLARE @IncludeLiveAiConversations bit          = 0;     -- keep 0 unless explicitly approved: 0 = tickets with an ACTIVE AI conversation are held back. MUST equal the Preview's value
 DECLARE @CsAgentRoleOnly         bit              = 1;     -- 1 = only holders of the CS Agent role receive tickets (can Transfer as owner). MUST equal the Preview's value
+DECLARE @ReassignTicketsAlreadyOwnedByEligibleCcAgent bit = 1;  -- MUST equal the Preview's value. 1 = literal rule (every Open ticket is dealt again). 0 = leave a CC ticket an eligible CC agent already owns
+DECLARE @ExcludeAgentsWithTicketDenials bit      = 1;     -- MUST equal the Preview's value. 1 = an agent with an explicit DENY of Tickets.View / Resolve / Close is not dealt tickets
 DECLARE @AllowSecondBatch        bit              = 0;     -- keep 0: this is a ONE-TIME operation
 DECLARE @BatchId                 uniqueidentifier = NEWID();-- correlation id of every row this run writes; needed by the rollback script
 DECLARE @ExpectedDb              sysname          = N'TigerCS_Ticketing_Prod';
@@ -94,7 +104,7 @@ SELECT @missing += v.Tbl + N'.' + v.Col + N' ' FROM (VALUES
     (N'Tickets', N'CurrentOwnerEmployeeId'), (N'Tickets', N'TicketStatus'), (N'Tickets', N'CreatedAtUtc'), (N'Tickets', N'RowVersion'),
     (N'Tickets', N'RequestTypeId'), (N'Tickets', N'CategoryId'), (N'Tickets', N'PriorityId'), (N'Tickets', N'SlaState'),
     (N'Tickets', N'EscalationLevel'), (N'Tickets', N'VerificationStatus'),
-    (N'TicketAssignments', N'TicketId'), (N'TicketAssignments', N'AssignedEmployeeId'), (N'TicketAssignments', N'AssignedDepartmentId'),
+    (N'TicketAssignments', N'TicketAssignmentId'), (N'TicketAssignments', N'TicketId'), (N'TicketAssignments', N'AssignedEmployeeId'), (N'TicketAssignments', N'AssignedDepartmentId'),
     (N'TicketAssignments', N'AssignedAtUtc'), (N'TicketAssignments', N'AssigningActorEmployeeId'), (N'TicketAssignments', N'IsCurrent'),
     (N'AuditEntries', N'ActorEmployeeId'), (N'AuditEntries', N'Action'), (N'AuditEntries', N'EntityType'), (N'AuditEntries', N'EntityId'),
     (N'AuditEntries', N'BeforeValue'), (N'AuditEntries', N'AfterValue'), (N'AuditEntries', N'CorrelationId'), (N'AuditEntries', N'OccurredAtUtc'),
@@ -125,9 +135,9 @@ IF EXISTS (SELECT 1 FROM dbo.DepartmentWorkflowSettings WHERE DepartmentId = @Cc
 
 IF @DryRun = 0
 BEGIN
-    IF ISNULL(@ServiceIdsConfirmed, 0) <> 1 OR @ApprovedTicketCount IS NULL OR @ApprovedTransferCount IS NULL OR @ApprovedAgentCount IS NULL
+    IF ISNULL(@ServiceIdsConfirmed, 0) <> 1 OR @ApprovedTicketCount IS NULL OR @ApprovedTransferCount IS NULL OR @ApprovedReassignedCount IS NULL OR @ApprovedAgentCount IS NULL
        OR @ApprovedHeldBackPendingApprovalCount IS NULL OR @ApprovedHeldBackActiveAiCount IS NULL
-        THROW 50307, 'ABORTED: commit gates not satisfied - set @ServiceIdsConfirmed = 1 and the five approved counts (tickets, moved, agents, held-back pending approvals, held-back active AI) from the approved preview.', 1;
+        THROW 50307, 'ABORTED: commit gates not satisfied - set @ServiceIdsConfirmed = 1 and the six approved counts (tickets, moved, reassigned, agents, held-back pending approvals, held-back active AI) from the approved preview.', 1;
     IF NOT EXISTS (SELECT 1 FROM @ServiceIdentity) AND ISNULL(@NoServiceAccountsExist, 0) <> 1
         THROW 50308, 'ABORTED: the service-account list is empty. List every service/integration account id, or set @NoServiceAccountsExist = 1 if you have confirmed there are none.', 1;
     IF EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId))
@@ -163,15 +173,19 @@ CLOSE watched; DEALLOCATE watched;
 CREATE TABLE #Agents (
     Rn int NOT NULL PRIMARY KEY, EmployeeId uniqueidentifier NOT NULL, DisplayName nvarchar(200) NULL, UserName nvarchar(256) NULL,
     SortKey char(36) COLLATE Latin1_General_BIN2 NOT NULL);
-CREATE TABLE #Cand (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL,
+CREATE TABLE #Deny (EmployeeId uniqueidentifier NOT NULL, PermissionKey nvarchar(100) NOT NULL);
+CREATE TABLE #AsgBefore (TicketAssignmentId bigint NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, AssignedEmployeeId uniqueidentifier NOT NULL, AssignedDepartmentId int NOT NULL,
+    AssignedAtUtc datetime2 NOT NULL, AssigningActorEmployeeId uniqueidentifier NULL, IsCurrent bit NOT NULL);
+CREATE TABLE #Cand (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, TicketNumber nvarchar(80) NULL, TicketStatus tinyint NOT NULL,
     CreatedAtUtc datetime2 NOT NULL, FromDepartmentId int NOT NULL, OriginatingDepartmentId int NOT NULL, IsMove bit NOT NULL,
+    PrevOwnerId uniqueidentifier NULL, PrevAssignmentId bigint NULL,
     RequestTypeId int NULL, CategoryId int NULL, PriorityId tinyint NULL, SlaState tinyint NOT NULL, EscalationLevel tinyint NOT NULL,
     VerificationStatus tinyint NOT NULL, RowVer binary(8) NOT NULL);
 CREATE TABLE #Plan (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, AgentRn int NOT NULL, EmployeeId uniqueidentifier NOT NULL,
-    FromDepartmentId int NOT NULL, IsMove bit NOT NULL, RowVer binary(8) NOT NULL);
+    FromDepartmentId int NOT NULL, IsMove bit NOT NULL, RowVer binary(8) NOT NULL, PrevOwnerId uniqueidentifier NULL, PrevAssignmentId bigint NULL);
 
 DECLARE @Now datetime2 = SYSUTCDATETIME();
-DECLARE @Cursor uniqueidentifier, @Start int = 1, @N int, @Cand int, @Moved int, @HeldApproval int, @HeldAiOnly int, @Updated int, @Inserted int, @EventsInserted int, @LastAgent uniqueidentifier,
+DECLARE @Cursor uniqueidentifier, @Start int = 1, @N int, @Cand int, @Moved int, @Reassigned int, @Events int, @Superseded int, @HeldApproval int, @HeldAiOnly int, @Updated int, @Inserted int, @EventsInserted int, @LastAgent uniqueidentifier,
         @MaxAuditIdBefore bigint, @MaxEventIdBefore bigint;
 
 BEGIN TRY
@@ -195,7 +209,12 @@ BEGIN TRY
         INSERT INTO dbo.DepartmentAssignmentRotations (DepartmentId, LastAssignedEmployeeId, UpdatedAtUtc) VALUES (@CcId, NULL, @Now);
     SELECT @Cursor = LastAssignedEmployeeId FROM dbo.DepartmentAssignmentRotations WITH (UPDLOCK, ROWLOCK) WHERE DepartmentId = @CcId;
 
-    -- (c) eligible agents, Round Robin order (same rules as FilterEligibleAsync) ------------------------------------------------
+    -- explicit permission DENIALS (dbo.UserPermissionOverrides, Effect 2) of View / Resolve / Close - the table exists only after AddUserPermissionOverrides
+    IF OBJECT_ID(N'dbo.UserPermissionOverrides', N'U') IS NOT NULL
+        EXEC sp_executesql N'INSERT #Deny (EmployeeId, PermissionKey) SELECT EmployeeId, PermissionKey FROM dbo.UserPermissionOverrides
+                             WHERE Effect = 2 AND PermissionKey IN (N''Tickets.View'', N''Tickets.Resolve'', N''Tickets.Close'')';
+
+    -- (c) eligible agents, Round Robin order (same rules as FilterEligibleAsync + explicit denials) ----------------------------
     INSERT #Agents (Rn, EmployeeId, DisplayName, UserName, SortKey)
     SELECT ROW_NUMBER() OVER (ORDER BY CONVERT(char(36), e.EmployeeId) COLLATE Latin1_General_BIN2),
            e.EmployeeId, e.DisplayName, u.UserName, CONVERT(char(36), e.EmployeeId) COLLATE Latin1_General_BIN2
@@ -205,6 +224,7 @@ BEGIN TRY
       AND EXISTS (SELECT 1 FROM dbo.UserDepartmentAssignments a WHERE a.EmployeeId = e.EmployeeId AND a.DepartmentId = @CcId)
       AND NOT (u.LockoutEnabled = 1 AND u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET())
       AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId)
+      AND (@ExcludeAgentsWithTicketDenials = 0 OR NOT EXISTS (SELECT 1 FROM #Deny d WHERE d.EmployeeId = e.EmployeeId))
       AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
                   WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'))
       AND (@CsAgentRoleOnly = 0 OR EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
@@ -217,42 +237,46 @@ BEGIN TRY
         THROW 50312, @msg, 1;
     END;
 
-    -- (d) eligible tickets from EVERY department, LOCKED for this transaction. Held back (never selected, never locked, never touched):
+    -- (d) eligible tickets from EVERY department, LOCKED for this transaction: Open only, owned or not. Held back (never selected, never locked, never touched):
     --     a PENDING APPROVAL, or an ACTIVE AI CONVERSATION (live Genesys interaction nobody took, no human needed, no open handoff).
     INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc, FromDepartmentId, OriginatingDepartmentId, IsMove,
-                  RequestTypeId, CategoryId, PriorityId, SlaState, EscalationLevel, VerificationStatus, RowVer)
+                  PrevOwnerId, PrevAssignmentId, RequestTypeId, CategoryId, PriorityId, SlaState, EscalationLevel, VerificationStatus, RowVer)
     SELECT ROW_NUMBER() OVER (ORDER BY t.CreatedAtUtc, t.TicketId), t.TicketId, t.TicketNumber, t.TicketStatus, t.CreatedAtUtc,
            t.CurrentDepartmentId, t.OriginatingDepartmentId, CASE WHEN t.CurrentDepartmentId <> @CcId THEN 1 ELSE 0 END,
+           t.CurrentOwnerEmployeeId, (SELECT TOP (1) a.TicketAssignmentId FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1),
            t.RequestTypeId, t.CategoryId, t.PriorityId, t.SlaState, t.EscalationLevel, t.VerificationStatus, t.RowVersion
     FROM dbo.Tickets AS t WITH (UPDLOCK, ROWLOCK)
-    WHERE t.TicketStatus IN (1, 2, 3, 4)
-      AND t.CurrentOwnerEmployeeId IS NULL
-      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1)
+    WHERE t.TicketStatus = 1                                                                      -- OPEN only
       AND NOT EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1)
       AND (@IncludeLiveAiConversations = 1 OR NOT (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
                      AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
-       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4))));
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4))))
+      AND NOT (@ReassignTicketsAlreadyOwnedByEligibleCcAgent = 0 AND t.CurrentDepartmentId = @CcId
+               AND EXISTS (SELECT 1 FROM #Agents ag WHERE ag.EmployeeId = t.CurrentOwnerEmployeeId));
     SET @Cand = (SELECT COUNT(*) FROM #Cand);
     SET @Moved = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1);
-    -- held-back counts (read only, not locked): approval-pending tickets (with or without an AI conversation) and AI-only tickets
+    SET @Reassigned = (SELECT COUNT(*) FROM #Cand WHERE PrevOwnerId IS NOT NULL);
+    SET @Events = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1 OR PrevOwnerId IS NOT NULL);
+    -- pre-image of EVERY assignment row of the candidates (the "nothing was deleted or edited except IsCurrent" proof below)
+    INSERT #AsgBefore SELECT a.TicketAssignmentId, a.TicketId, a.AssignedEmployeeId, a.AssignedDepartmentId, a.AssignedAtUtc, a.AssigningActorEmployeeId, a.IsCurrent
+    FROM dbo.TicketAssignments a JOIN #Cand c ON c.TicketId = a.TicketId;
+    -- held-back counts (read only, not locked): Open tickets with a pending approval (with or without an AI conversation) and AI-only Open tickets
     SELECT @HeldApproval = COUNT(*) FROM dbo.Tickets AS t
-    WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NULL
-      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1) AND EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1);
+    WHERE t.TicketStatus = 1 AND EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1);
     SELECT @HeldAiOnly = COUNT(*) FROM dbo.Tickets AS t
-    WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NULL
-      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1) AND NOT EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1) AND @IncludeLiveAiConversations = 0 AND (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+    WHERE t.TicketStatus = 1 AND NOT EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1) AND @IncludeLiveAiConversations = 0 AND (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
                      AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4)));
-    IF @Cand = 0 THROW 50313, 'NOTHING TO DO: no eligible unowned tickets. Nothing was changed.', 1;
-    IF @DryRun = 0 AND (@Cand <> @ApprovedTicketCount OR @Moved <> @ApprovedTransferCount
+    IF @Cand = 0 THROW 50313, 'NOTHING TO DO: no eligible Open tickets. Nothing was changed.', 1;
+    IF @DryRun = 0 AND (@Cand <> @ApprovedTicketCount OR @Moved <> @ApprovedTransferCount OR @Reassigned <> @ApprovedReassignedCount
                         OR @HeldApproval <> @ApprovedHeldBackPendingApprovalCount OR @HeldAiOnly <> @ApprovedHeldBackActiveAiCount)
     BEGIN
-        SET @msg = N'ABORTED: eligible tickets = ' + CONVERT(nvarchar(10), @Cand) + N' (moved ' + CONVERT(nvarchar(10), @Moved) + N', held back: approvals '
-                 + CONVERT(nvarchar(10), @HeldApproval) + N', AI ' + CONVERT(nvarchar(10), @HeldAiOnly) + N') but approved = '
-                 + CONVERT(nvarchar(10), @ApprovedTicketCount) + N' (moved ' + CONVERT(nvarchar(10), @ApprovedTransferCount) + N', held back: approvals '
-                 + CONVERT(nvarchar(10), @ApprovedHeldBackPendingApprovalCount) + N', AI ' + CONVERT(nvarchar(10), @ApprovedHeldBackActiveAiCount)
+        SET @msg = N'ABORTED: eligible tickets = ' + CONVERT(nvarchar(10), @Cand) + N' (moved ' + CONVERT(nvarchar(10), @Moved) + N', owner replaced ' + CONVERT(nvarchar(10), @Reassigned)
+                 + N', held back: approvals ' + CONVERT(nvarchar(10), @HeldApproval) + N', AI ' + CONVERT(nvarchar(10), @HeldAiOnly) + N') but approved = '
+                 + CONVERT(nvarchar(10), @ApprovedTicketCount) + N' (moved ' + CONVERT(nvarchar(10), @ApprovedTransferCount) + N', owner replaced ' + CONVERT(nvarchar(10), @ApprovedReassignedCount)
+                 + N', held back: approvals ' + CONVERT(nvarchar(10), @ApprovedHeldBackPendingApprovalCount) + N', AI ' + CONVERT(nvarchar(10), @ApprovedHeldBackActiveAiCount)
                  + N'). The backlog changed since the preview - re-run the preview and re-approve.';
         THROW 50314, @msg, 1;
     END;
@@ -260,27 +284,37 @@ BEGIN TRY
     -- (e) the deal: next eligible after the cursor, wrapping (DepartmentAssignmentRotation.PickNext) --------------------------
     IF @Cursor IS NOT NULL
         SELECT @Start = ISNULL(MIN(Rn), 1) FROM #Agents WHERE SortKey > CONVERT(char(36), @Cursor) COLLATE Latin1_General_BIN2;
-    INSERT #Plan (Seq, TicketId, AgentRn, EmployeeId, FromDepartmentId, IsMove, RowVer)
-    SELECT c.Seq, c.TicketId, a.Rn, a.EmployeeId, c.FromDepartmentId, c.IsMove, c.RowVer
+    INSERT #Plan (Seq, TicketId, AgentRn, EmployeeId, FromDepartmentId, IsMove, RowVer, PrevOwnerId, PrevAssignmentId)
+    SELECT c.Seq, c.TicketId, a.Rn, a.EmployeeId, c.FromDepartmentId, c.IsMove, c.RowVer, c.PrevOwnerId, c.PrevAssignmentId
     FROM #Cand c JOIN #Agents a ON a.Rn = ((@Start - 1 + c.Seq - 1) % @N) + 1;
     IF (SELECT COUNT(*) FROM #Plan) <> @Cand THROW 50315, 'ABORTED: internal check failed - plan size differs from candidate count.', 1;
     SELECT TOP (1) @LastAgent = EmployeeId FROM #Plan ORDER BY Seq DESC;
 
     -- (f) writes ------------------------------------------------------------------------------------------------------------------
-    -- Department move + ownership in ONE statement. Guarded by: still unowned, still in the department we planned from, RowVersion unchanged.
-    -- ALL rows must match or the whole run aborts.
+    -- Department move + ownership in ONE statement. Guarded by: still Open, still owned by the same person (or still unowned), still in the department we
+    -- planned from, RowVersion unchanged. ALL rows must match or the whole run aborts.
     UPDATE t SET CurrentDepartmentId = @CcId, CurrentOwnerEmployeeId = p.EmployeeId
     FROM dbo.Tickets AS t
     JOIN #Plan AS p ON p.TicketId = t.TicketId AND t.RowVersion = p.RowVer
-    WHERE t.CurrentOwnerEmployeeId IS NULL AND t.CurrentDepartmentId = p.FromDepartmentId AND t.TicketStatus IN (1, 2, 3, 4);
+    WHERE t.TicketStatus = 1 AND t.CurrentDepartmentId = p.FromDepartmentId
+      AND ((t.CurrentOwnerEmployeeId IS NULL AND p.PrevOwnerId IS NULL) OR t.CurrentOwnerEmployeeId = p.PrevOwnerId);
     SET @Updated = @@ROWCOUNT;
     IF @Updated <> @Cand
     BEGIN
-        SET @msg = N'ABORTED: ' + CONVERT(nvarchar(10), @Cand - @Updated) + N' ticket(s) changed while the run was in progress (owner/department/status/rowversion). Whole run rolled back.';
+        SET @msg = N'ABORTED: ' + CONVERT(nvarchar(10), @Cand - @Updated) + N' ticket(s) changed while the run was in progress (status/owner/department/rowversion). Whole run rolled back.';
         THROW 50316, @msg, 1;
     END;
 
-    -- Current assignment rows in CC (system actor = NULL, like AutoAssign). The filtered unique index rejects a second current row.
+    -- Retire the previous current assignment row (history is KEPT: same as TicketAssignment.MarkSuperseded). It must be exactly the row read at selection.
+    DECLARE @Sup TABLE (TicketAssignmentId bigint NOT NULL PRIMARY KEY);
+    UPDATE a SET IsCurrent = 0 OUTPUT inserted.TicketAssignmentId INTO @Sup
+    FROM dbo.TicketAssignments a JOIN #Plan p ON p.TicketId = a.TicketId WHERE a.IsCurrent = 1;
+    SET @Superseded = @@ROWCOUNT;
+    IF EXISTS (SELECT 1 FROM @Sup s WHERE NOT EXISTS (SELECT 1 FROM #Plan p WHERE p.PrevAssignmentId = s.TicketAssignmentId))
+       OR EXISTS (SELECT 1 FROM #Plan p WHERE p.PrevAssignmentId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM @Sup s WHERE s.TicketAssignmentId = p.PrevAssignmentId))
+        THROW 50317, 'ABORTED: the assignment rows superseded are not exactly the rows read at selection (a concurrent assignment). Whole run rolled back.', 1;
+
+    -- New current assignment rows in CC (system actor = NULL, like AutoAssign). The filtered unique index rejects a second current row.
     INSERT dbo.TicketAssignments (TicketId, AssignedEmployeeId, AssignedDepartmentId, AssignedAtUtc, AssigningActorEmployeeId, IsCurrent)
     SELECT p.TicketId, p.EmployeeId, @CcId, @Now, NULL, 1 FROM #Plan p;
     SET @Inserted = @@ROWCOUNT;
@@ -288,7 +322,7 @@ BEGIN TRY
     -- Audit 1/2: the department move (only tickets that changed department) - same shape as the app's Call-Center-first "Transfer" entry
     INSERT dbo.AuditEntries (ActorEmployeeId, Action, EntityType, EntityId, BeforeValue, AfterValue, CorrelationId, OccurredAtUtc)
     SELECT NULL, N'Transfer', N'Ticket', CONVERT(nvarchar(100), p.TicketId),
-           N'DepartmentId=' + CONVERT(nvarchar(20), p.FromDepartmentId) + N';AssignedEmployeeId=DepartmentQueue',
+           N'DepartmentId=' + CONVERT(nvarchar(20), p.FromDepartmentId) + N';AssignedEmployeeId=' + ISNULL(LOWER(CONVERT(nvarchar(36), p.PrevOwnerId)), N'DepartmentQueue'),
            N'DepartmentId=' + CONVERT(nvarchar(20), @CcId) + N';Reason=One-time backlog redistribution to Call Center;OriginatingDepartmentId='
              + CONVERT(nvarchar(20), c.OriginatingDepartmentId) + N' (unchanged);Trigger=BacklogDistribution;BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId)),
            @BatchId, @Now
@@ -296,17 +330,23 @@ BEGIN TRY
 
     -- Audit 2/2: the assignment, one per ticket (engine format)
     INSERT dbo.AuditEntries (ActorEmployeeId, Action, EntityType, EntityId, BeforeValue, AfterValue, CorrelationId, OccurredAtUtc)
-    SELECT NULL, N'AutoAssign', N'Ticket', CONVERT(nvarchar(100), p.TicketId), NULL,
+    SELECT NULL, N'AutoAssign', N'Ticket', CONVERT(nvarchar(100), p.TicketId),
+           N'PreviousOwnerId=' + ISNULL(LOWER(CONVERT(nvarchar(36), p.PrevOwnerId)), N'none') + N';PreviousAssignmentId=' + ISNULL(CONVERT(nvarchar(20), p.PrevAssignmentId), N'none')
+           + N';PreviousDepartmentId=' + CONVERT(nvarchar(20), p.FromDepartmentId),
            N'AssignedEmployeeId=' + LOWER(CONVERT(nvarchar(36), p.EmployeeId)) + N';DepartmentId=' + CONVERT(nvarchar(20), @CcId)
-           + N';Mode=RoundRobin;Trigger=BacklogDistribution;BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId)),
+           + N';Mode=RoundRobin;Trigger=BacklogDistribution;BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId))
+           + CASE WHEN p.PrevOwnerId IS NULL THEN N';Reassigned=0' ELSE N';Reassigned=1' END,
            @BatchId, @Now
     FROM #Plan p;
 
-    -- Workflow event: TicketTransferred / SystemRouting (5), system actor, From -> CC, receiving employee (TicketWorkflowEvent.ForTransfer shape)
+    -- Workflow event: TicketTransferred / SystemRouting (5), system actor, From -> CC, receiving employee (TicketWorkflowEvent.ForTransfer shape).
+    -- Written when the ticket changes department OR already had an owner (a reassignment); a first assignment out of the CC queue needs none (as in the app).
     INSERT dbo.TicketWorkflowEvents (TicketId, EventType, OccurredAtUtc, ActorEmployeeId, TicketApprovalId, Note, CorrelationId,
                                      FromDepartmentId, ToDepartmentId, ToEmployeeId, TransferReasonCode)
-    SELECT p.TicketId, 17, @Now, NULL, NULL, N'One-time backlog redistribution to Call Center', @BatchId, p.FromDepartmentId, @CcId, p.EmployeeId, 5
-    FROM #Plan p WHERE p.IsMove = 1;
+    SELECT p.TicketId, 17, @Now, NULL, NULL,
+           N'One-time backlog redistribution to Call Center' + CASE WHEN p.PrevOwnerId IS NULL THEN N'' ELSE N'; previous owner ' + LOWER(CONVERT(nvarchar(36), p.PrevOwnerId)) END,
+           @BatchId, p.FromDepartmentId, @CcId, p.EmployeeId, 5
+    FROM #Plan p WHERE p.IsMove = 1 OR p.PrevOwnerId IS NOT NULL;
     SET @EventsInserted = @@ROWCOUNT;
 
     -- Cursor + one batch audit row (holds the cursor pre-image the rollback needs)
@@ -317,7 +357,8 @@ BEGIN TRY
             N'LastAssignedEmployeeId=' + LOWER(CONVERT(nvarchar(36), @LastAgent)) + N';Tickets=' + CONVERT(nvarchar(20), @Cand)
             + N';Agents=' + CONVERT(nvarchar(20), @N) + N';Moved=' + CONVERT(nvarchar(20), @Moved)
             + N';DepartmentId=' + CONVERT(nvarchar(20), @CcId) + N';BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId))
-            + N';HeldBackPendingApproval=' + CONVERT(nvarchar(20), @HeldApproval) + N';HeldBackActiveAi=' + CONVERT(nvarchar(20), @HeldAiOnly),
+            + N';HeldBackPendingApproval=' + CONVERT(nvarchar(20), @HeldApproval) + N';HeldBackActiveAi=' + CONVERT(nvarchar(20), @HeldAiOnly)
+            + N';Reassigned=' + CONVERT(nvarchar(20), @Reassigned),
             @BatchId, @Now);
 
     -- (g0) RE-CHECKS after the writes. The planned ticket rows are now exclusively locked by this transaction, so any competing writer that read a
@@ -336,6 +377,7 @@ BEGIN TRY
                    WHERE e.EmployeeId = p.EmployeeId AND e.DeactivatedAtUtc IS NULL
                      AND NOT (u.LockoutEnabled = 1 AND u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET())
                      AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId)
+                     AND (@ExcludeAgentsWithTicketDenials = 0 OR NOT EXISTS (SELECT 1 FROM #Deny d WHERE d.EmployeeId = e.EmployeeId))
                      AND EXISTS (SELECT 1 FROM dbo.UserDepartmentAssignments a WHERE a.EmployeeId = e.EmployeeId AND a.DepartmentId = @CcId)
                      AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
                                  WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'))
@@ -353,8 +395,8 @@ BEGIN TRY
                                          OR NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = p.TicketId AND a.IsCurrent = 1
                                                         AND a.AssignedEmployeeId = p.EmployeeId AND a.AssignedDepartmentId = @CcId))
         THROW 50323, 'VALIDATION FAILED: a planned ticket does not have exactly one current assignment matching its owner and Call Center.', 1;
-    IF EXISTS (SELECT 1 FROM #Plan p JOIN dbo.Tickets t ON t.TicketId = p.TicketId WHERE t.TicketStatus NOT IN (1, 2, 3, 4) OR t.CurrentDepartmentId <> @CcId)
-        THROW 50324, 'VALIDATION FAILED: a planned ticket is not an active Call Center ticket.', 1;
+    IF EXISTS (SELECT 1 FROM #Plan p JOIN dbo.Tickets t ON t.TicketId = p.TicketId WHERE t.TicketStatus <> 1 OR t.CurrentDepartmentId <> @CcId)
+        THROW 50324, 'VALIDATION FAILED: a planned ticket is not an Open Call Center ticket.', 1;
     IF EXISTS (SELECT 1 FROM #Plan p JOIN #Agents a ON a.Rn = p.AgentRn JOIN dbo.Employees e ON e.EmployeeId = a.EmployeeId WHERE e.DeactivatedAtUtc IS NOT NULL)
         THROW 50325, 'VALIDATION FAILED: a ticket was assigned to a deactivated employee.', 1;
     IF EXISTS (SELECT 1 FROM #Plan p JOIN @ServiceIdentity s ON s.EmployeeId = p.EmployeeId)
@@ -367,15 +409,22 @@ BEGIN TRY
         THROW 50328, 'VALIDATION FAILED: audit rows written by this batch <> moves + assignments + 1 batch row.', 1;
     IF (SELECT COUNT(*) FROM dbo.TicketAssignments a JOIN #Plan p ON p.TicketId = a.TicketId WHERE a.IsCurrent = 1 AND a.AssignedAtUtc = @Now) <> @Cand
         THROW 50329, 'VALIDATION FAILED: current assignment rows written by this batch <> tickets.', 1;
-    IF EXISTS (SELECT 1 FROM dbo.TicketAssignments a JOIN #Plan p ON p.TicketId = a.TicketId WHERE a.IsCurrent = 0 AND a.AssignedAtUtc = @Now)
-        THROW 50330, 'VALIDATION FAILED: an existing assignment row was superseded - this script must never supersede one.', 1;
-    IF @EventsInserted <> @Moved
-       OR (SELECT COUNT(*) FROM dbo.TicketWorkflowEvents WHERE TicketWorkflowEventId > @MaxEventIdBefore AND CorrelationId = @BatchId) <> @Moved
-        THROW 50331, 'VALIDATION FAILED: workflow events written by this batch <> tickets moved.', 1;
-    IF EXISTS (SELECT 1 FROM #Plan p WHERE p.IsMove = 1 AND NOT EXISTS (
+    -- history kept: every pre-existing assignment row of a planned ticket still exists, unchanged except IsCurrent, and none is current any more
+    IF EXISTS (SELECT b.TicketAssignmentId, b.TicketId, b.AssignedEmployeeId, b.AssignedDepartmentId, b.AssignedAtUtc, b.AssigningActorEmployeeId FROM #AsgBefore b
+               EXCEPT
+               SELECT a.TicketAssignmentId, a.TicketId, a.AssignedEmployeeId, a.AssignedDepartmentId, a.AssignedAtUtc, a.AssigningActorEmployeeId FROM dbo.TicketAssignments a)
+       OR EXISTS (SELECT 1 FROM #AsgBefore b JOIN dbo.TicketAssignments a ON a.TicketAssignmentId = b.TicketAssignmentId WHERE a.IsCurrent = 1)
+       OR (SELECT COUNT(*) FROM dbo.TicketAssignments a JOIN #Plan p ON p.TicketId = a.TicketId) <> (SELECT COUNT(*) FROM #AsgBefore) + @Cand
+        THROW 50330, 'VALIDATION FAILED: a previous assignment row was deleted, edited (other than IsCurrent) or is still current.', 1;
+    IF (SELECT COUNT(*) FROM dbo.AuditEntries WHERE AuditEntryId > @MaxAuditIdBefore AND CorrelationId = @BatchId AND Action = N'AutoAssign' AND BeforeValue LIKE N'PreviousOwnerId=%PreviousAssignmentId=%PreviousDepartmentId=%') <> @Cand
+        THROW 50334, 'VALIDATION FAILED: a per-ticket AutoAssign audit row does not record the previous owner / assignment / department.', 1;
+    IF @EventsInserted <> @Events
+       OR (SELECT COUNT(*) FROM dbo.TicketWorkflowEvents WHERE TicketWorkflowEventId > @MaxEventIdBefore AND CorrelationId = @BatchId) <> @Events
+        THROW 50331, 'VALIDATION FAILED: workflow events written by this batch <> tickets moved or reassigned.', 1;
+    IF EXISTS (SELECT 1 FROM #Plan p WHERE (p.IsMove = 1 OR p.PrevOwnerId IS NOT NULL) AND NOT EXISTS (
                    SELECT 1 FROM dbo.TicketWorkflowEvents e WHERE e.TicketId = p.TicketId AND e.CorrelationId = @BatchId AND e.EventType = 17
                      AND e.TransferReasonCode = 5 AND e.FromDepartmentId = p.FromDepartmentId AND e.ToDepartmentId = @CcId AND e.ToEmployeeId = p.EmployeeId))
-        THROW 50332, 'VALIDATION FAILED: a moved ticket lacks its TicketTransferred workflow event.', 1;
+        THROW 50332, 'VALIDATION FAILED: a moved or reassigned ticket lacks its TicketTransferred workflow event.', 1;
 
     -- Preserved fields: everything that must not change is compared with the pre-write values captured in (d). EXCEPT is NULL-safe.
     IF EXISTS (
@@ -400,17 +449,16 @@ BEGIN TRY
     -- (h) report (inside the transaction so a dry run still shows what WOULD be committed) ------------------------------------------
     SELECT CASE WHEN @DryRun = 1 THEN 'DRY RUN - everything below will be ROLLED BACK' ELSE 'COMMITTING' END AS Mode,
            @BatchId AS BatchId_KeepForRollback, @CcId AS CallCenterDepartmentId, @N AS Agents, @Cand AS TicketsAssigned,
-           @Moved AS TicketsMovedIntoCC, @Cand - @Moved AS TicketsAlreadyInCC, @Cursor AS CursorBefore, @LastAgent AS CursorAfter;
+           @Moved AS TicketsMovedIntoCC, @Cand - @Moved AS TicketsAlreadyInCC, @Reassigned AS OwnerReplaced, @Cand - @Reassigned AS WereUnowned, @Cursor AS CursorBefore, @LastAgent AS CursorAfter;
 
     SELECT @HeldApproval AS HeldBack_PendingApproval_Untouched, @HeldAiOnly AS HeldBack_ActiveAi_Untouched;
 
-    SELECT d.Code AS FromDepartment, COUNT(*) AS Tickets, SUM(CASE WHEN p.IsMove = 1 THEN 1 ELSE 0 END) AS Moved
+    SELECT d.Code AS FromDepartment, COUNT(*) AS Tickets, SUM(CASE WHEN p.IsMove = 1 THEN 1 ELSE 0 END) AS Moved, SUM(CASE WHEN p.PrevOwnerId IS NOT NULL THEN 1 ELSE 0 END) AS OwnerReplaced
     FROM #Plan p JOIN dbo.Departments d ON d.DepartmentId = p.FromDepartmentId GROUP BY d.Code ORDER BY COUNT(*) DESC;
 
     SELECT a.Rn AS RotationPosition, a.DisplayName, a.UserName, COUNT(p.TicketId) AS TicketsAssigned,
            SUM(CASE WHEN p.IsMove = 1 THEN 1 ELSE 0 END) AS FromOtherDepartments,
-           SUM(CASE WHEN c.TicketStatus = 1 THEN 1 ELSE 0 END) AS Open_, SUM(CASE WHEN c.TicketStatus = 2 THEN 1 ELSE 0 END) AS InProgress_,
-           SUM(CASE WHEN c.TicketStatus IN (3, 4) THEN 1 ELSE 0 END) AS Pending_,
+           SUM(CASE WHEN p.PrevOwnerId IS NOT NULL THEN 1 ELSE 0 END) AS TakenFromAnotherOwner,
            (SELECT COUNT(*) FROM dbo.Tickets t WHERE t.CurrentOwnerEmployeeId = a.EmployeeId AND t.TicketStatus IN (1, 2, 3, 4)) AS ActiveOwnedNow
     FROM #Agents a LEFT JOIN #Plan p ON p.AgentRn = a.Rn LEFT JOIN #Cand c ON c.TicketId = p.TicketId
     GROUP BY a.Rn, a.DisplayName, a.UserName, a.EmployeeId ORDER BY a.Rn;
@@ -436,4 +484,4 @@ BEGIN CATCH
     THROW;
 END CATCH;
 
-DROP TABLE IF EXISTS #Plan; DROP TABLE IF EXISTS #Cand; DROP TABLE IF EXISTS #Agents;
+DROP TABLE IF EXISTS #Plan; DROP TABLE IF EXISTS #Cand; DROP TABLE IF EXISTS #Agents; DROP TABLE IF EXISTS #AsgBefore; DROP TABLE IF EXISTS #Deny;
