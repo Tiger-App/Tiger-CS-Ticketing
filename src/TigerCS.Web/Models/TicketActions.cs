@@ -1,4 +1,4 @@
-using TigerCS.Application.Modules.SlaAndEscalation.Services;
+﻿using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
@@ -35,6 +35,7 @@ namespace TigerCS.Web.Models;
 /// <param name="ViewerEmployeeId">The viewer, from the NameIdentifier claim — the same id the Api reads as callerEmployeeId.</param>
 /// <param name="CurrentOwnerEmployeeId">The ticket's current owner, or null when unassigned.</param>
 /// <param name="CurrentDepartmentId">The department currently holding the ticket.</param>
+/// <param name="ViewerActsAsInteractionHandler">Server-computed (TicketDetailDto): a CS Agent Genesys reported as handling this ticket's interaction, in its department, with nobody else owning it — the backend then lets them Resolve, Close and Transfer.</param>
 /// <param name="ViewerDepartmentIds">Every department the viewer is assigned to, per GET /api/users/me.</param>
 public sealed record TicketActionContext(
     IReadOnlyCollection<string> ViewerRoles,
@@ -43,7 +44,8 @@ public sealed record TicketActionContext(
     int CurrentDepartmentId,
     IReadOnlyCollection<int> ViewerDepartmentIds,
     IReadOnlySet<string>? ViewerGrantedPermissions = null,
-    IReadOnlySet<string>? ViewerDeniedPermissions = null)
+    IReadOnlySet<string>? ViewerDeniedPermissions = null,
+    bool ViewerActsAsInteractionHandler = false)
 {
     /// <summary>The viewer's explicit denial of <paramref name="permission"/> (employee override, from GET /api/users/me): the Api refuses it whatever the role, ownership or System Administrator override says, so no control for it is ever offered.</summary>
     public bool IsDenied(string permission) => ViewerDeniedPermissions?.Contains(permission) == true;
@@ -133,23 +135,32 @@ public static class TicketActions
         && (viewerRoles.Any(TicketRoleSets.ReviewEscalations.Contains) || AuthorizationOverride.AppliesTo(viewerRoles));
 
     /// <summary>
-    /// Whether a Transfer control — and the department picker inside it —
-    /// is worth rendering. Reads the Api's own <see cref="TicketRoleSets.Transfer"/>
-    /// (CS Manager only) rather than a local copy, so the UI can never offer
-    /// transfer destinations to a role the Api would refuse; plus the
-    /// System Administrator override (ADR-0024) the Api honors through its
-    /// AuthorizationGate. Enforcement stays server-side.
-    ///
-    /// <para>
-    /// Role-only, because <c>TicketAssignmentAppService.TransferAsync</c>'s own
-    /// rule is role-only — it tests <see cref="TicketRoleSets.Transfer"/> and
-    /// nothing else. This is the one action where a role list is the whole
-    /// server rule.
-    /// </para>
+    /// Whether a Transfer control — and the department picker inside it — is worth rendering. Mirrors
+    /// <c>TicketAssignmentAppService.TransferAsync</c> exactly: ADR-0024's override or <see cref="TicketRoleSets.TransferAnyTicket"/>
+    /// (CS Manager) for any ticket; otherwise a <see cref="TicketRoleSets.Transfer"/> role (CS Agent/Supervisor) on a ticket the viewer
+    /// currently owns, and a CS Supervisor also on a ticket of a department they belong to. Read-only viewers never qualify.
     /// </summary>
-    public static bool CanTransfer(IReadOnlyCollection<string>? viewerRoles) =>
-        viewerRoles is not null
-        && (viewerRoles.Any(TicketRoleSets.Transfer.Contains) || AuthorizationOverride.AppliesTo(viewerRoles));
+    public static bool CanTransfer(TicketActionContext? context)
+    {
+        if (context is not { } c)
+        {
+            return false;
+        }
+
+        if (c.OverrideApplies || c.HasAnyRole(TicketRoleSets.TransferAnyTicket))
+        {
+            return true;
+        }
+
+        if (c.IsReadOnlyViewer || !c.HasAnyRole(TicketRoleSets.Transfer))
+        {
+            return false;
+        }
+
+        return c.IsCurrentOwner
+            || c.ViewerActsAsInteractionHandler
+            || (c.HasRole(Roles.CsSupervisor) && c.BelongsToCurrentDepartment);
+    }
 
     /// <summary>
     /// Transfer including the viewer's own overrides: never when Tickets.Transfer is denied; otherwise the role rule above, or an
@@ -158,7 +169,7 @@ public static class TicketActions
     public static bool CanTransferTicket(TicketActionContext? context) =>
         context is { } c
         && !c.IsDenied(Permissions.TicketsTransfer)
-        && (CanTransfer(c.ViewerRoles) || (c.IsGranted(Permissions.TicketsTransfer) && c.TicketWithinGrantScope));
+        && (CanTransfer(c) || (c.IsGranted(Permissions.TicketsTransfer) && c.TicketWithinGrantScope));
 
     /// <summary>Reopen including the viewer's own overrides (a denial hides it; Reopen has no grant path in the services).</summary>
     public static bool CanReopenTicket(TicketActionContext? context) =>
@@ -181,12 +192,19 @@ public static class TicketActions
         viewerRoles is not null
         && (viewerRoles.Any(TicketRoleSets.Close.Contains) || AuthorizationOverride.AppliesTo(viewerRoles));
 
-    /// <summary>Close, including the ticket's current assignee — who may close it whatever their role or department (read-only roles excepted).</summary>
+    /// <summary>
+    /// Mirrors <c>TicketLifecycleAppService.CloseAsync</c>'s permission rule: ADR-0024's override, or the ticket's current assignee
+    /// whatever their role or department (read-only roles excepted), or a <see cref="TicketRoleSets.Close"/> role. A CS Agent who is not
+    /// the assignee additionally needs ticket access the UI cannot see (assigned/handled/department grant), so the control is hidden for
+    /// them rather than offered on a guess — the direction a display check should err.
+    /// </summary>
     public static bool CanCloseTicket(TicketActionContext? context) =>
         context is { } c
         && !c.IsDenied(Permissions.TicketsClose)
-        && (CanClose(c.ViewerRoles)
+        && (c.OverrideApplies
             || (c.IsCurrentOwner && !c.IsReadOnlyViewer)
+            || c.ViewerActsAsInteractionHandler
+            || (c.HasAnyRole(TicketRoleSets.Close) && !TicketVisibilityRule.IsRestrictedCsAgent(c.ViewerRoles))
             // A grant replaces the CS-layer role only; the viewer must still belong to the ticket's department.
             || (c.IsGranted(Permissions.TicketsClose) && c.TicketWithinGrantScope));
 
@@ -222,7 +240,7 @@ public static class TicketActions
             return true;
         }
 
-        if (c.IsCurrentOwner && !c.IsReadOnlyViewer)
+        if ((c.IsCurrentOwner && !c.IsReadOnlyViewer) || c.ViewerActsAsInteractionHandler)
         {
             return true;
         }

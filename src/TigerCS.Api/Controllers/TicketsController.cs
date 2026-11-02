@@ -1174,6 +1174,12 @@ public class TicketsController(
             detail: "The department's workflow settings disable this operation.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
 
+        TicketMutationOutcome.TransferTargetMustMatchRequestType => Problem(
+            type: "https://tigercs.internal/problems/transfer-target-must-match-request-type",
+            title: "Transfer target must match the request type",
+            detail: "A classified ticket is transferred to the department that owns its request type.",
+            statusCode: StatusCodes.Status422UnprocessableEntity),
+
         _ => Problem(statusCode: StatusCodes.Status500InternalServerError)
     };
 

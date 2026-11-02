@@ -134,6 +134,11 @@ public sealed class GenesysServiceFixture
     /// <summary>The REAL lifecycle service the closer calls — over the same ticket, status-history, audit and Outbox fakes.</summary>
     public TicketLifecycleAppService Lifecycle { get; }
 
+    /// <summary>The Call Center department, when the fixture was built with <c>callCenterFirst</c> (production wiring: Round Robin + department lookup).</summary>
+    public Department? CallCenter { get; private set; }
+
+    public FakeAssignmentRotationRepository Rotation { get; } = new();
+
     public FakeTicketResolutionRepository Resolutions { get; } = new();
     public FakeTicketPendingRecordRepository PendingRecords { get; } = new();
     public FakeOutboxWriter Outbox { get; } = new();
@@ -142,7 +147,8 @@ public sealed class GenesysServiceFixture
     /// The rollback lever <c>Genesys:AutoRaiseHandoffOnConversationEnd</c> (production default: false — ending a conversation is not a
     /// request for a human). Tests of the legacy safety net switch it on.
     /// </param>
-    public GenesysServiceFixture(bool enabled = true, int? inactivityTimeoutMinutes = null, bool autoRaiseHandoffOnConversationEnd = false)
+    public GenesysServiceFixture(
+        bool enabled = true, int? inactivityTimeoutMinutes = null, bool autoRaiseHandoffOnConversationEnd = false, bool callCenterFirst = false)
     {
         Options = new GenesysOptions { Enabled = enabled, AutoRaiseHandoffOnConversationEnd = autoRaiseHandoffOnConversationEnd };
         if (inactivityTimeoutMinutes is { } minutes)
@@ -163,8 +169,16 @@ public sealed class GenesysServiceFixture
         var intakeRecordAppService = new IntakeRecordAppService(
             IntakeRecords, Departments, Channels, UnitOfWork, Audit, TimeProvider.System);
 
-        var autoAssignment = new TicketAutoAssignmentService(
-            AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit);
+        if (callCenterFirst)
+        {
+            CallCenter = Departments.AddDepartment("Call Center", "CC");
+        }
+
+        var autoAssignment = callCenterFirst
+            ? new TicketAutoAssignmentService(
+                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, Rotation, Departments)
+            : new TicketAutoAssignmentService(
+                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit);
 
         var ticketCreationAppService = new TicketCreationAppService(
             IntakeRecords, new FakeUnitReferenceRepository(), new FakeContactReferenceRepository(),
@@ -172,7 +186,7 @@ public sealed class GenesysServiceFixture
             new FakeTicketRequesterSnapshotRepository(), StatusHistory, UnitOfWork, Audit, outbox,
             sla.DueDates, Clock, RequestTypes, Interactions,
             autoAssignment,
-            WorkflowTemplates);
+            WorkflowTemplates, serviceIdentities: null, workflowEventRepository: WorkflowEvents);
         ManualTicketCreation = ticketCreationAppService;
 
         // The same customer lookup the New Ticket wizard uses — composed
@@ -197,7 +211,8 @@ public sealed class GenesysServiceFixture
         HandlingHistory = new GenesysAgentHandlingHistory(WorkflowEvents, AgentResolution, Clock);
 
         AgentHandoff = new GenesysAgentHandoffAppService(
-            Options, Conversations, Handoffs, WorkflowEvents, Tickets, UnitOfWork, Audit, TimeProvider.System);
+            Options, Conversations, Handoffs, WorkflowEvents, Tickets, UnitOfWork, Audit, TimeProvider.System,
+            callCenterFirst ? Departments : null, callCenterFirst ? TicketAssignments : null, callCenterFirst ? autoAssignment : null);
 
         RequestTypeClassification = new GenesysRequestTypeClassificationAppService(
             Tickets, Approvals, Conversations, Handoffs,
@@ -254,7 +269,7 @@ public sealed class GenesysServiceFixture
             new TicketAutoAssignmentService(
                 AssignmentRules, departmentSettings, DepartmentAssignments, TicketAssignments, Audit),
             sla.DueDates,
-            new ReopenEligibilityService(StatusHistory, requestTypes, workflowTemplates, ReopenPolicy.Default), handlerRepository: FakeTicketInteractionHandlerRepository.Permissive());
+            new ReopenEligibilityService(StatusHistory, requestTypes, workflowTemplates, ReopenPolicy.Default), handlerRepository: FakeTicketInteractionHandlerRepository.Permissive(), ticketAssignmentRepository: TicketAssignments);
 
         // Contract #3: the one update facade over the two services above.
         TicketUpdate = new GenesysTicketUpdateAppService(

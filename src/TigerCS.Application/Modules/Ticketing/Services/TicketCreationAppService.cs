@@ -66,7 +66,8 @@ public sealed class TicketCreationAppService(
     ITicketInteractionRepository interactionRepository,
     TicketAutoAssignmentService autoAssignmentService,
     IWorkflowTemplateRepository workflowTemplateRepository,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    IServiceIdentityRegistry? serviceIdentities = null,
+    ITicketWorkflowEventRepository? workflowEventRepository = null)
 {
     /// <summary>Creates a ticket from an intake record. A CS Agent creating it by hand becomes its owner when eligible (see <paramref name="callerRoles"/>).</summary>
     /// <param name="callerEmployeeId">The creating employee.</param>
@@ -233,6 +234,13 @@ public sealed class TicketCreationAppService(
 
         var now = timeProvider.GetUtcNow().UtcDateTime;
 
+        // Call Center is the FIRST human-handling department for every channel. A ticket that needs a person enters it whatever its
+        // category's department; a Genesys inquiry the AI is still handling (no human follow-up requested) does not — it only reaches
+        // the Call Center when a person is actually asked for (GenesysAgentHandoffAppService), so an AI-resolved ticket is never
+        // routed there needlessly. No active Call Center department configured -> the previous behaviour, reported as a blocker.
+        var needsHuman = request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp;
+        var callCenter = needsHuman ? await autoAssignmentService.ResolveCallCenterAsync(cancellationToken) : null;
+
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
         Ticket ticket;
@@ -349,6 +357,7 @@ public sealed class TicketCreationAppService(
         // A Website/Chatbot conversation starts its "customer inactive" clock now: the customer opening it is the first interaction.
         // Call Center tickets are outside that rule and never tracked.
         if (originatingInteraction.IsWebsiteOrChatbotConversation
+            && callCenter is null
             && !string.Equals(department.Code, TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase))
         {
             originatingInteraction.StartTrackingCustomerInteraction(now, callerEmployeeId);
@@ -356,38 +365,61 @@ public sealed class TicketCreationAppService(
 
         await interactionRepository.AddAsync(originatingInteraction, cancellationToken);
 
-        // Workflow/Automation phase 2 — Department + Request Type resolve
-        // the configured assignment rule; no rule (or any invalid target)
-        // leaves the ticket in the department queue, audited as a system
-        // action. Runs in this same transaction, before the SLA period and
-        // creation audit commit with it.
-        var automatic = await autoAssignmentService.ApplyAsync(
-            ticket, now, correlationId, AutoAssignmentTrigger.TicketCreated, cancellationToken);
-
-        // Call Center is the first human queue: when a Call Center user opens a ticket for another department and no rule
-        // decided, that department's rotation picks the next eligible employee (the department queue, visibly unassigned,
-        // when nobody is eligible). Same engine as every other automatic assignment.
-        if (request.GenesysContext is null
-            && request.AssignToDepartmentQueue != true
-            && callerRoles is not null
-            && ticket.CurrentOwnerEmployeeId is null
-            && (automatic.Outcome is AutoAssignmentOutcome.NoRequestType or AutoAssignmentOutcome.NoRuleConfigured
-                or AutoAssignmentOutcome.ConfiguredAssigneeNotInDepartment)
-            && await autoAssignmentService.IsCallCenterRoutingAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
+        if (callCenter is not null)
         {
-            automatic = await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, automatic, now, correlationId, cancellationToken);
+            // Call Center first: the ticket enters the Call Center (OriginatingDepartmentId is untouched) and ONE eligible Call
+            // Center agent is picked by Round Robin. Request-type rules and creator self-assignment do not apply here — the agent
+            // either resolves/closes it or transfers it, and the destination department's own assignment runs on that Transfer.
+            if (callCenter.DepartmentId != ticket.CurrentDepartmentId)
+            {
+                var fromDepartmentId = ticket.CurrentDepartmentId;
+                ticket.TransferToDepartment(callCenter.DepartmentId);
+                await auditWriter.WriteAsync(
+                    actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
+                    beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId=DepartmentQueue",
+                    afterValue: $"DepartmentId={callCenter.DepartmentId};Reason=New ticket requires a person — routed to Call Center first;OriginatingDepartmentId={ticket.OriginatingDepartmentId} (unchanged)",
+                    correlationId, cancellationToken);
+                if (workflowEventRepository is not null)
+                {
+                    await workflowEventRepository.AddAsync(
+                        TicketWorkflowEvent.ForTransfer(
+                            ticket.TicketId, now, actorEmployeeId: null, TicketTransferReason.SystemRouting,
+                            fromDepartmentId, callCenter.DepartmentId, toEmployeeId: null,
+                            "New ticket — Call Center first", correlationId),
+                        cancellationToken);
+                }
+            }
+
+            // Mandatory: neither AssignToDepartmentQueue nor creator self-assignment can bypass it. With no eligible agent the ticket stays
+            // in the Call Center queue, audited as Unassigned.
+            await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
         }
-
-        // A CS Agent who creates a ticket by hand owns it — so they can see and work it — unless they chose the Department Queue, a
-        // configured rule already decided, or someone is already assigned. Genesys-created tickets (a GenesysContext) are never self-assigned:
-        // there the agent's access comes from handling the interaction.
-        if (request.GenesysContext is null
-            && request.AssignToDepartmentQueue != true
-            && callerRoles is not null
-            && TicketVisibilityRule.IsRestrictedCsAgent(callerRoles, callerEmployeeId, serviceIdentities))
+        else
         {
-            await autoAssignmentService.TrySelfAssignAsync(
-                ticket, callerEmployeeId, automatic.Outcome, now, correlationId, cancellationToken);
+            // No Call Center first (an AI-handled Genesys inquiry, or no Call Center department is configured): the previous
+            // behaviour — Department + Request Type resolve the configured rule; no rule leaves the department queue.
+            var automatic = await autoAssignmentService.ApplyAsync(
+                ticket, now, correlationId, AutoAssignmentTrigger.TicketCreated, cancellationToken);
+
+            if (request.GenesysContext is null
+                && request.AssignToDepartmentQueue != true
+                && callerRoles is not null
+                && ticket.CurrentOwnerEmployeeId is null
+                && (automatic.Outcome is AutoAssignmentOutcome.NoRequestType or AutoAssignmentOutcome.NoRuleConfigured
+                    or AutoAssignmentOutcome.ConfiguredAssigneeNotInDepartment)
+                && await autoAssignmentService.IsCallCenterRoutingAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
+            {
+                automatic = await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, automatic, now, correlationId, cancellationToken: cancellationToken);
+            }
+
+            if (request.GenesysContext is null
+                && request.AssignToDepartmentQueue != true
+                && callerRoles is not null
+                && TicketVisibilityRule.IsRestrictedCsAgent(callerRoles, callerEmployeeId, serviceIdentities))
+            {
+                await autoAssignmentService.TrySelfAssignAsync(
+                    ticket, callerEmployeeId, automatic.Outcome, now, correlationId, cancellationToken);
+            }
         }
 
         // Backlog S-08's corrected acceptance criterion: ticket creation

@@ -174,6 +174,12 @@ public static class TicketVisibilityRule
                 return ticket.CreatedByEmployeeId == callerEmployeeId ? TicketAccessLevel.Full : TicketAccessLevel.None;
             }
 
+            // The ticket is currently assigned to the caller: they always have full access to it, whatever department it sits in.
+            if (ticket.CurrentOwnerEmployeeId == callerEmployeeId && !Roles.IsReadOnlyCaller(callerRoles))
+            {
+                return TicketAccessLevel.Full;
+            }
+
             if (!IsRestrictedCsAgent(callerRoles, callerEmployeeId, serviceIdentities))
             {
                 // The employee a ticket is currently assigned to can always open and work it (read-only roles never own tickets).
@@ -190,14 +196,22 @@ public static class TicketVisibilityRule
 
             if (ticket.CurrentOwnerEmployeeId == callerEmployeeId
                 || (handlerRepository is not null
-                    && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken))
+                    && await handlerRepository.HasActiveHandlerGrantAsync(ticket.TicketId, callerEmployeeId, cancellationToken))
                 || await CanViewDepartmentAsync(
                     userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket.CurrentDepartmentId, serviceIdentities, cancellationToken))
             {
                 return TicketAccessLevel.Full;
             }
 
-            return ticket.CreatedByEmployeeId == callerEmployeeId ? TicketAccessLevel.ReadOnly : TicketAccessLevel.None;
+            // A handler whose handling predates a manual transfer keeps following the ticket, read-only (like a creator).
+            if (ticket.CreatedByEmployeeId == callerEmployeeId
+                || (handlerRepository is not null
+                    && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken)))
+            {
+                return TicketAccessLevel.ReadOnly;
+            }
+
+            return TicketAccessLevel.None;
         }
     }
 

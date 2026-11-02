@@ -27,11 +27,11 @@ public static class RolePermissionDefaults
             // (TicketRoleSets, SlaRoleSets, PolicyNames). Ownership-based rights (the assigned employee
             // may resolve / close / work their own ticket) are ticket-level and are not role baselines.
             [Roles.CsAgent] = Set(
-                TicketsView, TicketsCreate, TicketsEdit, TicketsClose, TicketsReopen, TicketsEscalate,
+                TicketsView, TicketsCreate, TicketsEdit, TicketsTransfer, TicketsClose, TicketsReopen, TicketsEscalate,
                 CustomersView, CustomersSend, CollectionsView, CampaignsView, DashboardView,
                 InteractionsView, InteractionsEdit),
             [Roles.CsSupervisor] = Set(
-                TicketsView, TicketsCreate, TicketsEdit, TicketsAssign, TicketsClose, TicketsReopen, TicketsEscalate,
+                TicketsView, TicketsCreate, TicketsEdit, TicketsAssign, TicketsTransfer, TicketsClose, TicketsReopen, TicketsEscalate,
                 CustomersView, CustomersSend, CollectionsView, CollectionsSend, CampaignsView, DashboardView,
                 InteractionsView, InteractionsEdit),
             [Roles.DepartmentEmployee] = Set(
