@@ -54,9 +54,10 @@ History scan (only key names inspected) found non-empty values committed for the
 | `ConnectionStrings:CrmDatabase` (SQL login password) | same | CRMDB SQL Server; receivables contact enrichment | CRM DBA |
 | `Crm:SecretKey` (`X-SECRET-KEY`) | same | Tiger CRM `TicketingSystem/*` API — **CRM and TigerCS must change together** | CRM team |
 | `PactApi:ApiKey` | same | PACT customer API | PACT team |
+| `EmailNotifications:Password` (SMTP mailbox password) | `src/TigerCS.Api/appsettings*.json` (2026-10-21 to 2026-10-23) and `publish/TigerCS.Api/appsettings*.json` | Microsoft 365 `no_reply` mailbox; customer e-mail, OTP and document delivery. See [20](20-smtp-credential-exposure-and-rotation.md) | M365 administrator |
 | Dev fallback in `TigerCsDbContextFactory.cs` and CI SQL password in `.github/workflows/db-migration-validation.yml` | current tree | local/CI containers only — confirm they are not reused anywhere real | Repo owner |
 
-Procedure: create the new secret in the secret store → update the dependent system and TigerCS configuration in the same window → restart → run the *UAT* checks for lookup, receivables and CRM calls → disable the old credential → (optional, separate decision) purge history with `git filter-repo` and force-push after notifying all clones. JWT signing key and SMTP password were not found in history, but rotate them if they were ever shared in the same files.
+Procedure: create the new secret in the secret store → update the dependent system and TigerCS configuration in the same window → restart → run the *UAT* checks for lookup, receivables and CRM calls → disable the old credential → (optional, separate decision) purge history with `git filter-repo` and force-push after notifying all clones. The JWT signing key was not found in history, but rotate it if it was ever shared in the same files. The SMTP password **was** committed (see 20) and must be rotated.
 
 ## 17.6 What was verified where
 

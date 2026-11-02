@@ -134,6 +134,140 @@ public sealed class CommittedSecretsGuardTests
             + string.Join(", ", offenders));
     }
 
+    /// <summary>
+    /// Settings that hold a credential and therefore must be empty or absent in every committed settings
+    /// file (src and publish). The values come from user-secrets (Development) or environment variables /
+    /// the host's secret store (UAT/Production). Crm:SecretKey and connection-string passwords have their own
+    /// guards above and below.
+    /// </summary>
+    private static readonly string[] SecretSettingPaths =
+    [
+        "EmailNotifications:Password",
+        "Sms:Broadnet:Password",
+        "PactApi:ApiKey",
+        "Collections:GenesysOutbound:ClientSecret",
+        "Jwt:SigningKey",
+        "CrmDocuments:OtpCodePepper",
+    ];
+
+    /// <summary>
+    /// True when <paramref name="settingPath"/> (colon-separated, matched case-insensitively like the
+    /// configuration system itself) exists in <paramref name="root"/> with a value that is not empty or
+    /// whitespace. Returns only a verdict: the value is never read into a message.
+    /// </summary>
+    private static bool CarriesANonEmptyValue(JsonElement root, string settingPath)
+    {
+        var current = root;
+
+        foreach (var segment in settingPath.Split(':'))
+        {
+            if (current.ValueKind != JsonValueKind.Object)
+            {
+                return false;
+            }
+
+            var found = false;
+            foreach (var property in current.EnumerateObject())
+            {
+                if (string.Equals(property.Name, segment, StringComparison.OrdinalIgnoreCase))
+                {
+                    current = property.Value;
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found)
+            {
+                return false;
+            }
+        }
+
+        return current.ValueKind switch
+        {
+            JsonValueKind.String => !string.IsNullOrWhiteSpace(current.GetString()),
+            JsonValueKind.Null or JsonValueKind.Undefined => false,
+            _ => true
+        };
+    }
+
+    private static IReadOnlyList<string> CommittedFilesCarryingANonEmptyValue(string settingPath)
+    {
+        var root = RepositoryRoot();
+
+        return [.. CommittedSettingsFiles()
+            .Where(path =>
+            {
+                using var document = Parse(path);
+                return CarriesANonEmptyValue(document.RootElement, settingPath);
+            })
+            .Select(path => Path.GetRelativePath(root, path).Replace('\\', '/'))];
+    }
+
+    private static string SecretFoundMessage(string settingPath, IEnumerable<string> offenders)
+        => $"{settingPath} must not be committed with a value in any appsettings file (src or publish): it comes from "
+            + "user-secrets (Development) or the environment variable / secret store (UAT/Production), per docs/DEV-SETUP.md "
+            + "and docs/system/20-smtp-credential-exposure-and-rotation.md. Set it to an empty string in: "
+            + string.Join(", ", offenders)
+            + ". A value that was ever committed must also be rotated, because it remains in Git history.";
+
+    [Fact]
+    public void NoCommittedSettingsFile_CarriesANonEmptySmtpPassword_InEitherSrcOrPublish()
+    {
+        var offenders = CommittedFilesCarryingANonEmptyValue("EmailNotifications:Password");
+
+        Assert.True(offenders.Count == 0, SecretFoundMessage("EmailNotifications:Password", offenders));
+    }
+
+    [Theory]
+    [InlineData("Sms:Broadnet:Password")]
+    [InlineData("PactApi:ApiKey")]
+    [InlineData("Collections:GenesysOutbound:ClientSecret")]
+    [InlineData("Jwt:SigningKey")]
+    [InlineData("CrmDocuments:OtpCodePepper")]
+    public void NoCommittedSettingsFile_CarriesANonEmptyCredential_InEitherSrcOrPublish(string settingPath)
+    {
+        Assert.Contains(settingPath, SecretSettingPaths);
+
+        var offenders = CommittedFilesCarryingANonEmptyValue(settingPath);
+
+        Assert.True(offenders.Count == 0, SecretFoundMessage(settingPath, offenders));
+    }
+
+    /// <summary>
+    /// A detector that never fires would pass forever. Pin its verdicts on synthetic JSON (no real
+    /// credential involved) and that the failure message names files but never repeats the value.
+    /// </summary>
+    [Theory]
+    [InlineData("{\"EmailNotifications\":{\"Password\":\"synthetic-value\"}}", true)]
+    [InlineData("{\"emailnotifications\":{\"password\":\"synthetic-value\"}}", true)]
+    [InlineData("{\"EmailNotifications\":{\"Password\":42}}", true)]
+    [InlineData("{\"EmailNotifications\":{\"Password\":\"\"}}", false)]
+    [InlineData("{\"EmailNotifications\":{\"Password\":\"   \"}}", false)]
+    [InlineData("{\"EmailNotifications\":{\"Password\":null}}", false)]
+    [InlineData("{\"EmailNotifications\":{}}", false)]
+    [InlineData("{}", false)]
+    [InlineData("{\"EmailNotifications\":\"not-an-object\"}", false)]
+    public void TheSecretDetector_FlagsOnlyAValue_AndIsCaseInsensitive(string json, bool expected)
+    {
+        using var document = JsonDocument.Parse(json);
+
+        Assert.Equal(expected, CarriesANonEmptyValue(document.RootElement, "EmailNotifications:Password"));
+    }
+
+    [Fact]
+    public void TheSecretFailureMessage_NamesTheFiles_NeverTheValue()
+    {
+        const string synthetic = "synthetic-value-that-must-not-be-echoed";
+        using var document = JsonDocument.Parse($"{{\"EmailNotifications\":{{\"Password\":\"{synthetic}\"}}}}");
+        Assert.True(CarriesANonEmptyValue(document.RootElement, "EmailNotifications:Password"));
+
+        var message = SecretFoundMessage("EmailNotifications:Password", ["publish/Example/appsettings.json"]);
+
+        Assert.Contains("publish/Example/appsettings.json", message, StringComparison.Ordinal);
+        Assert.DoesNotContain(synthetic, message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void NoCommittedSettingsFile_CarriesAConnectionStringPassword_InEitherSrcOrPublish()
     {
