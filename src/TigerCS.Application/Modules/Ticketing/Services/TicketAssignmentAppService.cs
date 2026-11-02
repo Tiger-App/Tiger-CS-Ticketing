@@ -24,7 +24,8 @@ public sealed class TicketAssignmentAppService(
     TimeProvider timeProvider,
     IDepartmentWorkflowSettingsRepository departmentWorkflowSettingsRepository,
     TicketAutoAssignmentService autoAssignmentService,
-    ITicketWorkflowEventRepository? workflowEventRepository = null)
+    ITicketWorkflowEventRepository? workflowEventRepository = null,
+    ITicketInteractionHandlerRepository? handlerRepository = null)
 {
     /// <summary>
     /// PR correction — the caller's role alone decides Assign authority now;
@@ -170,6 +171,8 @@ public sealed class TicketAssignmentAppService(
             callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains)
             || (callerRoles.Any(TicketRoleSets.Transfer.Contains)
                 && (ticket.CurrentOwnerEmployeeId == callerEmployeeId
+                    || await TicketOwnershipRules.IsActingInteractionHandlerAsync(
+                        handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken)
                     || (callerRoles.Contains(Roles.CsSupervisor)
                         && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken)))));
 

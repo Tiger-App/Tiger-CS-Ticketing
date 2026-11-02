@@ -1,4 +1,4 @@
-using TigerCS.Application.Abstractions;
+﻿using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
@@ -1128,6 +1128,13 @@ public sealed class TicketLifecycleAppService(
         {
             // The current assignee may always resolve, regardless of role or department.
             if (IsCurrentOwner(callerEmployeeId, callerRoles, ticket))
+            {
+                return true;
+            }
+
+            // A CS Agent Genesys reported as handling this ticket's interaction, while nobody else owns it (TicketOwnershipRules).
+            if (await TicketOwnershipRules.IsActingInteractionHandlerAsync(
+                    handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken))
             {
                 return true;
             }

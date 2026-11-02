@@ -34,13 +34,15 @@ namespace TigerCS.Web.Models;
 /// <param name="ViewerEmployeeId">The viewer, from the NameIdentifier claim — the same id the Api reads as callerEmployeeId.</param>
 /// <param name="CurrentOwnerEmployeeId">The ticket's current owner, or null when unassigned.</param>
 /// <param name="CurrentDepartmentId">The department currently holding the ticket.</param>
+/// <param name="ViewerActsAsInteractionHandler">Server-computed (TicketDetailDto): a CS Agent Genesys reported as handling this ticket's interaction, in its department, with nobody else owning it — the backend then lets them Resolve, Close and Transfer.</param>
 /// <param name="ViewerDepartmentIds">Every department the viewer is assigned to, per GET /api/users/me.</param>
 public sealed record TicketActionContext(
     IReadOnlyCollection<string> ViewerRoles,
     Guid ViewerEmployeeId,
     Guid? CurrentOwnerEmployeeId,
     int CurrentDepartmentId,
-    IReadOnlyCollection<int> ViewerDepartmentIds)
+    IReadOnlyCollection<int> ViewerDepartmentIds,
+    bool ViewerActsAsInteractionHandler = false)
 {
     /// <summary>ADR-0024's override, read from its single central definition rather than naming the role here.</summary>
     public bool OverrideApplies => AuthorizationOverride.AppliesTo(ViewerRoles);
@@ -139,7 +141,9 @@ public static class TicketActions
             return false;
         }
 
-        return c.IsCurrentOwner || (c.HasRole(Roles.CsSupervisor) && c.BelongsToCurrentDepartment);
+        return c.IsCurrentOwner
+            || c.ViewerActsAsInteractionHandler
+            || (c.HasRole(Roles.CsSupervisor) && c.BelongsToCurrentDepartment);
     }
 
     /// <summary>
@@ -169,6 +173,7 @@ public static class TicketActions
         context is { } c
         && (c.OverrideApplies
             || (c.IsCurrentOwner && !c.IsReadOnlyViewer)
+            || c.ViewerActsAsInteractionHandler
             || (c.HasAnyRole(TicketRoleSets.Close) && !TicketVisibilityRule.IsRestrictedCsAgent(c.ViewerRoles)));
 
     /// <summary>
@@ -198,7 +203,7 @@ public static class TicketActions
             return true;
         }
 
-        if (c.IsCurrentOwner && !c.IsReadOnlyViewer)
+        if ((c.IsCurrentOwner && !c.IsReadOnlyViewer) || c.ViewerActsAsInteractionHandler)
         {
             return true;
         }

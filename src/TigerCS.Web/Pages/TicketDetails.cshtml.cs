@@ -1168,7 +1168,8 @@ public sealed class TicketDetailsModel(
                 Viewer.EmployeeId,
                 ticket.CurrentOwnerEmployeeId,
                 ticket.CurrentDepartmentId,
-                [.. nameResolver.OwnDepartments.Select(d => d.DepartmentId)]);
+                [.. nameResolver.OwnDepartments.Select(d => d.DepartmentId)],
+                ticket.ViewerActsAsInteractionHandler);
 
         StatusTargets = TicketStatusTransitions.AllowedTargetsFrom(ticket.TicketStatus);
 

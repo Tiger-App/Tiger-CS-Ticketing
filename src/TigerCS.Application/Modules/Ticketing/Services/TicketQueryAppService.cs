@@ -1,4 +1,4 @@
-using TigerCS.Application.Authorization;
+﻿using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Notifications;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -150,6 +150,9 @@ public sealed class TicketQueryAppService(
         var detail = ToDetailDto(ticket) with
         {
             IsReadOnlyAccess = accessLevel == TicketAccessLevel.ReadOnly,
+            ViewerActsAsInteractionHandler = accessLevel == TicketAccessLevel.Full
+                && await TicketOwnershipRules.IsActingInteractionHandlerAsync(
+                    handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken),
             ResolvedAtUtc = currentResolution?.ResolvedAtUtc,
             ClosedAtUtc = closedAt,
             IsReopenEligible = reopenPolicy.IsReopenEligible(
