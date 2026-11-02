@@ -1,9 +1,10 @@
-using TigerCS.Application.Abstractions;
+﻿using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
+using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.GenesysIntegration.Services;
@@ -57,7 +58,8 @@ public sealed class GenesysAgentHandoffAppService(
     IAuditEntryWriter auditWriter,
     TimeProvider timeProvider,
     IDepartmentRepository? departmentRepository = null,
-    ITicketAssignmentRepository? ticketAssignmentRepository = null)
+    ITicketAssignmentRepository? ticketAssignmentRepository = null,
+    Ticketing.Services.TicketAutoAssignmentService? autoAssignmentService = null)
 {
     public async Task<GenesysHandoffResult> RequestAsync(
         Guid callerEmployeeId, GenesysHandoffRequestDto request, CancellationToken cancellationToken = default)
@@ -151,6 +153,7 @@ public sealed class GenesysAgentHandoffAppService(
         // already owns is left with them.
         var callCenter = await ResolveCallCenterRoutingAsync(ticket, trigger, cancellationToken);
         var routedFromDepartmentId = ticket.CurrentDepartmentId;
+        var routedFromOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;   // non-null only for an automatic pre-assignment (see ResolveCallCenterRoutingAsync)
         if (callCenter is not null)
         {
             ticket.TransferToDepartment(callCenter.DepartmentId);
@@ -183,8 +186,9 @@ public sealed class GenesysAgentHandoffAppService(
         {
             await auditWriter.WriteAsync(
                 actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
-                beforeValue: $"DepartmentId={routedFromDepartmentId};AssignedEmployeeId=DepartmentQueue",
-                afterValue: $"DepartmentId={callCenter.DepartmentId};Reason=Human agent requested — routed to Call Center",
+                beforeValue: $"DepartmentId={routedFromDepartmentId};AssignedEmployeeId={routedFromOwnerEmployeeId?.ToString() ?? "DepartmentQueue"}",
+                afterValue: $"DepartmentId={callCenter.DepartmentId};Reason=Human agent requested — routed to Call Center"
+                    + (routedFromOwnerEmployeeId is not null ? ";AutomaticPreAssignmentReleased=true" : string.Empty),
                 requestCorrelationId, cancellationToken);
 
             if (ticketAssignmentRepository is not null
@@ -199,6 +203,12 @@ public sealed class GenesysAgentHandoffAppService(
                     routedFromDepartmentId, callCenter.DepartmentId, toEmployeeId: null,
                     "Human agent requested — Call Center first", requestCorrelationId),
                 cancellationToken);
+
+            // Call Center first, then ONE eligible Call Center agent by Round Robin (the queue, visibly unassigned, when nobody is eligible).
+            if (autoAssignmentService is not null)
+            {
+                await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, requestCorrelationId, cancellationToken);
+            }
         }
 
         await workflowEventRepository.AddAsync(
@@ -242,14 +252,24 @@ public sealed class GenesysAgentHandoffAppService(
             ticket.TicketId, ticket.TicketNumber, handoff.Status.ToString());
     }
 
-    /// <summary>The Call Center department when this handoff must route the ticket there; null when it must not (already there, owned by a person, closed, an explicit agent transfer, or no Call Center configured).</summary>
+    /// <summary>
+    /// The Call Center department when this handoff must route the ticket there; null when it must not (already there, genuinely owned by
+    /// a person, closed, an explicit agent transfer, or no Call Center configured). A ticket whose owner was only put there by automation
+    /// (a Request Type rule or Round Robin — see <see cref="TicketOwnershipRules.IsAutomaticPreAssignmentAsync"/>) is NOT human-owned: it
+    /// still goes to Call Center first, and that pre-assignment is released (superseded, audited). Human ownership is never overwritten.
+    /// </summary>
     private async Task<Domain.Modules.IdentityAndAccess.Department?> ResolveCallCenterRoutingAsync(
         Ticket ticket, HandoffTrigger? trigger, CancellationToken cancellationToken)
     {
         if (departmentRepository is null
             || ticket.TicketStatus == TicketStatus.Closed
-            || ticket.CurrentOwnerEmployeeId is not null
             || trigger == HandoffTrigger.AgentTransfer)
+        {
+            return null;
+        }
+
+        if (ticket.CurrentOwnerEmployeeId is not null
+            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken))
         {
             return null;
         }

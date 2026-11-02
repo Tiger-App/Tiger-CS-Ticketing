@@ -565,7 +565,8 @@ public sealed class TicketsWorkspaceTests
 
         Assert.Equal("my", query["view"]);
         Assert.Equal(ViewerId.ToString(), query["ownerEmployeeId"]);
-        Assert.Equal("true", query["activeOnly"]);
+        // Every ticket currently assigned, in any status: no active-only narrowing, so the list matches the card.
+        Assert.False(query.ContainsKey("activeOnly"));
     }
 
     [Fact]

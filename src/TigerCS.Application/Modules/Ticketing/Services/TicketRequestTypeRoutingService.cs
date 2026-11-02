@@ -245,7 +245,10 @@ public sealed class TicketRequestTypeRoutingService(
         // Department FIRST, exactly as TransferAsync does: the responsible
         // department is the primary assignment, OriginatingDepartmentId is
         // never touched, and the transfer clears the previous owner.
-        var transferred = requestType.DepartmentId != ticket.CurrentDepartmentId;
+        // Call Center first: a ticket sitting in the Call Center is waiting for a person. Classifying it records the request type (the
+        // Call Center agent then transfers it to that department); the system never moves it past the Call Center on its own.
+        var inCallCenter = await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
+        var transferred = !inCallCenter && requestType.DepartmentId != ticket.CurrentDepartmentId;
         if (transferred)
         {
             ticket.TransferToDepartment(requestType.DepartmentId);
@@ -264,10 +267,12 @@ public sealed class TicketRequestTypeRoutingService(
         Guid? assignedEmployeeId = ticket.CurrentOwnerEmployeeId;
         if (transferred || ticket.CurrentOwnerEmployeeId is null)
         {
-            var assignment = await autoAssignmentService.ApplyAsync(
-                ticket, nowUtc, correlationId,
-                transferred ? AutoAssignmentTrigger.DepartmentTransfer : AutoAssignmentTrigger.RequestTypeClassified,
-                cancellationToken);
+            var assignment = inCallCenter
+                ? await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, nowUtc, correlationId, cancellationToken)
+                : await autoAssignmentService.ApplyAsync(
+                    ticket, nowUtc, correlationId,
+                    transferred ? AutoAssignmentTrigger.DepartmentTransfer : AutoAssignmentTrigger.RequestTypeClassified,
+                    cancellationToken);
             assignmentOutcome = assignment.Outcome.ToString();
             assignedEmployeeId = assignment.AssignedEmployeeId;
         }

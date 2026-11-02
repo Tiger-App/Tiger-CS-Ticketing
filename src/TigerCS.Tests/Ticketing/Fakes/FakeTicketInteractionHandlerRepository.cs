@@ -36,6 +36,14 @@ public sealed class FakeTicketInteractionHandlerRepository : ITicketInteractionH
 
     public void Discard(TicketInteractionHandler handler) => _handlers.Remove(handler);
 
+    /// <summary>When a ticket was last manually transferred — handling recorded before it no longer carries modify access. Set by tests that model a transfer.</summary>
+    public Dictionary<long, DateTime> ManualTransferAtUtc { get; } = [];
+
+    public Task<bool> HasActiveHandlerGrantAsync(long ticketId, Guid userId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(EveryUserHandlesEveryTicket
+            || _handlers.Any(h => h.TicketId == ticketId && h.HandledByUserId == userId
+                && (!ManualTransferAtUtc.TryGetValue(ticketId, out var at) || h.RecordedAtUtc > at)));
+
     public bool HasHandledSync(long ticketId, Guid userId) =>
         EveryUserHandlesEveryTicket || _handlers.Any(h => h.TicketId == ticketId && h.HandledByUserId == userId);
 
