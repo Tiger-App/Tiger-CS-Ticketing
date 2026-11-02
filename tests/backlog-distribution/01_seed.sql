@@ -2,6 +2,7 @@
  Test fixture for the Call Center backlog-distribution scripts. DISPOSABLE SQL SERVER ONLY (database must be named TigerCS_Ticketing_Prod
  inside a throw-away container - the scripts' own name guard requires it). Schema comes from the repo's real migration scripts, not from this file.
 
+ Hold-back fixtures: H-APR-* pending approval, H-AI-* active AI conversation, H-BOTH-1 both (all HELD); F-* carry decided approvals / ended or human-flagged or handed-off or taken AI conversations (all ELIGIBLE).
  Eligible agents (text/.NET Guid order differs from SQL Server uniqueidentifier order on purpose):
    A1 00000000-0000-0000-0000-000000000002 (CS Agent)         A2 00000000-0000-0000-0001-000000000000 (CS Agent)
    A3 7a000000-0000-0000-0000-000000000001 (CS Agent)         DE f0000000-0000-0000-0000-000000000009 (Department Employee)
@@ -94,6 +95,46 @@ SELECT N'X-DRIFT-' + CONVERT(nvarchar(5), v.i), @SUP, @SUP, NULL, NULL, NULL, 1,
 INSERT dbo.TicketAssignments (TicketId, AssignedEmployeeId, AssignedDepartmentId, AssignedAtUtc, AssigningActorEmployeeId, IsCurrent)
 SELECT TicketId, @FinEmp, CurrentDepartmentId, SYSUTCDATETIME(), NULL, 1 FROM dbo.Tickets WHERE TicketNumber LIKE N'X-DRIFT-%';
 
+
+-- ---------------------------------------------------------------------------------------------------------------------
+-- HOLD-BACK RULES: pending approvals and active AI conversations
+-- ---------------------------------------------------------------------------------------------------------------------
+DECLARE @TkCols TABLE (n nvarchar(20), orig int, cur int, st tinyint);
+INSERT @TkCols VALUES
+ -- HELD (pending approval): 3 SUP, 2 FIN, 1 CC
+ (N'H-APR-1', @SUP, @SUP, 1), (N'H-APR-2', @SUP, @SUP, 2), (N'H-APR-3', @SUP, @SUP, 3), (N'H-APR-4', @FIN, @FIN, 1), (N'H-APR-5', @FIN, @FIN, 4), (N'H-APR-6', @CC, @CC, 2),
+ -- HELD (active AI conversation only): 3 SUP, 2 LEG
+ (N'H-AI-1', @SUP, @SUP, 1), (N'H-AI-2', @SUP, @SUP, 2), (N'H-AI-3', @SUP, @SUP, 3), (N'H-AI-4', @LEG, @LEG, 1), (N'H-AI-5', @LEG, @LEG, 2),
+ -- HELD (both): counted once, under the approval
+ (N'H-BOTH-1', @FIN, @FIN, 1),
+ -- ELIGIBLE although they carry approval / AI history
+ (N'F-DEC-1', @SUP, @SUP, 1), (N'F-DEC-2', @FIN, @FIN, 2), (N'F-DEC-3', @LEG, @LEG, 3),                 -- approvals already Approved / Rejected / Cancelled
+ (N'F-AIEND-1', @SUP, @SUP, 1), (N'F-AIEND-2', @FIN, @FIN, 2),                                           -- AI conversation ended
+ (N'F-AIHUM-1', @LEG, @LEG, 1), (N'F-AIHUM-2', @SUP, @SUP, 3),                                           -- AI ticket flagged RequiresHumanFollowUp
+ (N'F-AIHAND-1', @SUP, @SUP, 2),                                                                         -- AI conversation but a human handoff is open
+ (N'F-AITAKEN-1', @FIN, @FIN, 1),                                                                        -- AI conversation already taken by a person
+ (N'F-AIINACT-1', @LEG, @LEG, 4);                                                                        -- AI conversation closed for inactivity
+INSERT dbo.Tickets (TicketNumber, OriginatingDepartmentId, CurrentDepartmentId, CurrentOwnerEmployeeId, CategoryId, PriorityId, TicketStatus, VerificationStatus, EscalationLevel, SlaState, RequestSummary, ReopenCount, CreatedAtUtc)
+SELECT n, orig, cur, NULL, NULL, NULL, st, 0, 0, 1, N'hold-back fixture', 0, DATEADD(minute, ROW_NUMBER() OVER (ORDER BY n), @Base) FROM @TkCols;
+
+-- approvals: type 1 Accounting. Status 1 Pending / 2 Approved / 3 Rejected / 4 Cancelled
+INSERT dbo.TicketApprovals (TicketId, ApprovalType, Status, TargetKind, RequestedByEmployeeId, RequestedAtUtc, IsCurrent, CorrelationId)
+SELECT TicketId, 1, CASE WHEN TicketNumber LIKE N'H-%' THEN 1 WHEN TicketNumber = N'F-DEC-1' THEN 2 WHEN TicketNumber = N'F-DEC-2' THEN 3 ELSE 4 END, 1, @FinEmp,
+       DATEADD(day, -2, SYSUTCDATETIME()), 1, NEWID()
+FROM dbo.Tickets WHERE TicketNumber LIKE N'H-APR-%' OR TicketNumber = N'H-BOTH-1' OR TicketNumber LIKE N'F-DEC-%';
+
+-- Genesys (Source 2) chat (ChannelId 2) interactions
+INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, RequiresHumanFollowUp, EndedAtUtc, InactivityClosedAtUtc, HandledByUserId)
+SELECT TicketId, 1, 2, 2, N'0500000000', N'conv-' + TicketNumber, DATEADD(day, -1, SYSUTCDATETIME()),
+       CASE WHEN TicketNumber LIKE N'F-AIHUM-%' THEN 1 ELSE 0 END,
+       CASE WHEN TicketNumber LIKE N'F-AIEND-%' THEN DATEADD(hour, -5, SYSUTCDATETIME()) END,
+       CASE WHEN TicketNumber LIKE N'F-AIINACT-%' THEN DATEADD(hour, -4, SYSUTCDATETIME()) END,
+       CASE WHEN TicketNumber LIKE N'F-AITAKEN-%' THEN @A1 END
+FROM dbo.Tickets WHERE TicketNumber LIKE N'H-AI-%' OR TicketNumber = N'H-BOTH-1' OR TicketNumber LIKE N'F-AI%';
+INSERT dbo.TicketAgentHandoffs (TicketId, TicketInteractionId, DepartmentId, ChannelId, Status, RequestedAtUtc, CreatedAtUtc)
+SELECT t.TicketId, i.TicketInteractionId, t.CurrentDepartmentId, 2, 2, SYSUTCDATETIME(), SYSUTCDATETIME()
+FROM dbo.Tickets t JOIN dbo.TicketInteractions i ON i.TicketId = t.TicketId WHERE t.TicketNumber = N'F-AIHAND-1';
+
 -- existing history that must survive: status history, notes, audit, workflow events
 INSERT dbo.TicketStatusHistory (TicketId, Dimension, OldValue, NewValue, ActorEmployeeId, ActorIsSystem, Note, CorrelationId, OccurredAtUtc)
 SELECT TOP (12) TicketId, 1, NULL, 1, NULL, 1, N'created', NEWID(), CreatedAtUtc FROM dbo.Tickets WHERE TicketNumber LIKE N'E-%' ORDER BY TicketId;
@@ -104,4 +145,4 @@ SELECT NULL, N'Create', N'Ticket', CONVERT(nvarchar(100), TicketId), NULL, N'see
 INSERT dbo.TicketWorkflowEvents (TicketId, EventType, OccurredAtUtc, ActorEmployeeId, Note, CorrelationId, FromDepartmentId, ToDepartmentId, TransferReasonCode)
 SELECT TicketId, 17, DATEADD(hour, 1, CreatedAtUtc), NULL, N'earlier routing', NEWID(), @CC, CurrentDepartmentId, 5 FROM dbo.Tickets WHERE TicketNumber IN (N'E-0007', N'E-0008', N'E-0009', N'E-0010', N'E-0011');
 
-SELECT (SELECT COUNT(*) FROM dbo.Tickets) AS Tickets, (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketNumber LIKE N'E-%') AS Eligible, (SELECT COUNT(*) FROM dbo.Employees) AS Employees;
+SELECT (SELECT COUNT(*) FROM dbo.Tickets) AS Tickets, (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketNumber LIKE N'E-%' OR TicketNumber LIKE N'F-%') AS Eligible, (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketNumber LIKE N'H-%') AS HeldBack, (SELECT COUNT(*) FROM dbo.Employees) AS Employees;

@@ -13,9 +13,13 @@
    * TicketStatus IN (1 Open, 2 InProgress, 3 PendingCustomer, 4 PendingThirdParty-legacy)   (Resolved 5 / Closed 6 excluded; the schema has no 'Cancelled')
    * Tickets.CurrentOwnerEmployeeId IS NULL                                                 (never overwrite an employee's ownership)
    * no TicketAssignments row with IsCurrent = 1                                            (never overwrite/duplicate an active assignment)
+   * NO pending approval  (TicketApprovals.Status = 1)                                      -> HELD BACK, listed separately below
+   * NO active AI conversation: a Genesys interaction that is not ended, not inactivity-closed, needs no human follow-up and was not taken by a person,
+     on a ticket with no interaction flagged RequiresHumanFollowUp and no open human handoff (AgentHandoff Waiting/Assigned/InProgress)  -> HELD BACK, listed separately
    * any CurrentDepartmentId (active OR inactive department)
+ HELD-BACK tickets are NEVER touched: not moved, not assigned, no audit row, no event. They stay exactly as they are and are reported here so they can be handled by their own workflow.
  What the run would change per eligible ticket:  CurrentDepartmentId -> CC (if not already CC) and CurrentOwnerEmployeeId -> the dealt agent.
- NEVER changed: OriginatingDepartmentId, RequestTypeId, CategoryId, PriorityId, TicketStatus, SlaState, history, notes, approvals, interactions, notifications.
+ NEVER changed: OriginatingDepartmentId, RequestTypeId, CategoryId, PriorityId, TicketStatus, SlaState, history, notes, approvals, interactions (incl. AI conversations), notifications.
 
  ROUND ROBIN (reproduces TicketAutoAssignmentService.AssignRoundRobinAsync / FilterEligibleAsync / DepartmentAssignmentRotation.PickNext):
    * pool       = members of the active CC department who are: not deactivated, not locked out, not a service identity, and hold at least one of
@@ -35,6 +39,9 @@ BEGIN
     DECLARE @m nvarchar(400) = N'ABORTED: connected to [' + ISNULL(DB_NAME(), N'?') + N'], this preview is for [' + @ExpectedDb + N'] only.';
     THROW 50200, @m, 1;
 END;
+
+IF COL_LENGTH(N'dbo.TicketInteractions', N'RequiresHumanFollowUp') IS NULL OR OBJECT_ID(N'dbo.TicketAgentHandoffs', N'U') IS NULL OR OBJECT_ID(N'dbo.TicketApprovals', N'U') IS NULL
+    THROW 50201, N'ABORTED: dbo.TicketInteractions.RequiresHumanFollowUp / dbo.TicketAgentHandoffs / dbo.TicketApprovals not found - the hold-back rules cannot be evaluated; wrong database or a missing migration.', 1;
 
 -- Service accounts are configured in appsettings, not in SQL. Paste every id from BOTH settings (one INSERT per id):
 --   Authorization:ServiceIdentity:EmployeeIds      and      Collections:Authorization:IntegrationEmployeeIds
@@ -80,20 +87,36 @@ DECLARE @N int = (SELECT COUNT(*) FROM #Agents);
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 2. Eligible tickets (ALL departments)
 -- ---------------------------------------------------------------------------------------------------------------------------
-CREATE TABLE #Cand (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL,
-    CreatedAtUtc datetime2 NOT NULL, FromDepartmentId int NOT NULL, OriginatingDepartmentId int NOT NULL, IsMove bit NOT NULL);
+-- every unowned, unassigned Open/InProgress/Pending ticket, with the two hold-back flags
+CREATE TABLE #Base (TicketId bigint NOT NULL PRIMARY KEY, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL, CreatedAtUtc datetime2 NOT NULL,
+    FromDepartmentId int NOT NULL, OriginatingDepartmentId int NOT NULL, PendingApproval bit NOT NULL, ActiveAi bit NOT NULL);
 
-INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc, FromDepartmentId, OriginatingDepartmentId, IsMove)
-SELECT ROW_NUMBER() OVER (ORDER BY t.CreatedAtUtc, t.TicketId), t.TicketId, t.TicketNumber, t.TicketStatus, t.CreatedAtUtc,
-       t.CurrentDepartmentId, t.OriginatingDepartmentId, CASE WHEN t.CurrentDepartmentId <> @CcId THEN 1 ELSE 0 END
+INSERT #Base (TicketId, TicketNumber, TicketStatus, CreatedAtUtc, FromDepartmentId, OriginatingDepartmentId, PendingApproval, ActiveAi)
+SELECT t.TicketId, t.TicketNumber, t.TicketStatus, t.CreatedAtUtc, t.CurrentDepartmentId, t.OriginatingDepartmentId,
+       CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1) THEN 1 ELSE 0 END,
+       CASE WHEN (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+                     AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4))) THEN 1 ELSE 0 END
 FROM dbo.Tickets AS t
 WHERE @CcId IS NOT NULL
   AND t.TicketStatus IN (1, 2, 3, 4)                                   -- Open, InProgress, Pending*
   AND t.CurrentOwnerEmployeeId IS NULL                                 -- no owner
   AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1);   -- and no active assignment
 
+CREATE TABLE #Cand (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL,
+    CreatedAtUtc datetime2 NOT NULL, FromDepartmentId int NOT NULL, OriginatingDepartmentId int NOT NULL, IsMove bit NOT NULL);
+
+INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc, FromDepartmentId, OriginatingDepartmentId, IsMove)
+SELECT ROW_NUMBER() OVER (ORDER BY b.CreatedAtUtc, b.TicketId), b.TicketId, b.TicketNumber, b.TicketStatus, b.CreatedAtUtc,
+       b.FromDepartmentId, b.OriginatingDepartmentId, CASE WHEN b.FromDepartmentId <> @CcId THEN 1 ELSE 0 END
+FROM #Base AS b
+WHERE b.PendingApproval = 0 AND b.ActiveAi = 0;                        -- held-back tickets never enter the plan
+
 DECLARE @Cand int = (SELECT COUNT(*) FROM #Cand);
 DECLARE @Moved int = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1);
+DECLARE @HeldApproval int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 1);                    -- pending approval (whether or not an AI conversation is also active)
+DECLARE @HeldAiOnly   int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND ActiveAi = 1);  -- active AI conversation, no pending approval
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 3. The Round Robin deal
@@ -113,6 +136,7 @@ IF @N > 0
 SELECT @@SERVERNAME AS [Server], DB_NAME() AS [Database], SYSUTCDATETIME() AS PreviewAtUtc,
        @CcId AS CallCenterDepartmentId, @N AS EligibleAgents,
        @Cand AS EligibleTickets_Total, @Moved AS TicketsMovedIntoCC, @Cand - @Moved AS TicketsAlreadyInCC_AssignOnly,
+       @HeldApproval AS HeldBack_PendingApproval, @HeldAiOnly AS HeldBack_ActiveAiConversation,
        @Cursor AS RotationCursor_LastAssignedEmployeeId,
        CASE
            WHEN @CcCount <> 1                                    THEN 'BLOCKER: expected exactly one active department with Code=CC, found ' + CONVERT(varchar(10), @CcCount)
@@ -149,6 +173,34 @@ FROM #Cand
 ORDER BY Eligible DESC;
 
 -- ===========================================================================================================================
+-- RESULT SET 2b - HELD BACK (not moved, not assigned, not touched): pending approvals and active AI conversations
+-- ===========================================================================================================================
+SELECT d.Code AS DepartmentCode, d.Name AS DepartmentName,
+       SUM(CASE WHEN b.PendingApproval = 1 THEN 1 ELSE 0 END) AS HeldBack_PendingApproval,
+       SUM(CASE WHEN b.PendingApproval = 0 AND b.ActiveAi = 1 THEN 1 ELSE 0 END) AS HeldBack_ActiveAiOnly,
+       COUNT(*) AS HeldBackTotal
+FROM #Base AS b JOIN dbo.Departments AS d ON d.DepartmentId = b.FromDepartmentId
+WHERE b.PendingApproval = 1 OR b.ActiveAi = 1
+GROUP BY d.Code, d.Name
+UNION ALL
+SELECT N'** TOTAL **', NULL, @HeldApproval, @HeldAiOnly, @HeldApproval + @HeldAiOnly
+ORDER BY HeldBackTotal DESC;
+
+-- Each held-back ticket, with the reason (a ticket with BOTH a pending approval and an AI conversation is listed once, under the approval)
+SELECT b.TicketId, b.TicketNumber,
+       CASE b.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' WHEN 3 THEN 'PendingCustomer' WHEN 4 THEN 'PendingThirdParty' END AS [Status],
+       d.Code AS CurrentDepartment,
+       CASE WHEN b.PendingApproval = 1 THEN 'PENDING APPROVAL' ELSE 'ACTIVE AI CONVERSATION' END AS HeldBackBecause,
+       CASE WHEN b.ActiveAi = 1 AND b.PendingApproval = 1 THEN 'also has an active AI conversation' ELSE '' END AS Also,
+       (SELECT STRING_AGG(CASE ap.ApprovalType WHEN 1 THEN 'Accounting' WHEN 2 THEN 'CustomerService' ELSE 'Type' + CONVERT(varchar(5), ap.ApprovalType) END
+                          + ' (since ' + CONVERT(varchar(16), ap.RequestedAtUtc, 120) + ')', '; ')
+          FROM dbo.TicketApprovals ap WHERE ap.TicketId = b.TicketId AND ap.Status = 1) AS PendingApprovals,
+       b.CreatedAtUtc
+FROM #Base AS b JOIN dbo.Departments AS d ON d.DepartmentId = b.FromDepartmentId
+WHERE b.PendingApproval = 1 OR b.ActiveAi = 1
+ORDER BY CASE WHEN b.PendingApproval = 1 THEN 0 ELSE 1 END, d.Code, b.CreatedAtUtc, b.TicketId;
+
+-- ===========================================================================================================================
 -- RESULT SET 3 - What is EXCLUDED / never touched (for the sign-off)
 -- ===========================================================================================================================
 SELECT
@@ -165,7 +217,7 @@ SELECT
     (SELECT COUNT(*) FROM #Cand c JOIN dbo.Tickets t ON t.TicketId = c.TicketId WHERE t.RequestTypeId IS NOT NULL)                       AS WithRequestType_Preserved,
     (SELECT COUNT(*) FROM #Cand c JOIN dbo.Tickets t ON t.TicketId = c.TicketId WHERE t.CategoryId IS NULL)                                AS Unclassified,
     (SELECT COUNT(*) FROM #Cand c JOIN dbo.Tickets t ON t.TicketId = c.TicketId WHERE t.SlaState = 4)                                    AS SlaBreached_ClockUntouched,
-    (SELECT COUNT(*) FROM #Cand c WHERE EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = c.TicketId AND ap.IsCurrent = 1 AND ap.Status = 1)) AS WithPendingApproval_ApprovalKept,
+    (SELECT COUNT(*) FROM #Cand c WHERE EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = c.TicketId AND ap.Status IN (2, 3, 4))) AS WithDecidedApprovalHistory_Kept,
     (SELECT COUNT(*) FROM #Cand c WHERE c.OriginatingDepartmentId <> c.FromDepartmentId)                                                    AS AlreadyTransferredBefore_OriginatingDeptKept;
 
 -- ===========================================================================================================================
@@ -230,9 +282,10 @@ GROUP BY d.Code, a.Rn, a.DisplayName
 ORDER BY d.Code, a.Rn;
 
 -- ===========================================================================================================================
--- RESULT SET 6 - APPROVAL VALUES: copy these three numbers into the execution script's commit gates
+-- RESULT SET 6 - APPROVAL VALUES: copy these FIVE numbers into the execution script's commit gates
 -- ===========================================================================================================================
-SELECT @Cand AS ApprovedTicketCount, @Moved AS ApprovedMovedTicketCount, @N AS ApprovedAgentCount;
+SELECT @Cand AS ApprovedTicketCount, @Moved AS ApprovedMovedTicketCount, @N AS ApprovedAgentCount,
+       @HeldApproval AS ApprovedHeldBackPendingApprovalCount, @HeldAiOnly AS ApprovedHeldBackActiveAiCount;
 
 -- ===========================================================================================================================
 -- RESULT SET 7 - Exact plan: ticket -> original department -> receiving agent (ticket numbers only; no customer data)
@@ -251,4 +304,4 @@ ORDER BY c.Seq;
 SELECT TOP (1) a.DisplayName AS CursorWouldMoveTo, a.EmployeeId
 FROM #Plan p JOIN #Agents a ON a.Rn = p.AgentRn ORDER BY p.Seq DESC;
 
-DROP TABLE #Plan; DROP TABLE #Cand; DROP TABLE #Agents;
+DROP TABLE #Plan; DROP TABLE #Cand; DROP TABLE #Base; DROP TABLE #Agents;

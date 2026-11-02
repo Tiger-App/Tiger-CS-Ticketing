@@ -6,7 +6,9 @@
  ONE-TIME redistribution of the existing backlog (confirmed business decision):
    every UNOWNED Open / InProgress / Pending ticket from EVERY department is moved into the Call Center (CC) and given to exactly ONE eligible
    Call Center agent, using the Round Robin rules and persisted cursor of the existing engine (see Preview_..._ReadOnly.sql for the full rules).
-   Future tickets are unaffected: no application code, configuration or workflow is changed.
+   Plain Round Robin: no workload balancing. Future tickets are unaffected: no application code, configuration or workflow is changed.
+   HELD BACK and never touched: tickets with a PENDING APPROVAL (TicketApprovals.Status = 1) and tickets with an ACTIVE AI CONVERSATION (a live Genesys
+   interaction nobody has taken and that needs no human) - they are listed by the preview and their counts are commit gates.
 
  PER ELIGIBLE TICKET IT WRITES (all in ONE transaction, all-or-nothing):
    * dbo.Tickets                        CurrentDepartmentId -> CC (only if it was elsewhere) and CurrentOwnerEmployeeId -> the dealt agent
@@ -27,12 +29,14 @@
  SAFETY:
    * DB-name guard; hard abort on any schema difference it depends on (incl. the unique filtered index "one current assignment per ticket").
    * @DryRun = 1 (DEFAULT): performs every write, runs every validation, prints the result sets, then ROLLS BACK.
-   * COMMIT GATES (all required for @DryRun = 0): @ApprovedTicketCount, @ApprovedMovedTicketCount and @ApprovedAgentCount must equal what the run computes
-     (copy from the preview); service-account exclusions confirmed (@ServiceIdsConfirmed = 1 AND ids listed, or @NoServiceAccountsExist = 1) and every
+   * COMMIT GATES (all required for @DryRun = 0): @ApprovedTicketCount, @ApprovedMovedTicketCount, @ApprovedAgentCount, @ApprovedHeldBackPendingApprovalCount and
+     @ApprovedHeldBackActiveAiCount must equal what the run computes (copy the five numbers from the preview); service-account exclusions confirmed (@ServiceIdsConfirmed = 1 AND ids listed, or @NoServiceAccountsExist = 1) and every
      listed id must be a real employee; no earlier batch present.
    * Concurrency: sp_getapplock (blocks a second concurrent run); the CC rotation row is locked UPDLOCK/ROWLOCK exactly like the live app, so live
      intake serializes behind this run; candidate tickets are locked UPDLOCK/ROWLOCK, re-checked in the UPDATE (owner IS NULL, same department, same
-     RowVersion) and the run aborts if even one row differs; the filtered unique index makes a duplicate current assignment impossible.
+     RowVersion) and the run aborts if even one row differs; the filtered unique index makes a duplicate current assignment impossible. The candidate and agent
+     rows stay locked to commit, and AFTER the writes (rows now exclusively locked, so a competing writer must wait or has already committed) the run re-checks
+     that no planned ticket gained a pending approval or an active AI conversation and that every new owner is STILL an eligible agent - any change aborts the run.
    * Idempotent: a second run finds no unowned tickets (they now have owners) and an earlier batch blocks it anyway.
    * Rollback of ONLY this batch: Rollback_TigerCS_PROD_CallCenterBacklogDistribution.sql with this run's @BatchId (printed + stored in AuditEntries).
 
@@ -51,6 +55,8 @@ DECLARE @DryRun                  bit              = 1;     -- 1 = do everything,
 DECLARE @ApprovedTicketCount     int              = NULL;  -- commit gate: preview "ApprovedTicketCount"
 DECLARE @ApprovedMovedTicketCount int             = NULL;  -- commit gate: preview "ApprovedMovedTicketCount" (tickets that change department)
 DECLARE @ApprovedAgentCount      int              = NULL;  -- commit gate: preview "ApprovedAgentCount"
+DECLARE @ApprovedHeldBackPendingApprovalCount int = NULL;  -- commit gate: preview "ApprovedHeldBackPendingApprovalCount" (tickets left alone: pending approval)
+DECLARE @ApprovedHeldBackActiveAiCount        int = NULL;  -- commit gate: preview "ApprovedHeldBackActiveAiCount" (tickets left alone: active AI conversation only)
 DECLARE @ServiceIdsConfirmed     bit              = 0;     -- commit gate: set 1 only after listing ALL service-account ids below
 DECLARE @NoServiceAccountsExist  bit              = 0;     -- commit gate alternative: 1 ONLY if confirmed that no service/integration accounts exist (list stays empty)
 DECLARE @AllowSecondBatch        bit              = 0;     -- keep 0: this is a ONE-TIME operation
@@ -94,6 +100,9 @@ SELECT @missing += v.Tbl + N'.' + v.Col + N' ' FROM (VALUES
     (N'TicketWorkflowEvents', N'ActorEmployeeId'), (N'TicketWorkflowEvents', N'TicketApprovalId'), (N'TicketWorkflowEvents', N'Note'),
     (N'TicketWorkflowEvents', N'CorrelationId'), (N'TicketWorkflowEvents', N'FromDepartmentId'), (N'TicketWorkflowEvents', N'ToDepartmentId'),
     (N'TicketWorkflowEvents', N'ToEmployeeId'), (N'TicketWorkflowEvents', N'TransferReasonCode'),
+    (N'TicketApprovals', N'TicketId'), (N'TicketApprovals', N'Status'), (N'TicketAgentHandoffs', N'TicketId'), (N'TicketAgentHandoffs', N'Status'),
+    (N'TicketInteractions', N'TicketId'), (N'TicketInteractions', N'Source'), (N'TicketInteractions', N'EndedAtUtc'), (N'TicketInteractions', N'InactivityClosedAtUtc'),
+    (N'TicketInteractions', N'RequiresHumanFollowUp'), (N'TicketInteractions', N'HandledByUserId'),
     (N'DepartmentAssignmentRotations', N'DepartmentId'), (N'DepartmentAssignmentRotations', N'LastAssignedEmployeeId'),
     (N'DepartmentAssignmentRotations', N'UpdatedAtUtc'), (N'Employees', N'DeactivatedAtUtc'), (N'Employees', N'DisplayName'),
     (N'UserDepartmentAssignments', N'EmployeeId'), (N'UserDepartmentAssignments', N'DepartmentId'),
@@ -115,7 +124,8 @@ IF EXISTS (SELECT 1 FROM dbo.DepartmentWorkflowSettings WHERE DepartmentId = @Cc
 IF @DryRun = 0
 BEGIN
     IF ISNULL(@ServiceIdsConfirmed, 0) <> 1 OR @ApprovedTicketCount IS NULL OR @ApprovedMovedTicketCount IS NULL OR @ApprovedAgentCount IS NULL
-        THROW 50307, 'ABORTED: commit gates not satisfied - set @ServiceIdsConfirmed = 1 and @ApprovedTicketCount / @ApprovedMovedTicketCount / @ApprovedAgentCount from the approved preview.', 1;
+       OR @ApprovedHeldBackPendingApprovalCount IS NULL OR @ApprovedHeldBackActiveAiCount IS NULL
+        THROW 50307, 'ABORTED: commit gates not satisfied - set @ServiceIdsConfirmed = 1 and the five approved counts (tickets, moved, agents, held-back pending approvals, held-back active AI) from the approved preview.', 1;
     IF NOT EXISTS (SELECT 1 FROM @ServiceIdentity) AND ISNULL(@NoServiceAccountsExist, 0) <> 1
         THROW 50308, 'ABORTED: the service-account list is empty. List every service/integration account id, or set @NoServiceAccountsExist = 1 if you have confirmed there are none.', 1;
     IF EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId))
@@ -133,7 +143,7 @@ DECLARE @t sysname, @sql nvarchar(max), @rowCnt bigint;
 DECLARE watched CURSOR LOCAL FAST_FORWARD FOR
     SELECT v.n FROM (VALUES (N'Tickets'), (N'TicketAssignments'), (N'AuditEntries'), (N'TicketWorkflowEvents'), (N'DepartmentAssignmentRotations'), (N'TicketStatusHistory'),
         (N'TicketSlaInstances'), (N'TicketSlaPausePeriods'), (N'TicketInteractions'), (N'TicketInteractionMessages'), (N'TicketNotes'),
-        (N'TicketResolutions'), (N'TicketPendingRecords'), (N'TicketApprovals'), (N'TicketEscalations'),
+        (N'TicketResolutions'), (N'TicketPendingRecords'), (N'TicketApprovals'), (N'TicketAgentHandoffs'), (N'TicketEscalations'),
         (N'Notifications'), (N'OutboxMessages'), (N'Employees'), (N'AspNetUsers'), (N'AspNetUserRoles')) v(n)
     WHERE OBJECT_ID(N'dbo.' + v.n, N'U') IS NOT NULL;
 OPEN watched; FETCH NEXT FROM watched INTO @t;
@@ -159,7 +169,7 @@ CREATE TABLE #Plan (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, Agen
     FromDepartmentId int NOT NULL, IsMove bit NOT NULL, RowVer binary(8) NOT NULL);
 
 DECLARE @Now datetime2 = SYSUTCDATETIME();
-DECLARE @Cursor uniqueidentifier, @Start int = 1, @N int, @Cand int, @Moved int, @Updated int, @Inserted int, @EventsInserted int, @LastAgent uniqueidentifier,
+DECLARE @Cursor uniqueidentifier, @Start int = 1, @N int, @Cand int, @Moved int, @HeldApproval int, @HeldAiOnly int, @Updated int, @Inserted int, @EventsInserted int, @LastAgent uniqueidentifier,
         @MaxAuditIdBefore bigint, @MaxEventIdBefore bigint;
 
 BEGIN TRY
@@ -187,7 +197,7 @@ BEGIN TRY
     INSERT #Agents (Rn, EmployeeId, DisplayName, UserName, SortKey)
     SELECT ROW_NUMBER() OVER (ORDER BY CONVERT(char(36), e.EmployeeId) COLLATE Latin1_General_BIN2),
            e.EmployeeId, e.DisplayName, u.UserName, CONVERT(char(36), e.EmployeeId) COLLATE Latin1_General_BIN2
-    FROM dbo.Employees AS e
+    FROM dbo.Employees AS e WITH (UPDLOCK, ROWLOCK)      -- an agent cannot be deactivated while the batch runs
     JOIN dbo.AspNetUsers AS u ON u.Id = e.EmployeeId
     WHERE e.DeactivatedAtUtc IS NULL
       AND EXISTS (SELECT 1 FROM dbo.UserDepartmentAssignments a WHERE a.EmployeeId = e.EmployeeId AND a.DepartmentId = @CcId)
@@ -203,7 +213,8 @@ BEGIN TRY
         THROW 50312, @msg, 1;
     END;
 
-    -- (d) eligible tickets from EVERY department, LOCKED for this transaction ------------------------------------------------------
+    -- (d) eligible tickets from EVERY department, LOCKED for this transaction. Held back (never selected, never locked, never touched):
+    --     a PENDING APPROVAL, or an ACTIVE AI CONVERSATION (live Genesys interaction nobody took, no human needed, no open handoff).
     INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc, FromDepartmentId, OriginatingDepartmentId, IsMove,
                   RequestTypeId, CategoryId, PriorityId, SlaState, EscalationLevel, VerificationStatus, RowVer)
     SELECT ROW_NUMBER() OVER (ORDER BY t.CreatedAtUtc, t.TicketId), t.TicketId, t.TicketNumber, t.TicketStatus, t.CreatedAtUtc,
@@ -212,14 +223,32 @@ BEGIN TRY
     FROM dbo.Tickets AS t WITH (UPDLOCK, ROWLOCK)
     WHERE t.TicketStatus IN (1, 2, 3, 4)
       AND t.CurrentOwnerEmployeeId IS NULL
-      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1);
+      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1)
+      AND NOT EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1)
+      AND NOT (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+                     AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4)));
     SET @Cand = (SELECT COUNT(*) FROM #Cand);
     SET @Moved = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1);
+    -- held-back counts (read only, not locked): approval-pending tickets (with or without an AI conversation) and AI-only tickets
+    SELECT @HeldApproval = COUNT(*) FROM dbo.Tickets AS t
+    WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NULL
+      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1) AND EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1);
+    SELECT @HeldAiOnly = COUNT(*) FROM dbo.Tickets AS t
+    WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NULL
+      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1) AND NOT EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1) AND (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+                     AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4)));
     IF @Cand = 0 THROW 50313, 'NOTHING TO DO: no eligible unowned tickets. Nothing was changed.', 1;
-    IF @DryRun = 0 AND (@Cand <> @ApprovedTicketCount OR @Moved <> @ApprovedMovedTicketCount)
+    IF @DryRun = 0 AND (@Cand <> @ApprovedTicketCount OR @Moved <> @ApprovedMovedTicketCount
+                        OR @HeldApproval <> @ApprovedHeldBackPendingApprovalCount OR @HeldAiOnly <> @ApprovedHeldBackActiveAiCount)
     BEGIN
-        SET @msg = N'ABORTED: eligible tickets = ' + CONVERT(nvarchar(10), @Cand) + N' (moved ' + CONVERT(nvarchar(10), @Moved) + N') but approved = '
-                 + CONVERT(nvarchar(10), @ApprovedTicketCount) + N' (moved ' + CONVERT(nvarchar(10), @ApprovedMovedTicketCount)
+        SET @msg = N'ABORTED: eligible tickets = ' + CONVERT(nvarchar(10), @Cand) + N' (moved ' + CONVERT(nvarchar(10), @Moved) + N', held back: approvals '
+                 + CONVERT(nvarchar(10), @HeldApproval) + N', AI ' + CONVERT(nvarchar(10), @HeldAiOnly) + N') but approved = '
+                 + CONVERT(nvarchar(10), @ApprovedTicketCount) + N' (moved ' + CONVERT(nvarchar(10), @ApprovedMovedTicketCount) + N', held back: approvals '
+                 + CONVERT(nvarchar(10), @ApprovedHeldBackPendingApprovalCount) + N', AI ' + CONVERT(nvarchar(10), @ApprovedHeldBackActiveAiCount)
                  + N'). The backlog changed since the preview - re-run the preview and re-approve.';
         THROW 50314, @msg, 1;
     END;
@@ -283,8 +312,30 @@ BEGIN TRY
             LOWER(CONVERT(nvarchar(36), @Cursor)),
             N'LastAssignedEmployeeId=' + LOWER(CONVERT(nvarchar(36), @LastAgent)) + N';Tickets=' + CONVERT(nvarchar(20), @Cand)
             + N';Agents=' + CONVERT(nvarchar(20), @N) + N';Moved=' + CONVERT(nvarchar(20), @Moved)
-            + N';DepartmentId=' + CONVERT(nvarchar(20), @CcId) + N';BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId)),
+            + N';DepartmentId=' + CONVERT(nvarchar(20), @CcId) + N';BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId))
+            + N';HeldBackPendingApproval=' + CONVERT(nvarchar(20), @HeldApproval) + N';HeldBackActiveAi=' + CONVERT(nvarchar(20), @HeldAiOnly),
             @BatchId, @Now);
+
+    -- (g0) RE-CHECKS after the writes. The planned ticket rows are now exclusively locked by this transaction, so any competing writer that read a
+    -- ticket before us has either already committed (and is seen here - READ COMMITTED waits for an uncommitted competing row) or must wait for our commit.
+    -- Anything that appeared since selection aborts the WHOLE run (re-preview, re-approve): a held-back ticket must never be moved.
+    IF EXISTS (SELECT 1 FROM #Plan p JOIN dbo.Tickets t ON t.TicketId = p.TicketId WHERE EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1))
+        THROW 50340, 'ABORTED: a planned ticket gained a PENDING APPROVAL while the run was in progress. Whole run rolled back - re-run the preview.', 1;
+    IF EXISTS (SELECT 1 FROM #Plan p JOIN dbo.Tickets t ON t.TicketId = p.TicketId WHERE (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+                     AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4))))
+        THROW 50341, 'ABORTED: a planned ticket gained an ACTIVE AI CONVERSATION while the run was in progress. Whole run rolled back - re-run the preview.', 1;
+    IF EXISTS (SELECT 1 FROM #Plan p
+               WHERE NOT EXISTS (
+                   SELECT 1 FROM dbo.Employees e JOIN dbo.AspNetUsers u ON u.Id = e.EmployeeId
+                   WHERE e.EmployeeId = p.EmployeeId AND e.DeactivatedAtUtc IS NULL
+                     AND NOT (u.LockoutEnabled = 1 AND u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET())
+                     AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId)
+                     AND EXISTS (SELECT 1 FROM dbo.UserDepartmentAssignments a WHERE a.EmployeeId = e.EmployeeId AND a.DepartmentId = @CcId)
+                     AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
+                                 WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'))))
+        THROW 50342, 'ABORTED: a new owner is no longer an eligible Call Center agent (deactivated / locked / removed from CC / lost role) - whole run rolled back.', 1;
 
     -- (g) validation INSIDE the transaction: any failure rolls everything back ------------------------------------------------------
     IF @Inserted <> @Cand THROW 50320, 'VALIDATION FAILED: assignment rows inserted <> tickets.', 1;
@@ -344,6 +395,8 @@ BEGIN TRY
     SELECT CASE WHEN @DryRun = 1 THEN 'DRY RUN - everything below will be ROLLED BACK' ELSE 'COMMITTING' END AS Mode,
            @BatchId AS BatchId_KeepForRollback, @CcId AS CallCenterDepartmentId, @N AS Agents, @Cand AS TicketsAssigned,
            @Moved AS TicketsMovedIntoCC, @Cand - @Moved AS TicketsAlreadyInCC, @Cursor AS CursorBefore, @LastAgent AS CursorAfter;
+
+    SELECT @HeldApproval AS HeldBack_PendingApproval_Untouched, @HeldAiOnly AS HeldBack_ActiveAi_Untouched;
 
     SELECT d.Code AS FromDepartment, COUNT(*) AS Tickets, SUM(CASE WHEN p.IsMove = 1 THEN 1 ELSE 0 END) AS Moved
     FROM #Plan p JOIN dbo.Departments d ON d.DepartmentId = p.FromDepartmentId GROUP BY d.Code ORDER BY COUNT(*) DESC;

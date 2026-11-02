@@ -11,7 +11,7 @@ docker run -d --name "$C" -e ACCEPT_EULA=Y -e MSSQL_SA_PASSWORD="$PW" -e MSSQL_P
 S=(docker exec -i "$C" /opt/mssql-tools18/bin/sqlcmd -C -I -S localhost -U sa -P "$PW" -b)   # -I = QUOTED_IDENTIFIER ON (filtered indexes)
 for i in $(seq 1 60); do "${S[@]}" -Q "SELECT 1" >/dev/null 2>&1 && break; sleep 2; done
 "${S[@]}" -Q "CREATE DATABASE TigerCS_Ticketing_Prod"
-for f in src/TicketingMigrations.sql AddTicketInteractionHandlers.sql AddTicketTransferTracking.sql AddTicketCreatedBy.sql AddDepartmentAssignmentRotation.sql tests/backlog-distribution/01_seed.sql; do
+for f in src/TicketingMigrations.sql AddLastCustomerInteractionToTicketInteractions.sql AddCustomerSatisfactionReviews.sql AddGenesysServiceRequestToTicketInteractions.sql AddTicketInteractionHandlers.sql AddTicketTransferTracking.sql AddTicketCreatedBy.sql AddDepartmentAssignmentRotation.sql tests/backlog-distribution/01_seed.sql; do
   echo "== $f"; docker cp "$ROOT/$f" "$C:/tmp/m.sql"; docker exec -u 0 "$C" chmod 644 /tmp/m.sql
   "${S[@]}" -d TigerCS_Ticketing_Prod -i /tmp/m.sql
 done
