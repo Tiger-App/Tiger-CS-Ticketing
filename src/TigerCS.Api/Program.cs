@@ -371,7 +371,7 @@ app.UseAuthorization();
 
 // Phase 1 foundation placeholder (S-01), kept anonymous per
 // Security-Architecture.md §5's explicit health-check exception.
-app.MapGet("/health", () => Results.Ok(new HealthResponse("healthy")))
+app.MapGet("/health", () => Results.Ok(new HealthResponse("healthy", BuildInfo.Version)))
     .AllowAnonymous()
     .WithTags(OpenApiTags.Health)
     .WithName("GetHealth")
@@ -395,4 +395,13 @@ app.Run();
 /// <summary>The <c>GET /health</c> payload.</summary>
 /// <remarks>A named type rather than an anonymous object purely so the response has a schema in the OpenAPI document; the JSON it serialises to is unchanged.</remarks>
 /// <param name="Status">Constant literal <c>"healthy"</c>.</param>
-public sealed record HealthResponse(string Status);
+/// <param name="Version">The build that is running: <c>x.y.z+&lt;full git commit&gt;</c> when built by <c>tools/build-release.sh</c>. Lets a deployment be verified against the commit it was meant to contain.</param>
+public sealed record HealthResponse(string Status, string? Version = null);
+
+/// <summary>The running assembly's informational version (carries the git commit when published with <c>-p:SourceRevisionId</c>).</summary>
+public static class BuildInfo
+{
+    public static readonly string Version =
+        typeof(BuildInfo).Assembly.GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "unknown";
+}

@@ -93,10 +93,10 @@ public sealed class AnsweringAgentAssignmentSqlServerTests : IDisposable
     }
 
     /// <summary>A Customer Service ticket with its originating Genesys interaction (the shape an AI-handled conversation has).</summary>
-    private (long TicketId, string ConversationId) AddTicket(Seed seed, int n)
+    private (long TicketId, string ConversationId) AddTicket(Seed seed, int n, bool inCallCenter = false)
     {
         using var context = CreateContext();
-        var ticket = Ticket.CreateUnclassified($"TG-ANS-20261102-{n:D4}", seed.CustomerServiceId, $"Answer {n}", Now.AddHours(-n));
+        var ticket = Ticket.CreateUnclassified($"TG-ANS-20261102-{n:D4}", inCallCenter ? seed.CallCenterId : seed.CustomerServiceId, $"Answer {n}", Now.AddHours(-n));
         context.Tickets.Add(ticket);
         context.SaveChanges();
         var conversation = $"conv-{Guid.NewGuid():N}"[..20];
@@ -188,7 +188,7 @@ public sealed class AnsweringAgentAssignmentSqlServerTests : IDisposable
     public async Task StaleSecondWriter_IsRejectedByTheRowVersion_NotMergedIntoTwoOwners()
     {
         var seed = CreateAndSeedDatabase();
-        var (ticketId, _) = AddTicket(seed, 1);
+        var (ticketId, _) = AddTicket(seed, 1, inCallCenter: true);      // already in the Call Center: no routing step, the DATABASE decides
 
         // Two deliveries are in flight: both loaded the ticket while it was still unowned.
         using var first = CreateContext();
@@ -202,7 +202,7 @@ public sealed class AnsweringAgentAssignmentSqlServerTests : IDisposable
         var lost = await Compose(second).ApplyConnectedAgentAsync(Integration, secondTicket, secondInteraction, seed.GenesysB, "Routing");
 
         Assert.Equal(AnswerAssignmentOutcome.AssignedToAnsweringAgent, won.Outcome);
-        Assert.Equal(AnswerAssignmentOutcome.ConcurrencyConflict, lost.Outcome);       // nothing applied; the event can be redelivered safely
+        Assert.Equal(AnswerAssignmentOutcome.ConcurrencyConflict, lost.Outcome);       // rejected by the row version; the event can be redelivered safely
 
         var (owner, rows) = Read(ticketId);
         Assert.Equal(seed.AgentA, owner);
@@ -218,6 +218,32 @@ public sealed class AnsweringAgentAssignmentSqlServerTests : IDisposable
         }
 
         Assert.Equal(seed.AgentA, Read(ticketId).Owner);
+    }
+
+    [VisibilitySqlServerFact]
+    public async Task StaleSecondWriter_OnATicketTheFirstOneMovedIntoTheCallCenter_AppliesNothing()
+    {
+        var seed = CreateAndSeedDatabase();
+        var (ticketId, _) = AddTicket(seed, 1);                          // starts in Customer Service: the first writer ROUTES it
+
+        using var first = CreateContext();
+        using var second = CreateContext();
+        var firstTicket = await first.Tickets.SingleAsync(t => t.TicketId == ticketId);
+        var firstInteraction = await first.TicketInteractions.FirstAsync(i => i.TicketId == ticketId);
+        var secondTicket = await second.Tickets.SingleAsync(t => t.TicketId == ticketId);        // still sees Customer Service, unowned
+        var secondInteraction = await second.TicketInteractions.FirstAsync(i => i.TicketId == ticketId);
+
+        var won = await Compose(first).ApplyConnectedAgentAsync(Integration, firstTicket, firstInteraction, seed.GenesysA, "Routing");
+        var lost = await Compose(second).ApplyConnectedAgentAsync(Integration, secondTicket, secondInteraction, seed.GenesysB, "Routing");
+
+        Assert.Equal(AnswerAssignmentOutcome.AssignedToAnsweringAgent, won.Outcome);
+        // The routing guard sees the first writer's committed move into the Call Center and refuses to route the stale copy again.
+        Assert.True(lost.Outcome is AnswerAssignmentOutcome.NotApplicable or AnswerAssignmentOutcome.ConcurrencyConflict);
+
+        var (owner, rows) = Read(ticketId);
+        Assert.Equal(seed.AgentA, owner);
+        Assert.Single(rows);
+        Assert.Single(rows, r => r.IsCurrent);
     }
 
     [VisibilitySqlServerFact]

@@ -207,11 +207,11 @@ public class GenesysAnsweringAgentRoutingTests
     {
         var w = NewWorld(assignOnAnswer: false);
 
-        // A call answered at creation, exactly as before the rule existed: the answering agent is only a recorded handler; with no
-        // human-follow-up flag the ticket neither moves to the Call Center nor gets an owner.
+        // A call answered at creation, exactly as before the rule existed: a mapped agent at pickup is human evidence, so the ticket enters
+        // the Call Center and Round Robin picks the owner - the answering agent is only a recorded handler.
         var call = await IngestPhoneCallAsync(w, "conv-lever-call", w.Answering.GenesysId);
-        Assert.Equal(w.Cs.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);
-        AssertSingleOwner(w, call.TicketId, expectedOwner: null);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);
+        AssertSingleOwner(w, call.TicketId, w.RoundRobinNext.Id);
         Assert.Contains(w.F.Handlers.All, h => h.TicketId == call.TicketId && h.HandledByUserId == w.Answering.Id);
 
         // An agent connecting later and a handoff with a connected agent: no direct assignment, no flag.
@@ -226,7 +226,9 @@ public class GenesysAnsweringAgentRoutingTests
         Assert.NotNull(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);                 // Round Robin, as before the rule existed
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action is "AssignOnAnswer" or "AnswerAssignmentSkipped");
 
+        // An unmapped id at pickup is no evidence of a person: before the rule it moved nothing, and with the lever off it still does not.
         var unmapped = await IngestPhoneCallAsync(w, "conv-lever-unmapped", "ghost-agent");
+        Assert.Equal(w.Cs.DepartmentId, w.Ticket(unmapped.TicketId).CurrentDepartmentId);
         Assert.Equal(0, FlagCount(w, unmapped.TicketId));
     }
 
@@ -499,6 +501,25 @@ public class GenesysAnsweringAgentRoutingTests
         Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Equal(0, FlagCount(w, ticket.TicketId));
+    }
+
+    [Fact]
+    public async Task MappedButIneligiblePersonConnectsToAnAiChat_IsFlagged_NotTreatedAsABot_AndNobodyElseGetsIt()
+    {
+        var w = NewWorld();
+        // A real Ticketing user (mapped) who is not a Call Center agent: a person, never a bot - so the chat is human-answered, but this
+        // person cannot own a Call Center ticket. It waits in the Call Center queue, flagged; Round Robin must not hand it to someone else.
+        w.F.AddAgent("g-finance-person", "Finance Person", inCallCenter: false);
+        var chat = await IngestAiChatAsync(w, "conv-mapped-ineligible");
+
+        await ConnectAsync(w, chat, "g-finance-person");
+
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
+        AssertSingleOwner(w, chat.TicketId, expectedOwner: null);
+        Assert.Equal(1, FlagCount(w, chat.TicketId));
+        Assert.Contains(w.F.WorkflowEvents.All, e => e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note!.Contains("not a Call Center member"));
+        Assert.True(RoundRobinCursorUntouched(w));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == chat.TicketId.ToString());
     }
 
     [Fact]

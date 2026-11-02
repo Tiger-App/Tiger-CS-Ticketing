@@ -312,7 +312,9 @@ public sealed class GenesysServiceFixture
         // Contract #3: the one update facade over the two services above.
         TicketUpdate = new GenesysTicketUpdateAppService(
             Options, Conversations, Tickets, Departments, Handoffs, UnitOfWork, ConversationEnd, AgentHandoff, AgentResolution, Audit,
-            WorkflowEvents, Clock, RequestTypeClassification, Lifecycle, HandlingHistory, HandlerRecorder, AnsweringAgents);
+            WorkflowEvents, Clock, RequestTypeClassification, Lifecycle, HandlingHistory, HandlerRecorder,
+            autoAssignmentService: callCenterFirst ? autoAssignment : null,
+            answeringAgentAssignment: AnsweringAgents);
 
         InactivityClose = new ChatbotInactivityCloseAppService(
             Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock);

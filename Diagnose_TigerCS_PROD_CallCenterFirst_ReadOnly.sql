@@ -83,12 +83,18 @@ ORDER BY v.MigrationId;
 -- ===========================================================================================================================
 -- 3. Call Center department and Round Robin state
 -- ===========================================================================================================================
-SELECT d.DepartmentId, d.Code, d.Name, d.IsActive,
+-- The rotation table exists only once the release is deployed, so its columns are added through dynamic SQL (otherwise this statement
+-- fails with Msg 208 exactly in the "not deployed" case this script must diagnose).
+DECLARE @sql3 nvarchar(max) = N'SELECT d.DepartmentId, d.Code, d.Name, d.IsActive,
        (SELECT AllowAssignment FROM dbo.DepartmentWorkflowSettings s WHERE s.DepartmentId = d.DepartmentId) AS AllowAssignment_NULL_means_default_true,
-       (SELECT COUNT(*) FROM dbo.UserDepartmentAssignments a WHERE a.DepartmentId = d.DepartmentId) AS Members,
-       CASE WHEN @HasRotation = 1 THEN (SELECT LastAssignedEmployeeId FROM dbo.DepartmentAssignmentRotations r WHERE r.DepartmentId = d.DepartmentId) END AS RotationCursor,
-       CASE WHEN @HasRotation = 1 THEN (SELECT UpdatedAtUtc FROM dbo.DepartmentAssignmentRotations r WHERE r.DepartmentId = d.DepartmentId) END AS CursorUpdatedAtUtc
-FROM dbo.Departments d WHERE d.Code = N'CC' OR d.Name LIKE N'%Call Center%';
+       (SELECT COUNT(*) FROM dbo.UserDepartmentAssignments a WHERE a.DepartmentId = d.DepartmentId) AS Members'
+    + CASE WHEN @HasRotation = 1 THEN N',
+       (SELECT LastAssignedEmployeeId FROM dbo.DepartmentAssignmentRotations r WHERE r.DepartmentId = d.DepartmentId) AS RotationCursor,
+       (SELECT UpdatedAtUtc FROM dbo.DepartmentAssignmentRotations r WHERE r.DepartmentId = d.DepartmentId) AS CursorUpdatedAtUtc' ELSE N',
+       CAST(NULL AS uniqueidentifier) AS RotationCursor, CAST(NULL AS datetime2) AS CursorUpdatedAtUtc' END
+    + N'
+FROM dbo.Departments d WHERE d.Code = N''CC'' OR d.Name LIKE N''%Call Center%'';';
+EXEC sp_executesql @sql3;
 
 -- ===========================================================================================================================
 -- 4-8. THE TICKET: TG-ACC-20261102-0021
@@ -144,27 +150,39 @@ END;
 
 -- ===========================================================================================================================
 -- 9. Tickets created since the release date that are NOT in the Call Center and have no owner - grouped by how they were created
+--    (SQL Server forbids an aggregate over a subquery, so "routed Call Center-first" is computed per ticket in the CTE and the outer query only aggregates plain columns)
 -- ===========================================================================================================================
-SELECT CASE i.Source WHEN 1 THEN 'Ticketing (manual UI/API)' WHEN 2 THEN 'Genesys' ELSE 'no interaction row' END AS CreatedVia,
+;WITH T AS (
+    SELECT t.TicketId, t.CurrentDepartmentId, i.Source, i.ChannelId, i.RequiresHumanFollowUp,
+           CASE WHEN EXISTS (SELECT 1 FROM dbo.AuditEntries a WHERE a.EntityType = N'Ticket' AND a.EntityId = CONVERT(nvarchar(100), t.TicketId)
+                             AND a.Action = N'Transfer' AND a.AfterValue LIKE N'%routed to Call Center first%') THEN 1 ELSE 0 END AS RoutedFlag
+    FROM dbo.Tickets t
+    LEFT JOIN dbo.TicketInteractions i ON i.TicketId = t.TicketId AND i.IsOriginatingInteraction = 1
+    WHERE t.CreatedAtUtc >= @ReleaseDateUtc AND t.CurrentOwnerEmployeeId IS NULL AND t.TicketStatus IN (1, 2, 3, 4)
+      AND t.CurrentDepartmentId <> ISNULL(@CcId, -1)
+)
+SELECT CASE x.Source WHEN 1 THEN 'Ticketing (manual UI/API)' WHEN 2 THEN 'Genesys' ELSE 'no interaction row' END AS CreatedVia,
        ISNULL(ch.Code, '-') AS ChannelCode,
-       CASE WHEN i.RequiresHumanFollowUp = 1 THEN 'human follow-up requested' ELSE 'no human follow-up flag' END AS HumanFlag,
+       CASE WHEN x.RequiresHumanFollowUp = 1 THEN 'human follow-up requested' ELSE 'no human follow-up flag' END AS HumanFlag,
        cd.Code AS CurrentDept, COUNT(*) AS Tickets,
-       SUM(CASE WHEN EXISTS (SELECT 1 FROM dbo.AuditEntries a WHERE a.EntityType = N'Ticket' AND a.EntityId = CONVERT(nvarchar(100), t.TicketId)
-                             AND a.Action = N'Transfer' AND a.AfterValue LIKE N'%routed to Call Center first%') THEN 1 ELSE 0 END) AS RoutedCallCenterFirst
-FROM dbo.Tickets t
-JOIN dbo.Departments cd ON cd.DepartmentId = t.CurrentDepartmentId
-LEFT JOIN dbo.TicketInteractions i ON i.TicketId = t.TicketId AND i.IsOriginatingInteraction = 1
-LEFT JOIN dbo.Channels ch ON ch.ChannelId = i.ChannelId
-WHERE t.CreatedAtUtc >= @ReleaseDateUtc AND t.CurrentOwnerEmployeeId IS NULL AND t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentDepartmentId <> ISNULL(@CcId, -1)
-GROUP BY i.Source, ch.Code, i.RequiresHumanFollowUp, cd.Code
+       SUM(x.RoutedFlag) AS RoutedCallCenterFirst
+FROM T x
+JOIN dbo.Departments cd ON cd.DepartmentId = x.CurrentDepartmentId
+LEFT JOIN dbo.Channels ch ON ch.ChannelId = x.ChannelId
+GROUP BY x.Source, ch.Code, x.RequiresHumanFollowUp, cd.Code
 ORDER BY COUNT(*) DESC;
 
 -- 10. Hour-by-hour: when did the Call Center-first routing start (first/last routed ticket) versus tickets that were not routed
-SELECT CONVERT(varchar(13), t.CreatedAtUtc, 120) + ':00' AS HourUtc, COUNT(*) AS TicketsCreated,
-       SUM(CASE WHEN EXISTS (SELECT 1 FROM dbo.AuditEntries a WHERE a.EntityType = N'Ticket' AND a.EntityId = CONVERT(nvarchar(100), t.TicketId)
-                             AND a.Action = N'Transfer' AND a.AfterValue LIKE N'%routed to Call Center first%') THEN 1 ELSE 0 END) AS RoutedCallCenterFirst,
-       SUM(CASE WHEN t.CurrentOwnerEmployeeId IS NULL THEN 1 ELSE 0 END) AS StillUnowned
-FROM dbo.Tickets t
-WHERE t.CreatedAtUtc >= @ReleaseDateUtc
-GROUP BY CONVERT(varchar(13), t.CreatedAtUtc, 120)
+;WITH T AS (
+    SELECT t.TicketId, t.CreatedAtUtc, t.CurrentOwnerEmployeeId,
+           CASE WHEN EXISTS (SELECT 1 FROM dbo.AuditEntries a WHERE a.EntityType = N'Ticket' AND a.EntityId = CONVERT(nvarchar(100), t.TicketId)
+                             AND a.Action = N'Transfer' AND a.AfterValue LIKE N'%routed to Call Center first%') THEN 1 ELSE 0 END AS RoutedFlag
+    FROM dbo.Tickets t
+    WHERE t.CreatedAtUtc >= @ReleaseDateUtc
+)
+SELECT CONVERT(varchar(13), x.CreatedAtUtc, 120) + ':00' AS HourUtc, COUNT(*) AS TicketsCreated,
+       SUM(x.RoutedFlag) AS RoutedCallCenterFirst,
+       SUM(CASE WHEN x.CurrentOwnerEmployeeId IS NULL THEN 1 ELSE 0 END) AS StillUnowned
+FROM T x
+GROUP BY CONVERT(varchar(13), x.CreatedAtUtc, 120)
 ORDER BY 1;

@@ -73,8 +73,12 @@ public sealed class GenesysAnsweringAgentAssignmentService(
 
         // An unusable agent flags/queues the ticket only when a person is evidently handling it already: it sits in the Call Center, the
         // conversation needs human follow-up, human work is open, or it is a VOICE call (a call connected to an agent is answered by a
-        // person). Otherwise (an AI chat that merely names an id - a bot, a not-yet-connected agent) nothing moves.
-        var humanManaged = await autoAssignment.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
+        // person), or the id maps to a real Ticketing user. Otherwise (an AI chat that merely names an unmapped id - a bot) nothing moves.
+        // A MAPPED id (even a deactivated or locked one) is a known person, never a bot, so it counts too; only an id that maps to nobody
+        // needs one of the other signals before the ticket is touched.
+        var knownPerson = agent.Issue is not (AnsweringAgentIssue.NotMapped or AnsweringAgentIssue.InvalidId);
+        var humanManaged = knownPerson
+            || await autoAssignment.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
             || interaction.ChannelId == WellKnownChannels.Phone
             || interaction.RequiresHumanFollowUp
             || await handoffRepository.GetOpenByInteractionIdAsync(interaction.TicketInteractionId, cancellationToken) is not null;

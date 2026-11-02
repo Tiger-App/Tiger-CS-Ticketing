@@ -221,6 +221,10 @@ public sealed class GenesysInquiryIngestionAppService(
         // endpoint (GenesysAgentContextAppService).
         var agent = await ResolveAgentAsync(inquiry.AgentId, cancellationToken);
 
+        // Was this accepted by a person? Judged from the actual event (an explicit flag, or a voice call created at pickup by a mapped agent),
+        // never from the channel alone: a Phone ticket with no such evidence stays AI-handled and is not moved.
+        var humanSignal = GenesysHumanHandlingEvidence.ForInquiry(inquiry, agent is { IsResolved: true });
+
         // The configured default priority (Normal). Unresolvable configuration
         // never costs the inquiry: it falls back to the previous behavior (no
         // priority, no SLA until classified) and says so on the audit entry.
@@ -289,7 +293,7 @@ public sealed class GenesysInquiryIngestionAppService(
                 CustomerName: inquiry.CustomerName ?? lookup.CustomerName,
                 CustomerEmail: inquiry.CustomerEmail,
                 ServiceRequestId: serviceRequestId,
-                RequiresHumanFollowUp: inquiry.HumanFollowUpRequired == true));
+                RequiresHumanFollowUp: humanSignal != GenesysHumanSignal.None));
 
         TicketCreationResult creation;
         try
@@ -378,7 +382,7 @@ public sealed class GenesysInquiryIngestionAppService(
                 + $"CustomerLookup={lookup.Status};Classification=Unclassified;"
                 + $"DefaultPriority={(defaultPriority is null ? "(none: not configured or not found)" : $"{defaultPriority.Name}({defaultPriority.PriorityId})")};"
                 + $"AgentMapping={DescribeAgentMapping(inquiry.AgentId, agent)};"
-                + $"ServiceRequestId={serviceRequestId ?? "(none)"};HumanFollowUpRequired={inquiry.HumanFollowUpRequired == true};"
+                + $"ServiceRequestId={serviceRequestId ?? "(none)"};HumanFollowUpRequired={inquiry.HumanFollowUpRequired == true};HumanSignal={humanSignal};"
                 + $"RequestTypeRejected={requestTypeRejected ?? "(none)"}",
             correlationId: Guid.NewGuid(),
             cancellationToken);

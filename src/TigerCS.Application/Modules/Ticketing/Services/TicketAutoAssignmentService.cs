@@ -231,6 +231,76 @@ public sealed class TicketAutoAssignmentService(
     }
 
     /// <summary>
+    /// Call Center first for a ticket that ALREADY exists and has just been found to need a person (Genesys reporting
+    /// <c>humanFollowUpRequired</c> after the ticket was created): the ticket moves to the Call Center (OriginatingDepartmentId, Request
+    /// Type, status and SLA untouched) and ONE eligible Call Center agent is picked by Round Robin.
+    ///
+    /// <para>
+    /// Returns false and changes nothing when the ticket is closed or resolved, already in the Call Center, owned by a person (only an
+    /// automatic pre-assignment is released — <see cref="TicketOwnershipRules.IsAutomaticPreAssignmentAsync"/>), or no active Call Center
+    /// exists. Idempotent: a second call finds the ticket already in the Call Center. Runs inside the caller's transaction.
+    /// </para>
+    /// </summary>
+    public async Task<bool> RouteExistingTicketToCallCenterAsync(
+        Ticket ticket, DateTime nowUtc, Guid correlationId, string reason, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        if (ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed
+            || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
+            || callCenter.DepartmentId == ticket.CurrentDepartmentId)
+        {
+            return false;
+        }
+
+        if (ticket.CurrentOwnerEmployeeId is not null
+            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken))
+        {
+            return false;   // genuine human ownership is never overwritten
+        }
+
+        // Call Center is the FIRST stop, once. A ticket that was created in, or has already passed through, the Call Center and was then
+        // transferred onward by a Call Center agent must not be pulled back by a later Genesys update (a transcript, the call ending, a
+        // repeated agent-connected event) — that would undo the agent's Transfer and its destination assignment.
+        if (ticket.OriginatingDepartmentId == callCenter.DepartmentId
+            || (workflowEventRepository is not null
+                && (await workflowEventRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Any(e =>
+                    e.EventType == WorkflowEventType.TicketTransferred && e.ToDepartmentId == callCenter.DepartmentId)))
+        {
+            return false;
+        }
+
+        var fromDepartmentId = ticket.CurrentDepartmentId;
+        var releasedOwner = ticket.CurrentOwnerEmployeeId;
+        if (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken) is { } current)
+        {
+            current.MarkSuperseded();
+        }
+
+        ticket.TransferToDepartment(callCenter.DepartmentId);   // clears the owner; OriginatingDepartmentId is write-once
+
+        await auditWriter.WriteAsync(
+            actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
+            beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId={releasedOwner?.ToString() ?? "DepartmentQueue"}",
+            afterValue: $"DepartmentId={callCenter.DepartmentId};Reason={reason}"
+                + (releasedOwner is not null ? ";AutomaticPreAssignmentReleased=true" : string.Empty)
+                + $";OriginatingDepartmentId={ticket.OriginatingDepartmentId} (unchanged)",
+            correlationId, cancellationToken);
+
+        if (workflowEventRepository is not null)
+        {
+            await workflowEventRepository.AddAsync(
+                TicketWorkflowEvent.ForTransfer(
+                    ticket.TicketId, nowUtc, actorEmployeeId: null, TicketTransferReason.SystemRouting,
+                    fromDepartmentId, callCenter.DepartmentId, toEmployeeId: null, reason, correlationId),
+                cancellationToken);
+        }
+
+        await AssignCallCenterIntakeAsync(ticket, nowUtc, correlationId, cancellationToken);
+        return true;
+    }
+
+    /// <summary>
     /// Round Robin as the default when no explicit rule decided (Transfer, Call Center category routing): runs only when the ticket
     /// has no owner and <paramref name="configured"/> (the result of <see cref="ApplyAsync"/>) was "nothing configured" — a specific
     /// assignee, an explicit department-queue rule or disabled assignment always wins. Same single engine, same audit trail.
@@ -449,8 +519,9 @@ public sealed class TicketAutoAssignmentService(
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "No active Call Center department.");
         }
 
-        // A person moved it on (Transfer / escalation): the transfer and its new owner stand. System routing does not count.
-        if (await HasPersonTransferAsync(ticket.TicketId, cancellationToken))
+        // A person moved it on (Transfer / escalation), or it already passed through the Call Center and left it: that move and the new owner
+        // stand. A late Genesys event must never undo them. (Routing INTO the Call Center by the system does not count as a person's transfer.)
+        if (await HasLeftOrBeenTransferredByPersonAsync(ticket, callCenter.DepartmentId, cancellationToken))
         {
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "A person transferred the ticket; it is left as they placed it.");
         }
@@ -578,11 +649,22 @@ public sealed class TicketAutoAssignmentService(
         return new AnswerAssignmentResult(AnswerAssignmentOutcome.QueuedForManualAssignment, Issue: issue, Wrote: true);
     }
 
-    /// <summary>True when a PERSON has transferred the ticket (any transfer event that is not system routing, which includes escalations).</summary>
-    private async Task<bool> HasPersonTransferAsync(long ticketId, CancellationToken cancellationToken) =>
-        workflowEventRepository is not null
-        && (await workflowEventRepository.ListByTicketIdAsync(ticketId, cancellationToken)).Any(e =>
-            e.EventType == WorkflowEventType.TicketTransferred && e.TransferReasonCode != (byte)TicketTransferReason.SystemRouting);
+    /// <summary>
+    /// True when a PERSON has transferred the ticket (any transfer event that is not system routing, escalations included), or the ticket
+    /// has already been in the Call Center and is no longer there. Either way a later "agent connected" must not move it again.
+    /// </summary>
+    private async Task<bool> HasLeftOrBeenTransferredByPersonAsync(Ticket ticket, int callCenterDepartmentId, CancellationToken cancellationToken)
+    {
+        if (workflowEventRepository is null)
+        {
+            return false;
+        }
+
+        var events = await workflowEventRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken);
+        return events.Any(e => e.EventType == WorkflowEventType.TicketTransferred && e.TransferReasonCode != (byte)TicketTransferReason.SystemRouting)
+            || (ticket.CurrentDepartmentId != callCenterDepartmentId
+                && events.Any(e => e.EventType == WorkflowEventType.TicketTransferred && e.ToDepartmentId == callCenterDepartmentId));
+    }
 
     private static string Describe(AnsweringAgentIssue issue) => issue switch
     {

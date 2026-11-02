@@ -6,6 +6,10 @@ Round Robin. Round Robin is used **only** when a human handoff was requested and
 Kill-switch: `Genesys:AssignOnAnswer` (default `true`). Set `false` (environment variable `Genesys__AssignOnAnswer=false`, then recycle the API pool) to return to the previous
 behaviour — Round Robin for every ticket that needs a person, the answering agent only recorded as a handler. No redeploy, no data change.
 
+> Relationship to `docs/Genesys/Human-Accepted-Call-Routing-Runbook.md` (human-accepted calls → Call Center): that document decides **whether** a conversation is
+> human-handled and routes it; this rule decides **who owns it** when a specific agent answered. They compose: the evidence a person has the call is the same
+> (`GenesysHumanHandlingEvidence`), and a ticket that already passed through the Call Center and left it is never pulled back by either.
+
 ## What counts as "answered"
 
 Only an agent id Genesys sends as **connected** (answered / accepted):
@@ -18,7 +22,7 @@ Only an agent id Genesys sends as **connected** (answered / accepted):
 | `handoff.assignedAgentId` (Genesys names who is to take the work) | **No** |
 | Top-level `agentId` on an update / conversation end (conversation context) | **No** (recorded as a handler only, as before) |
 | Ringing, offered, alerting, queue-only events | **No** — they must not be sent as `routing.agentId` |
-| `agentId` on an AI-handled chat with no human flag (a bot, a not-yet-connected agent) | **No** — the ticket is not dragged into the Call Center |
+| `agentId` on an AI-handled chat with no human flag and no mapping (a bot, a not-yet-connected agent) | **No** — the ticket is not dragged into the Call Center. (A *mapped* user is a real person, so a mapped-but-ineligible one is flagged, not ignored.) |
 
 The Genesys flow therefore **must send `routing.agentId` / the inquiry `agentId` only once the agent has actually connected.** An id sent while the agent is only ringing would be treated as an answer.
 
