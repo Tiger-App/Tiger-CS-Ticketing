@@ -259,6 +259,17 @@ public sealed class TicketAutoAssignmentService(
             return false;   // genuine human ownership is never overwritten
         }
 
+        // Call Center is the FIRST stop, once. A ticket that was created in, or has already passed through, the Call Center and was then
+        // transferred onward by a Call Center agent must not be pulled back by a later Genesys update (a transcript, the call ending, a
+        // repeated agent-connected event) — that would undo the agent's Transfer and its destination assignment.
+        if (ticket.OriginatingDepartmentId == callCenter.DepartmentId
+            || (workflowEventRepository is not null
+                && (await workflowEventRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Any(e =>
+                    e.EventType == WorkflowEventType.TicketTransferred && e.ToDepartmentId == callCenter.DepartmentId)))
+        {
+            return false;
+        }
+
         var fromDepartmentId = ticket.CurrentDepartmentId;
         var releasedOwner = ticket.CurrentOwnerEmployeeId;
         if (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken) is { } current)

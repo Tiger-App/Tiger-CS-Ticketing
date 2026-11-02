@@ -383,9 +383,17 @@ public sealed class GenesysTicketUpdateAppService(
             await RecordCustomerConfirmationAsync(callerEmployeeId, ticket, conversationId, confirmation, cancellationToken);
         }
 
-        if (request.HumanFollowUpRequired == true)
+        // A person has taken the conversation — judged from the actual event this update carries (explicit flag, a mapped agent CONNECTED,
+        // an agent taking pending work, a HumanAgent line), so a late human follow-up on a ticket the AI created also lands in the Call
+        // Center and gets one agent. No evidence = nothing here runs: an AI conversation (queue change, VirtualAgent lines, an unmapped or
+        // merely-ringing agent) is never moved.
+        var routingAgentId = NullIfBlank(request.Routing?.AgentId);
+        var routingAgentIsHuman = routingAgentId is not null
+            && (await agentResolution.ResolveByGenesysUserIdAsync(routingAgentId, cancellationToken)).IsResolved;
+        var humanSignal = GenesysHumanHandlingEvidence.ForUpdate(request, routingAgentIsHuman);
+        if (humanSignal != GenesysHumanSignal.None)
         {
-            await MarkHumanFollowUpAsync(callerEmployeeId, ticket, interaction, cancellationToken);
+            await MarkHumanFollowUpAsync(callerEmployeeId, ticket, interaction, humanSignal, cancellationToken);
         }
 
         await ApplyCustomerActivityAsync(callerEmployeeId, ticket, interaction, request, cancellationToken);
@@ -695,7 +703,7 @@ public sealed class GenesysTicketUpdateAppService(
     /// through the authorized workflow. Touches only this ticket's own interaction, never a sibling ticket of the same conversation.
     /// </summary>
     private async Task MarkHumanFollowUpAsync(
-        Guid callerEmployeeId, Ticket ticket, TicketInteraction interaction, CancellationToken cancellationToken)
+        Guid callerEmployeeId, Ticket ticket, TicketInteraction interaction, GenesysHumanSignal signal, CancellationToken cancellationToken)
     {
         var changed = interaction.MarkRequiresHumanFollowUp();
 
@@ -710,7 +718,7 @@ public sealed class GenesysTicketUpdateAppService(
                 GenesysAuditActions.ConversationEntityType,
                 interaction.GenesysConversationId!,
                 beforeValue: null,
-                afterValue: $"TicketId={ticket.TicketId};ServiceRequestId={interaction.GenesysServiceRequestId ?? "(none)"};TicketStatus={ticket.TicketStatus}",
+                afterValue: $"TicketId={ticket.TicketId};ServiceRequestId={interaction.GenesysServiceRequestId ?? "(none)"};TicketStatus={ticket.TicketStatus};HumanSignal={signal}",
                 correlationId: correlationId,
                 cancellationToken);
         }
