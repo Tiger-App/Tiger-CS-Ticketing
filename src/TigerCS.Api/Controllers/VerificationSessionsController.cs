@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.CustomerVerification.Dto;
 using TigerCS.Application.Modules.CustomerVerification.Services;
 using TigerCS.Domain.Modules.CustomerVerification;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -35,6 +36,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/verification-sessions")]
 [Authorize(Policy = PolicyNames.CustomerVerification)]
 [Tags(OpenApiTags.CustomerVerification)]
+[RequirePermission(Permissions.TicketsCreate)]
 public class VerificationSessionsController(VerificationSessionAppService verificationSessionAppService) : ControllerBase
 {
     /// <summary>Create and confirm a verification session in one call.</summary>

@@ -5,6 +5,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -26,6 +27,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/customers")]
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Tags(OpenApiTags.CustomerHistory)]
+[RequirePermission(Permissions.CustomersView)]
 public class CustomerHistoryController(
     CustomerHistoryAppService customerHistoryAppService,
     CustomerSearchAppService customerSearchAppService) : ControllerBase

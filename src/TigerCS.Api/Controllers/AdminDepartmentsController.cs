@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.Administration.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -15,12 +16,14 @@ public class AdminDepartmentsController(AdminDepartmentAppService departments) :
 {
     /// <summary>Every department with member, request-type and ticket-reference counts (inactive included by default).</summary>
     [HttpGet]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<IReadOnlyList<AdminDepartmentDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> List([FromQuery] bool includeInactive = true, CancellationToken cancellationToken = default) =>
         Ok(await departments.ListAsync(includeInactive, cancellationToken));
 
     /// <summary>One department with its members.</summary>
     [HttpGet("{departmentId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<AdminDepartmentDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(int departmentId, CancellationToken cancellationToken)
@@ -31,6 +34,7 @@ public class AdminDepartmentsController(AdminDepartmentAppService departments) :
 
     /// <summary>Creates a department (name and code must be unique).</summary>
     [HttpPost]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminDepartmentDetailDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Create([FromBody] SaveDepartmentRequestDto request, CancellationToken cancellationToken) =>
@@ -39,6 +43,7 @@ public class AdminDepartmentsController(AdminDepartmentAppService departments) :
 
     /// <summary>Renames a department / changes its code; historical tickets keep the same department id.</summary>
     [HttpPut("{departmentId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminDepartmentDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -47,6 +52,7 @@ public class AdminDepartmentsController(AdminDepartmentAppService departments) :
 
     /// <summary>Activate/deactivate — an inactive department is never offered for new work and is never deleted.</summary>
     [HttpPatch("{departmentId:int}/activation")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminDepartmentDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> SetActivation(int departmentId, [FromBody] SetActiveRequestDto request, CancellationToken cancellationToken) =>
@@ -54,6 +60,7 @@ public class AdminDepartmentsController(AdminDepartmentAppService departments) :
 
     /// <summary>Adds an existing user to the department using the existing membership model.</summary>
     [HttpPost("{departmentId:int}/members")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminDepartmentDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -63,6 +70,7 @@ public class AdminDepartmentsController(AdminDepartmentAppService departments) :
 
     /// <summary>Ends a member's department membership.</summary>
     [HttpDelete("{departmentId:int}/members/{employeeId:guid}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminDepartmentDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]

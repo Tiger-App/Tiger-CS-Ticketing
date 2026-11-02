@@ -72,6 +72,7 @@ public sealed class AdministrationRenderTests : IDisposable
         { "/Admin/Users", "tone-info" },
         { "/Admin/Users/New", "tone-info" },
         { $"/Admin/Users/{AlmaId}", "tone-info" },
+        { $"/Admin/Users/{AlmaId}/Permissions", "tone-info" },
         { "/Admin/Departments", "tone-progress" },
         { "/Admin/Departments/1", "tone-progress" },
         { "/Admin/RequestTypes", "tone-secondary" },
@@ -181,6 +182,24 @@ public sealed class AdministrationRenderTests : IDisposable
         Assert.Contains("class=\"cell-sub\">Deactivated ", withInactive, StringComparison.Ordinal);
         Assert.Contains("<tr class=\"is-link is-inactive\"", withInactive, StringComparison.Ordinal);
         Assert.Contains("identity__avatar--muted", withInactive, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task UsersList_OffersManagePermissions_ForEveryUser_AndThePageShowsTheEffectiveMatrix()
+    {
+        var list = await Ok(await GetAsync("/Admin/Users"));
+        Assert.Contains($"href=\"/Admin/Users/{AlmaId}/Permissions\"", list, StringComparison.Ordinal);
+        Assert.Contains("Manage Permissions", list, StringComparison.Ordinal);
+
+        var page = await Ok(await GetAsync($"/Admin/Users/{AlmaId}/Permissions"));
+        Assert.Contains("Manage Permissions", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"roles-form\"", page, StringComparison.Ordinal);
+        Assert.Contains("id=\"permissions-form\"", page, StringComparison.Ordinal);
+        Assert.Contains("name=\"Overrides[Tickets.Reopen]\"", page, StringComparison.Ordinal);
+        Assert.Contains("name=\"SelectedRoles\"", page, StringComparison.Ordinal);
+        Assert.Contains("Administrator only", page, StringComparison.Ordinal);
+        Assert.Contains("Root Admin", page, StringComparison.Ordinal);
+        Assert.Contains("Permission=Tickets.Reopen;Override=Deny;Effective=false", page, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -486,6 +505,7 @@ public sealed class AdministrationRenderTests : IDisposable
                 "api/admin/users" => Json(Users(includeInactive)),
                 "api/admin/users/password-policy" => Json(new PasswordPolicyDto(8, true, true, true, true, 4)),
                 _ when path == $"api/admin/users/{AlmaId}" => Json(Alma),
+                _ when path == $"api/admin/users/{AlmaId}/permissions" => Json(AlmaPermissions),
                 "api/admin/channels" => Json(Channels(includeInactive)),
                 "api/admin/channels/1" => Json(Channels(true)[0]),
                 "api/admin/departments" => Json(Departments(includeInactive)),
@@ -515,6 +535,21 @@ public sealed class AdministrationRenderTests : IDisposable
             [Roles.SystemAdministrator, Roles.CsManager],
             [new DepartmentMembershipDto(1, "Collections", true), new DepartmentMembershipDto(2, "Finance", false)],
             true);
+
+        private static UserPermissionsDto AlmaPermissions => new(
+            AlmaId, "Alma Hassan", "alma.hassan", true, [Roles.CsManager], false, false, false,
+            [
+                new("Tickets",
+                [
+                    new("Tickets.View", "View", "View tickets", "Open tickets.", false, true, "Inherit", true, "Role", true),
+                    new("Tickets.Reopen", "Reopen", "Reopen tickets", "Reopen a closed ticket.", false, true, "Deny", false, "Denied", true)
+                ]),
+                new("Administration",
+                [
+                    new("Administration.Permissions.Manage", "Manage", "Manage permissions", "Change overrides.", true, false, "Inherit", false, "None", false)
+                ])
+            ],
+            [new PermissionChangeDto(Now, "Root Admin", "Tickets.Reopen", "Permission=Tickets.Reopen;Override=Inherit;Effective=true", "Permission=Tickets.Reopen;Override=Deny;Effective=false")]);
 
         private static AdminUserDto Ravi => new(
             RaviId, "ravi.menon", null, "Ravi Menon", true, false, Now.AddMonths(-3), Now.AddYears(-1), false,

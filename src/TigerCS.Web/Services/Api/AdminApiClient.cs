@@ -58,6 +58,12 @@ public sealed class AdminApiClient(HttpClient httpClient, ILogger<AdminApiClient
     public Task<ApiResult<PasswordPolicyDto>> GetPasswordPolicyAsync(CancellationToken ct) =>
         GetAsync<PasswordPolicyDto>("api/admin/users/password-policy", ct);
 
+    public Task<ApiResult<UserPermissionsDto>> GetUserPermissionsAsync(Guid employeeId, CancellationToken ct) =>
+        GetAsync<UserPermissionsDto>($"api/admin/users/{employeeId}/permissions", ct);
+
+    public Task<ApiResult<UserPermissionsDto>> SetUserPermissionsAsync(Guid employeeId, SetUserPermissionsRequestDto request, CancellationToken ct) =>
+        PutAsync<SetUserPermissionsRequestDto, UserPermissionsDto>($"api/admin/users/{employeeId}/permissions", request, ct);
+
     public Task<ApiResult<AdminUserDto>> UnlockUserAsync(Guid employeeId, CancellationToken ct) =>
         PostAsync<object, AdminUserDto>($"api/admin/users/{employeeId}/unlock", new { }, ct);
 

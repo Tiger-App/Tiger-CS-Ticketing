@@ -5,6 +5,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -22,6 +23,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/intake-records")]
 [Authorize(Policy = PolicyNames.CustomerVerification)]
 [Tags(OpenApiTags.Intake)]
+[RequirePermission(Permissions.TicketsCreate)]
 public class IntakeRecordsController(IntakeRecordAppService intakeRecordAppService) : ControllerBase
 {
     /// <summary>Record a customer interaction, before any customer lookup is attempted.</summary>

@@ -6,6 +6,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.CrmDocuments.Dto;
 using TigerCS.Application.Modules.CrmDocuments.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -32,6 +33,7 @@ public sealed class CustomerDocumentsController(CustomerDocumentsAppService docu
     /// <param name="crmLeadId">The CRM lead of the selected unit. Must be one of the customer's units (403 otherwise).</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     [HttpGet]
+    [RequirePermission(Permissions.CustomersView)]
     [ProducesResponseType<CustomerDocumentsDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -60,6 +62,7 @@ public sealed class CustomerDocumentsController(CustomerDocumentsAppService docu
     /// <param name="download">True to send as an attachment (save), false to open inline.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     [HttpGet("{crmLeadId:int}/{documentType}/{recordId}/file")]
+    [RequirePermission(Permissions.CustomersView)]
     [Produces("application/octet-stream")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -99,6 +102,7 @@ public sealed class CustomerDocumentsController(CustomerDocumentsAppService docu
     /// <param name="idempotencyKey">Required. Reuse it on a retry of the same click; a new send needs a new key.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     [HttpPost("send")]
+    [RequirePermission(Permissions.CustomersSend)]
     [ProducesResponseType<CrmDocumentCopyResult>(StatusCodes.Status200OK)]
     [ProducesResponseType<CrmDocumentCopyResult>(StatusCodes.Status202Accepted)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]

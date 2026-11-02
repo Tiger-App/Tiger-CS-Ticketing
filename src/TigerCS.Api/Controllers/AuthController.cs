@@ -7,6 +7,7 @@ using TigerCS.Application.Modules.GenesysIntegration.Services;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -14,6 +15,7 @@ namespace TigerCS.Api.Controllers;
 [ApiController]
 [Route("api/auth")]
 [Tags(OpenApiTags.Authentication)]
+[NoPermissionRequired("Sign-in, sign-out and change-password are available to every account.")]
 public class AuthController(
     AuthenticationAppService authenticationAppService,
     GenesysScreenPopAppService screenPopAppService) : ControllerBase

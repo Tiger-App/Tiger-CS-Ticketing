@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Reporting.Dto;
 using TigerCS.Application.Modules.Reporting.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -19,6 +20,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/reports")]
 [Authorize(Policy = PolicyNames.ReportsRead)]
 [Tags(OpenApiTags.Reports)]
+[RequirePermission(Permissions.ReportsView)]
 public class ReportsController(TeamPerformanceAppService teamPerformanceAppService) : ControllerBase
 {
     /// <summary>The Team Performance report: one row per active CS Agent with Currently Assigned, Tickets Worked, Completed Follow-ups and SLA Breaches, a totals row and the picker options.</summary>

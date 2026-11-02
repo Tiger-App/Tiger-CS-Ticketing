@@ -9,6 +9,7 @@ using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -50,6 +51,7 @@ public sealed class CollectionsController(
     /// ticket creation, subject to the caller's financial read permissions.
     /// </summary>
     [HttpGet("customer-lookup/payment-summary")]
+    [RequirePermission(Permissions.CollectionsView)]
     [Authorize(Policy = PolicyNames.CustomerVerification)]
     [ProducesResponseType<CollectionsPaymentSummaryResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -106,6 +108,7 @@ public abstract class CollectionsControllerBase(
     /// <response code="404">AccountNotFound — customer not known to TigerCS, or not visible.</response>
     /// <response code="503">FinanceUnavailable (PACT unreachable), or CollectionsDisabled.</response>
     [HttpGet("customers/by-key/{customerKey}/payment-summary")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<CollectionsPaymentSummaryResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -134,6 +137,7 @@ public abstract class CollectionsControllerBase(
     /// <response code="422">CustomerNotMapped — no verified PACT mapping (e.g. a CRM customer).</response>
     /// <response code="503">FinanceUnavailable (PACT or EDSM failed), or CollectionsDisabled.</response>
     [HttpGet("customers/by-key/{customerKey}/payment-transactions")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<CollectionsPaymentTransactionsResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -160,6 +164,7 @@ public abstract class CollectionsControllerBase(
     /// <response code="404">AccountNotFound — absent, or not this customer's.</response>
     /// <response code="503">FinanceUnavailable, or Collections disabled.</response>
     [HttpGet("customers/{crmCustomerId}/outstanding")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<CollectionsOutstandingResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -190,6 +195,7 @@ public abstract class CollectionsControllerBase(
     /// <response code="404">AccountNotFound.</response>
     /// <response code="503">FinanceUnavailable, or Collections disabled.</response>
     [HttpGet("customers/{crmCustomerId}/payments")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<CollectionsInstalmentsResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<CollectionsPaymentHistoryResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -238,6 +244,7 @@ public abstract class CollectionsControllerBase(
     /// <response code="403">Forbidden — no reminder permission.</response>
     /// <response code="503">FinanceUnavailable, or Collections disabled.</response>
     [HttpGet("reminders/candidates")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<CollectionsReminderCandidatesResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -276,6 +283,7 @@ public abstract class CollectionsControllerBase(
     /// <response code="422">NoEligibleContact or ChannelNotEnabled.</response>
     /// <response code="503">FinanceUnavailable (including stale data), or Collections disabled.</response>
     [HttpPost("reminders")]
+    [RequirePermission(Permissions.CollectionsSend)]
     [ProducesResponseType<CollectionsReminderJobDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<CollectionsReminderJobDto>(StatusCodes.Status202Accepted)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -315,6 +323,7 @@ public abstract class CollectionsControllerBase(
     /// <response code="409">IdempotencyConflict, or ReminderSuppressed.</response>
     /// <response code="503">Collections disabled.</response>
     [HttpPost("reminders/{reminderId}/outcomes")]
+    [RequirePermission(Permissions.CollectionsEdit)]
     [ProducesResponseType<RecordReminderOutcomeResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<RecordReminderOutcomeResponseDto>(StatusCodes.Status202Accepted)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -343,6 +352,7 @@ public abstract class CollectionsControllerBase(
     /// <response code="403">Forbidden.</response>
     /// <response code="503">Collections disabled.</response>
     [HttpGet("customers/{crmCustomerId}/reminders")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<CollectionsReminderHistoryResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]

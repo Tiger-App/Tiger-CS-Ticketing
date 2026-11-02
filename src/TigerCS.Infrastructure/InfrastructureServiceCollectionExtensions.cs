@@ -137,6 +137,12 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IAuthorizationHandler, ActiveEmployeeHandler>();
         services.AddScoped<IAuthorizationHandler, DepartmentScopedHandler>();
 
+        // Employee-specific permission overrides (Manage Permissions). Same
+        // pattern as the System Administrator override below: one bare
+        // handler, no policy has to know about it.
+        services.AddScoped<IUserPermissionOverrideRepository, UserPermissionOverrideRepository>();
+        services.AddScoped<IAuthorizationHandler, UserPermissionAuthorizationHandler>();
+
         // The central System Administrator authorization override (ADR-0024).
         // Registered once, here, rather than referenced by any policy or
         // controller: ASP.NET Core runs every registered IAuthorizationHandler
@@ -431,6 +437,7 @@ public static class InfrastructureServiceCollectionExtensions
         // Administration / Workflow Designer phase — SystemAdministrator-only
         // endpoints compose these over the existing services above.
         services.AddScoped<AdminUserAppService>();
+        services.AddScoped<AdminUserPermissionAppService>();
         services.AddScoped<AdminDepartmentAppService>();
         services.AddScoped<AdminRequestTypeAppService>();
         services.AddScoped<AdminWorkflowAppService>();
