@@ -15,8 +15,8 @@
 | Inactivity closure never happens | `BackgroundJobs:Enabled=false`, SQL scripts missing, `awaitingCustomerReply` not sent | Hangfire dashboard/tables | enable, apply scripts, add data action 10 |
 | No customer e‑mail / OTP e‑mail | `EmailNotifications:Enabled=false`, SMTP creds, outbox job off | `Notifications` table, outbox | enable + creds + `BackgroundJobs` |
 | OTP `503 DOCUMENT_COPY_DISABLED` | `CrmDocuments:Enabled=false` | config | enable in UAT |
-| Host won't start: `OtpCodePepper` | startup guard | env | set `CrmDocuments__OtpCodePepper` |
-| Host won't start: `AllowInProduction` | docs enabled in Production | env | disable or approve deliberately |
+| Document copy stays OFF, log error mentions `OtpCodePepper` | startup guard (host still starts; feature disabled) | env | set `CrmDocuments__OtpCodePepper` |
+| Document copy stays OFF, log error mentions `AllowInProduction` | enabled in Production without sign-off (host still starts; feature disabled) | env | disable or approve deliberately |
 | OTP `422 NO_EMAIL_ON_RECORD` | CRM has no usable e‑mail for the buyer | CRM record | fix CRM data |
 | OTP `429` | resend too soon / limits (60 s, 3 sends, 5 challenges/h) | `Retry-After` | wait |
 | OTP `423 OTP_LOCKED` | 5 wrong codes | — | start a new challenge |

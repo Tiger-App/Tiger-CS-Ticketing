@@ -160,15 +160,20 @@ using (var smsStartupScope = app.Services.CreateScope())
 // documents) ships disabled. In Production it stays disabled until real UAT
 // verification has passed and someone sets CrmDocuments:AllowInProduction
 // deliberately — enabling it alone is not enough.
+//
+// These two guards fail CLOSED but never stop the host: a misconfigured document feature must not take down Ticketing,
+// Genesys or the Agent Desk. The feature is switched off for the process (the options object is a shared singleton, so
+// every consumer sees it), the document/OTP routes answer 503 DOCUMENT_COPY_DISABLED, and the reason is logged as an error.
 using (var documentsStartupScope = app.Services.CreateScope())
 {
     var documentOptions = documentsStartupScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.CrmDocuments.CrmDocumentOptions>();
     if (documentOptions.Enabled && app.Environment.IsProduction() && !documentOptions.AllowInProduction)
     {
-        throw new InvalidOperationException(
-            "CrmDocuments:Enabled is true in Production but CrmDocuments:AllowInProduction is not. Customer document delivery must stay "
-            + "disabled in Production until real UAT verification has passed (docs/Genesys/Document-Copy-API.md, Status). "
-            + "Set CrmDocuments:Enabled to false, or set AllowInProduction deliberately after sign-off.");
+        documentOptions.Enabled = false;
+        app.Logger.LogError(
+            "CrmDocuments:Enabled is true in Production but CrmDocuments:AllowInProduction is not. Customer document delivery stays "
+            + "DISABLED for this process until real UAT verification has passed (docs/Genesys/Document-Copy-API.md, Status). "
+            + "Set CrmDocuments:AllowInProduction=true deliberately after sign-off to enable it; the rest of the application is unaffected.");
     }
 
     // The OTP code hash is keyed with CrmDocuments:OtpCodePepper. Without it the code falls back to a constant key
@@ -176,9 +181,11 @@ using (var documentsStartupScope = app.Services.CreateScope())
     if (documentOptions.Enabled && string.IsNullOrWhiteSpace(documentOptions.OtpCodePepper)
         && !app.Environment.IsDevelopment() && !string.Equals(app.Environment.EnvironmentName, "Testing", StringComparison.OrdinalIgnoreCase))
     {
-        throw new InvalidOperationException(
-            "CrmDocuments:Enabled is true but CrmDocuments:OtpCodePepper is empty. Set a random secret (environment variable "
-            + "CrmDocuments__OtpCodePepper) before enabling customer OTP verification outside Development.");
+        documentOptions.Enabled = false;
+        app.Logger.LogError(
+            "CrmDocuments:Enabled is true but CrmDocuments:OtpCodePepper is empty. Customer document delivery stays DISABLED for this "
+            + "process. Set a random secret (environment variable CrmDocuments__OtpCodePepper) before enabling customer OTP "
+            + "verification outside Development; the rest of the application is unaffected.");
     }
 }
 

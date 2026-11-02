@@ -374,18 +374,20 @@ public class StartupValidationTests
     /// Customer document delivery (email OTP + sending a customer's documents)
     /// stays disabled in Production until real UAT verification passes:
     /// enabling it there without the separate, deliberate AllowInProduction
-    /// switch refuses to start.
+    /// switch keeps the feature OFF (fail closed) but the host still starts.
     /// </summary>
     [Fact]
-    public void ProductionEnvironment_WithCustomerDocumentsEnabledButNotApproved_FailsAtStartup()
+    public void ProductionEnvironment_WithCustomerDocumentsEnabledButNotApproved_StartsWithFeatureDisabled()
     {
         var config = ProductionConfig();
         config["CrmDocuments:Enabled"] = "true";
+        config["CrmDocuments:OtpCodePepper"] = "test-pepper";
+        config["CrmDocuments:OtpSmsEnabled"] = "false";
 
         using var factory = new ConfiguredFactory("Production", config);
 
-        var ex = Assert.ThrowsAny<Exception>(() => factory.Server);
-        Assert.Contains("CrmDocuments:AllowInProduction", ex.ToString());
+        Assert.NotNull(factory.Server);
+        Assert.False(factory.Services.GetRequiredService<TigerCS.Application.Modules.CrmDocuments.CrmDocumentOptions>().Enabled);
     }
 
     [Fact]
@@ -400,20 +402,22 @@ public class StartupValidationTests
         approved["CrmDocuments:Enabled"] = "true";
         approved["CrmDocuments:AllowInProduction"] = "true";
         approved["CrmDocuments:OtpCodePepper"] = "test-pepper";
+        approved["CrmDocuments:OtpSmsEnabled"] = "false";
         using var factory = new ConfiguredFactory("Production", approved);
         Assert.NotNull(factory.Server);
+        Assert.True(factory.Services.GetRequiredService<TigerCS.Application.Modules.CrmDocuments.CrmDocumentOptions>().Enabled);
     }
 
     [Fact]
-    public void UatEnvironment_WithCustomerDocumentsEnabledButNoOtpPepper_FailsAtStartup()
+    public void UatEnvironment_WithCustomerDocumentsEnabledButNoOtpPepper_StartsWithFeatureDisabled()
     {
         var config = ProductionConfig();
         config["CrmDocuments:Enabled"] = "true";
 
         using var factory = new ConfiguredFactory("Staging", config);
 
-        var ex = Assert.ThrowsAny<Exception>(() => factory.Server);
-        Assert.Contains("CrmDocuments:OtpCodePepper", ex.ToString());
+        Assert.NotNull(factory.Server);
+        Assert.False(factory.Services.GetRequiredService<TigerCS.Application.Modules.CrmDocuments.CrmDocumentOptions>().Enabled);
     }
 
     [Fact]
