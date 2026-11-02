@@ -96,12 +96,13 @@ public class CallCenterFirstRoutingTests
             Enumerable.Range(0, count).Select(_ => AddMember(department)).OrderBy(id => id).ToArray();
 
         public async Task<TicketCreationResult> CreateManualAsync(
-            Department categoryDepartment, GenesysInteractionContextDto? genesys = null, bool? queue = null, string[]? roles = null)
+            Department categoryDepartment, GenesysInteractionContextDto? genesys = null, bool? queue = null, string[]? roles = null,
+            byte channelId = WellKnownChannels.Phone)
         {
             var category = Categories.Seed(categoryDepartment.DepartmentId, $"Cat {Guid.NewGuid():N}");
             var creator = Guid.NewGuid();
             var intake = new IntakeRecord(
-                WellKnownChannels.Phone, "+971500000001", null, false, null, priorityHint: null, creator, DateTime.UtcNow);
+                channelId, "+971500000001", null, false, null, priorityHint: null, creator, DateTime.UtcNow);
             await Intakes.AddAsync(intake);
             return await Creation.CreateAsync(
                 creator,
@@ -142,6 +143,41 @@ public class CallCenterFirstRoutingTests
         Assert.All(env.Assignments.Added, a => Assert.Equal(env.CallCenter.DepartmentId, a.AssignedDepartmentId));
         Assert.Contains(env.Audit.Entries, w => w.Action == "Transfer" && w.AfterValue!.Contains("Call Center first"));
         Assert.Contains(env.Audit.Entries, w => w.Action == "AutoAssign" && w.AfterValue!.Contains("Trigger=CallCenterIntake"));
+    }
+
+    /// <summary>Regression (TG-LCS-…-0015): whatever the channel and whatever department the category belongs to, a human-handled ticket enters Call Center and gets exactly one agent.</summary>
+    [Theory]
+    [InlineData(WellKnownChannels.Phone)]
+    [InlineData(WellKnownChannels.AppOrWebsite)]
+    [InlineData(WellKnownChannels.WhatsAppOrLiveChat)]
+    [InlineData(WellKnownChannels.SocialMediaDirectMessage)]
+    [InlineData(WellKnownChannels.FaceToFaceKiosk)]
+    [InlineData(WellKnownChannels.WhatsApp)]
+    [InlineData(WellKnownChannels.LiveChat)]
+    [InlineData(WellKnownChannels.Website)]
+    [InlineData(WellKnownChannels.MobileApp)]
+    [InlineData(WellKnownChannels.Instagram)]
+    [InlineData(WellKnownChannels.Facebook)]
+    public async Task EveryManualChannel_FromAnyOriginatingDepartment_EntersCallCenterWithOneAgent(byte channelId)
+    {
+        var env = new Env();
+        var leasing = env.Departments.AddDepartment("Leasing Customer Services", "LCS");
+        var accounting = env.Departments.AddDepartment("Accounting", "ACC");
+        var agent = env.AddMember(env.CallCenter!);
+        env.AddMember(leasing);
+        env.AddMember(accounting);
+
+        foreach (var origin in new[] { leasing, accounting, env.Cs })
+        {
+            var result = await env.CreateManualAsync(origin, channelId: channelId, roles: [Roles.CsAgent]);
+
+            Assert.Equal(TicketCreationOutcome.Success, result.Outcome);
+            var ticket = Stored(env, result);
+            Assert.Equal(env.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+            Assert.Equal(origin.DepartmentId, ticket.OriginatingDepartmentId);
+            Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+            Assert.Single(env.Assignments.Added, a => a.TicketId == ticket.TicketId && a.IsCurrent);
+        }
     }
 
     [Fact]
