@@ -26,6 +26,15 @@ public sealed class RequireTicketAccessAttribute() : TypeFilterAttribute(typeof(
 {
 }
 
+/// <summary>
+/// Marks an action that a caller with read-only access to the ticket may still POST to, because the action does its own, stricter ticket
+/// check. Today only Take Ownership: it is refused unless <c>TicketClaimPolicy</c> says the caller may take THIS ticket.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method)]
+public sealed class PermitReadOnlyTicketAccessAttribute : Attribute
+{
+}
+
 internal sealed class RequireTicketAccessFilter(TicketQueryAppService ticketQueryAppService) : IAsyncResourceFilter
 {
     public async Task OnResourceExecutionAsync(ResourceExecutingContext context, ResourceExecutionDelegate next)
@@ -69,7 +78,11 @@ internal sealed class RequireTicketAccessFilter(TicketQueryAppService ticketQuer
         }
 
         // The creator of a ticket in another department may read it and nothing else: every request that is not a safe read is refused.
-        if (access == TicketAccess.ReadOnly && !IsSafeRead(context.HttpContext.Request.Method))
+        // The one exception is an action that is its own gate and explicitly says so (Take Ownership): an unassigned ticket is opened
+        // read-only precisely so the agent can decide to take it, and that action then applies the full TicketClaimPolicy.
+        if (access == TicketAccess.ReadOnly
+            && !IsSafeRead(context.HttpContext.Request.Method)
+            && !context.ActionDescriptor.EndpointMetadata.OfType<PermitReadOnlyTicketAccessAttribute>().Any())
         {
             context.Result = Forbidden(
                 "Read-only access.",

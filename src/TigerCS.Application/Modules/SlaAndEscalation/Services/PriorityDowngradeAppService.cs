@@ -55,7 +55,8 @@ public sealed class PriorityDowngradeAppService(
     TimeProvider timeProvider,
     SlaPauseService? slaPauseService = null,
     ITicketInteractionHandlerRepository? handlerRepository = null,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    IServiceIdentityRegistry? serviceIdentities = null,
+    TicketClaimPolicy? claimPolicy = null)
 {
     /// <summary>Roles that may REQUEST a downgrade ("Agent and above"): the ticket's owner always, plus these (department-side roles additionally need membership of the ticket's department).</summary>
     public static readonly IReadOnlyCollection<string> CrossDepartmentRequesterRoles =
@@ -197,7 +198,7 @@ public sealed class PriorityDowngradeAppService(
         }
 
         if (!await TicketVisibilityRule.CanViewTicketAsync(
-                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy))
         {
             return Fail<IReadOnlyList<PriorityDowngradeRequestResponseDto>>(DowngradeOutcome.Forbidden);
         }

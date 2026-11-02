@@ -76,7 +76,10 @@ public sealed record TicketQuery(
     Guid? CreatedByEmployeeId = null,
     bool Escalated = false,
     bool CreatedOnlyScope = false,
-    Guid? OwnerVisibilityEmployeeId = null);
+    Guid? OwnerVisibilityEmployeeId = null,
+    bool IncludeClaimable = false,
+    bool AvailableToTakeOnly = false,
+    bool DepartmentFilterIncludesClaimable = false);
 
 public sealed record TicketQueryResult(IReadOnlyList<Ticket> Items, int TotalCount);
 
