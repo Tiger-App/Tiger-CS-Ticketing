@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.ClassificationAndRouting;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
+using TigerCS.Tests.Administration.Services;
 using TigerCS.Tests.CustomerVerification.Fakes;
 using TigerCS.Tests.IdentityAndAccess.Fakes;
 using TigerCS.Tests.Notifications.Fakes;
@@ -139,6 +140,31 @@ public sealed class GenesysServiceFixture
 
     public FakeAssignmentRotationRepository Rotation { get; } = new();
 
+    /// <summary>
+    /// Identity accounts of the Call Center agents, present only when the fixture was built with <c>strictAccounts</c>: then the assignment
+    /// service checks lockout / account existence (and roles) exactly as production does, so a test can lock an agent out. Every agent a
+    /// test wants to be assignable must then be added through <see cref="AddAgent"/>.
+    /// </summary>
+    public FakeUserAccountManager? Accounts { get; }
+
+    /// <summary>Service / integration identities (never assignable), present only with <c>strictAccounts</c>.</summary>
+    public MutableServiceIdentities? ServiceIdentities { get; }
+
+    /// <summary>The "who answered owns the ticket" service the update facade and the handoff use.</summary>
+    public GenesysAnsweringAgentAssignmentService AnsweringAgents { get; }
+
+    /// <summary>The assignment engine (Round Robin + direct assignment to the answering agent), as production composes it for Genesys.</summary>
+    public TicketAutoAssignmentService AutoAssignment { get; }
+
+    /// <summary>Service identities a test can add to; the production registry is configuration, this is its stand-in.</summary>
+    public sealed class MutableServiceIdentities : TigerCS.Application.Authorization.IServiceIdentityRegistry
+    {
+        private readonly HashSet<Guid> _ids = [];
+        public MutableServiceIdentities Add(Guid id) { _ids.Add(id); return this; }
+        public bool IsServiceIdentity(Guid employeeId) => _ids.Contains(employeeId);
+        public IReadOnlyCollection<Guid> ServiceIdentityIds => _ids;
+    }
+
     public FakeTicketResolutionRepository Resolutions { get; } = new();
     public FakeTicketPendingRecordRepository PendingRecords { get; } = new();
     public FakeOutboxWriter Outbox { get; } = new();
@@ -148,9 +174,10 @@ public sealed class GenesysServiceFixture
     /// request for a human). Tests of the legacy safety net switch it on.
     /// </param>
     public GenesysServiceFixture(
-        bool enabled = true, int? inactivityTimeoutMinutes = null, bool autoRaiseHandoffOnConversationEnd = false, bool callCenterFirst = false)
+        bool enabled = true, int? inactivityTimeoutMinutes = null, bool autoRaiseHandoffOnConversationEnd = false, bool callCenterFirst = false,
+        bool strictAccounts = false, bool assignOnAnswer = true)
     {
-        Options = new GenesysOptions { Enabled = enabled, AutoRaiseHandoffOnConversationEnd = autoRaiseHandoffOnConversationEnd };
+        Options = new GenesysOptions { Enabled = enabled, AutoRaiseHandoffOnConversationEnd = autoRaiseHandoffOnConversationEnd, AssignOnAnswer = assignOnAnswer };
         if (inactivityTimeoutMinutes is { } minutes)
         {
             Options.CustomerInactivityTimeoutMinutes = minutes;
@@ -174,11 +201,19 @@ public sealed class GenesysServiceFixture
             CallCenter = Departments.AddDepartment("Call Center", "CC");
         }
 
+        if (strictAccounts)
+        {
+            Accounts = new FakeUserAccountManager();
+            ServiceIdentities = new MutableServiceIdentities();
+        }
+
         var autoAssignment = callCenterFirst
             ? new TicketAutoAssignmentService(
-                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, Rotation, Departments)
+                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, Rotation, Departments,
+                roleReader: Accounts, accountManager: Accounts, serviceIdentities: ServiceIdentities, workflowEventRepository: WorkflowEvents)
             : new TicketAutoAssignmentService(
                 AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit);
+        AutoAssignment = autoAssignment;
 
         var ticketCreationAppService = new TicketCreationAppService(
             IntakeRecords, new FakeUnitReferenceRepository(), new FakeContactReferenceRepository(),
@@ -210,9 +245,12 @@ public sealed class GenesysServiceFixture
 
         HandlingHistory = new GenesysAgentHandlingHistory(WorkflowEvents, AgentResolution, Clock);
 
+        AnsweringAgents = new GenesysAnsweringAgentAssignmentService(AgentResolution, autoAssignment, Handoffs, UnitOfWork, Clock);
+
         AgentHandoff = new GenesysAgentHandoffAppService(
             Options, Conversations, Handoffs, WorkflowEvents, Tickets, UnitOfWork, Audit, TimeProvider.System,
-            callCenterFirst ? Departments : null, callCenterFirst ? TicketAssignments : null, callCenterFirst ? autoAssignment : null);
+            callCenterFirst ? Departments : null, callCenterFirst ? TicketAssignments : null, callCenterFirst ? autoAssignment : null,
+            answeringAgents: AnsweringAgents);
 
         RequestTypeClassification = new GenesysRequestTypeClassificationAppService(
             Tickets, Approvals, Conversations, Handoffs,
@@ -275,11 +313,8 @@ public sealed class GenesysServiceFixture
         TicketUpdate = new GenesysTicketUpdateAppService(
             Options, Conversations, Tickets, Departments, Handoffs, UnitOfWork, ConversationEnd, AgentHandoff, AgentResolution, Audit,
             WorkflowEvents, Clock, RequestTypeClassification, Lifecycle, HandlingHistory, HandlerRecorder,
-            autoAssignmentService: callCenterFirst
-                ? new TicketAutoAssignmentService(
-                    AssignmentRules, departmentSettings, DepartmentAssignments, TicketAssignments, Audit, Rotation, Departments,
-                    workflowEventRepository: WorkflowEvents)
-                : null);
+            autoAssignmentService: callCenterFirst ? autoAssignment : null,
+            answeringAgentAssignment: AnsweringAgents);
 
         InactivityClose = new ChatbotInactivityCloseAppService(
             Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock);
@@ -318,6 +353,31 @@ public sealed class GenesysServiceFixture
         if (roles.Length > 0)
         {
             UserRoles.Add(userId, roles);
+        }
+
+        return userId;
+    }
+
+    /// <summary>
+    /// A person who works in the Call Center: a Ticketing user, mapped to a Genesys User ID, a member of the Call Center, with an Identity
+    /// account (when the fixture is strict) and the CS Agent role. Returns the Ticketing user id.
+    /// </summary>
+    public Guid AddAgent(string genesysUserId, string displayName = "Call Center Agent", bool isActive = true, bool lockedOut = false, bool inCallCenter = true, params string[] roles)
+    {
+        roles = roles.Length == 0 ? [Roles.CsAgent] : roles;
+        var userId = MapAgent(genesysUserId, genesysEmail: null, isActive, displayName, roles);
+        if (inCallCenter)
+        {
+            DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(userId, CallCenter!.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
+        }
+
+        if (Accounts is not null)
+        {
+            Accounts.Add(userId, displayName.Replace(' ', '.').ToLowerInvariant() + "." + userId.ToString("N")[..6], roles);
+            if (lockedOut)
+            {
+                Accounts.LockOut(userId);
+            }
         }
 
         return userId;

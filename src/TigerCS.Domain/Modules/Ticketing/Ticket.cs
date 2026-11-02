@@ -766,6 +766,17 @@ public class Ticket
         CurrentOwnerEmployeeId = employeeId;
     }
 
+    /// <summary>
+    /// Clears the current owner without moving the ticket: it returns to its department's queue. Used only to release an AUTOMATIC
+    /// pre-assignment (Round Robin / rule) when the person who actually answered the interaction cannot take the ticket, so it is never left
+    /// with somebody who did not. The caller supersedes the assignment row and audits it. A no-op when nobody owns the ticket.
+    /// </summary>
+    public void ReleaseOwner()
+    {
+        EnsureNotClosed();
+        CurrentOwnerEmployeeId = null;
+    }
+
     /// <summary>MVP-API-Contracts.md §3.6 — moves CurrentDepartmentId, leaves OriginatingDepartmentId untouched (write-once, MVP-ERD.md §2.3), and clears the current owner: the receiving department must explicitly claim/assign it.</summary>
     public void TransferToDepartment(int targetDepartmentId)
     {

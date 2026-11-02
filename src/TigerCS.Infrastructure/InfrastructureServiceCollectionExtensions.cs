@@ -342,6 +342,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<GenesysAgentResolutionAppService>();
         services.AddScoped<GenesysAgentHandlingHistory>();
         services.AddScoped<GenesysInteractionHandlerRecorder>();
+        services.AddScoped<GenesysAnsweringAgentAssignmentService>();
         services.AddScoped<GenesysAgentContextAppService>();
         // Secure Screen Pop — one-time, one-hour launch tokens (hash stored
         // only) that sign the mapped agent into TigerCS Web.

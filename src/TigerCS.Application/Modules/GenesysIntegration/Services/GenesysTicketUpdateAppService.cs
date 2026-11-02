@@ -69,7 +69,8 @@ public sealed class GenesysTicketUpdateAppService(
     TicketLifecycleAppService lifecycleAppService,
     GenesysAgentHandlingHistory handlingHistory,
     GenesysInteractionHandlerRecorder? handlerRecorder = null,
-    TicketAutoAssignmentService? autoAssignmentService = null)
+    TicketAutoAssignmentService? autoAssignmentService = null,
+    GenesysAnsweringAgentAssignmentService? answeringAgentAssignment = null)
 {
     /// <summary>The exact closure reason recorded when the AI finishes the conversation.</summary>
     public const string ClosedByAiReason = "Closed by AI";
@@ -222,11 +223,14 @@ public sealed class GenesysTicketUpdateAppService(
         {
             if (handoff.Required == true)
             {
+                // routing.agentId is the agent Genesys reports as CONNECTED (answered). Passing it lets the handoff give the ticket straight to
+                // that agent instead of Round Robin; request.AgentId / handoff.AgentAvailable only say who is assigned, which is not an answer.
                 var requested = await agentHandoffAppService.RequestAsync(
                     callerEmployeeId,
                     new GenesysHandoffRequestDto(
                         conversationId, handoff.AgentAvailable, handoff.Mode, handoff.Reason, handoff.Trigger,
                         request.AgentId, request.AgentName, handoff.WorkItemId, TicketId: ticketId),
+                    options.AssignOnAnswer ? NullIfBlank(request.Routing?.AgentId) : null,
                     cancellationToken);
 
                 if (requested.Outcome is not (GenesysHandoffOutcome.HandoffRecorded or GenesysHandoffOutcome.AlreadyRequested))
@@ -287,6 +291,20 @@ public sealed class GenesysTicketUpdateAppService(
         if (request.Routing is not null || request.StartedAtUtc is not null)
         {
             await RecordRoutingAsync(callerEmployeeId, interaction, request, cancellationToken);
+        }
+
+        // The agent Genesys reports as CONNECTED (answered / accepted - never ringing or merely assigned) owns the ticket: given to them
+        // directly, in the Call Center, not to the next agent in the rotation. An agent who cannot take it (unmapped, deactivated, locked
+        // out ...) leaves the ticket in the Call Center queue flagged for manual assignment. A human owner, or a person's transfer, stands:
+        // later events never overwrite either. Idempotent per agent.
+        if (options.AssignOnAnswer && answeringAgentAssignment is not null && NullIfBlank(request.Routing?.AgentId) is { } answeringAgentId)
+        {
+            var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
+                callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken);
+            if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
+            {
+                return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);
+            }
         }
 
         // An agent connecting to a conversation whose human work is still
@@ -383,9 +401,17 @@ public sealed class GenesysTicketUpdateAppService(
             await RecordCustomerConfirmationAsync(callerEmployeeId, ticket, conversationId, confirmation, cancellationToken);
         }
 
-        if (request.HumanFollowUpRequired == true)
+        // A person has taken the conversation — judged from the actual event this update carries (explicit flag, a mapped agent CONNECTED,
+        // an agent taking pending work, a HumanAgent line), so a late human follow-up on a ticket the AI created also lands in the Call
+        // Center and gets one agent. No evidence = nothing here runs: an AI conversation (queue change, VirtualAgent lines, an unmapped or
+        // merely-ringing agent) is never moved.
+        var routingAgentId = NullIfBlank(request.Routing?.AgentId);
+        var routingAgentIsHuman = routingAgentId is not null
+            && (await agentResolution.ResolveByGenesysUserIdAsync(routingAgentId, cancellationToken)).IsResolved;
+        var humanSignal = GenesysHumanHandlingEvidence.ForUpdate(request, routingAgentIsHuman);
+        if (humanSignal != GenesysHumanSignal.None)
         {
-            await MarkHumanFollowUpAsync(callerEmployeeId, ticket, interaction, cancellationToken);
+            await MarkHumanFollowUpAsync(callerEmployeeId, ticket, interaction, humanSignal, cancellationToken);
         }
 
         await ApplyCustomerActivityAsync(callerEmployeeId, ticket, interaction, request, cancellationToken);
@@ -695,7 +721,7 @@ public sealed class GenesysTicketUpdateAppService(
     /// through the authorized workflow. Touches only this ticket's own interaction, never a sibling ticket of the same conversation.
     /// </summary>
     private async Task MarkHumanFollowUpAsync(
-        Guid callerEmployeeId, Ticket ticket, TicketInteraction interaction, CancellationToken cancellationToken)
+        Guid callerEmployeeId, Ticket ticket, TicketInteraction interaction, GenesysHumanSignal signal, CancellationToken cancellationToken)
     {
         var changed = interaction.MarkRequiresHumanFollowUp();
 
@@ -710,7 +736,7 @@ public sealed class GenesysTicketUpdateAppService(
                 GenesysAuditActions.ConversationEntityType,
                 interaction.GenesysConversationId!,
                 beforeValue: null,
-                afterValue: $"TicketId={ticket.TicketId};ServiceRequestId={interaction.GenesysServiceRequestId ?? "(none)"};TicketStatus={ticket.TicketStatus}",
+                afterValue: $"TicketId={ticket.TicketId};ServiceRequestId={interaction.GenesysServiceRequestId ?? "(none)"};TicketStatus={ticket.TicketStatus};HumanSignal={signal}",
                 correlationId: correlationId,
                 cancellationToken);
         }

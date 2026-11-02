@@ -12,8 +12,8 @@ rm -rf "$OUT"; mkdir -p "$OUT/api" "$OUT/web"
 ( cd src
   dotnet test TigerCS.slnx -v q --nologo
   dotnet ef migrations has-pending-model-changes -p TigerCS.Infrastructure -s TigerCS.Api
-  dotnet publish TigerCS.Api/TigerCS.Api.csproj -c Release -o "../$OUT/api" --nologo -v q
-  dotnet publish TigerCS.Web/TigerCS.Web.csproj -c Release -o "../$OUT/web" --nologo -v q
+  dotnet publish TigerCS.Api/TigerCS.Api.csproj -c Release -o "../$OUT/api" -p:SourceRevisionId="$COMMIT" --nologo -v q
+  dotnet publish TigerCS.Web/TigerCS.Web.csproj -c Release -o "../$OUT/web" -p:SourceRevisionId="$COMMIT" --nologo -v q
   dotnet ef migrations script --idempotent -p TigerCS.Infrastructure -s TigerCS.Api -o "../$OUT/TigerCS-all-migrations.idempotent.sql" )
 cp docs/system/13-deployment-order.md docs/system/12-configuration-reference.md "$OUT/"
 ( cd "$OUT" && zip -qr "TigerCS-$SHORT.zip" api web TigerCS-all-migrations.idempotent.sql 12-configuration-reference.md 13-deployment-order.md
