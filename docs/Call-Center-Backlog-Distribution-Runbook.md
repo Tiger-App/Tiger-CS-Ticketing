@@ -45,7 +45,7 @@ Audit/engine parity: each ticket gets the same record the engine writes (`AutoAs
 1. **Unowned tickets that are *not* in the Call Center department (default: excluded).** The engine's pool is the ticket's *current* department, and an
    assignee must belong to it. Giving a Finance/Legal/etc. ticket to a Call Center agent would either break that invariant or require a department
    transfer (changing department, audit, SLA routing). The preview's *Scope reconciliation* table shows exactly how many such tickets exist per
-   department. If you want them moved to Call Center first, that is a separate, explicit change — tell me and I'll plan it.
+   department. If you want them moved to Call Center first, that is a separate, explicit change: size it with `Preview_TigerCS_PROD_CrossDepartmentBacklogToCallCenter_ReadOnly.sql` (read-only) before any move is scripted.
 2. **Fairness definition.** Round Robin deals evenly *from the cursor*; it does **not** level out agents who already hold different numbers of tickets
    (the preview shows `ActiveOwnedBefore/After` so you can see the effect). If you want workload-levelling instead, that deviates from "the existing engine".
 3. **Notifications.** An assignment never created a notification in this app, and the script sends none (no bulk burst to agents). Say so if you want one.

@@ -1,3 +1,32 @@
+# Incident TG-LCS-20261102-0015 — new tickets still landing in Leasing/Accounting (root cause and fix)
+
+**Symptom:** Open, `Leasing Customer Services Queue (Unassigned)` instead of Call Center + one agent.
+
+**Root cause (code, now fixed).** Genesys creates the ticket first and reports `humanFollowUpRequired: true` *afterwards* on the ticket-update
+call (the AI only learns it is a leasing request / complaint mid-conversation). `GenesysTicketUpdateAppService.MarkHumanFollowUpAsync` recorded the
+flag and stopped chatbot closure, but never routed the ticket, and ticket creation only enters Call Center when the flag is already `true` in the
+*create* payload. Result: a human-needed ticket stayed unassigned in its originating department forever. Fix: the update now calls
+`TicketAutoAssignmentService.RouteExistingTicketToCallCenterAsync` (Call Center + one Round Robin agent; `OriginatingDepartmentId`, Request Type,
+status, SLA untouched; human-owned, closed/resolved and already-CC tickets skipped; idempotent). AI-only conversations that never ask for a person
+are not moved.
+
+**Second cause (deployment, must be checked on the server).** The `publish/` build checked into this repo (31 Oct 09:43) predates Call Center first:
+`TigerCS.Application.dll` contains no `AssignCallCenterIntakeAsync`/`ResolveCallCenterAsync`/`DepartmentAssignmentRotation`. A Production site
+running that (or any pre-`bebcd3e`) build routes by category department only. Also confirm `DepartmentAssignmentRotations` exists in the Production DB
+(`Deploy_TigerCS_Prod_Migrations.sql`) and that department `CC` is active with at least one eligible agent
+(`Verify_TigerCS_CallCenter_Agents_ReadOnly.sql`).
+
+**Read-only checks for the incident ticket:** its `AuditEntries` (a `Transfer` row = routing ran; none = it never did), its Genesys
+`TicketInteractions.RequiresHumanFollowUp` / `Source` / `GenesysConversationId`, and the raw create/update payloads from the Genesys flow
+(is `humanFollowUpRequired` sent at create, at update, or never?). A phone call answered by a Genesys agent without the flag is *not* treated as
+human work automatically — decide whether Genesys must send the flag for every human-handled channel.
+
+**Backlog (requirement 3).** `Preview_TigerCS_PROD_CrossDepartmentBacklogToCallCenter_ReadOnly.sql` sizes unassigned Open/InProgress/Pending tickets
+outside CC (MOVE_TO_CC vs HOLD_AI_ACTIVE). The existing Execute script still deals only tickets already in CC; extending it to move-then-deal needs the
+preview approved and a UAT dry run first. Nothing here has been run against any database.
+
+---
+
 # Reconciliation with the parallel workflow-fix line (release candidate)
 
 This branch now also contains `claude/admiring-maxwell-6wvhed` (Round Robin eligibility hardening, role-scoped Transfer, single-owner
