@@ -5,6 +5,7 @@ using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.Administration.Services;
 using TigerCS.Domain.Modules.WorkflowConfiguration;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -16,6 +17,7 @@ public class AdminRequestTypesController(AdminRequestTypeAppService requestTypes
 {
     /// <summary>Every request type, optionally scoped to one department, with its workflow, assignment summary and ticket count.</summary>
     [HttpGet]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<IReadOnlyList<AdminRequestTypeSummaryDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> List(
         [FromQuery] int? departmentId, [FromQuery] bool includeInactive = true, CancellationToken cancellationToken = default) =>
@@ -23,6 +25,7 @@ public class AdminRequestTypesController(AdminRequestTypeAppService requestTypes
 
     /// <summary>One request type with its workflow link, assignment rule, approval requirements and SLA rows.</summary>
     [HttpGet("{requestTypeId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<AdminRequestTypeDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(int requestTypeId, CancellationToken cancellationToken)
@@ -33,6 +36,7 @@ public class AdminRequestTypesController(AdminRequestTypeAppService requestTypes
 
     /// <summary>Creates a request type in a department, following a workflow that already has a published version.</summary>
     [HttpPost]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminRequestTypeDetailDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Create([FromBody] SaveRequestTypeRequestDto request, CancellationToken cancellationToken) =>
@@ -41,6 +45,7 @@ public class AdminRequestTypesController(AdminRequestTypeAppService requestTypes
 
     /// <summary>Edits a request type; the department is immutable once tickets reference the request type.</summary>
     [HttpPut("{requestTypeId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminRequestTypeDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -50,6 +55,7 @@ public class AdminRequestTypesController(AdminRequestTypeAppService requestTypes
 
     /// <summary>Activate/deactivate — request types are never deleted; historical tickets keep them.</summary>
     [HttpPatch("{requestTypeId:int}/activation")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminRequestTypeDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -58,6 +64,7 @@ public class AdminRequestTypesController(AdminRequestTypeAppService requestTypes
 
     /// <summary>Replaces the request type's assignment configuration (Department Queue / Specific Employee / Team).</summary>
     [HttpPut("{requestTypeId:int}/assignment-rule")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminRequestTypeDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -66,6 +73,7 @@ public class AdminRequestTypesController(AdminRequestTypeAppService requestTypes
 
     /// <summary>Creates or edits the requirement for one controlled approval type.</summary>
     [HttpPut("{requestTypeId:int}/approval-requirements/{approvalType}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminRequestTypeDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -75,6 +83,7 @@ public class AdminRequestTypesController(AdminRequestTypeAppService requestTypes
 
     /// <summary>Creates or edits the SLA row for one (request type, priority) pair — existing confirmed values only.</summary>
     [HttpPut("{requestTypeId:int}/sla-policies/{priorityId}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminRequestTypeDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

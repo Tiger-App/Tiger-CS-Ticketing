@@ -5,6 +5,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -19,6 +20,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/customers")]
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Tags(OpenApiTags.CustomerDirectory)]
+[RequirePermission(Permissions.CustomersView)]
 public class CustomersController(CustomerDirectoryAppService customerDirectoryAppService) : ControllerBase
 {
     /// <summary>Lists known customers, most recently active first — paginated, optionally searched and filtered.</summary>

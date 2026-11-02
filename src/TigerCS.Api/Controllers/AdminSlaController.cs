@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
 using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -23,6 +24,7 @@ public class AdminSlaController(SlaQueryAppService slaQueryAppService) : AdminCo
 {
     /// <summary>The effective SLA configuration: per-priority policies, the active business calendar and the clock/first-response/pause rules in force.</summary>
     [HttpGet("configuration")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<SlaConfigurationDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetConfiguration(CancellationToken cancellationToken) =>
         Ok(await slaQueryAppService.GetConfigurationAsync(cancellationToken));

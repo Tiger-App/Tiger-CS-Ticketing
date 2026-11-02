@@ -2,10 +2,12 @@
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
+using TigerCS.Application.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
-using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
@@ -26,7 +28,9 @@ public sealed class TicketAssignmentAppService(
     IDepartmentWorkflowSettingsRepository departmentWorkflowSettingsRepository,
     TicketAutoAssignmentService autoAssignmentService,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
+    IUserPermissionOverrideRepository? permissionOverrides = null,
     ITicketInteractionHandlerRepository? handlerRepository = null,
+    IServiceIdentityRegistry? serviceIdentities = null,
     IRequestTypeRepository? requestTypeRepository = null)
 {
     /// <summary>
@@ -171,6 +175,13 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
         }
 
+        // An explicit denial of Tickets.Transfer always blocks, the System Administrator included.
+        var transferOverride = await CallerPermissionOverrides.GetAsync(permissionOverrides, callerEmployeeId, Permissions.TicketsTransfer, cancellationToken);
+        if (transferOverride == PermissionEffect.Deny)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
+        }
+
         var transferAuthorized = await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
             callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains)
             || (callerRoles.Any(TicketRoleSets.Transfer.Contains)
@@ -179,6 +190,17 @@ public sealed class TicketAssignmentAppService(
                         handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken, ticketAssignmentRepository)
                     || (callerRoles.Contains(Roles.CsSupervisor)
                         && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken)))));
+
+        // A Tickets.Transfer grant stands in for the Transfer role only. It never widens visibility: the grantee must still be able
+        // to modify THIS ticket (their department / a ticket they handle).
+        if (!transferAuthorized
+            && transferOverride == PermissionEffect.Grant
+            && !Roles.IsReadOnlyCaller(callerRoles)
+            && await TicketVisibilityRule.CanModifyTicketAsync(
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
+        {
+            transferAuthorized = true;
+        }
 
         var isAdministrativeTransfer = AuthorizationOverride.AppliesTo(callerRoles)
             || callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains);

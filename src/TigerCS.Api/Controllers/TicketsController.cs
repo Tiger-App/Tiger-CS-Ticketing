@@ -6,6 +6,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -56,6 +57,7 @@ public class TicketsController(
     /// <response code="409">The intake record was already promoted to a ticket, or a ticket-number collision occurred — retry.</response>
     /// <response code="422">UnitReferenceId and ContactReferenceId were not both supplied or both omitted.</response>
     [HttpPost]
+    [RequirePermission(Permissions.TicketsCreate)]
     [Authorize(Policy = PolicyNames.CustomerVerification)]
     [ProducesResponseType<TicketResponseDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -94,6 +96,7 @@ public class TicketsController(
     /// </param>
     /// <response code="200">A page of ticket summaries, with the total matching count.</response>
     [HttpGet]
+    [RequirePermission(Permissions.TicketsView)]
     [AllowServiceIdentity]
     [ProducesResponseType<TicketListResultDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> GetQueue([FromQuery] TicketListRequestDto request, CancellationToken cancellationToken)
@@ -125,6 +128,7 @@ public class TicketsController(
     /// <response code="200">The ticket.</response>
     /// <response code="404">No such ticket, or it is not visible to the caller.</response>
     [HttpGet("{ticketId:long}")]
+    [RequirePermission(Permissions.TicketsView)]
     [AllowServiceIdentity]
     [ProducesResponseType<TicketDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -160,6 +164,7 @@ public class TicketsController(
     /// <response code="200">The customer's ticket-count summary and most recent previous tickets (possibly empty).</response>
     /// <response code="404">No such ticket, or it is not visible to the caller.</response>
     [HttpGet("{ticketId:long}/customer-history")]
+    [RequirePermission(Permissions.TicketsView)]
     [Tags(OpenApiTags.CustomerHistory)]
     [ProducesResponseType<CustomerHistoryDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -194,6 +199,7 @@ public class TicketsController(
     /// <response code="200">The customer's profile. <c>status</c> is one of "NotCrmVerified", "Found", "CrmUnavailable", "AmbiguousCustomerMatch", "NotFoundInCrm", "NoPhoneOnRecord" — only "Found" populates name/mobile/email/units, and only when CRM's Buyer is the ticket's own CrmBuyerCustomerId.</response>
     /// <response code="404">No such ticket, or it is not visible to the caller.</response>
     [HttpGet("{ticketId:long}/customer-profile")]
+    [RequirePermission(Permissions.TicketsView)]
     [Tags(OpenApiTags.CustomerProfile)]
     [ProducesResponseType<CustomerProfileDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -228,6 +234,7 @@ public class TicketsController(
     /// <response code="200">The ticket's interactions, oldest first, each with its transcript (possibly empty).</response>
     /// <response code="404">No such ticket, or it is not visible to the caller.</response>
     [HttpGet("{ticketId:long}/interactions")]
+    [RequirePermission(Permissions.TicketsView)]
     [Tags(OpenApiTags.Genesys)]
     [ProducesResponseType<TicketInteractionHistoryDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -259,6 +266,7 @@ public class TicketsController(
     /// <response code="200">The ticket's review cycles (possibly empty).</response>
     /// <response code="404">No such ticket, or it is not visible to the caller.</response>
     [HttpGet("{ticketId:long}/reviews")]
+    [RequirePermission(Permissions.TicketsView)]
     [ProducesResponseType<TigerCS.Application.Modules.CustomerReviews.Dto.TicketReviewsDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetReviews(long ticketId, CancellationToken cancellationToken)
@@ -319,6 +327,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/classification")]
+    [RequirePermission(Permissions.TicketsEdit)]
     [Tags(OpenApiTags.TicketLifecycle)]
     public async Task<IActionResult> Classify(
         long ticketId, [FromBody] ClassifyTicketRequestDto request, CancellationToken cancellationToken)
@@ -353,6 +362,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/assignment")]
+    [RequirePermission(Permissions.TicketsAssign)]
     [Tags(OpenApiTags.Assignment)]
     public async Task<IActionResult> Assign(long ticketId, [FromBody] AssignTicketRequestDto request, CancellationToken cancellationToken)
     {
@@ -384,6 +394,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/transfer")]
+    [RequirePermission(Permissions.TicketsTransfer)]
     [Tags(OpenApiTags.Transfer)]
     public async Task<IActionResult> Transfer(long ticketId, [FromBody] TransferTicketRequestDto request, CancellationToken cancellationToken)
     {
@@ -426,6 +437,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/status")]
+    [RequirePermission(Permissions.TicketsEdit)]
     [Tags(OpenApiTags.TicketLifecycle)]
     public async Task<IActionResult> ChangeStatus(long ticketId, [FromBody] ChangeStatusRequestDto request, CancellationToken cancellationToken)
     {
@@ -458,6 +470,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/resolution")]
+    [RequirePermission(Permissions.TicketsResolve)]
     [Tags(OpenApiTags.TicketLifecycle)]
     public async Task<IActionResult> Resolve(long ticketId, [FromBody] ResolveTicketRequestDto request, CancellationToken cancellationToken)
     {
@@ -486,6 +499,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/close")]
+    [RequirePermission(Permissions.TicketsClose)]
     [Tags(OpenApiTags.TicketLifecycle)]
     public async Task<IActionResult> Close(long ticketId, [FromBody] CloseTicketRequestDto request, CancellationToken cancellationToken)
     {
@@ -545,6 +559,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/reopen")]
+    [RequirePermission(Permissions.TicketsReopen)]
     [Tags(OpenApiTags.TicketLifecycle)]
     public async Task<IActionResult> Reopen(long ticketId, [FromBody] ReopenTicketRequestDto request, CancellationToken cancellationToken)
     {
@@ -589,6 +604,7 @@ public class TicketsController(
     [ProducesResponseType<TicketApprovalsViewDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [HttpGet("{ticketId:long}/approvals")]
+    [RequirePermission(Permissions.TicketsView)]
     [Tags(OpenApiTags.Approvals)]
     public async Task<IActionResult> GetApprovals(long ticketId, CancellationToken cancellationToken)
     {
@@ -622,6 +638,7 @@ public class TicketsController(
     [ProducesResponseType<TicketLifecycleHistoryDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [HttpGet("{ticketId:long}/history")]
+    [RequirePermission(Permissions.TicketsView)]
     [Tags(OpenApiTags.Tickets)]
     public async Task<IActionResult> GetLifecycleHistory(long ticketId, CancellationToken cancellationToken)
     {
@@ -656,6 +673,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/approvals")]
+    [RequirePermission(Permissions.TicketsEdit)]
     // Chairman/CEO is read-only except for the documented right to REQUEST a Reopen Approval
     // (Solution-Analysis.md 4.1); TicketApprovalAppService refuses every other approval type for it.
     [AllowReadOnlyCallerWrite]
@@ -689,6 +707,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/approvals/{approvalId:long}/decision")]
+    [RequirePermission(Permissions.TicketsApprove)]
     [Tags(OpenApiTags.Approvals)]
     public async Task<IActionResult> DecideApproval(
         long ticketId, long approvalId, [FromBody] DecideApprovalRequestDto request, CancellationToken cancellationToken)
@@ -715,6 +734,7 @@ public class TicketsController(
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [HttpPost("{ticketId:long}/approvals/{approvalId:long}/cancellation")]
+    [RequirePermission(Permissions.TicketsEdit)]
     [Tags(OpenApiTags.Approvals)]
     public async Task<IActionResult> CancelApproval(
         long ticketId, long approvalId, [FromBody] CancelApprovalRequestDto request, CancellationToken cancellationToken)
@@ -744,6 +764,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/workflow-events")]
+    [RequirePermission(Permissions.TicketsEdit)]
     [Tags(OpenApiTags.Approvals)]
     public async Task<IActionResult> RecordWorkflowEvent(
         long ticketId, [FromBody] RecordWorkflowEventRequestDto request, CancellationToken cancellationToken)
@@ -777,6 +798,7 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/reconciliation")]
+    [RequirePermission(Permissions.TicketsCreate)]
     [Authorize(Policy = PolicyNames.CustomerVerification)]
     [Tags(OpenApiTags.CrmReconciliation)]
     public async Task<IActionResult> Reconcile(long ticketId, [FromBody] ReconcileTicketRequestDto request, CancellationToken cancellationToken)
@@ -799,6 +821,7 @@ public class TicketsController(
     /// <response code="400">The request body was malformed.</response>
     /// <response code="404">No such ticket, or it is not visible to the caller.</response>
     [HttpPost("{ticketId:long}/notes")]
+    [RequirePermission(Permissions.TicketsEdit)]
     [Tags(OpenApiTags.Notes)]
     [ProducesResponseType<TicketNoteResponseDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -828,6 +851,7 @@ public class TicketsController(
     /// <response code="200">A page of notes, with the total count.</response>
     /// <response code="404">No such ticket, or it is not visible to the caller.</response>
     [HttpGet("{ticketId:long}/notes")]
+    [RequirePermission(Permissions.TicketsView)]
     [Tags(OpenApiTags.Notes)]
     [ProducesResponseType<TicketNoteListResultDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

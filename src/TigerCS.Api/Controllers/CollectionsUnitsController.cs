@@ -7,6 +7,7 @@ using TigerCS.Application.Modules.Collections.Dto;
 using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -15,6 +16,7 @@ namespace TigerCS.Api.Controllers;
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Route("api/collections")]
 [Tags(OpenApiTags.Collections)]
+[RequirePermission(Permissions.CollectionsView)]
 public sealed class CollectionsUnitsController(
     CollectionsUnitPaymentSummaryAppService summary, CollectionsLeasingSummaryAppService leasing, CustomerUnitLinkService linking, ICollectionsCustomerProfiles profiles,
     ICollectionsCrmOwnerStore crmOwners, CollectionsAuthorizationService authorization) : ControllerBase

@@ -80,10 +80,12 @@ public sealed class CustomerPaymentTabRenderTests : IDisposable
         Assert.Contains("name=\"customerKey\" value=\"crm:9001\"", html, StringComparison.Ordinal);
         Assert.Contains("Show</button>", html, StringComparison.Ordinal);
         // The unit-based lookup of the CRM customer (no profile read), then the verified EDSM lookup, and nothing else.
-        Assert.Equal(2, _api.Requests.Count);
-        Assert.StartsWith("/api/collections/customers/crm/9001/units?", _api.Requests[0], StringComparison.Ordinal);
-        Assert.Contains("/api/collections/customer-lookup/payment-summary?", _api.Requests[1], StringComparison.Ordinal);
-        Assert.Contains("customerKey=crm%3A9001", _api.Requests[1], StringComparison.Ordinal);
+        // (The navigation's own GET /api/users/me - the viewer's permission overrides - is not a customer read.)
+        var customerRequests = _api.Requests.Where(r => !r.StartsWith("/api/users/me", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, customerRequests.Count);
+        Assert.StartsWith("/api/collections/customers/crm/9001/units?", customerRequests[0], StringComparison.Ordinal);
+        Assert.Contains("/api/collections/customer-lookup/payment-summary?", customerRequests[1], StringComparison.Ordinal);
+        Assert.Contains("customerKey=crm%3A9001", customerRequests[1], StringComparison.Ordinal);
     }
 
     [Theory]

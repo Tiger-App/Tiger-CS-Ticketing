@@ -13,7 +13,10 @@ public enum AdminOutcome
     Conflict,
 
     /// <summary>A new password failed ASP.NET Core Identity's password validators; <c>Errors</c> lists their descriptions. The API answers 422.</summary>
-    PasswordPolicyViolation
+    PasswordPolicyViolation,
+
+    /// <summary>The caller is not allowed to make this change (self-service permission edits, granting what they do not hold, administrator-only permissions). The API answers 403.</summary>
+    Forbidden
 }
 
 public sealed record AdminResult<T>(AdminOutcome Outcome, T? Value = default, IReadOnlyList<string>? Errors = null)
@@ -29,6 +32,8 @@ public sealed record AdminResult<T>(AdminOutcome Outcome, T? Value = default, IR
     public static AdminResult<T> Invalid(IReadOnlyList<string> errors) => new(AdminOutcome.ValidationFailed, default, errors);
 
     public static AdminResult<T> Conflict(params string[] errors) => new(AdminOutcome.Conflict, default, errors);
+
+    public static AdminResult<T> Forbidden(params string[] errors) => new(AdminOutcome.Forbidden, default, errors);
 }
 
 public sealed record AdminResult(AdminOutcome Outcome, IReadOnlyList<string>? Errors = null)

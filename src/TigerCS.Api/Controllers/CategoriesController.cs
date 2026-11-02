@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.ClassificationAndRouting.Dto;
 using TigerCS.Application.Modules.ClassificationAndRouting.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -11,6 +12,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/categories")]
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Tags(OpenApiTags.Categories)]
+[NoPermissionRequired("Reference data needed by every signed-in user.")]
 public class CategoriesController(CategoryCatalogAppService categoryCatalogAppService) : ControllerBase
 {
     /// <summary>

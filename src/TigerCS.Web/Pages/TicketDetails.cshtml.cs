@@ -968,7 +968,7 @@ public sealed class TicketDetailsModel(
         ClassifyNotice = ClassifyNotice.For(
             ClassifyOptions,
             TicketDisplay.AssignedDepartmentLabel(ticket.CurrentDepartmentId, nameResolver.TryGetDepartmentName(ticket.CurrentDepartmentId)),
-            Viewer, TicketActions.CanTransfer(ActionContext));
+            Viewer, TicketActions.CanTransferTicket(ActionContext));
 
         var current = ticket.PriorityId ?? 4;
         ClassifyPriorities = Enumerable.Range(1, current).Select(p => (byte)p).ToList();
@@ -1169,6 +1169,8 @@ public sealed class TicketDetailsModel(
                 ticket.CurrentOwnerEmployeeId,
                 ticket.CurrentDepartmentId,
                 [.. nameResolver.OwnDepartments.Select(d => d.DepartmentId)],
+                nameResolver.OwnPermissions.Granted,
+                nameResolver.OwnPermissions.Denied,
                 ticket.ViewerActsAsInteractionHandler);
 
         StatusTargets = TicketStatusTransitions.AllowedTargetsFrom(ticket.TicketStatus);
@@ -1201,10 +1203,11 @@ public sealed class TicketDetailsModel(
     /// </summary>
     private async Task LoadTransferTargetsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
-        // Permission mirrors the API's rule (CS Manager any ticket; CS Agent/Supervisor their own; Supervisor their department).
+        // Permission mirrors the API's rule (CS Manager any ticket; CS Agent/Supervisor their own; Supervisor their department),
+        // including the viewer's own Tickets.Transfer grant/denial.
         var isManager = ActionContext is { } actionContext
             && (actionContext.OverrideApplies || actionContext.HasAnyRole(TicketRoleSets.TransferAnyTicket));
-        CanTransfer = TicketActions.CanTransfer(ActionContext);
+        CanTransfer = TicketActions.CanTransferTicket(ActionContext);
         TransferTargets = [];
         TransferTargetsUnavailable = false;
 
@@ -1251,7 +1254,7 @@ public sealed class TicketDetailsModel(
     /// </summary>
     private async Task LoadReopenTargetsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
-        CanReopen = TicketActions.CanReopen(Viewer?.Roles);
+        CanReopen = TicketActions.CanReopenTicket(ActionContext);
         ReopenTargets = [];
         ReopenTargetsUnavailable = false;
 

@@ -1717,6 +1717,45 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("Employees", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.IdentityAndAccess.Permissions.UserPermissionOverride", b =>
+                {
+                    b.Property<long>("UserPermissionOverrideId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("UserPermissionOverrideId"));
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("CreatedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<byte>("Effect")
+                        .HasColumnType("tinyint");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("PermissionKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("UpdatedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("UserPermissionOverrideId");
+
+                    b.HasIndex("EmployeeId", "PermissionKey")
+                        .IsUnique();
+
+                    b.ToTable("UserPermissionOverrides", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.IdentityAndAccess.UserDepartmentAssignment", b =>
                 {
                     b.Property<int>("UserDepartmentAssignmentId")
@@ -3992,6 +4031,15 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .WithOne()
                         .HasForeignKey("TigerCS.Domain.Modules.IdentityAndAccess.Employee", "EmployeeId")
                         .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.IdentityAndAccess.Permissions.UserPermissionOverride", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });
 

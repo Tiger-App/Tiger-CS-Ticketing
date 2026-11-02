@@ -5,6 +5,7 @@ using TigerCS.Application.Modules.CustomerVerification.CrmIntegration;
 using TigerCS.Application.Modules.CustomerVerification.Dto;
 using TigerCS.Application.Modules.CustomerVerification.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -35,6 +36,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/crm")]
 [Authorize(Policy = PolicyNames.CustomerVerification)]
 [Tags(OpenApiTags.CrmLookup)]
+[RequirePermission(Permissions.TicketsCreate)]
 public class CrmController(CrmUnitLookupAppService crmUnitLookupAppService, CrmBuyerLookupAppService crmBuyerLookupAppService)
     : ControllerBase
 {

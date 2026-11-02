@@ -142,7 +142,7 @@ public sealed class TicketsWorkspaceTests
     {
         var nav = View("Shared", "_Nav.cshtml");
 
-        foreach (var item in new[] { "(\"dashboard\", \"Dashboard\", \"/Dashboard\")", "(\"customers\", \"Customers\", \"/Customers\")", "(\"tickets\", \"Tickets\", \"/Tickets\")", "(\"admin\", \"Administration\", \"/Admin\")" })
+        foreach (var item in new[] { "Add(\"dashboard\", \"Dashboard\", \"/Dashboard\"", "Add(\"customers\", \"Customers\", \"/Customers\"", "Add(\"tickets\", \"Tickets\", \"/Tickets\"", "(\"admin\", \"Administration\", \"/Admin\")" })
         {
             Assert.Contains(item, nav, StringComparison.Ordinal);
         }

@@ -165,6 +165,7 @@
                                             <button type="submit" class="btn btn-sm">Unlock</button>
                                         </form>
                                     }
+                                    <a class="btn btn-sm" href="/Admin/Users/@user.EmployeeId/Permissions" title="Roles, permission overrides and effective access for @user.DisplayName">@await Html.PartialAsync("_AdminIcon", "shield") Manage Permissions</a>
                                     <a class="row-open" href="/Admin/Users/@user.EmployeeId" aria-label="Manage @user.DisplayName">@await Html.PartialAsync("_AdminIcon", "chevron-right")</a>
                                 </td>
                             </tr>

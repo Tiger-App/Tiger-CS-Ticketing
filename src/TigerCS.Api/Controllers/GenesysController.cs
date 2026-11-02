@@ -5,6 +5,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
 using TigerCS.Application.Modules.GenesysIntegration.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -38,6 +39,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/genesys")]
 [Authorize(Policy = PolicyNames.CustomerVerification)]
 [Tags(OpenApiTags.Genesys)]
+[NoPermissionRequired("Genesys integration surface; reached by the integration service account, which cannot hold permission overrides.")]
 public class GenesysController(
     GenesysInquiryIngestionAppService ingestionAppService,
     GenesysTicketUpdateAppService ticketUpdateAppService,

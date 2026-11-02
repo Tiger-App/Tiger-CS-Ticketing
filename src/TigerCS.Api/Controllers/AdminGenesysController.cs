@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.Administration.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -28,6 +29,7 @@ public class AdminGenesysController(AdminGenesysRoutingAppService genesys) : Adm
 {
     /// <summary>Every configured Genesys queue → department mapping.</summary>
     [HttpGet("queue-mappings")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<IReadOnlyList<AdminGenesysQueueMappingDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> ListQueueMappings(
         [FromQuery] bool includeInactive = true, CancellationToken cancellationToken = default) =>
@@ -35,6 +37,7 @@ public class AdminGenesysController(AdminGenesysRoutingAppService genesys) : Adm
 
     /// <summary>Maps a Genesys queue to a department. The queue id must be unique — re-pointing an existing queue is an edit, not a second mapping.</summary>
     [HttpPost("queue-mappings")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminGenesysQueueMappingDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> CreateQueueMapping(
@@ -45,6 +48,7 @@ public class AdminGenesysController(AdminGenesysRoutingAppService genesys) : Adm
 
     /// <summary>Re-points a queue at another department, renames it, or activates/deactivates it. The queue id itself is the identity and is never edited.</summary>
     [HttpPut("queue-mappings/{genesysQueueMappingId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminGenesysQueueMappingDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]

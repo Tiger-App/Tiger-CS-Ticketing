@@ -2,6 +2,8 @@
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
+using TigerCS.Application.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Application.Modules.Notifications;
 using TigerCS.Application.Modules.Notifications.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -48,6 +50,7 @@ public sealed class TicketLifecycleAppService(
     SlaPauseService? slaPauseService = null,
     ITicketInteractionHandlerRepository? handlerRepository = null,
     IServiceIdentityRegistry? serviceIdentities = null,
+    IUserPermissionOverrideRepository? permissionOverrides = null,
     ITicketAssignmentRepository? ticketAssignmentRepository = null)
 {
     /// <summary>Matches the <c>TicketStatusHistory.Note</c> column, so a long reason is never lost to a database truncation error mid-transaction.</summary>
@@ -230,7 +233,10 @@ public sealed class TicketLifecycleAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.InvalidStatusTransition);
         }
 
-        if (!await IsResolveAuthorizedAsync(callerEmployeeId, callerRoles, ticket, cancellationToken))
+        // An explicit denial of Tickets.Resolve always blocks - the assignee and the System Administrator included.
+        var resolveOverride = await CallerPermissionOverrides.GetAsync(permissionOverrides, callerEmployeeId, Permissions.TicketsResolve, cancellationToken);
+        if (resolveOverride == PermissionEffect.Deny
+            || !await IsResolveAuthorizedAsync(callerEmployeeId, callerRoles, ticket, resolveOverride == PermissionEffect.Grant, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
@@ -373,8 +379,26 @@ public sealed class TicketLifecycleAppService(
 
         // Whoever the ticket is currently assigned to may close it, whatever their role or department; everyone else needs
         // the CS-layer role. A read-only caller never qualifies through ownership.
+        // An explicit denial of Tickets.Close always blocks - the assignee and the System Administrator included.
+        var closeOverride = await CallerPermissionOverrides.GetAsync(permissionOverrides, callerEmployeeId, Permissions.TicketsClose, cancellationToken);
+        if (closeOverride == PermissionEffect.Deny)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
+        }
+
         var isCurrentOwner = IsCurrentOwner(callerEmployeeId, callerRoles, ticket);
-        if (!AuthorizationGate.Evaluate(callerRoles, () => isCurrentOwner || callerRoles.Any(TicketRoleSets.Close.Contains)))
+        var hasCloseRole = callerRoles.Any(TicketRoleSets.Close.Contains);
+        var closeGranted = closeOverride == PermissionEffect.Grant && !Roles.IsReadOnlyCaller(callerRoles);
+        if (!AuthorizationGate.Evaluate(callerRoles, () => isCurrentOwner || hasCloseRole || closeGranted))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
+        }
+
+        // A grant stands in for the CS-layer role only: someone who closes by grant alone must still be able to modify this ticket
+        // (their department, or a ticket they handle) - the grant never widens visibility.
+        if (!isCurrentOwner && !hasCloseRole && closeGranted && !AuthorizationOverride.AppliesTo(callerRoles)
+            && !await TicketVisibilityRule.CanModifyTicketAsync(
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
@@ -1127,7 +1151,7 @@ public sealed class TicketLifecycleAppService(
 
     /// <summary>ISSUE-022: Resolve is Department Employee/Head only. A Department Employee must be the ticket's current owner (the one who actually worked it); a Department Head may resolve any ticket in a department they belong to. Both are permission rules, so both run under the ADR-0024 override — the ticket's own eligibility for resolution (<see cref="Ticket.Resolve"/>) is separate, and is not.</summary>
     private Task<bool> IsResolveAuthorizedAsync(
-        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
+        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, bool granted, CancellationToken cancellationToken) =>
         AuthorizationGate.EvaluateAsync(callerRoles, async () =>
         {
             // The current assignee may always resolve, regardless of role or department.
@@ -1143,14 +1167,20 @@ public sealed class TicketLifecycleAppService(
                 return true;
             }
 
-            if (!callerRoles.Any(TicketRoleSets.Resolve.Contains))
+            var hasResolveRole = callerRoles.Any(TicketRoleSets.Resolve.Contains);
+            if (!hasResolveRole && !granted)
             {
                 return false;
             }
 
-            if (callerRoles.Contains(Roles.DepartmentHead))
+            // A Tickets.Resolve grant replaces only the role requirement. Someone who got it by grant (no Resolve role) is scoped
+            // like a Department Head: they must belong to the ticket's current department, and - if a CS Agent - be able to modify the ticket.
+            if (callerRoles.Contains(Roles.DepartmentHead) || (!hasResolveRole && granted))
             {
-                return await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken);
+                return !Roles.IsReadOnlyCaller(callerRoles)
+                    && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken)
+                    && await TicketVisibilityRule.PassesAgentScopeAsync(
+                        userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken);
             }
 
             return ticket.CurrentOwnerEmployeeId == callerEmployeeId;

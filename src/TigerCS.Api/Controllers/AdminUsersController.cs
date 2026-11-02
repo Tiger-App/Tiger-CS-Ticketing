@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.Administration.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -11,10 +12,11 @@ namespace TigerCS.Api.Controllers;
 [Route("api/admin/users")]
 [Authorize(Policy = PolicyNames.SystemAdministrator)]
 [Tags(OpenApiTags.Administration)]
-public class AdminUsersController(AdminUserAppService users) : AdminControllerBase
+public class AdminUsersController(AdminUserAppService users, AdminUserPermissionAppService permissions) : AdminControllerBase
 {
     /// <summary>Lists users with optional search (display name, user name, e-mail) and inactive users included on request.</summary>
     [HttpGet]
+    [RequirePermission(Permissions.AdminUsersView)]
     [ProducesResponseType<AdminUserListDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> List(
         [FromQuery] string? search, [FromQuery] bool includeInactive = false,
@@ -23,11 +25,13 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
 
     /// <summary>The password rules ASP.NET Core Identity is configured with.</summary>
     [HttpGet("password-policy")]
+    [RequirePermission(Permissions.AdminUsersView)]
     [ProducesResponseType<PasswordPolicyDto>(StatusCodes.Status200OK)]
     public IActionResult GetPasswordPolicy() => Ok(users.GetPasswordPolicy());
 
     /// <summary>One user with roles, department memberships and whether ticket history references them.</summary>
     [HttpGet("{employeeId:guid}")]
+    [RequirePermission(Permissions.AdminUsersView)]
     [ProducesResponseType<AdminUserDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(Guid employeeId, CancellationToken cancellationToken)
@@ -38,6 +42,7 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
 
     /// <summary>Creates the Identity account (Identity validates the initial password) and the employee profile.</summary>
     [HttpPost]
+    [RequirePermission(Permissions.AdminUsersCreate)]
     [ProducesResponseType<AdminUserDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Create([FromBody] CreateUserRequestDto request, CancellationToken cancellationToken) =>
@@ -46,6 +51,7 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
 
     /// <summary>Edits the supported profile fields (display name, e-mail, Geyness-staff flag).</summary>
     [HttpPut("{employeeId:guid}/profile")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
     [ProducesResponseType<AdminUserDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -54,6 +60,7 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
 
     /// <summary>Activate/deactivate — the existing last-active-administrator guard applies.</summary>
     [HttpPatch("{employeeId:guid}/activation")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
     [ProducesResponseType<AdminUserDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -62,6 +69,7 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
 
     /// <summary>Replaces the user's roles with exactly the given fixed roles.</summary>
     [HttpPut("{employeeId:guid}/roles")]
+    [RequirePermission(Permissions.AdminRolesAssign)]
     [ProducesResponseType<AdminUserDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -71,6 +79,7 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
 
     /// <summary>Adds a department membership using the existing membership model.</summary>
     [HttpPost("{employeeId:guid}/departments")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
     [ProducesResponseType<AdminUserDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -90,6 +99,7 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
     /// <response code="404">No such employee.</response>
     /// <response code="422">The new password violates the password policy; <c>errors</c> lists each reason.</response>
     [HttpPost("{employeeId:guid}/password")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
@@ -98,6 +108,7 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
 
     /// <summary>Unlocks a locked-out account (clears the lockout end date and failed-attempt count) and audits it.</summary>
     [HttpPost("{employeeId:guid}/unlock")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
     [ProducesResponseType<AdminUserDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -106,9 +117,34 @@ public class AdminUsersController(AdminUserAppService users) : AdminControllerBa
 
     /// <summary>Ends a department membership; the primary membership cannot be removed while others remain.</summary>
     [HttpDelete("{employeeId:guid}/departments/{departmentId:int}")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
     [ProducesResponseType<AdminUserDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> RemoveDepartment(Guid employeeId, int departmentId, CancellationToken cancellationToken) =>
         FromResult(await users.RemoveDepartmentAsync(CallerEmployeeId, employeeId, departmentId, cancellationToken));
+
+    /// <summary>The employee's roles, role baseline, per-permission overrides, effective permissions and recent changes.</summary>
+    [HttpGet("{employeeId:guid}/permissions")]
+    [RequirePermission(Permissions.AdminPermissionsManage)]
+    [ProducesResponseType<UserPermissionsDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetPermissions(Guid employeeId, CancellationToken cancellationToken) =>
+        FromResult(await permissions.GetAsync(CallerEmployeeId, employeeId, cancellationToken));
+
+    /// <summary>Replaces the employee's permission overrides (Grant / Deny; absent = inherit from roles). Audited per changed permission.</summary>
+    /// <remarks>
+    /// 403 when the caller edits their own permissions, grants something they do not hold, or grants an administrator-only
+    /// permission; 409 when the change would remove an administrator-only permission from the last active System Administrator
+    /// or targets an integration account; 400 for unknown permissions or mutating grants to read-only roles.
+    /// </remarks>
+    [HttpPut("{employeeId:guid}/permissions")]
+    [RequirePermission(Permissions.AdminPermissionsManage)]
+    [ProducesResponseType<UserPermissionsDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> SetPermissions(Guid employeeId, [FromBody] SetUserPermissionsRequestDto request, CancellationToken cancellationToken) =>
+        FromResult(await permissions.SetAsync(CallerEmployeeId, employeeId, request, cancellationToken));
 }
