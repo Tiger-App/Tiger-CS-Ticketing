@@ -104,7 +104,8 @@ public sealed class TicketQueryAppService(
             Escalated: request.Escalated == true,
             AgentScopeEmployeeId: agentScope,
             CreatedByEmployeeId: request.CreatedByMe == true ? callerEmployeeId : null,
-            CreatedOnlyScope: IsGenesysIntegration(callerEmployeeId, callerRoles));
+            CreatedOnlyScope: IsGenesysIntegration(callerEmployeeId, callerRoles),
+            OwnerVisibilityEmployeeId: callerEmployeeId);
 
         var result = await ticketRepository.SearchAsync(query, cancellationToken);
 

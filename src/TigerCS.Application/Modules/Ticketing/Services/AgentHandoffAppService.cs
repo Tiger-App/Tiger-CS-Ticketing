@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -197,6 +198,16 @@ public sealed class AgentHandoffAppService(
             return AgentHandoffResult.Failure(AgentHandoffOutcome.AgentNotInTicketDepartment);
         }
 
+        // One owner at a time (checked before anything is claimed or written, and only while the work is unclaimed or already this caller's, so a second agent still hears AlreadyClaimed): a ticket a different person genuinely owns is not taken by accepting. Automation's pre-assignment (or no
+        // owner) is the only thing accepting replaces; anything else is a deliberate Assign/Transfer by someone with that authority.
+        if ((handoff.AssignedEmployeeId is null || handoff.AssignedEmployeeId == callerEmployeeId)
+            && ticket.CurrentOwnerEmployeeId is { } existingOwner
+            && existingOwner != callerEmployeeId
+            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken))
+        {
+            return AgentHandoffResult.Failure(AgentHandoffOutcome.TicketOwnedByAnotherEmployee);
+        }
+
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var correlationId = Guid.NewGuid();
         var beforeStatus = handoff.Status;
@@ -307,9 +318,9 @@ public sealed class AgentHandoffAppService(
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
-        catch (TicketConcurrentlyModifiedException)
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {
-            // Either the ticket's RowVersion or the handoff's moved between
+            // Either the ticket's RowVersion or the handoff's moved (or a concurrent request already became the current assignee) between
             // this request's read and its commit. Nothing was written.
             return AgentHandoffResult.Failure(AgentHandoffOutcome.ConcurrencyConflict);
         }

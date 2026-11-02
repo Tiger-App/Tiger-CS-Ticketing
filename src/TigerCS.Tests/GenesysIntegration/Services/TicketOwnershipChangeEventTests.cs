@@ -162,7 +162,7 @@ public class TicketOwnershipChangeEventTests
     }
 
     [Fact]
-    public async Task HandoffAccept_RepeatedAfterTheTicketWasMovedAway_RecordsTheOwnershipChangeExactlyOnce()
+    public async Task HandoffAccept_RepeatedAfterAPersonReassignedTheTicket_DoesNotTakeItBack()
     {
         var (f, handoffId, agent, departmentId) = await PendingHandoffAsync("conv-accept-retake");
         var other = Guid.NewGuid();
@@ -170,16 +170,13 @@ public class TicketOwnershipChangeEventTests
         var ticket = f.Tickets.All.Single();
 
         await f.PendingWork.AcceptAsync(agent, AgentRoles, handoffId);                 // claim + take ownership: event 1
-        ticket.AssignTo(other);                                                        // a supervisor moves it away
-        await f.PendingWork.AcceptAsync(agent, AgentRoles, handoffId);                 // same agent accepts again: takes it back
-        await f.PendingWork.AcceptAsync(agent, AgentRoles, handoffId);                 // plain repeat: nothing changes
+        ticket.AssignTo(other);                                                        // a supervisor deliberately moves it away
+        var again = await f.PendingWork.AcceptAsync(agent, AgentRoles, handoffId);     // accepting again must not silently undo that
 
-        var started = f.WorkflowEvents.All.Where(e => e.EventType == WorkflowEventType.HandoffStarted).ToList();
-        Assert.Equal(2, started.Count);                                                // one per actual ownership change, not per click
-        Assert.All(started, e => Assert.Equal(agent, e.ToEmployeeId));
-        Assert.All(started, e => Assert.False(e.IsEscalation));
-        Assert.Contains("again", started[1].Note);
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(AgentHandoffOutcome.TicketOwnedByAnotherEmployee, again.Outcome);
+        Assert.Equal(other, ticket.CurrentOwnerEmployeeId);                            // one owner, and it is not overwritten
+        var started = Assert.Single(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.HandoffStarted);
+        Assert.Equal(agent, started.ToEmployeeId);
         Assert.DoesNotContain(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.TicketTransferred);
     }
 }

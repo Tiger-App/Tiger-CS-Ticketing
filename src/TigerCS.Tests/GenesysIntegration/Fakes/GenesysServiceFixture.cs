@@ -254,7 +254,7 @@ public sealed class GenesysServiceFixture
             new TicketAutoAssignmentService(
                 AssignmentRules, departmentSettings, DepartmentAssignments, TicketAssignments, Audit),
             sla.DueDates,
-            new ReopenEligibilityService(StatusHistory, requestTypes, workflowTemplates, ReopenPolicy.Default), handlerRepository: FakeTicketInteractionHandlerRepository.Permissive());
+            new ReopenEligibilityService(StatusHistory, requestTypes, workflowTemplates, ReopenPolicy.Default), handlerRepository: FakeTicketInteractionHandlerRepository.Permissive(), ticketAssignmentRepository: TicketAssignments);
 
         // Contract #3: the one update facade over the two services above.
         TicketUpdate = new GenesysTicketUpdateAppService(

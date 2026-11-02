@@ -1,4 +1,5 @@
-﻿using TigerCS.Application.Abstractions;
+﻿using TigerCS.Application.Modules.CustomerVerification.Abstractions;
+using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -139,8 +140,9 @@ public sealed class TicketAssignmentAppService(
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
-        catch (TicketConcurrentlyModifiedException)
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {
+            // Lost the race: another request changed the ticket, or already made someone its current assignee (unique current assignment).
             return TicketMutationResult.Failure(TicketMutationOutcome.ConcurrencyConflict);
         }
 
@@ -172,7 +174,7 @@ public sealed class TicketAssignmentAppService(
             || (callerRoles.Any(TicketRoleSets.Transfer.Contains)
                 && (ticket.CurrentOwnerEmployeeId == callerEmployeeId
                     || await TicketOwnershipRules.IsActingInteractionHandlerAsync(
-                        handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken)
+                        handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken, ticketAssignmentRepository)
                     || (callerRoles.Contains(Roles.CsSupervisor)
                         && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken)))));
 
@@ -241,6 +243,10 @@ public sealed class TicketAssignmentAppService(
         // straight from department B to department C.
         ticket.TransferToDepartment(request.TargetDepartmentId);
 
+        // Single current owner: the previous assignment ends with the transfer (history row kept, just no longer current), so the previous
+        // owner holds no ownership-based right on the ticket whether or not the new department can assign it to anyone.
+        (await ticketAssignmentRepository.GetCurrentAsync(ticketId, cancellationToken))?.MarkSuperseded();
+
         await auditWriter.WriteAsync(
             callerEmployeeId, "Transfer", "Ticket", ticketId.ToString(),
             beforeValue: $"DepartmentId={previousDepartmentId};AssignedEmployeeId={previousOwnerEmployeeId?.ToString() ?? "DepartmentQueue"}",
@@ -304,8 +310,9 @@ public sealed class TicketAssignmentAppService(
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
-        catch (TicketConcurrentlyModifiedException)
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {
+            // Lost the race: another request changed the ticket, or already made someone its current assignee (unique current assignment).
             return TicketMutationResult.Failure(TicketMutationOutcome.ConcurrencyConflict);
         }
 

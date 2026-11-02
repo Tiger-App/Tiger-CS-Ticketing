@@ -174,6 +174,12 @@ public static class TicketVisibilityRule
                 return ticket.CreatedByEmployeeId == callerEmployeeId ? TicketAccessLevel.Full : TicketAccessLevel.None;
             }
 
+            // The ticket is currently assigned to the caller: they always have full access to it, whatever department it sits in.
+            if (ticket.CurrentOwnerEmployeeId == callerEmployeeId && !Roles.IsReadOnlyCaller(callerRoles))
+            {
+                return TicketAccessLevel.Full;
+            }
+
             if (!IsRestrictedCsAgent(callerRoles, callerEmployeeId, serviceIdentities))
             {
                 return await CanViewDepartmentAsync(

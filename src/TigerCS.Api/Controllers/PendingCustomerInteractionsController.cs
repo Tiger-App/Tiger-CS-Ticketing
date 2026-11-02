@@ -271,6 +271,12 @@ public class PendingCustomerInteractionsController(AgentHandoffAppService agentH
                 + "or ask a member of its current department to take it.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
 
+        AgentHandoffOutcome.TicketOwnedByAnotherEmployee => Problem(
+            type: "https://tigercs.internal/problems/ticket-owned-by-another-employee",
+            title: "The ticket is already owned by another employee",
+            detail: "A ticket has one owner. Accepting would take it from them, so nothing was changed. Ask a supervisor to reassign it.",
+            statusCode: StatusCodes.Status409Conflict),
+
         AgentHandoffOutcome.TicketClosed => Problem(
             type: "https://tigercs.internal/problems/ticket-closed",
             title: "The ticket behind this work is closed",

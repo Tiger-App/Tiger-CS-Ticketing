@@ -46,7 +46,8 @@ public static class TicketOwnershipRules
         Guid callerEmployeeId,
         IReadOnlyCollection<string> callerRoles,
         Ticket ticket,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ITicketAssignmentRepository? assignmentRepository = null)
     {
         ArgumentNullException.ThrowIfNull(callerRoles);
         ArgumentNullException.ThrowIfNull(ticket);
@@ -57,6 +58,17 @@ public static class TicketOwnershipRules
             && ticket.TicketStatus != TicketStatus.Closed
             && (ticket.CurrentOwnerEmployeeId is null || ticket.CurrentOwnerEmployeeId == callerEmployeeId)
             && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken)
-            && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken);
+            && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken)
+            && !await WasPreviousOwnerAsync(assignmentRepository, ticket, callerEmployeeId, cancellationToken);
     }
+
+    /// <summary>
+    /// True when the caller once owned the ticket but no longer does: ownership ended (transfer / reassignment), and with it every right that
+    /// rested on it. Interaction handling then no longer stands in for ownership either, so a previous owner cannot Resolve, Close or Transfer.
+    /// </summary>
+    public static async Task<bool> WasPreviousOwnerAsync(
+        ITicketAssignmentRepository? assignmentRepository, Ticket ticket, Guid employeeId, CancellationToken cancellationToken = default) =>
+        assignmentRepository is not null
+        && ticket.CurrentOwnerEmployeeId != employeeId
+        && await assignmentRepository.HasSupersededAssignmentAsync(ticket.TicketId, employeeId, cancellationToken);
 }

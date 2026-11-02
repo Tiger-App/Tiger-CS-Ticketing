@@ -47,7 +47,8 @@ public sealed class TicketLifecycleAppService(
     ReopenEligibilityService reopenEligibilityService,
     SlaPauseService? slaPauseService = null,
     ITicketInteractionHandlerRepository? handlerRepository = null,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    IServiceIdentityRegistry? serviceIdentities = null,
+    ITicketAssignmentRepository? ticketAssignmentRepository = null)
 {
     /// <summary>Matches the <c>TicketStatusHistory.Note</c> column, so a long reason is never lost to a database truncation error mid-transaction.</summary>
     public const int ReopenReasonMaxLength = 1000;
@@ -378,9 +379,12 @@ public sealed class TicketLifecycleAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
 
-        // Close is a cross-department right of the CS layer; a CS Agent may use it only on a ticket they can see.
-        if (!isCurrentOwner && !await TicketVisibilityRule.PassesAgentScopeAsync(
-                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
+        // Close is a cross-department right of the CS layer; a CS Agent may use it only on a ticket they can see — and never on one they
+        // used to own: ownership ended with the transfer/reassignment, so handling the interaction earlier no longer carries a right to act.
+        if (!isCurrentOwner
+            && (await TicketOwnershipRules.WasPreviousOwnerAsync(ticketAssignmentRepository, ticket, callerEmployeeId, cancellationToken)
+                || !await TicketVisibilityRule.PassesAgentScopeAsync(
+                    userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken)))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
@@ -1134,7 +1138,7 @@ public sealed class TicketLifecycleAppService(
 
             // A CS Agent Genesys reported as handling this ticket's interaction, while nobody else owns it (TicketOwnershipRules).
             if (await TicketOwnershipRules.IsActingInteractionHandlerAsync(
-                    handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken))
+                    handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken, ticketAssignmentRepository))
             {
                 return true;
             }
