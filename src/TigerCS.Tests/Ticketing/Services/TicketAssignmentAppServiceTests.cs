@@ -499,7 +499,7 @@ public class TicketAssignmentAppServiceTests
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Empty(f.Assignments.Added);
 
-        var autoAssign = Assert.Single(f.Audit.Entries, e => e.Action == "AutoAssign");
+        var autoAssign = Assert.Single(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Rule "));
         Assert.Contains("DepartmentQueue", autoAssign.AfterValue);
         Assert.Contains($"DepartmentId={departmentC.DepartmentId}", autoAssign.AfterValue);
         Assert.Contains("Trigger=DepartmentTransfer", autoAssign.AfterValue);
@@ -522,8 +522,9 @@ public class TicketAssignmentAppServiceTests
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Empty(f.Assignments.Added);
 
-        var autoAssign = Assert.Single(f.Audit.Entries, e => e.Action == "AutoAssign");
-        Assert.Contains("No active assignment rule configured", autoAssign.AfterValue);
+        // The rule found nothing; the Round Robin default then had no rotation store / eligible employee, so the queue stays visibly unassigned.
+        Assert.Contains(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("No active assignment rule configured"));
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("AssignedEmployeeId="));
     }
 
     [Fact]
@@ -541,8 +542,9 @@ public class TicketAssignmentAppServiceTests
         Assert.Equal(departmentC.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
 
-        // No request type => no automation ran at all, exactly as before.
-        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign");
+        // No request type => no rule exists, so only the Round Robin default can assign; this fixture has no eligible employee, so the
+        // queue stays visibly unassigned and nothing was assigned.
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("AssignedEmployeeId="));
         Assert.Empty(f.Assignments.Added);
     }
 

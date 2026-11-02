@@ -4,6 +4,7 @@ using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
+using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
@@ -23,7 +24,8 @@ public sealed class TicketAssignmentAppService(
     TimeProvider timeProvider,
     IDepartmentWorkflowSettingsRepository departmentWorkflowSettingsRepository,
     TicketAutoAssignmentService autoAssignmentService,
-    ITicketWorkflowEventRepository? workflowEventRepository = null)
+    ITicketWorkflowEventRepository? workflowEventRepository = null,
+    IRequestTypeRepository? requestTypeRepository = null)
 {
     /// <summary>
     /// PR correction — the caller's role alone decides Assign authority now;
@@ -146,7 +148,12 @@ public sealed class TicketAssignmentAppService(
         return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
     }
 
-    /// <summary>PR correction: transfer authority is CS Manager only — every other role (including Department Head and CS Supervisor, who retain Assign authority) is forbidden.</summary>
+    /// <summary>
+    /// Transfer authority: the CS Manager, and — Call Center first — the Call Center agent the ticket is currently assigned to, who either
+    /// resolves/closes it or transfers it to the department its request type belongs to. Every other role (including Department Head and
+    /// CS Supervisor, who retain Assign authority) is forbidden. Once transferred, the previous owner no longer owns the ticket, so the
+    /// owner-based right ends with the hand-over.
+    /// </summary>
     public async Task<TicketMutationResult> TransferAsync(
         Guid callerEmployeeId,
         IReadOnlyCollection<string> callerRoles,
@@ -160,7 +167,13 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
         }
 
-        if (!AuthorizationGate.Evaluate(callerRoles, () => callerRoles.Any(TicketRoleSets.Transfer.Contains)))
+        var isManager = callerRoles.Any(TicketRoleSets.Transfer.Contains);
+        var isCallCenterOwner = !isManager
+            && !Roles.IsReadOnlyCaller(callerRoles)
+            && ticket.CurrentOwnerEmployeeId == callerEmployeeId
+            && await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
+            && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken);
+        if (!AuthorizationGate.Evaluate(callerRoles, () => isManager || isCallCenterOwner))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
@@ -177,13 +190,24 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.AlreadyInTargetDepartment);
         }
 
+        // A Call Center agent transfers by Request Type: once the ticket is classified, the destination is the department that owns its
+        // request type. (A CS Manager keeps the unrestricted manual transfer.)
+        if (isCallCenterOwner
+            && ticket.RequestTypeId is { } classifiedRequestTypeId
+            && requestTypeRepository is not null
+            && await requestTypeRepository.GetByIdAsync(classifiedRequestTypeId, cancellationToken) is { } classifiedRequestType
+            && classifiedRequestType.DepartmentId != request.TargetDepartmentId)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.TransferTargetMustMatchRequestType);
+        }
+
         // Workflow/Automation phase 2 — same narrowing-only rule as
         // AssignAsync: the SOURCE department's settings may disable
         // transferring tickets out of it; nothing here widens the CS-Manager
         // role gate above.
         var sourceSettings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(
             ticket.CurrentDepartmentId, cancellationToken);
-        if (sourceSettings is { AllowTransferToOtherDepartments: false })
+        if (!isCallCenterOwner && sourceSettings is { AllowTransferToOtherDepartments: false })
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.DisabledByDepartmentSettings);
         }
@@ -225,6 +249,9 @@ public sealed class TicketAssignmentAppService(
         // straight from department B to department C.
         ticket.TransferToDepartment(request.TargetDepartmentId);
 
+        // Single ownership: the previous owner's assignment row ends with the hand-over, whatever the destination then does.
+        (await ticketAssignmentRepository.GetCurrentAsync(ticketId, cancellationToken))?.MarkSuperseded();
+
         await auditWriter.WriteAsync(
             callerEmployeeId, "Transfer", "Ticket", ticketId.ToString(),
             beforeValue: $"DepartmentId={previousDepartmentId};AssignedEmployeeId={previousOwnerEmployeeId?.ToString() ?? "DepartmentQueue"}",
@@ -263,8 +290,14 @@ public sealed class TicketAssignmentAppService(
             // (no rule, rule targets someone outside department C, settings
             // disable assignment) leaves the ticket in the NEW department's
             // queue — audited, and never a randomly picked employee.
-            await autoAssignmentService.ApplyAsync(
+            var configured = await autoAssignmentService.ApplyAsync(
                 ticket, now, correlationId, AutoAssignmentTrigger.DepartmentTransfer, cancellationToken);
+
+            // No explicit rule decided: the destination department's Round Robin picks ONE eligible employee (or, when
+            // nobody is eligible, the queue stays visibly unassigned). A specific assignee, an explicit department-queue
+            // rule or disabled assignment still win — see ApplyRoundRobinFallbackAsync.
+            await autoAssignmentService.ApplyRoundRobinFallbackAsync(
+                ticket, configured, AutoAssignmentTrigger.DepartmentTransfer, now, correlationId, cancellationToken);
         }
 
         // Ticket transfer tracking: one typed event per transfer — who moved it, to which department and (when one took

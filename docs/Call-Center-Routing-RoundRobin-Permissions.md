@@ -1,3 +1,20 @@
+# FINAL RULE — Call Center is the first human-handling department for ALL channels
+
+Supersedes the Genesys-only wording in the Flow table below.
+
+| Step | Behavior | Where |
+|---|---|---|
+| New ticket needs a person (manual UI/API, Genesys with `requiresHumanFollowUp`) | Created, then moved to **Call Center** (`OriginatingDepartmentId` untouched; `Transfer` audit + `TicketTransferred`/SystemRouting event, not counted as a transfer) and given to ONE eligible Call Center agent by Round Robin (trigger `CallCenterIntake`). Request-type rules and creator self-assignment do not apply. | `TicketCreationAppService`, `TicketAutoAssignmentService.AssignCallCenterIntakeAsync` |
+| AI-handled Genesys ticket (no human follow-up) | Unchanged: stays where it was created; AI closure (`closedByAi`) is untouched. Reaches Call Center only if a person is later requested. | `TicketCreationAppService` (`needsHuman`) |
+| Human requested later (Genesys handoff) | Routed to Call Center **and** Round Robin assigned (previously left in the Call Center queue). | `GenesysAgentHandoffAppService` |
+| Call Center agent | Resolve/Close directly (owner right), or **Transfer**. The assigned Call Center agent may Transfer (previously CS Manager only); for a classified ticket the target must be the request type's department (`422 transfer-target-must-match-request-type`). | `TicketAssignmentAppService.TransferAsync` |
+| Transfer | Previous assignment superseded, previous owner loses ownership; destination rule decides first, otherwise destination Round Robin picks ONE eligible employee; explicit assignee, explicit department-queue rule, disabled assignment still win. No eligible employee -> visible unassigned queue. | `TicketAutoAssignmentService.ApplyRoundRobinFallbackAsync` |
+| System request-type classification | A ticket sitting in Call Center is classified but NOT moved by the system; the Call Center agent transfers it. | `TicketRequestTypeRoutingService` |
+
+Fallbacks: no active `CC` department -> previous behaviour (ticket stays in its category department). `assignToDepartmentQueue=true` -> enters Call Center, unassigned.
+
+---
+
 # Call Center routing, Round Robin assignment, Resolve/Close/Reopen permissions
 
 ## Flow

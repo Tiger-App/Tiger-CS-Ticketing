@@ -627,9 +627,11 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(colleague, ticket.TicketId));
         await TransferAsync(manager, ticket.TicketId, receiving);
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(colleague, ticket.TicketId));
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(receivingAgent, ticket.TicketId)); // a CS Agent's department grants nothing
+        // A CS Agent's department grants nothing by itself — but a transfer now assigns the receiving department's next eligible employee
+        // (Round Robin), and a ticket assigned to an agent is theirs. The only member of the receiving department is that employee.
+        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(receivingAgent, ticket.TicketId));
         Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(colleague));
-        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(receivingAgent));
+        Assert.Contains(ticket.TicketId, await ListedIdsAsync(receivingAgent));
     }
 
     [Theory]

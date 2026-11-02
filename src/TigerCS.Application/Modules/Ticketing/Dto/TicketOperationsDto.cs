@@ -308,6 +308,9 @@ public enum TicketMutationOutcome
     /// <summary>Workflow/Automation phase 2: the department's workflow settings disable this operation (assignment, internal reassignment, or transfer out) for the ticket's current department.</summary>
     DisabledByDepartmentSettings,
 
+    /// <summary>Call Center first: a Call Center agent transfers a classified ticket to the department that owns its request type, not to any other.</summary>
+    TransferTargetMustMatchRequestType,
+
     /// <summary>Classification: the ticket already carries a category. Re-categorising an existing ticket is a different operation, not built in this phase.</summary>
     AlreadyClassified,
 

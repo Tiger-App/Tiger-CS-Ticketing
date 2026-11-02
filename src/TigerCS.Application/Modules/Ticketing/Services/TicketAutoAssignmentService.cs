@@ -55,7 +55,10 @@ public enum AutoAssignmentTrigger
     RequestTypeClassified,
 
     /// <summary>A Call Center user selected a category that belongs to another department; the ticket was routed there.</summary>
-    CategoryRouted
+    CategoryRouted,
+
+    /// <summary>A new ticket that needs a person entered the Call Center, the first human-handling department for every channel.</summary>
+    CallCenterIntake
 }
 
 /// <summary>The outcome plus what was assigned, for the caller's response/logging. <paramref name="TeamMemberEmployeeIds"/> carries the configured team members (excluding the primary) for a team rule.</summary>
@@ -96,7 +99,8 @@ public sealed class TicketAutoAssignmentService(
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     ITicketAssignmentRepository ticketAssignmentRepository,
     IAuditEntryWriter auditWriter,
-    IAssignmentRotationRepository? rotationRepository = null)
+    IAssignmentRotationRepository? rotationRepository = null,
+    IDepartmentRepository? departmentRepository = null)
 {
     /// <summary>
     /// Runs inside the caller's creation transaction, after the ticket row
@@ -188,14 +192,46 @@ public sealed class TicketAutoAssignmentService(
         await IsCallCenterMemberAsync(employeeId, cancellationToken)
         && !await userDepartmentAssignmentRepository.ExistsAsync(employeeId, departmentId, cancellationToken);
 
+    /// <summary>The active Call Center department, or null when none is configured (callers then keep the pre-Call-Center-first behaviour and the gap is reported, never guessed).</summary>
+    public async Task<Domain.Modules.IdentityAndAccess.Department?> ResolveCallCenterAsync(CancellationToken cancellationToken = default) =>
+        departmentRepository is null
+            ? null
+            : (await departmentRepository.ListAsync(activeOnly: true, cancellationToken)).FirstOrDefault(d =>
+                string.Equals(d.Code, TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase));
+
+    /// <summary>True when the department is the Call Center.</summary>
+    public async Task<bool> IsCallCenterDepartmentAsync(int departmentId, CancellationToken cancellationToken = default) =>
+        departmentRepository is not null
+        && await departmentRepository.GetByIdAsync(departmentId, cancellationToken) is { } department
+        && string.Equals(department.Code, TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
-    /// Call Center category routing: the ticket is already in the category's department; assign it to the next employee in that
-    /// department's rotation — unless a configured request-type rule already decided (a specific assignee, an explicit queue, or
-    /// assignment disabled), which always wins, or the ticket already has an owner. <paramref name="configured"/> is the result of
-    /// <see cref="ApplyAsync"/> for the same ticket. Same single engine, same audit trail.
+    /// Call Center intake: the ticket (already sitting in the Call Center) is given to the next eligible Call Center agent in the
+    /// persisted Round Robin rotation. Request-type rules are deliberately NOT consulted — they name employees of the destination
+    /// department, and the Call Center agent's Transfer is what reaches them. A department whose settings disable assignment, or one
+    /// with no eligible agent, leaves the ticket visibly unassigned in the Call Center queue (audited), never a guess.
     /// </summary>
-    public async Task<AutoAssignmentResult> ApplyCategoryRoutingAsync(
-        Ticket ticket, AutoAssignmentResult configured, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default)
+    public async Task<AutoAssignmentResult> AssignCallCenterIntakeAsync(
+        Ticket ticket, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default)
+    {
+        var settings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(ticket.CurrentDepartmentId, cancellationToken);
+        if (settings is { AllowAssignment: false })
+        {
+            return await QueueAsync(ticket, AutoAssignmentOutcome.AssignmentDisabledForDepartment,
+                "Call Center workflow settings disable assignment", AutoAssignmentTrigger.CallCenterIntake, correlationId, cancellationToken);
+        }
+
+        return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, AutoAssignmentTrigger.CallCenterIntake, ruleId: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Round Robin as the default when no explicit rule decided (Transfer, Call Center category routing): runs only when the ticket
+    /// has no owner and <paramref name="configured"/> (the result of <see cref="ApplyAsync"/>) was "nothing configured" — a specific
+    /// assignee, an explicit department-queue rule or disabled assignment always wins. Same single engine, same audit trail.
+    /// </summary>
+    public async Task<AutoAssignmentResult> ApplyRoundRobinFallbackAsync(
+        Ticket ticket, AutoAssignmentResult configured, AutoAssignmentTrigger trigger, DateTime nowUtc, Guid correlationId,
+        CancellationToken cancellationToken = default)
     {
         if (ticket.CurrentOwnerEmployeeId is not null
             || configured.Outcome is not (AutoAssignmentOutcome.NoRequestType or AutoAssignmentOutcome.NoRuleConfigured
@@ -210,8 +246,13 @@ public sealed class TicketAutoAssignmentService(
             return configured;
         }
 
-        return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, AutoAssignmentTrigger.CategoryRouted, ruleId: null, cancellationToken);
+        return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, trigger, ruleId: null, cancellationToken);
     }
+
+    /// <summary>Call Center category routing (kept for existing callers): <see cref="ApplyRoundRobinFallbackAsync"/> with the category trigger.</summary>
+    public Task<AutoAssignmentResult> ApplyCategoryRoutingAsync(
+        Ticket ticket, AutoAssignmentResult configured, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default) =>
+        ApplyRoundRobinFallbackAsync(ticket, configured, AutoAssignmentTrigger.CategoryRouted, nowUtc, correlationId, cancellationToken);
 
     /// <summary>
     /// Assigns to the next eligible active member of the ticket's CURRENT department. The persisted cursor is row-locked for the
@@ -221,7 +262,7 @@ public sealed class TicketAutoAssignmentService(
     private async Task<AutoAssignmentResult> AssignRoundRobinAsync(
         Ticket ticket, DateTime nowUtc, Guid correlationId, AutoAssignmentTrigger trigger, int? ruleId, CancellationToken cancellationToken)
     {
-        var ruleText = ruleId is { } id ? $"Rule {id}" : "Category routing";
+        var ruleText = ruleId is { } id ? $"Rule {id}" : trigger == AutoAssignmentTrigger.CallCenterIntake ? "Call Center intake" : "Round Robin default";
         if (rotationRepository is null)
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,

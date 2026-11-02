@@ -136,6 +136,13 @@ public static class TicketActions
         && (viewerRoles.Any(TicketRoleSets.Transfer.Contains) || AuthorizationOverride.AppliesTo(viewerRoles));
 
     /// <summary>
+    /// The viewer owns the ticket and belongs to its current department — the precondition of the Call Center agent's Transfer right.
+    /// Display only: the caller still has to confirm the department is the Call Center, and the API enforces both.
+    /// </summary>
+    public static bool IsPotentialCallCenterTransferer(TicketActionContext? context) =>
+        context is { IsCurrentOwner: true, IsReadOnlyViewer: false, BelongsToCurrentDepartment: true };
+
+    /// <summary>
     /// Whether a Close control is worth rendering. Reads the Api's own
     /// <see cref="TicketRoleSets.Close"/> (CS Agent/CS Supervisor/CS Manager —
     /// the other half of ISSUE-022's Resolve/Close split) plus ADR-0024's

@@ -57,7 +57,8 @@ public sealed class GenesysAgentHandoffAppService(
     IAuditEntryWriter auditWriter,
     TimeProvider timeProvider,
     IDepartmentRepository? departmentRepository = null,
-    ITicketAssignmentRepository? ticketAssignmentRepository = null)
+    ITicketAssignmentRepository? ticketAssignmentRepository = null,
+    Ticketing.Services.TicketAutoAssignmentService? autoAssignmentService = null)
 {
     public async Task<GenesysHandoffResult> RequestAsync(
         Guid callerEmployeeId, GenesysHandoffRequestDto request, CancellationToken cancellationToken = default)
@@ -199,6 +200,12 @@ public sealed class GenesysAgentHandoffAppService(
                     routedFromDepartmentId, callCenter.DepartmentId, toEmployeeId: null,
                     "Human agent requested — Call Center first", requestCorrelationId),
                 cancellationToken);
+
+            // Call Center first, then ONE eligible Call Center agent by Round Robin (the queue, visibly unassigned, when nobody is eligible).
+            if (autoAssignmentService is not null)
+            {
+                await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, requestCorrelationId, cancellationToken);
+            }
         }
 
         await workflowEventRepository.AddAsync(

@@ -1200,7 +1200,9 @@ public sealed class TicketDetailsModel(
     /// </summary>
     private async Task LoadTransferTargetsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
-        CanTransfer = TicketActions.CanTransfer(Viewer?.Roles);
+        // The CS Manager transfers any ticket; the Call Center agent the ticket is assigned to transfers it onward (Call Center first).
+        var isManager = TicketActions.CanTransfer(Viewer?.Roles);
+        CanTransfer = isManager || TicketActions.IsPotentialCallCenterTransferer(ActionContext);
         TransferTargets = [];
         TransferTargetsUnavailable = false;
 
@@ -1212,7 +1214,19 @@ public sealed class TicketDetailsModel(
         var active = await nameResolver.GetActiveDepartmentsAsync(cancellationToken);
         if (active is null)
         {
-            TransferTargetsUnavailable = true;
+            // Only a viewer whose right does not depend on the directory is told it is unavailable; the owner-based right needs it
+            // to confirm the Call Center, so without it nothing is offered.
+            TransferTargetsUnavailable = isManager;
+            CanTransfer = isManager;
+            return;
+        }
+
+        if (!isManager
+            && !active.Any(d => d.DepartmentId == ticket.CurrentDepartmentId
+                && string.Equals(d.Name, "Call Center", StringComparison.OrdinalIgnoreCase)))
+        {
+            // The owner-based right belongs to the Call Center only; the API enforces the same.
+            CanTransfer = false;
             return;
         }
 
