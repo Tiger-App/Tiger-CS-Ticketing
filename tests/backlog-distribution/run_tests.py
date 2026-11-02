@@ -115,7 +115,43 @@ def open_tickets():
             for r in rows("SELECT TicketId, CONVERT(nvarchar(30),CreatedAtUtc,121), CurrentDepartmentId, ISNULL(CONVERT(nvarchar(36),CurrentOwnerEmployeeId),'NULL') "
                           "FROM dbo.Tickets WHERE TicketStatus=1")]
 
-def held_sets(include_ai=False):
+import datetime as _dt
+def _ts(v): return None if v in ("NULL", "", None) else _dt.datetime.strptime(v[:26].ljust(26, "0"), "%Y-%m-%d %H:%M:%S.%f")
+
+def ai_state(recent_min=60, stale_h=24):
+    """Independent re-implementation of the diagnostic: for every Open ticket the active-AI rule flags (before the pending-approval split):
+    {ticketId: (state, human_evidence, age_hours)} - computed in Python from raw rows."""
+    now = _ts(scalar("SELECT CONVERT(varchar(27),SYSUTCDATETIME(),121)"))
+    open_ids = {t for t, _, _, _ in open_tickets()}
+    created = {int(r[0]): _ts(r[1]) for r in rows("SELECT TicketId, CONVERT(varchar(27),CreatedAtUtc,121) FROM dbo.Tickets WHERE TicketStatus=1")}
+    firstresp = {int(r[0]) for r in rows("SELECT TicketId FROM dbo.Tickets WHERE TicketStatus=1 AND FirstHumanResponseAtUtc IS NOT NULL")}
+    inter = {}; iid2t = {}
+    for r in rows("SELECT TicketInteractionId, TicketId, Source, ISNULL(CONVERT(varchar(27),EndedAtUtc,121),'NULL'), ISNULL(CONVERT(varchar(27),InactivityClosedAtUtc,121),'NULL'), RequiresHumanFollowUp, ISNULL(CONVERT(nvarchar(36),HandledByUserId),'NULL'), "
+                  "CONVERT(varchar(27),CreatedAtUtc,121), ISNULL(CONVERT(varchar(27),InteractionStartedAtUtc,121),'NULL'), ISNULL(CONVERT(varchar(27),LastCustomerInteractionAtUtc,121),'NULL'), ISNULL(CONVERT(varchar(27),AwaitingCustomerReplySinceUtc,121),'NULL') FROM dbo.TicketInteractions"):
+        iid2t[int(r[0])] = int(r[1]); inter.setdefault(int(r[1]), []).append(r)
+    msgs = {}
+    for iid, sender, sent in rows("SELECT TicketInteractionId, Sender, CONVERT(varchar(27),SentAtUtc,121) FROM dbo.TicketInteractionMessages"):
+        msgs.setdefault(iid2t[int(iid)], []).append((sender, _ts(sent)))
+    handlers = {int(r[0]) for r in rows("SELECT DISTINCT TicketId FROM dbo.TicketInteractionHandlers")}
+    handoff_any = {int(r[0]) for r in rows("SELECT DISTINCT TicketId FROM dbo.TicketAgentHandoffs")}
+    handoff_open = {int(r[0]) for r in rows("SELECT DISTINCT TicketId FROM dbo.TicketAgentHandoffs WHERE Status IN (2,3,4)")}
+    events = {}
+    for t, et, occ in rows("SELECT TicketId, EventType, CONVERT(varchar(27),OccurredAtUtc,121) FROM dbo.TicketWorkflowEvents"):
+        events.setdefault(int(t), []).append((int(et), _ts(occ)))
+    out = {}
+    for t in open_ids:
+        rs = inter.get(t, [])
+        live = [r for r in rs if r[2] == "2" and r[3] == "NULL" and r[4] == "NULL" and r[5] in ("0", "False") and r[6] == "NULL"]
+        if not live or any(r[5] in ("1", "True") for r in rs) or t in handoff_open: continue
+        stamps = [created[t]] + [_ts(v) for r in rs for v in (r[7], r[8], r[9], r[10]) if _ts(v)]
+        stamps += [m[1] for m in msgs.get(t, [])] + [o for et, o in events.get(t, []) if 10 <= et <= 19]
+        last = max(stamps); age = (now - last).total_seconds() / 3600.0
+        human = (any(m[0] == "2" for m in msgs.get(t, [])) or t in handlers or t in firstresp or t in handoff_any or any(et in (11, 12, 18, 19) for et, _ in events.get(t, [])))
+        st = "HUMAN_TOUCHED_NOT_FLAGGED" if human else ("GENUINELY_ACTIVE" if age <= recent_min / 60.0 else ("SILENT_BUT_UNDER_THRESHOLD" if age <= stale_h else "STALE_NO_END_EVENT"))
+        out[t] = (st, human, age)
+    return out
+
+def held_sets(include_ai=False, stale_after=None, human=False):
     """Independent re-implementation of the hold-back rules from raw rows: (all Open ids, pending-approval ids, AI-only ids)."""
     base = {t for t, _, _, _ in open_tickets()}
     pend = {int(r[0]) for r in rows("SELECT DISTINCT TicketId FROM dbo.TicketApprovals WHERE Status=1")} & base
@@ -128,11 +164,14 @@ def held_sets(include_ai=False):
     for t in base:
         rs = inter.get(t, [])
         live = any(x[0] == "2" and x[1] == "-" and x[2] == "-" and x[3] in ("0", "False") and x[4] == "-" for x in rs)
-        human = any(x[3] in ("1", "True") for x in rs)
-        if live and not human and t not in handoff: ai.add(t)
+        flagged_human = any(x[3] in ("1", "True") for x in rs)
+        if live and not flagged_human and t not in handoff: ai.add(t)
+    if stale_after is not None or human:
+        st = ai_state()
+        ai = {t for t in ai if not ((st[t][1] and human) or (not st[t][1] and stale_after is not None and st[t][2] > stale_after))}
     return base, pend, (set() if include_ai else ai - pend)
 
-def oracle(service_ids=(SVC,), cs_only=True, include_ai=False, reassign_owned=True, exclude_denied=True):
+def oracle(service_ids=(SVC,), cs_only=True, include_ai=False, reassign_owned=True, exclude_denied=True, stale_after=None, human=False):
     """Expected plan {ticketId: agentId} computed in Python from raw table data (Open tickets only, owned or not)."""
     svc = {s.lower() for s in service_ids}
     cc = int(scalar("SELECT DepartmentId FROM dbo.Departments WHERE Code='CC' AND IsActive=1"))
@@ -152,7 +191,7 @@ def oracle(service_ids=(SVC,), cs_only=True, include_ai=False, reassign_owned=Tr
                      and not (exclude_denied and m[0].lower() in denied)})
     cur = rows("SELECT CONVERT(nvarchar(36),LastAssignedEmployeeId) FROM dbo.DepartmentAssignmentRotations WHERE DepartmentId=%d" % cc)
     cursor = cur[0][0].lower() if cur and cur[0][0] != "NULL" else None
-    base, pend, ai_only = held_sets(include_ai)
+    base, pend, ai_only = held_sets(include_ai, stale_after, human)
     cur_asg = {int(r[0]): int(r[1]) for r in rows("SELECT TicketId, TicketAssignmentId FROM dbo.TicketAssignments WHERE IsCurrent=1")}
     cands = []
     PREV.clear()
@@ -969,9 +1008,109 @@ def t17_keep_in_place():
           scalar("SELECT COUNT(*) FROM dbo.AuditEntries WHERE CorrelationId='%s' AND EntityId IN (%s)" % (BATCH, ",".join(map(str, kept)))) == "0")
     check("CC tickets owned by a NON-pool employee (the supervisor) are still dealt", all(t in plan for t in ids(["O-CCSUPV-1", "O-CCSUPV-2"])))
 
+
+def t18_stale_ai_conversations():
+    print("T18 stale / human-touched 'active AI' conversations: diagnostic, proposed correction, protection kept for genuinely active ones")
+    restore()
+    # age the fixture's flagged conversations to 5 days, then add the scenarios (all Open, unowned, in SUP unless stated)
+    must("""SET QUOTED_IDENTIFIER ON; SET NOCOUNT ON;
+      DECLARE @SUP int = (SELECT DepartmentId FROM dbo.Departments WHERE Code='SUP');
+      UPDATE i SET CreatedAtUtc = DATEADD(day,-5,SYSUTCDATETIME()) FROM dbo.TicketInteractions i JOIN dbo.Tickets t ON t.TicketId=i.TicketId WHERE t.TicketNumber LIKE 'H-AI-%' OR t.TicketNumber IN ('H-BOTH-1','O-AI-1');
+      DECLARE @Z TABLE (n nvarchar(20), ch tinyint, mins int, endedmins int NULL);
+      INSERT @Z VALUES (N'Z-REC',2,5,NULL),(N'Z-12H',2,720,NULL),(N'Z-3D',2,4320,NULL),(N'Z-PHONE2D',1,2880,NULL),(N'Z-MSG',2,4320,NULL),(N'Z-HUM',2,4320,NULL),(N'Z-HAND',2,2,NULL),(N'Z-APR',2,4320,NULL),(N'Z-OLDEND',2,4320,1440);
+      INSERT dbo.Tickets (TicketNumber, OriginatingDepartmentId, CurrentDepartmentId, CurrentOwnerEmployeeId, TicketStatus, VerificationStatus, EscalationLevel, SlaState, RequestSummary, ReopenCount, CreatedAtUtc)
+      SELECT n, @SUP, @SUP, NULL, 1, 0, 0, 1, N'stale-ai scenario', 0, DATEADD(minute,-mins-1,SYSUTCDATETIME()) FROM @Z;
+      INSERT dbo.Tickets (TicketNumber, OriginatingDepartmentId, CurrentDepartmentId, CurrentOwnerEmployeeId, TicketStatus, VerificationStatus, EscalationLevel, SlaState, RequestSummary, ReopenCount, CreatedAtUtc)
+      VALUES (N'Z-NOINT', @SUP, @SUP, NULL, 1, 0, 0, 1, N'no interaction row', 0, DATEADD(day,-9,SYSUTCDATETIME()));
+      INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, InteractionStartedAtUtc, LastCustomerInteractionAtUtc, RequiresHumanFollowUp)
+      SELECT t.TicketId, 1, 2, z.ch, N'0500000000', N'conv-' + z.n, DATEADD(minute,-z.mins,SYSUTCDATETIME()), DATEADD(minute,-z.mins,SYSUTCDATETIME()), DATEADD(minute,-z.mins,SYSUTCDATETIME()), 0 FROM @Z z JOIN dbo.Tickets t ON t.TicketNumber=z.n;
+      -- Z-OLDEND also has a newer, ENDED conversation
+      INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, InteractionStartedAtUtc, EndedAtUtc, EndReason, RequiresHumanFollowUp)
+      SELECT TicketId, 0, 2, 2, N'0500000000', N'conv-oldend-2', DATEADD(minute,-1500,SYSUTCDATETIME()), DATEADD(minute,-1500,SYSUTCDATETIME()), DATEADD(minute,-1440,SYSUTCDATETIME()), N'customer left', 0 FROM dbo.Tickets WHERE TicketNumber=N'Z-OLDEND';
+      -- Z-MSG: old conversation but a customer line 30 minutes ago;  Z-HUM: old conversation with a HumanAgent line
+      INSERT dbo.TicketInteractionMessages (TicketInteractionId, Sequence, Sender, SenderName, SentAtUtc, Body)
+      SELECT i.TicketInteractionId, 1, 1, N'cust', DATEADD(minute,-30,SYSUTCDATETIME()), N'hello' FROM dbo.TicketInteractions i JOIN dbo.Tickets t ON t.TicketId=i.TicketId WHERE t.TicketNumber=N'Z-MSG';
+      INSERT dbo.TicketInteractionMessages (TicketInteractionId, Sequence, Sender, SenderName, SentAtUtc, Body)
+      SELECT i.TicketInteractionId, 1, 2, N'agent', DATEADD(minute,-4300,SYSUTCDATETIME()), N'hi' FROM dbo.TicketInteractions i JOIN dbo.Tickets t ON t.TicketId=i.TicketId WHERE t.TicketNumber=N'Z-HUM';
+      -- Z-HAND: an interaction-handler row (an agent connected)
+      INSERT dbo.TicketInteractionHandlers (TicketInteractionId, TicketId, HandledByUserId, GenesysAgentUserId, Source, RecordedAtUtc)
+      SELECT i.TicketInteractionId, i.TicketId, '00000000-0000-0000-0000-000000000002', N'g-1', 1, SYSUTCDATETIME() FROM dbo.TicketInteractions i JOIN dbo.Tickets t ON t.TicketId=i.TicketId WHERE t.TicketNumber=N'Z-HAND';
+      -- Z-APR: stale but a pending approval
+      INSERT dbo.TicketApprovals (TicketId, ApprovalType, Status, TargetKind, RequestedByEmployeeId, RequestedAtUtc, IsCurrent, CorrelationId)
+      SELECT TicketId, 1, 1, 1, 'b0000000-0000-0000-0000-000000000001', DATEADD(day,-2,SYSUTCDATETIME()), 1, NEWID() FROM dbo.Tickets WHERE TicketNumber=N'Z-APR';""")
+    st = ai_state()
+    num = {int(r[0]): r[1] for r in rows("SELECT TicketId, TicketNumber FROM dbo.Tickets")}
+    got_states = {num[t]: v[0] for t, v in st.items()}
+    expect = {"Z-REC": "GENUINELY_ACTIVE", "Z-12H": "SILENT_BUT_UNDER_THRESHOLD", "Z-3D": "STALE_NO_END_EVENT", "Z-PHONE2D": "STALE_NO_END_EVENT", "Z-MSG": "GENUINELY_ACTIVE",
+              "Z-HUM": "HUMAN_TOUCHED_NOT_FLAGGED", "Z-HAND": "HUMAN_TOUCHED_NOT_FLAGGED", "Z-APR": "STALE_NO_END_EVENT", "Z-OLDEND": "STALE_NO_END_EVENT"}
+    check("oracle sanity: the scenarios classify as designed (and Z-NOINT is not flagged)", all(got_states.get(k) == v for k, v in expect.items()) and "Z-NOINT" not in got_states, got_states)
+    # ---- the diagnostic is read-only and agrees with the oracle
+    DIAG = os.path.join(ROOT, "Diagnose_TigerCS_PROD_ActiveAiConversations_ReadOnly.sql")
+    before = digest(state())
+    rc, out = run_text(open(DIAG, encoding="utf-8").read())
+    check("diagnostic exits 0 and changed nothing (all table digests equal)", rc == 0 and digest(state()) == before, out[-300:])
+    from collections import Counter
+    oc = Counter(v[0] for v in st.values())
+    ok = all(re.search(r"^%s\|%d\|" % (k, oc[k]), out, re.M) for k in oc)
+    check("diagnostic counts by state equal the independent oracle %s" % dict(oc), ok, out[:1500])
+    flagged = len(st); base, pend, ai_only = held_sets()
+    check("diagnostic headline: flagged active-AI = %d, of which also pending approval = %d" % (flagged, sum(1 for t in st if t in pend)),
+          re.search(r"\|%d\|%d\|\d+\|\d+\|\d+\|\d+\s*\n" % (len(base), flagged), out) is not None, out[:700])
+    eligible_now = len([t for t in base if t not in pend and t not in st])
+    h24 = sum(1 for t, v in st.items() if t not in pend and (v[1] or v[2] > 24))
+    check("diagnostic projection for 24 h: eligible now %d -> projected %d" % (eligible_now, eligible_now + h24),
+          re.search(r"^24 hours\|24\|%d\|\d+\|\d+\|%d\|" % (eligible_now, eligible_now + h24), out, re.M) is not None, out[out.find("Label|"):][:900])
+    check("diagnostic lists the missing-record counts (Z-NOINT among the Open tickets with no interaction row)", re.search(r"^\d+\|\d+\|0\|", out[out.find("OpenTickets_NoInteractionRow"):], re.M) is not None)
+    # ---- Preview: defaults unchanged, switches reproduce the oracle
+    base_plan, base_origin, cc, agents = oracle()
+    n0, m0, r0 = counts_of(base_plan, base_origin, cc)
+    rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC]))
+    check("switches OFF (default): the protection is unchanged - no ticket reclassified, counts as before", "READY|NULL|0|0|0" in out and "ReclassifiedAs" in out and not re.search(r"^[A-Z]-?[A-Z0-9-]+\|\w+\|(STALE|HUMAN_TOUCHED)\|", out, re.M), out[:600])
+    for label, sa, hu in (("stale > 24 h only", 24, 0), ("stale > 6 h only", 6, 0), ("human-touched only", None, 1), ("stale > 24 h + human-touched", 24, 1)):
+        plan, origin, cc, agents = oracle(stale_after=sa, human=bool(hu))
+        n, mv, rs = counts_of(plan, origin, cc); _, pend2, ai2 = held_sets(stale_after=sa, human=bool(hu))
+        sw = dict(StaleAiAfterHours="NULL" if sa is None else sa, TreatHumanTouchedAiAsHistorical=hu)
+        rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC], **sw))
+        check("Preview %s: eligible %d (was %d), moved %d, owner replaced %d, still held AI %d, approvals %d" % (label, n, n0, mv, rs, len(ai2), len(pend2)),
+              rc == 0 and re.search(r"\n%d\|%d\|%d\|%d\|%d\|%d\s*\n" % (n, mv, rs, len(agents), len(pend2), len(ai2)), out) is not None, out[-400:])
+        check("...and Execute (dry run, same switches, matching counts) agrees", execute(dry=False if False else True, approved=(n, mv, rs, len(agents), len(pend2), len(ai2)), **sw)[0] == 0)
+    # ---- commit with both switches: plan equals oracle, interactions untouched, genuinely active stay protected
+    plan, origin, cc, agents = oracle(stale_after=24, human=True)
+    n, mv, rs = counts_of(plan, origin, cc); _, pend2, ai2 = held_sets(stale_after=24, human=True)
+    appr = (n, mv, rs, len(agents), len(pend2), len(ai2)); sw = dict(StaleAiAfterHours=24, TreatHumanTouchedAiAsHistorical=1)
+    pre = state(); pre_x = snapshot_tables(["TicketApprovals", "TicketInteractions", "TicketInteractionMessages", "TicketInteractionHandlers", "TicketAgentHandoffs"])
+    rc, out = execute(dry=False, approved=APPROVED, **sw)
+    check("Execute with the switches but the OLD approved counts is refused (the correction changes the numbers, so it cannot slip in unseen)", rc != 0 and has(out, "backlog changed since the preview"), out[-250:])
+    rc_out = execute(dry=False, batch=BATCH, approved=appr, **sw)
+    commit_vs_oracle("Execute with the switches and the matching counts commits and equals the oracle (%d tickets)" % n, rc_out, plan)
+    ids_ = lambda names: ids(names)
+    moved = ids_(["Z-3D", "Z-PHONE2D", "Z-OLDEND", "Z-HUM", "Z-HAND"]); held = ids_(["Z-REC", "Z-12H", "Z-MSG", "Z-APR"])
+    post = state(); tk = {r[0]: r for r in post["Tickets"]}; pk = {r[0]: r for r in pre["Tickets"]}
+    check("stale (chat, phone, superseded) and human-touched conversations were moved and assigned", moved <= set(plan) and all(tk[str(t)] != pk[str(t)] for t in moved))
+    check("genuinely active / recently silent / recent-message conversations and the pending-approval ticket stay byte-identical (protection kept)", not (held & set(plan)) and all(tk[str(t)] == pk[str(t)] for t in held))
+    check("NO conversation record was modified (TicketInteractions, messages, handlers, handoffs, approvals byte-identical)",
+          snapshot_tables(["TicketApprovals", "TicketInteractions", "TicketInteractionMessages", "TicketInteractionHandlers", "TicketAgentHandoffs"]) == pre_x)
+    rc, out = rollback(BATCH, dry=False)
+    check("rollback restores the pre-batch Tickets table", rc == 0 and state()["Tickets"] == pre["Tickets"], out[-250:])
+    # ---- a NEW conversation on a stale ticket created mid-run must abort the run (Msg 50341)
+    restore()
+    must("SET QUOTED_IDENTIFIER ON; SET NOCOUNT ON; DECLARE @SUP int=(SELECT DepartmentId FROM dbo.Departments WHERE Code='SUP');"
+         "INSERT dbo.Tickets (TicketNumber, OriginatingDepartmentId, CurrentDepartmentId, CurrentOwnerEmployeeId, TicketStatus, VerificationStatus, EscalationLevel, SlaState, RequestSummary, ReopenCount, CreatedAtUtc) VALUES (N'Z-3D',@SUP,@SUP,NULL,1,0,0,1,N'x',0,DATEADD(day,-3,SYSUTCDATETIME()));"
+         "INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, InteractionStartedAtUtc, RequiresHumanFollowUp) SELECT TicketId,1,2,2,N'05',N'c-z3d',DATEADD(day,-3,SYSUTCDATETIME()),DATEADD(day,-3,SYSUTCDATETIME()),0 FROM dbo.Tickets WHERE TicketNumber=N'Z-3D'")
+    plan, origin, cc, agents = oracle(stale_after=24); n, mv, rs = counts_of(plan, origin, cc); _, pend2, ai2 = held_sets(stale_after=24)
+    victim = scalar("SELECT TicketId FROM dbo.Tickets WHERE TicketNumber='Z-3D'")
+    slow = patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC], BatchId="'%s'" % BATCH, StaleAiAfterHours=24, **approval_params((n, mv, rs, len(agents), len(pend2), len(ai2))))
+    marker = "    -- (f) writes"; assert marker in slow            # the window before the update, where only update locks are held
+    slow = slow.replace(marker, "    WAITFOR DELAY '00:00:10';\n" + marker, 1)
+    res = {}; th = threading.Thread(target=lambda: res.__setitem__("A", run_text(slow))); th.start(); time.sleep(4)
+    rcN, outN = run_text("SET QUOTED_IDENTIFIER ON; INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, InteractionStartedAtUtc, RequiresHumanFollowUp) "
+                         "VALUES (%s,0,2,2,N'05',N'new-live',SYSUTCDATETIME(),SYSUTCDATETIME(),0)" % victim)
+    th.join(); rcA, outA = res["A"]
+    check("a brand-new conversation on a 'stale' ticket during the run aborts the whole run (Msg 50341)", rcA != 0 and "Msg 50341" in outA and scalar("SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action='BacklogDistributionBatch'") == "0", (rcN, outA[-250:]))
+
 TESTS = [t01_preview_readonly, t01b_preview_as_datareader, t02_dry_run, t03_gates, t04_commit, t05_rollback_clean, t06_rollback_touched, t06b_include_worked, t07_concurrency,
          t08_race_between_preview_and_run, t09_cursor_and_pool_edges, t11_pending_approvals, t11b_approval_decided_between_preview_and_run, t12_active_ai, t13_concurrent_safeguards,
-         t14_switches, t15_owned_reassignment, t16_denials, t17_keep_in_place, t10_scale]
+         t14_switches, t15_owned_reassignment, t16_denials, t17_keep_in_place, t18_stale_ai_conversations, t10_scale]
 
 if __name__ == "__main__":
     only = sys.argv[1:]

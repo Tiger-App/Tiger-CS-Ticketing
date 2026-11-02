@@ -61,6 +61,8 @@ DECLARE @NoServiceAccountsExist bit = 0;   -- set 1 ONLY if you have confirmed t
 DECLARE @IncludeLiveAiConversations bit = 0;   -- MUST equal the Execute script's value. 0 = tickets with an ACTIVE AI conversation are held back (listed below)
 DECLARE @CsAgentRoleOnly bit = 1;              -- MUST equal the Execute script's value. 1 = only holders of the CS Agent role receive tickets (the role that can Transfer as owner)
 DECLARE @ReassignTicketsAlreadyOwnedByEligibleCcAgent bit = 1;  -- MUST equal the Execute script's value. 1 = literal rule (deal EVERY Open ticket again). 0 = leave a CC ticket that an eligible CC agent already owns
+DECLARE @StaleAiAfterHours int = NULL;                           -- MUST equal the Execute script's value. NULL = off (default). e.g. 24 = an "active AI" conversation silent for more than 24 h with no human evidence is treated as ended
+DECLARE @TreatHumanTouchedAiAsHistorical bit = 0;                -- MUST equal the Execute script's value. 0 = off (default). 1 = an "AI" ticket where a person demonstrably took part is human work, not held back
 DECLARE @ExcludeAgentsWithTicketDenials bit = 1;                -- MUST equal the Execute script's value. 1 = an agent with an explicit DENY of Tickets.View / Resolve / Close is not dealt tickets
 
 -- ---------------------------------------------------------------------------------------------------------------------------
@@ -109,6 +111,37 @@ DECLARE @N int = (SELECT COUNT(*) FROM #Agents);
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 2. Eligible tickets (ALL departments, Open only, owned or not)
 -- ---------------------------------------------------------------------------------------------------------------------------
+-- ---------------------------------------------------------------------------------------------------------------------------
+-- Proposed correction for STALE / HUMAN-TOUCHED "active AI" conversations (see Diagnose_TigerCS_PROD_ActiveAiConversations_ReadOnly.sql).
+-- Computed in memory; NO TicketInteractions row is modified. Both switches are OFF by default, so the protection is unchanged unless approved.
+--   @StaleAiAfterHours             a live-looking AI conversation silent for MORE than this many hours, with no human evidence, is treated as an ended historical one
+--   @TreatHumanTouchedAiAsHistorical  a person took part (HumanAgent line, interaction handler, first human response, handoff row, agent event) but the row still says AI: treated as human work
+-- Last activity = latest interaction stamp / transcript message / handoff-or-Genesys workflow event / ticket creation (identical to the diagnostic).
+-- ---------------------------------------------------------------------------------------------------------------------------
+CREATE TABLE #StaleAi (TicketId bigint NOT NULL PRIMARY KEY, Reason varchar(20) NOT NULL, LastActivityUtc datetime2 NOT NULL);
+IF @StaleAiAfterHours IS NOT NULL OR @TreatHumanTouchedAiAsHistorical = 1
+    INSERT #StaleAi (TicketId, Reason, LastActivityUtc)
+    SELECT x.TicketId, CASE WHEN x.Human = 1 THEN 'HUMAN_TOUCHED' ELSE 'STALE' END, x.LastActivityUtc
+    FROM (SELECT t.TicketId,
+                 CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i JOIN dbo.TicketInteractionMessages mm ON mm.TicketInteractionId = i.TicketInteractionId WHERE i.TicketId = t.TicketId AND mm.Sender = 2)
+                        OR EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = t.TicketId)
+                        OR t.FirstHumanResponseAtUtc IS NOT NULL
+                        OR EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId)
+                        OR EXISTS (SELECT 1 FROM dbo.TicketWorkflowEvents e WHERE e.TicketId = t.TicketId AND e.EventType IN (11, 12, 18, 19)) THEN 1 ELSE 0 END AS Human,
+                 (SELECT MAX(v) FROM (VALUES
+                     ((SELECT MAX(z.v) FROM dbo.TicketInteractions i CROSS APPLY (VALUES (i.CreatedAtUtc), (i.InteractionStartedAtUtc), (i.LastCustomerInteractionAtUtc), (i.AwaitingCustomerReplySinceUtc)) z(v) WHERE i.TicketId = t.TicketId)),
+                     ((SELECT MAX(mm.SentAtUtc) FROM dbo.TicketInteractions i JOIN dbo.TicketInteractionMessages mm ON mm.TicketInteractionId = i.TicketInteractionId WHERE i.TicketId = t.TicketId)),
+                     ((SELECT MAX(e.OccurredAtUtc) FROM dbo.TicketWorkflowEvents e WHERE e.TicketId = t.TicketId AND e.EventType BETWEEN 10 AND 19)),
+                     (t.CreatedAtUtc)) a(v)) AS LastActivityUtc
+          FROM dbo.Tickets t
+          WHERE t.TicketStatus = 1
+            AND (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+                         AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
+                 AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
+                 AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4)))) x
+    WHERE (x.Human = 1 AND @TreatHumanTouchedAiAsHistorical = 1)
+       OR (x.Human = 0 AND @StaleAiAfterHours IS NOT NULL AND x.LastActivityUtc < DATEADD(hour, -@StaleAiAfterHours, SYSUTCDATETIME()));
+
 -- every Open ticket with its current owner / current assignment row and the two hold-back flags
 CREATE TABLE #Base (TicketId bigint NOT NULL PRIMARY KEY, TicketNumber nvarchar(80) NULL, CreatedAtUtc datetime2 NOT NULL,
     FromDepartmentId int NOT NULL, OriginatingDepartmentId int NOT NULL, PrevOwnerId uniqueidentifier NULL, PrevAssignmentId bigint NULL,
@@ -121,7 +154,7 @@ SELECT t.TicketId, t.TicketNumber, t.CreatedAtUtc, t.CurrentDepartmentId, t.Orig
        CASE WHEN (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
                      AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
-       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4))) THEN 1 ELSE 0 END,
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4)) AND NOT EXISTS (SELECT 1 FROM #StaleAi sa WHERE sa.TicketId = t.TicketId)) THEN 1 ELSE 0 END,
        CASE WHEN @ReassignTicketsAlreadyOwnedByEligibleCcAgent = 0 AND t.CurrentDepartmentId = @CcId
                  AND EXISTS (SELECT 1 FROM #Agents ag WHERE ag.EmployeeId = t.CurrentOwnerEmployeeId) THEN 1 ELSE 0 END
 FROM dbo.Tickets AS t
@@ -145,6 +178,8 @@ DECLARE @Moved int = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1);
 DECLARE @Reassigned int = (SELECT COUNT(*) FROM #Cand WHERE PrevOwnerId IS NOT NULL);                  -- eligible tickets that currently HAVE an owner (the owner is replaced)
 DECLARE @HeldApproval int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 1);                    -- pending approval (whether or not an AI conversation is also active)
 DECLARE @HeldAiOnly   int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND ActiveAi = 1 AND @IncludeLiveAiConversations = 0);  -- active AI conversation, no pending approval
+DECLARE @StaleAiReclassified int = (SELECT COUNT(*) FROM #StaleAi sa JOIN #Base b ON b.TicketId = sa.TicketId WHERE sa.Reason = 'STALE');
+DECLARE @HumanAiReclassified int = (SELECT COUNT(*) FROM #StaleAi sa JOIN #Base b ON b.TicketId = sa.TicketId WHERE sa.Reason = 'HUMAN_TOUCHED');
 DECLARE @KeptInPlace  int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND (ActiveAi = 0 OR @IncludeLiveAiConversations = 1) AND KeptInPlace = 1);
 
 -- ---------------------------------------------------------------------------------------------------------------------------
@@ -181,7 +216,16 @@ SELECT @@SERVERNAME AS [Server], DB_NAME() AS [Database], SYSUTCDATETIME() AS Pr
                                                                  THEN 'BLOCKER: a listed service-account id is not an employee (typo?) - see ServiceIdsNotFound below'
            WHEN @N = 1                                           THEN 'WARNING: only one eligible agent - every ticket goes to that person'
            WHEN @Cand = 0                                        THEN 'NOTHING TO DO: no eligible tickets'
-           ELSE 'READY' END AS Verdict;
+           ELSE 'READY' END AS Verdict,
+       @StaleAiAfterHours AS StaleAiAfterHours, @TreatHumanTouchedAiAsHistorical AS TreatHumanTouchedAiAsHistorical,
+       @StaleAiReclassified AS StaleAiTreatedAsEnded, @HumanAiReclassified AS HumanTouchedAiTreatedAsHuman;
+
+-- Tickets whose "active AI" protection was lifted by the proposed correction (empty while both switches are off) - review before approving
+SELECT b.TicketNumber, d.Code AS CurrentDepartment, sa.Reason AS ReclassifiedAs, sa.LastActivityUtc,
+       CAST(DATEDIFF(minute, sa.LastActivityUtc, SYSUTCDATETIME()) / 60.0 AS decimal(12, 1)) AS SilentHours,
+       CASE WHEN b.PendingApproval = 1 THEN 'still held back: PENDING APPROVAL' WHEN b.KeptInPlace = 1 THEN 'kept in place (owned by a pool agent)' ELSE 'now eligible' END AS Outcome
+FROM #StaleAi sa JOIN #Base b ON b.TicketId = sa.TicketId JOIN dbo.Departments d ON d.DepartmentId = b.FromDepartmentId
+ORDER BY sa.Reason, sa.LastActivityUtC, b.TicketNumber;
 
 SELECT s.EmployeeId AS ServiceIdsNotFound FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId);
 
@@ -375,4 +419,4 @@ ORDER BY c.Seq;
 SELECT TOP (1) a.DisplayName AS CursorWouldMoveTo, a.EmployeeId
 FROM #Plan p JOIN #Agents a ON a.Rn = p.AgentRn ORDER BY p.Seq DESC;
 
-DROP TABLE #Plan; DROP TABLE #Cand; DROP TABLE #Base; DROP TABLE #Agents; DROP TABLE #Deny;
+DROP TABLE #Plan; DROP TABLE #Cand; DROP TABLE #Base; DROP TABLE #Agents; DROP TABLE #Deny; DROP TABLE #StaleAi;
