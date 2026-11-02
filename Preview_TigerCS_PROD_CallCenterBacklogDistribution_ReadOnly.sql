@@ -3,28 +3,27 @@
  Preview_TigerCS_PROD_CallCenterBacklogDistribution_ReadOnly.sql      (DRY RUN - NO WRITES)
  Database : TigerCS_Ticketing_Prod
 
- READ-ONLY. Contains no INSERT/UPDATE/DELETE/DDL against the database. It only creates session temp tables (tempdb) and SELECTs.
- Run it from a read-only login. It changes nothing, takes no locks that block the application (READ UNCOMMITTED), and can be re-run any time.
+ READ-ONLY. No INSERT/UPDATE/DELETE/DDL against the database; only session temp tables (tempdb) and SELECTs. Run from a read-only login.
+ READ UNCOMMITTED, so it never blocks the application. Safe to re-run any time.
 
- It answers, BEFORE anything is executed:
-   1. Which tickets are in scope (Open / InProgress / Pending, Call Center, no owner, no current assignment)?
-   2. Which tickets are out of scope and why (other departments, drift anomalies, Resolved/Closed)?
-   3. Which Call Center agents are eligible, in exact Round Robin order, with their current workload?
-   4. How many tickets each agent WOULD receive, and the exact ticket -> agent plan.
+ BUSINESS RULE (confirmed): every existing UNOWNED Open / InProgress / Pending ticket, from EVERY department, is moved into the Call Center
+ (CC) and given to exactly ONE eligible Call Center agent by Round Robin. One-time backlog redistribution; future tickets are unaffected.
 
- It reproduces the existing Round Robin engine (TicketAutoAssignmentService.AssignRoundRobinAsync / FilterEligibleAsync /
- DepartmentAssignmentRotation.PickNext):
-   * pool            = active members of the ticket's CURRENT department (here: Code = 'CC', department active)
-   * eligibility     = employee not deactivated, account not locked out, not a service identity, holds at least one of
-                       CS Agent / Department Employee / Department Head (so Reporting User / Chairman-CEO-only users are excluded)
-   * order           = ascending .NET Guid order. For a Guid that is identical to ordinal order of its canonical text, so the script
-                       sorts on CONVERT(char(36), id) with a binary collation. (SQL Server's own uniqueidentifier ordering differs - not used.)
-   * next agent      = first eligible id greater than the persisted cursor (DepartmentAssignmentRotations.LastAssignedEmployeeId),
-                       wrapping to the first; cursor missing / no longer eligible restarts at the first.
- Tickets are dealt out oldest first (CreatedAtUtc, TicketId), so counts per agent differ by at most 1.
+ A ticket is ELIGIBLE when ALL hold:
+   * TicketStatus IN (1 Open, 2 InProgress, 3 PendingCustomer, 4 PendingThirdParty-legacy)   (Resolved 5 / Closed 6 excluded; the schema has no 'Cancelled')
+   * Tickets.CurrentOwnerEmployeeId IS NULL                                                 (never overwrite an employee's ownership)
+   * no TicketAssignments row with IsCurrent = 1                                            (never overwrite/duplicate an active assignment)
+   * any CurrentDepartmentId (active OR inactive department)
+ What the run would change per eligible ticket:  CurrentDepartmentId -> CC (if not already CC) and CurrentOwnerEmployeeId -> the dealt agent.
+ NEVER changed: OriginatingDepartmentId, RequestTypeId, CategoryId, PriorityId, TicketStatus, SlaState, history, notes, approvals, interactions, notifications.
 
- TicketStatus: 1 Open, 2 InProgress, 3 PendingCustomer, 4 PendingThirdParty (legacy)  -> in scope
-               5 Resolved, 6 Closed                                                   -> excluded   (there is no 'Cancelled' status in this schema)
+ ROUND ROBIN (reproduces TicketAutoAssignmentService.AssignRoundRobinAsync / FilterEligibleAsync / DepartmentAssignmentRotation.PickNext):
+   * pool       = members of the active CC department who are: not deactivated, not locked out, not a service identity, and hold at least one of
+                  CS Agent / Department Employee / Department Head (so read-only roles, supervisors, managers and admins are never dealt tickets)
+   * order      = ascending .NET Guid order == ordinal order of the canonical GUID text, so the script sorts on CONVERT(char(36), id) with a binary
+                  collation (SQL Server's own uniqueidentifier ordering is different and is deliberately not used)
+   * next agent = first eligible id greater than the persisted cursor (DepartmentAssignmentRotations.LastAssignedEmployeeId), wrapping to the first
+   * tickets are dealt OLDEST FIRST (CreatedAtUtc, TicketId) so per-agent counts differ by at most 1.
 ================================================================================
 */
 SET NOCOUNT ON;
@@ -42,13 +41,14 @@ END;
 -- Edits the variable table only; nothing persists.
 DECLARE @ServiceIdentity TABLE (EmployeeId uniqueidentifier PRIMARY KEY);
 -- INSERT INTO @ServiceIdentity VALUES ('00000000-0000-0000-0000-000000000000');
-DECLARE @ServiceIdsConfirmed bit = 0;   -- set to 1 once the list above is complete (an empty list with 0 is reported as a BLOCKER)
+DECLARE @ServiceIdsConfirmed bit = 0;      -- set 1 once the list above is complete
+DECLARE @NoServiceAccountsExist bit = 0;   -- set 1 ONLY if you have confirmed there are no service/integration accounts at all (empty list)
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 0. Call Center department + rotation cursor
 -- ---------------------------------------------------------------------------------------------------------------------------
-DECLARE @CcId int = (SELECT TOP (1) DepartmentId FROM dbo.Departments WHERE Code = N'CC' AND IsActive = 1);
 DECLARE @CcCount int = (SELECT COUNT(*) FROM dbo.Departments WHERE Code = N'CC' AND IsActive = 1);
+DECLARE @CcId int = (SELECT TOP (1) DepartmentId FROM dbo.Departments WHERE Code = N'CC' AND IsActive = 1);
 DECLARE @HasRotationTable bit = CASE WHEN OBJECT_ID(N'dbo.DepartmentAssignmentRotations', N'U') IS NULL THEN 0 ELSE 1 END;
 DECLARE @Cursor uniqueidentifier = NULL;
 IF @HasRotationTable = 1 AND @CcId IS NOT NULL
@@ -60,14 +60,11 @@ DECLARE @AssignmentAllowed bit = ISNULL((SELECT AllowAssignment FROM dbo.Departm
 -- ---------------------------------------------------------------------------------------------------------------------------
 CREATE TABLE #Agents (
     Rn int NOT NULL PRIMARY KEY, EmployeeId uniqueidentifier NOT NULL, DisplayName nvarchar(200) NULL, UserName nvarchar(256) NULL,
-    RoleList nvarchar(400) NULL, SortKey char(36) COLLATE Latin1_General_BIN2 NOT NULL);
+    SortKey char(36) COLLATE Latin1_General_BIN2 NOT NULL);
 
-INSERT #Agents (Rn, EmployeeId, DisplayName, UserName, RoleList, SortKey)
+INSERT #Agents (Rn, EmployeeId, DisplayName, UserName, SortKey)
 SELECT ROW_NUMBER() OVER (ORDER BY CONVERT(char(36), e.EmployeeId) COLLATE Latin1_General_BIN2),
-       e.EmployeeId, e.DisplayName, u.UserName,
-       (SELECT STRING_AGG(r.Name, N', ') WITHIN GROUP (ORDER BY r.Name)
-          FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId WHERE ur.UserId = e.EmployeeId),
-       CONVERT(char(36), e.EmployeeId) COLLATE Latin1_General_BIN2
+       e.EmployeeId, e.DisplayName, u.UserName, CONVERT(char(36), e.EmployeeId) COLLATE Latin1_General_BIN2
 FROM dbo.Employees AS e
 JOIN dbo.AspNetUsers AS u ON u.Id = e.EmployeeId
 WHERE @CcId IS NOT NULL
@@ -81,20 +78,22 @@ WHERE @CcId IS NOT NULL
 DECLARE @N int = (SELECT COUNT(*) FROM #Agents);
 
 -- ---------------------------------------------------------------------------------------------------------------------------
--- 2. Candidate tickets (the only tickets that would ever be touched)
+-- 2. Eligible tickets (ALL departments)
 -- ---------------------------------------------------------------------------------------------------------------------------
-CREATE TABLE #Cand (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL, CreatedAtUtc datetime2 NOT NULL);
+CREATE TABLE #Cand (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL,
+    CreatedAtUtc datetime2 NOT NULL, FromDepartmentId int NOT NULL, OriginatingDepartmentId int NOT NULL, IsMove bit NOT NULL);
 
-INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc)
-SELECT ROW_NUMBER() OVER (ORDER BY t.CreatedAtUtc, t.TicketId), t.TicketId, t.TicketNumber, t.TicketStatus, t.CreatedAtUtc
+INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc, FromDepartmentId, OriginatingDepartmentId, IsMove)
+SELECT ROW_NUMBER() OVER (ORDER BY t.CreatedAtUtc, t.TicketId), t.TicketId, t.TicketNumber, t.TicketStatus, t.CreatedAtUtc,
+       t.CurrentDepartmentId, t.OriginatingDepartmentId, CASE WHEN t.CurrentDepartmentId <> @CcId THEN 1 ELSE 0 END
 FROM dbo.Tickets AS t
 WHERE @CcId IS NOT NULL
-  AND t.CurrentDepartmentId = @CcId
   AND t.TicketStatus IN (1, 2, 3, 4)                                   -- Open, InProgress, Pending*
   AND t.CurrentOwnerEmployeeId IS NULL                                 -- no owner
   AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1);   -- and no active assignment
 
 DECLARE @Cand int = (SELECT COUNT(*) FROM #Cand);
+DECLARE @Moved int = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1);
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 3. The Round Robin deal
@@ -112,51 +111,65 @@ IF @N > 0
 -- RESULT SET 1 - Verdict
 -- ===========================================================================================================================
 SELECT @@SERVERNAME AS [Server], DB_NAME() AS [Database], SYSUTCDATETIME() AS PreviewAtUtc,
-       @CcId AS CallCenterDepartmentId, @N AS EligibleAgents, @Cand AS TicketsToAssign,
+       @CcId AS CallCenterDepartmentId, @N AS EligibleAgents,
+       @Cand AS EligibleTickets_Total, @Moved AS TicketsMovedIntoCC, @Cand - @Moved AS TicketsAlreadyInCC_AssignOnly,
        @Cursor AS RotationCursor_LastAssignedEmployeeId,
        CASE
            WHEN @CcCount <> 1                                    THEN 'BLOCKER: expected exactly one active department with Code=CC, found ' + CONVERT(varchar(10), @CcCount)
            WHEN @HasRotationTable = 0                            THEN 'BLOCKER: dbo.DepartmentAssignmentRotations is missing - apply Deploy_TigerCS_Prod_Migrations.sql first'
            WHEN @AssignmentAllowed = 0                           THEN 'BLOCKER: Call Center workflow settings disable assignment (the engine would leave tickets in the queue)'
            WHEN @N = 0                                           THEN 'BLOCKER: no eligible Call Center agent'
-           WHEN @ServiceIdsConfirmed = 0                         THEN 'BLOCKER: service-account list not confirmed (@ServiceIdsConfirmed = 0) - a service account could be listed as an agent below'
+           WHEN @ServiceIdsConfirmed = 0                         THEN 'BLOCKER: service-account exclusions not confirmed (@ServiceIdsConfirmed = 0) - a service account could be listed as an agent below'
+           WHEN NOT EXISTS (SELECT 1 FROM @ServiceIdentity) AND @NoServiceAccountsExist = 0
+                                                                 THEN 'BLOCKER: service-account list is empty - list the ids, or set @NoServiceAccountsExist = 1 if there are none'
+           WHEN EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId))
+                                                                 THEN 'BLOCKER: a listed service-account id is not an employee (typo?) - see ServiceIdsNotFound below'
            WHEN @N = 1                                           THEN 'WARNING: only one eligible agent - every ticket goes to that person'
-           WHEN @Cand = 0                                        THEN 'NOTHING TO DO: no eligible unowned tickets'
+           WHEN @Cand = 0                                        THEN 'NOTHING TO DO: no eligible tickets'
            ELSE 'READY' END AS Verdict;
 
--- ===========================================================================================================================
--- RESULT SET 2 - Scope reconciliation: every unowned non-terminal ticket, by department and why it is / is not in scope
--- ===========================================================================================================================
-SELECT d.Code AS DepartmentCode, d.Name AS DepartmentName,
-       SUM(CASE WHEN t.TicketStatus = 1 THEN 1 ELSE 0 END) AS [Open],
-       SUM(CASE WHEN t.TicketStatus = 2 THEN 1 ELSE 0 END) AS InProgress,
-       SUM(CASE WHEN t.TicketStatus IN (3, 4) THEN 1 ELSE 0 END) AS Pending,
-       COUNT(*) AS TotalUnowned,
-       CASE WHEN d.DepartmentId = @CcId THEN 'IN SCOPE (Call Center pool)'
-            ELSE 'OUT OF SCOPE - not a Call Center ticket; needs a separate decision (see runbook, "Tickets outside Call Center")' END AS Scope
-FROM dbo.Tickets AS t
-JOIN dbo.Departments AS d ON d.DepartmentId = t.CurrentDepartmentId
-WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NULL
-GROUP BY d.DepartmentId, d.Code, d.Name
-ORDER BY CASE WHEN d.DepartmentId = @CcId THEN 0 ELSE 1 END, COUNT(*) DESC;
+SELECT s.EmployeeId AS ServiceIdsNotFound FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId);
 
--- Counts of what is excluded and untouched, for the sign-off:
+-- ===========================================================================================================================
+-- RESULT SET 2 - ELIGIBLE TICKETS BY ORIGINAL (CURRENT) DEPARTMENT AND STATUS   <- the move being approved
+-- ===========================================================================================================================
+SELECT d.Code AS OriginalDepartmentCode, d.Name AS OriginalDepartmentName, d.IsActive AS DepartmentIsActive,
+       SUM(CASE WHEN c.TicketStatus = 1 THEN 1 ELSE 0 END) AS [Open],
+       SUM(CASE WHEN c.TicketStatus = 2 THEN 1 ELSE 0 END) AS InProgress,
+       SUM(CASE WHEN c.TicketStatus IN (3, 4) THEN 1 ELSE 0 END) AS Pending,
+       COUNT(*) AS Eligible,
+       CASE WHEN d.DepartmentId = @CcId THEN 'already in CC - assign only' ELSE 'MOVE to CC + assign' END AS Action
+FROM #Cand AS c
+JOIN dbo.Departments AS d ON d.DepartmentId = c.FromDepartmentId
+GROUP BY d.DepartmentId, d.Code, d.Name, d.IsActive
+UNION ALL
+SELECT N'** TOTAL **', NULL, NULL, SUM(CASE WHEN TicketStatus = 1 THEN 1 ELSE 0 END), SUM(CASE WHEN TicketStatus = 2 THEN 1 ELSE 0 END),
+       SUM(CASE WHEN TicketStatus IN (3, 4) THEN 1 ELSE 0 END), COUNT(*), NULL
+FROM #Cand
+ORDER BY Eligible DESC;
+
+-- ===========================================================================================================================
+-- RESULT SET 3 - What is EXCLUDED / never touched (for the sign-off)
+-- ===========================================================================================================================
 SELECT
-    (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketStatus IN (5, 6) AND CurrentOwnerEmployeeId IS NULL)  AS UnownedResolvedOrClosed_Excluded,
-    (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketStatus IN (1, 2, 3, 4) AND CurrentOwnerEmployeeId IS NOT NULL) AS AlreadyOwned_NeverTouched,
+    (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketStatus IN (5, 6) AND CurrentOwnerEmployeeId IS NULL)                         AS UnownedResolvedOrClosed_Excluded,
+    (SELECT COUNT(*) FROM dbo.Tickets WHERE TicketStatus IN (1, 2, 3, 4) AND CurrentOwnerEmployeeId IS NOT NULL)               AS AlreadyOwned_NeverTouched,
     (SELECT COUNT(*) FROM dbo.Tickets t WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NULL
-        AND EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1)) AS NoOwnerButHasCurrentAssignment_DataDrift_Excluded,
+        AND EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1))                  AS NoOwnerButHasCurrentAssignment_DataDrift_Excluded,
     (SELECT COUNT(*) FROM dbo.Tickets t WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NOT NULL
-        AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1)) AS OwnerButNoAssignmentRow_Legacy_NeverTouched,
-    (SELECT COUNT(*) FROM (SELECT TicketId FROM dbo.TicketAssignments WHERE IsCurrent = 1 GROUP BY TicketId HAVING COUNT(*) > 1) x) AS TicketsWithMoreThanOneCurrentAssignment_Existing;
+        AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1))              AS OwnerButNoAssignmentRow_Legacy_NeverTouched,
+    (SELECT COUNT(*) FROM (SELECT TicketId FROM dbo.TicketAssignments WHERE IsCurrent = 1 GROUP BY TicketId HAVING COUNT(*) > 1) x) AS TicketsWithMoreThanOneCurrentAssignment_MustBe0;
 
--- In-scope tickets by status
-SELECT CASE TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' WHEN 3 THEN 'PendingCustomer' WHEN 4 THEN 'PendingThirdParty(legacy)' END AS [Status],
-       COUNT(*) AS Tickets, MIN(CreatedAtUtc) AS Oldest, MAX(CreatedAtUtc) AS Newest
-FROM #Cand GROUP BY TicketStatus ORDER BY TicketStatus;
+-- Informational flags on the ELIGIBLE tickets (they will still be moved - this is what the Call Center inherits):
+SELECT
+    (SELECT COUNT(*) FROM #Cand c JOIN dbo.Tickets t ON t.TicketId = c.TicketId WHERE t.RequestTypeId IS NOT NULL)                       AS WithRequestType_Preserved,
+    (SELECT COUNT(*) FROM #Cand c JOIN dbo.Tickets t ON t.TicketId = c.TicketId WHERE t.CategoryId IS NULL)                                AS Unclassified,
+    (SELECT COUNT(*) FROM #Cand c JOIN dbo.Tickets t ON t.TicketId = c.TicketId WHERE t.SlaState = 4)                                    AS SlaBreached_ClockUntouched,
+    (SELECT COUNT(*) FROM #Cand c WHERE EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = c.TicketId AND ap.IsCurrent = 1 AND ap.Status = 1)) AS WithPendingApproval_ApprovalKept,
+    (SELECT COUNT(*) FROM #Cand c WHERE c.OriginatingDepartmentId <> c.FromDepartmentId)                                                    AS AlreadyTransferredBefore_OriginatingDeptKept;
 
 -- ===========================================================================================================================
--- RESULT SET 3 - Agents (all Call Center members, with the reason each is in or out) in rotation order
+-- RESULT SET 4 - Agents (all Call Center members, with the reason each is in or out), in rotation order
 -- ===========================================================================================================================
 SELECT ISNULL(CONVERT(varchar(10), a.Rn), '-') AS RotationPosition, e.DisplayName, u.UserName, e.EmployeeId,
        ISNULL((SELECT STRING_AGG(r.Name, N', ') WITHIN GROUP (ORDER BY r.Name)
@@ -185,10 +198,12 @@ WHERE uda.DepartmentId = @CcId AND e.DeactivatedAtUtc IS NULL
     OR e.DisplayName LIKE N'%genesys%' OR e.DisplayName LIKE N'%integration%' OR e.DisplayName LIKE N'%service%' OR e.DisplayName LIKE N'%bot%');
 
 -- ===========================================================================================================================
--- RESULT SET 4 - PROJECTED DISTRIBUTION PER AGENT  (this is the table to approve)
+-- RESULT SET 5 - PROJECTED DISTRIBUTION PER CALL CENTER AGENT  (this is the table to approve)
 -- ===========================================================================================================================
 SELECT a.Rn AS RotationPosition, a.DisplayName, a.UserName,
        COUNT(p.TicketId) AS TicketsToReceive,
+       SUM(CASE WHEN c.IsMove = 1 THEN 1 ELSE 0 END) AS FromOtherDepartments,
+       SUM(CASE WHEN c.IsMove = 0 THEN 1 ELSE 0 END) AS AlreadyInCC,
        SUM(CASE WHEN c.TicketStatus = 1 THEN 1 ELSE 0 END) AS Open_,
        SUM(CASE WHEN c.TicketStatus = 2 THEN 1 ELSE 0 END) AS InProgress_,
        SUM(CASE WHEN c.TicketStatus IN (3, 4) THEN 1 ELSE 0 END) AS Pending_,
@@ -205,18 +220,31 @@ SELECT MIN(cnt) AS MinPerAgent, MAX(cnt) AS MaxPerAgent, MAX(cnt) - MIN(cnt) AS 
        @Cand AS TotalTickets, @N AS Agents, @Cand / NULLIF(@N, 0) AS FloorPerAgent, @Cand % NULLIF(@N, 0) AS AgentsGettingOneExtra
 FROM (SELECT a.Rn, COUNT(p.TicketId) AS cnt FROM #Agents a LEFT JOIN #Plan p ON p.AgentRn = a.Rn GROUP BY a.Rn) x;
 
--- Values to copy into the execution script's approval gates:
-SELECT @Cand AS ApprovedTicketCount_for_execution_script, @N AS ApprovedAgentCount_for_execution_script;
+-- Original department x receiving agent (how each department's backlog is spread across the Call Center)
+SELECT d.Code AS OriginalDepartmentCode, a.DisplayName AS ReceivingAgent, COUNT(*) AS Tickets
+FROM #Plan p
+JOIN #Cand c ON c.TicketId = p.TicketId
+JOIN dbo.Departments d ON d.DepartmentId = c.FromDepartmentId
+JOIN #Agents a ON a.Rn = p.AgentRn
+GROUP BY d.Code, a.Rn, a.DisplayName
+ORDER BY d.Code, a.Rn;
 
 -- ===========================================================================================================================
--- RESULT SET 5 - Exact plan: ticket -> agent (ticket numbers only; no customer data)
+-- RESULT SET 6 - APPROVAL VALUES: copy these three numbers into the execution script's commit gates
+-- ===========================================================================================================================
+SELECT @Cand AS ApprovedTicketCount, @Moved AS ApprovedMovedTicketCount, @N AS ApprovedAgentCount;
+
+-- ===========================================================================================================================
+-- RESULT SET 7 - Exact plan: ticket -> original department -> receiving agent (ticket numbers only; no customer data)
 -- ===========================================================================================================================
 SELECT c.Seq AS DealOrder, c.TicketId, c.TicketNumber,
        CASE c.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' WHEN 3 THEN 'PendingCustomer' WHEN 4 THEN 'PendingThirdParty' END AS [Status],
-       c.CreatedAtUtc, a.DisplayName AS WouldBeAssignedTo, a.UserName
+       c.CreatedAtUtc, od.Code AS FromDepartment, CASE WHEN c.IsMove = 1 THEN 'CC' ELSE 'CC (no move)' END AS ToDepartment,
+       a.DisplayName AS WouldBeAssignedTo, a.UserName
 FROM #Cand AS c
 JOIN #Plan AS p ON p.TicketId = c.TicketId
 JOIN #Agents AS a ON a.Rn = p.AgentRn
+JOIN dbo.Departments AS od ON od.DepartmentId = c.FromDepartmentId
 ORDER BY c.Seq;
 
 -- Where the cursor would end up after the run:
