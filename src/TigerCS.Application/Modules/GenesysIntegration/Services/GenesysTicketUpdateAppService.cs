@@ -68,7 +68,8 @@ public sealed class GenesysTicketUpdateAppService(
     GenesysRequestTypeClassificationAppService classificationAppService,
     TicketLifecycleAppService lifecycleAppService,
     GenesysAgentHandlingHistory handlingHistory,
-    GenesysInteractionHandlerRecorder? handlerRecorder = null)
+    GenesysInteractionHandlerRecorder? handlerRecorder = null,
+    TicketAutoAssignmentService? autoAssignmentService = null)
 {
     /// <summary>The exact closure reason recorded when the AI finishes the conversation.</summary>
     public const string ClosedByAiReason = "Closed by AI";
@@ -696,21 +697,38 @@ public sealed class GenesysTicketUpdateAppService(
     private async Task MarkHumanFollowUpAsync(
         Guid callerEmployeeId, Ticket ticket, TicketInteraction interaction, CancellationToken cancellationToken)
     {
-        if (!interaction.MarkRequiresHumanFollowUp())
+        var changed = interaction.MarkRequiresHumanFollowUp();
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+        var correlationId = Guid.NewGuid();
+
+        if (changed)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId,
+                GenesysAuditActions.HumanFollowUpRequired,
+                GenesysAuditActions.ConversationEntityType,
+                interaction.GenesysConversationId!,
+                beforeValue: null,
+                afterValue: $"TicketId={ticket.TicketId};ServiceRequestId={interaction.GenesysServiceRequestId ?? "(none)"};TicketStatus={ticket.TicketStatus}",
+                correlationId: correlationId,
+                cancellationToken);
+        }
+
+        // Call Center first. The ticket was created before Genesys knew a person was needed (the usual case: the AI opens the ticket,
+        // then reports humanFollowUpRequired), so it is still sitting unassigned in its category/queue department. It enters the Call
+        // Center now and gets ONE agent by Round Robin — unless a person already owns it, or it is closed/resolved. Evaluated even when the
+        // flag was already set, so a redelivered update heals a ticket whose routing never ran; routing itself is idempotent.
+        var routed = autoAssignmentService is not null
+            && await autoAssignmentService.RouteExistingTicketToCallCenterAsync(
+                ticket, timeProvider.GetUtcNow().UtcDateTime, correlationId,
+                "Human follow-up required — routed to Call Center first", cancellationToken);
+
+        if (!changed && !routed)
         {
             return;
         }
 
-        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
-        await auditWriter.WriteAsync(
-            callerEmployeeId,
-            GenesysAuditActions.HumanFollowUpRequired,
-            GenesysAuditActions.ConversationEntityType,
-            interaction.GenesysConversationId!,
-            beforeValue: null,
-            afterValue: $"TicketId={ticket.TicketId};ServiceRequestId={interaction.GenesysServiceRequestId ?? "(none)"};TicketStatus={ticket.TicketStatus}",
-            correlationId: Guid.NewGuid(),
-            cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);
     }
