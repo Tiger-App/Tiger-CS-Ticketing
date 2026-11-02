@@ -59,7 +59,9 @@ A handoff request (`handoff.required:true`) already routed to Call Center + Roun
 # Works on ANY build, including the one currently running (no version endpoint there): look for the code's own strings in the DLL.
 $dll = 'C:\inetpub\TigerCS\Api\TigerCS.Application.dll'
 $b = [IO.File]::ReadAllBytes($dll)
-function Has($s){ $t=[Text.Encoding]::Unicode.GetString($b); $t.Contains($s) }
+$latin = [Text.Encoding]::GetEncoding(28591)            # byte-for-byte, so UTF-16 strings are found at any offset
+$hay = $latin.GetString($b)
+function Has($s){ $hay.Contains($latin.GetString([Text.Encoding]::Unicode.GetBytes($s))) }
 'CC-first (create):   ' + (Has 'New ticket requires a person')
 'Late follow-up #145: ' + (Has 'Human follow-up required — routed to Call Center first')
 'Human evidence (new): ' + (Has 'HumanSignal=')
