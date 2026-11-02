@@ -105,7 +105,8 @@ public sealed class TicketAutoAssignmentService(
     IDepartmentRepository? departmentRepository = null,
     IUserRoleReader? roleReader = null,
     IUserAccountManager? accountManager = null,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    IServiceIdentityRegistry? serviceIdentities = null,
+    ITicketWorkflowEventRepository? workflowEventRepository = null)
 {
     /// <summary>
     /// Runs inside the caller's creation transaction, after the ticket row
@@ -227,6 +228,65 @@ public sealed class TicketAutoAssignmentService(
         }
 
         return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, AutoAssignmentTrigger.CallCenterIntake, ruleId: null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Call Center first for a ticket that ALREADY exists and has just been found to need a person (Genesys reporting
+    /// <c>humanFollowUpRequired</c> after the ticket was created): the ticket moves to the Call Center (OriginatingDepartmentId, Request
+    /// Type, status and SLA untouched) and ONE eligible Call Center agent is picked by Round Robin.
+    ///
+    /// <para>
+    /// Returns false and changes nothing when the ticket is closed or resolved, already in the Call Center, owned by a person (only an
+    /// automatic pre-assignment is released — <see cref="TicketOwnershipRules.IsAutomaticPreAssignmentAsync"/>), or no active Call Center
+    /// exists. Idempotent: a second call finds the ticket already in the Call Center. Runs inside the caller's transaction.
+    /// </para>
+    /// </summary>
+    public async Task<bool> RouteExistingTicketToCallCenterAsync(
+        Ticket ticket, DateTime nowUtc, Guid correlationId, string reason, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        if (ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed
+            || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
+            || callCenter.DepartmentId == ticket.CurrentDepartmentId)
+        {
+            return false;
+        }
+
+        if (ticket.CurrentOwnerEmployeeId is not null
+            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken))
+        {
+            return false;   // genuine human ownership is never overwritten
+        }
+
+        var fromDepartmentId = ticket.CurrentDepartmentId;
+        var releasedOwner = ticket.CurrentOwnerEmployeeId;
+        if (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken) is { } current)
+        {
+            current.MarkSuperseded();
+        }
+
+        ticket.TransferToDepartment(callCenter.DepartmentId);   // clears the owner; OriginatingDepartmentId is write-once
+
+        await auditWriter.WriteAsync(
+            actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
+            beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId={releasedOwner?.ToString() ?? "DepartmentQueue"}",
+            afterValue: $"DepartmentId={callCenter.DepartmentId};Reason={reason}"
+                + (releasedOwner is not null ? ";AutomaticPreAssignmentReleased=true" : string.Empty)
+                + $";OriginatingDepartmentId={ticket.OriginatingDepartmentId} (unchanged)",
+            correlationId, cancellationToken);
+
+        if (workflowEventRepository is not null)
+        {
+            await workflowEventRepository.AddAsync(
+                TicketWorkflowEvent.ForTransfer(
+                    ticket.TicketId, nowUtc, actorEmployeeId: null, TicketTransferReason.SystemRouting,
+                    fromDepartmentId, callCenter.DepartmentId, toEmployeeId: null, reason, correlationId),
+                cancellationToken);
+        }
+
+        await AssignCallCenterIntakeAsync(ticket, nowUtc, correlationId, cancellationToken);
+        return true;
     }
 
     /// <summary>

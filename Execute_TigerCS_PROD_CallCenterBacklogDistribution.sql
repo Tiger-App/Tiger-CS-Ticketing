@@ -53,6 +53,7 @@ DECLARE @ApprovedAgentCount  int              = NULL;   -- commit gate: from the
 DECLARE @IncludeLiveAiConversations bit       = 0;      -- keep 0 unless explicitly approved (see header)
 DECLARE @CsAgentRoleOnly     bit              = 1;      -- 1 = only agents holding the CS Agent role receive work (the role that can Resolve/Close/Transfer as owner; see runbook)
 DECLARE @ServiceIdsConfirmed bit              = 0;      -- commit gate: set 1 only after listing ALL service-account ids below
+DECLARE @NoServiceAccountsExist bit           = 0;      -- commit gate alternative: 1 ONLY if confirmed that no service/integration accounts exist (list stays empty)
 DECLARE @AllowSecondBatch    bit              = 0;      -- keep 0: this is a ONE-TIME operation
 DECLARE @BatchId             uniqueidentifier = NEWID();-- correlation id of every row this run writes; needed by the rollback script
 DECLARE @ExpectedDb          sysname          = N'TigerCS_Ticketing_Prod';
@@ -118,10 +119,16 @@ IF @AllowSecondBatch = 0 AND EXISTS (SELECT 1 FROM dbo.AuditEntries WHERE Action
 
 IF @DryRun = 0 AND (ISNULL(@ServiceIdsConfirmed, 0) <> 1 OR @ApprovedTicketCount IS NULL OR @ApprovedTransferCount IS NULL OR @ApprovedAgentCount IS NULL)
     THROW 50307, 'ABORTED: commit gates not satisfied - set @ServiceIdsConfirmed = 1 (service-account ids filled in) and @ApprovedTicketCount / @ApprovedTransferCount / @ApprovedAgentCount from the approved preview.', 1;
+IF @DryRun = 0 AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity) AND ISNULL(@NoServiceAccountsExist, 0) <> 1
+    THROW 50308, 'ABORTED: the service-account list is empty. List every service/integration account id, or set @NoServiceAccountsExist = 1 if you have confirmed there are none.', 1;
+-- a mistyped id would silently leave the real service account in the Round Robin pool, so every listed id must be a real employee (checked on dry runs too)
+IF EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId))
+    THROW 50309, 'ABORTED: a listed service-account id is not an employee (typo?). Fix the list.', 1;
+IF @DryRun = 1 AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity) PRINT N'WARNING: service-account list is empty - a real run would be refused unless @NoServiceAccountsExist = 1.';
 
 -- ---------------------------------------------------- before-snapshot of tables that must stay untouched ----------------------
 DECLARE @Snapshot TABLE (TableName sysname PRIMARY KEY, RowsBefore bigint NOT NULL, RowsAfter bigint NULL, Expected nvarchar(40) NOT NULL);
-DECLARE @t sysname, @sql nvarchar(max), @n bigint;
+DECLARE @t sysname, @sql nvarchar(max), @rowCnt bigint;   -- NOT @n: T-SQL names are case-insensitive and @N (agent count) is declared below
 DECLARE watched CURSOR LOCAL FAST_FORWARD FOR
     SELECT v.n FROM (VALUES (N'Tickets'), (N'TicketAssignments'), (N'AuditEntries'), (N'DepartmentAssignmentRotations'), (N'TicketStatusHistory'),
         (N'TicketSlaInstances'), (N'TicketSlaPausePeriods'), (N'TicketInteractions'), (N'TicketInteractionMessages'), (N'TicketNotes'),
@@ -131,9 +138,9 @@ DECLARE watched CURSOR LOCAL FAST_FORWARD FOR
 OPEN watched; FETCH NEXT FROM watched INTO @t;
 WHILE @@FETCH_STATUS = 0
 BEGIN
-    SET @sql = N'SELECT @n = COUNT_BIG(*) FROM dbo.' + QUOTENAME(@t) + N' WITH (NOLOCK);';
-    EXEC sp_executesql @sql, N'@n bigint OUTPUT', @n = @n OUTPUT;
-    INSERT @Snapshot (TableName, RowsBefore, Expected) VALUES (@t, @n, CASE WHEN @t IN (N'Tickets', N'TicketAssignments', N'AuditEntries', N'DepartmentAssignmentRotations', N'TicketWorkflowEvents') THEN N'written by this script' ELSE N'must not be written by this script' END);
+    SET @sql = N'SELECT @rc = COUNT_BIG(*) FROM dbo.' + QUOTENAME(@t) + N' WITH (NOLOCK);';
+    EXEC sp_executesql @sql, N'@rc bigint OUTPUT', @rc = @rowCnt OUTPUT;
+    INSERT @Snapshot (TableName, RowsBefore, Expected) VALUES (@t, @rowCnt, CASE WHEN @t IN (N'Tickets', N'TicketAssignments', N'AuditEntries', N'DepartmentAssignmentRotations', N'TicketWorkflowEvents') THEN N'written by this script' ELSE N'must not be written by this script' END);
     FETCH NEXT FROM watched INTO @t;
 END;
 CLOSE watched; DEALLOCATE watched;
@@ -269,8 +276,8 @@ BEGIN TRY
     VALUES (NULL, N'BacklogDistributionBatch', N'DepartmentAssignmentRotation', CONVERT(nvarchar(100), @CcId),
             LOWER(CONVERT(nvarchar(36), @Cursor)),
             N'LastAssignedEmployeeId=' + LOWER(CONVERT(nvarchar(36), @LastAgent)) + N';Tickets=' + CONVERT(nvarchar(20), @Cand)
-            + N';Transfers=' + CONVERT(nvarchar(20), @Transfers)
-            + N';Agents=' + CONVERT(nvarchar(20), @N) + N';DepartmentId=' + CONVERT(nvarchar(20), @CcId) + N';BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId)),
+            + N';Agents=' + CONVERT(nvarchar(20), @N) + N';Moved=' + CONVERT(nvarchar(20), @Transfers)   -- format read by Rollback_...sql
+            + N';DepartmentId=' + CONVERT(nvarchar(20), @CcId) + N';BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId)),
             @BatchId, @Now);
 
     -- (g) validation INSIDE the transaction: any failure rolls everything back ------------------------------------------------------
@@ -306,9 +313,9 @@ BEGIN TRY
     OPEN watched2; FETCH NEXT FROM watched2 INTO @t;
     WHILE @@FETCH_STATUS = 0
     BEGIN
-        SET @sql = N'SELECT @n = COUNT_BIG(*) FROM dbo.' + QUOTENAME(@t) + N' WITH (NOLOCK);';
-        EXEC sp_executesql @sql, N'@n bigint OUTPUT', @n = @n OUTPUT;
-        UPDATE @Snapshot SET RowsAfter = @n WHERE TableName = @t;
+        SET @sql = N'SELECT @rc = COUNT_BIG(*) FROM dbo.' + QUOTENAME(@t) + N' WITH (NOLOCK);';
+        EXEC sp_executesql @sql, N'@rc bigint OUTPUT', @rc = @rowCnt OUTPUT;
+        UPDATE @Snapshot SET RowsAfter = @rowCnt WHERE TableName = @t;
         FETCH NEXT FROM watched2 INTO @t;
     END;
     CLOSE watched2; DEALLOCATE watched2;

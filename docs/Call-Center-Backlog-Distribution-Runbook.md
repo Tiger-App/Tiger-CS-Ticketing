@@ -1,6 +1,6 @@
 # Call Center first — Production diagnosis and one-time backlog correction (ALL departments)
 
-**Database:** `TigerCS_Ticketing_Prod` · **Status: NOT EXECUTED. Nothing has been run against Production, UAT or any SQL Server, and nothing has been deployed.**
+**Database:** `TigerCS_Ticketing_Prod` · **Status: NOT EXECUTED. Nothing has been run against Production or UAT, and nothing has been deployed.** The scripts were validated on a disposable SQL Server 2022 container with `tests/backlog-distribution` (see §9, item 4).
 Every script defaults to a mode that changes nothing; the execution script cannot commit without the approval gates in §5.
 
 | File | Purpose | Writes? |
@@ -89,11 +89,12 @@ Locking note: the script locks the candidate tickets and the CC cursor for a few
 Service accounts are **not in SQL**; the application builds the list from two settings (`ServiceIdentityRegistry`): `Authorization:ServiceIdentity:EmployeeIds` and `Collections:Authorization:IntegrationEmployeeIds`
 (Production: API-pool environment variables `Authorization__ServiceIdentity__EmployeeIds__0..n`, `Collections__Authorization__IntegrationEmployeeIds__0..n`; the committed value is an empty list).
 Both scripts take the same ids in `@ServiceIdentity`; the Preview/Execute **refuse to commit** while `@ServiceIdsConfirmed = 0`, and the Execute re-validates that no ticket went to a listed id.
+An **empty list** is refused unless `@NoServiceAccountsExist = 1` (set it only after confirming there are no service/integration accounts), and every listed id **must be an existing employee** (a typo would otherwise leave the real service account in the Round Robin pool). The Preview reports both as `BLOCKER`.
 The preview also prints a name-based heuristic (genesys / integration / service / bot / api) of CC members for manual review. **The ids are not available to this session — see Blockers.**
 
 ## 5. Execution gates (all enforced by `Execute`)
 `DB_NAME() = TigerCS_Ticketing_Prod` · schema columns/indexes present (incl. the unique filtered index) · exactly one active `CC` · assignment enabled for CC · no earlier `BacklogDistributionBatch` ·
-`@ServiceIdsConfirmed = 1` · approved counts (tickets, transfers, agents) equal the live computation · app lock held · every candidate row still unowned/same department/same status/same `RowVersion` ·
+`@ServiceIdsConfirmed = 1` and a non-empty service list (or `@NoServiceAccountsExist = 1`), every listed id an employee · approved counts (tickets, transfers, agents) equal the live computation · app lock held · every candidate row still unowned/same department/same status/same `RowVersion` ·
 post-write validations (one owner = one current assignment; all in CC; status and originating department unchanged; no deactivated/service owner; spread ≤ 1; audit/assignment/event counts exact; no assignment ever superseded).
 
 ## 6. Rollback strategy
@@ -138,9 +139,9 @@ Live check after execution (UI, as one real receiving CS Agent): My Tickets list
 1. **Service-account ids** (both settings) are not available → the scripts refuse to commit; also decides whether the Genesys integration account is a CC member.
 2. **Production state is unverified** — nothing here could connect to Production. Step 0 (Diagnose) must be run and, if the Call Center-first build/schema/`CC` department is missing, step 1 completed first.
 3. **No real counts** — the Preview must be run by someone with Production read access; the approval document is its output.
-4. **The SQL has never been run on SQL Server** (none available here). The first run must be the `@DryRun = 1` on UAT or a restored backup (step 5). Treat any error there as a defect to fix before Production.
+4. **SQL Server validation (disposable container only):** `tests/backlog-distribution` runs Preview, Execute (dry run, gates, commit, concurrency, scale), Rollback and the Diagnose script against a real SQL Server 2022 built from the repo's migrations, with an independent Round Robin oracle. It found and fixed three defects in the earlier drafts (a duplicate `@n`/`@N` variable that stopped Execute compiling, a Msg 8124 error in Rollback, and a Rollback that ignored Genesys-handler activity). It does **not** replace the `@DryRun = 1` on UAT or a restored Production backup (step 5), which remains mandatory; treat any error there as a defect.
 5. **Decisions:** (a) `@CsAgentRoleOnly` default, (b) holding back live AI conversations, (c) Genesys unflagged-ticket policy (§1.3), (d) backup/window owner.
-6. **No automated tests were run** for this change (no .NET SDK in the authoring environment); C# is unchanged.
+6. The `.NET` build and full test suite are run separately from the SQL validation; see the PR that merged this runbook for results.
 
 ## 10. Residual risks
 * Backlog drift between preview and execution — execution aborts unless counts equal the approved numbers; re-preview and re-approve.

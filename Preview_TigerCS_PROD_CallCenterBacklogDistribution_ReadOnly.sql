@@ -44,6 +44,7 @@ END;
 DECLARE @ServiceIdentity TABLE (EmployeeId uniqueidentifier PRIMARY KEY);
 -- INSERT INTO @ServiceIdentity VALUES ('00000000-0000-0000-0000-000000000000');
 DECLARE @ServiceIdsConfirmed bit = 0;   -- set to 1 once the list above is complete (an empty list with 0 is reported as a BLOCKER)
+DECLARE @NoServiceAccountsExist bit = 0;   -- set 1 ONLY if you have confirmed there are no service/integration accounts at all (empty list)
 DECLARE @IncludeLiveAiConversations bit = 0;   -- must equal the Execute script's value. 0 = live Genesys AI conversations are held back (listed below)
 DECLARE @CsAgentRoleOnly bit = 1;              -- must equal the Execute script's value. 1 = only holders of the CS Agent role receive work
 
@@ -139,6 +140,10 @@ SELECT @@SERVERNAME AS [Server], DB_NAME() AS [Database], SYSUTCDATETIME() AS Pr
            WHEN @AssignmentAllowed = 0                           THEN 'BLOCKER: Call Center workflow settings disable assignment (the engine would leave tickets in the queue)'
            WHEN @N = 0                                           THEN 'BLOCKER: no eligible Call Center agent'
            WHEN @ServiceIdsConfirmed = 0                         THEN 'BLOCKER: service-account list not confirmed (@ServiceIdsConfirmed = 0) - a service account could be listed as an agent below'
+           WHEN NOT EXISTS (SELECT 1 FROM @ServiceIdentity) AND @NoServiceAccountsExist = 0
+                                                                 THEN 'BLOCKER: service-account list is empty - list the ids, or set @NoServiceAccountsExist = 1 if there are none'
+           WHEN EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId))
+                                                                 THEN 'BLOCKER: a listed service-account id is not an employee (typo?)'
            WHEN @N = 1                                           THEN 'WARNING: only one eligible agent - every ticket goes to that person'
            WHEN @Cand = 0                                        THEN 'NOTHING TO DO: no eligible unowned tickets'
            ELSE 'READY' END AS Verdict;
