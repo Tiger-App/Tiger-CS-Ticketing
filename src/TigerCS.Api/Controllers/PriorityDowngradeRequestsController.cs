@@ -6,6 +6,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
 using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -41,6 +42,7 @@ public class PriorityDowngradeRequestsController(PriorityDowngradeAppService ser
     /// <response code="409">`downgrade-request-already-pending`; the body carries the existing request.</response>
     /// <response code="422">Not a downgrade, ticket unclassified, or ticket Resolved/Closed.</response>
     [HttpPost("api/tickets/{ticketId:long}/sla/priority-downgrade-requests")]
+    [RequirePermission(Permissions.TicketsEdit)]
     [ProducesResponseType<PriorityDowngradeRequestResponseDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -64,6 +66,7 @@ public class PriorityDowngradeRequestsController(PriorityDowngradeAppService ser
     /// <response code="403">The ticket is outside the caller's department visibility.</response>
     /// <response code="404">No such ticket.</response>
     [HttpGet("api/tickets/{ticketId:long}/sla/priority-downgrade-requests")]
+    [RequirePermission(Permissions.TicketsView)]
     [ProducesResponseType<IReadOnlyList<PriorityDowngradeRequestResponseDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
@@ -82,6 +85,7 @@ public class PriorityDowngradeRequestsController(PriorityDowngradeAppService ser
     /// <response code="200">A page of Pending, unexpired requests with ticket context.</response>
     /// <response code="403">The caller holds no decision authority, or asked for a department they do not belong to.</response>
     [HttpGet("api/priority-downgrade-requests/pending")]
+    [RequirePermission(Permissions.TicketsApprove)]
     [Authorize(Policy = PolicyNames.DepartmentHeadOrAbove)]
     [ProducesResponseType<PendingDowngradePageDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -111,6 +115,7 @@ public class PriorityDowngradeRequestsController(PriorityDowngradeAppService ser
     /// <response code="410">The request expired.</response>
     /// <response code="422">The ticket is Closed or Resolved.</response>
     [HttpPost("api/priority-downgrade-requests/{requestId:long}/approve")]
+    [RequirePermission(Permissions.TicketsApprove)]
     [Authorize(Policy = PolicyNames.DepartmentHeadOrAbove)]
     [ProducesResponseType<DowngradeDecisionResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -140,6 +145,7 @@ public class PriorityDowngradeRequestsController(PriorityDowngradeAppService ser
     /// <response code="409">Not pending, or a lost concurrency race.</response>
     /// <response code="410">The request expired.</response>
     [HttpPost("api/priority-downgrade-requests/{requestId:long}/reject")]
+    [RequirePermission(Permissions.TicketsApprove)]
     [Authorize(Policy = PolicyNames.DepartmentHeadOrAbove)]
     [ProducesResponseType<PriorityDowngradeRequestResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]

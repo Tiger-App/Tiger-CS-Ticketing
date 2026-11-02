@@ -27,6 +27,11 @@ public abstract class AdminControllerBase : ControllerBase
             AdminOutcome.Success => onSuccess is null ? Ok(result.Value) : onSuccess(result.Value!),
             AdminOutcome.NotFound => NotFound(),
             AdminOutcome.ValidationFailed => ValidationProblem(result.Errors),
+            AdminOutcome.Forbidden => Problem(
+                type: "https://tigercs.internal/problems/administration-forbidden",
+                title: "You are not allowed to make this change",
+                detail: string.Join(" ", result.Errors ?? []),
+                statusCode: StatusCodes.Status403Forbidden),
             AdminOutcome.Conflict => Problem(
                 type: "https://tigercs.internal/problems/administration-conflict",
                 title: "The change conflicts with current configuration",
@@ -42,6 +47,11 @@ public abstract class AdminControllerBase : ControllerBase
             AdminOutcome.NotFound => NotFound(),
             AdminOutcome.ValidationFailed => ValidationProblem(result.Errors),
             AdminOutcome.PasswordPolicyViolation => PasswordPolicyProblem(result.Errors),
+            AdminOutcome.Forbidden => Problem(
+                type: "https://tigercs.internal/problems/administration-forbidden",
+                title: "You are not allowed to make this change",
+                detail: string.Join(" ", result.Errors ?? []),
+                statusCode: StatusCodes.Status403Forbidden),
             AdminOutcome.Conflict => Problem(
                 type: "https://tigercs.internal/problems/administration-conflict",
                 title: "The change conflicts with current configuration",

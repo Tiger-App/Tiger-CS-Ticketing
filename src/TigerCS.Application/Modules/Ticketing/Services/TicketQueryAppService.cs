@@ -1,4 +1,4 @@
-using TigerCS.Application.Authorization;
+﻿using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Notifications;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -54,7 +54,7 @@ public sealed class TicketQueryAppService(
         }
 
         var visibleDepartmentIds = await ResolveTicketViewDepartmentIdsAsync(callerEmployeeId, callerRoles, cancellationToken);
-        var agentScope = ResolveTicketViewAgentScope(callerEmployeeId, callerRoles);
+        var agentScope = ResolveTicketListAgentScope(callerEmployeeId, callerRoles);
 
         var page = request.Page < 1 ? 1 : request.Page;
         var pageSize = request.PageSize is < 1 or > 200 ? 50 : request.PageSize;
@@ -104,7 +104,8 @@ public sealed class TicketQueryAppService(
             Escalated: request.Escalated == true,
             AgentScopeEmployeeId: agentScope,
             CreatedByEmployeeId: request.CreatedByMe == true ? callerEmployeeId : null,
-            CreatedOnlyScope: IsGenesysIntegration(callerEmployeeId, callerRoles));
+            CreatedOnlyScope: IsGenesysIntegration(callerEmployeeId, callerRoles),
+            OwnerVisibilityEmployeeId: callerEmployeeId);
 
         var result = await ticketRepository.SearchAsync(query, cancellationToken);
 
@@ -150,6 +151,9 @@ public sealed class TicketQueryAppService(
         var detail = ToDetailDto(ticket) with
         {
             IsReadOnlyAccess = accessLevel == TicketAccessLevel.ReadOnly,
+            ViewerActsAsInteractionHandler = accessLevel == TicketAccessLevel.Full
+                && await TicketOwnershipRules.IsActingInteractionHandlerAsync(
+                    handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken),
             ResolvedAtUtc = currentResolution?.ResolvedAtUtc,
             ClosedAtUtc = closedAt,
             IsReopenEligible = reopenPolicy.IsReopenEligible(
@@ -378,6 +382,21 @@ public sealed class TicketQueryAppService(
     /// <summary>The ticket-view counterpart of <see cref="ResolveAgentScope"/>: the caller themselves for a restricted CS Agent and for the Genesys integration account.</summary>
     public Guid? ResolveTicketViewAgentScope(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles) =>
         IsGenesysIntegration(callerEmployeeId, callerRoles) ? callerEmployeeId : ResolveAgentScope(callerEmployeeId, callerRoles);
+
+    /// <summary>
+    /// The scope the ticket LIST (Queue / My Tickets / Closed) uses: <see cref="ResolveTicketViewAgentScope"/>, plus - for a
+    /// department-scoped caller (Department Employee / Head) - the caller themselves, so every ticket currently assigned to them is
+    /// listed whatever department it now sits in (My Tickets after a Call Center transfer). Ownership only adds the caller's own
+    /// tickets; their department scope is unchanged. The dashboard keeps <see cref="ResolveTicketViewAgentScope"/>.
+    /// </summary>
+    public Guid? ResolveTicketListAgentScope(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles) =>
+        ResolveTicketViewAgentScope(callerEmployeeId, callerRoles)
+            ?? (OwnsTicketsOutsideDepartmentScope(callerRoles) ? callerEmployeeId : null);
+
+    private static bool OwnsTicketsOutsideDepartmentScope(IReadOnlyCollection<string> callerRoles) =>
+        TicketVisibilityRule.HoldsDepartmentRole(callerRoles)
+        && !TigerCS.Domain.Modules.IdentityAndAccess.Roles.IsReadOnlyCaller(callerRoles)
+        && !callerRoles.Any(TicketRoleSets.CrossDepartmentView.Contains);
 
     /// <summary>True when the caller is the Genesys integration account: it sees the Genesys-created tickets of every department (see <see cref="TicketVisibilityRule.IsGenesysIntegration"/>).</summary>
     public bool IsGenesysIntegration(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles) =>

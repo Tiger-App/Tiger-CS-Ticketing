@@ -1,3 +1,5 @@
+@using TigerCS.Domain.Modules.IdentityAndAccess.Permissions
+@inject ViewerAccessService ViewerAccess
 @{
     // The primary workspace navigation. The former ticket-list
     // shortcuts are no longer top-level items — they are the views (tabs)
@@ -6,22 +8,25 @@
     // New Ticket) lights the same "Tickets" item.
     var active = ViewData["ActiveNav"] as string ?? "tickets";
     var currentUser = CurrentUser.FromPrincipal(User);
-    (string Key, string Label, string Href)[] items =
-    [
-        ("dashboard", "Dashboard", "/Dashboard"),
-        ("customers", "Customers", "/Customers"),
-        ("tickets", "Tickets", "/Tickets"),
-        ("collections", "Collections", "/Collections/Receivables"),
-    ];
-    // Management reports: offered to the CS Manager tier only. Hiding the
-    // link is presentation; the Api's policy is what actually refuses.
-    if (ReportsPolicy.AppliesTo(currentUser))
+    // What the Api would answer for each module: never when the permission is denied to this employee; otherwise through the
+    // module's role rule or an explicit grant. Hiding is presentation - every endpoint enforces the same overrides.
+    var access = await ViewerAccess.GetAsync();
+    var roles = currentUser?.Roles ?? [];
+    var items = new List<(string Key, string Label, string Href)>();
+    void Add(string key, string label, string href, string permission, bool roleRuleSatisfied = true)
     {
-        items = [.. items, ("reports", "Team Performance", "/Reports/TeamPerformance")];
+        if (access.CanReach(permission, roleRuleSatisfied)) { items.Add((key, label, href)); }
     }
-    if (AdministrationPolicy.AppliesTo(currentUser))
+    Add("dashboard", "Dashboard", "/Dashboard", Permissions.DashboardView);
+    Add("customers", "Customers", "/Customers", Permissions.CustomersView);
+    Add("tickets", "Tickets", "/Tickets", Permissions.TicketsView);
+    Add("collections", "Collections", "/Collections/Receivables", Permissions.CollectionsView);
+    // Management reports and Administration are role-gated at the Api: the role, or an explicit grant.
+    Add("reports", "Team Performance", "/Reports/TeamPerformance", Permissions.ReportsView, ReportsPolicy.AppliesTo(currentUser));
+    var adminRole = AdministrationPolicy.AppliesTo(currentUser);
+    if (access.CanReach(Permissions.AdminUsersView, adminRole) || access.CanReach(Permissions.AdminConfigurationView, adminRole))
     {
-        items = [.. items, ("admin", "Administration", "/Admin")];
+        items.Add(("admin", "Administration", "/Admin"));
     }
 }
 <nav class="app-nav" aria-label="Primary">

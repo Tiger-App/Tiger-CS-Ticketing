@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -11,6 +12,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/roles")]
 [Authorize(Policy = PolicyNames.SystemAdministrator)]
 [Tags(OpenApiTags.Roles)]
+[RequirePermission(Permissions.AdminUsersView)]
 public class RolesController(RoleCatalogAppService roleCatalogAppService) : ControllerBase
 {
     /// <summary>The fixed role catalogue. System Administrator only.</summary>

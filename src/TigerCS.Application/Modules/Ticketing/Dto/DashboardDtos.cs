@@ -17,7 +17,7 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// <param name="PendingCustomer">Tickets currently in PendingCustomer.</param>
 /// <param name="ResolvedToday">Tickets whose current resolution was recorded today (UTC day).</param>
 /// <param name="Reopened">Active tickets that have been reopened at least once.</param>
-/// <param name="MyTickets">Active tickets currently owned by the caller.</param>
+/// <param name="MyTickets">Tickets currently assigned to the caller, in any status.</param>
 /// <param name="AttentionTickets">The Tickets Requiring Attention rows — breached, due soon, critical/high, or unassigned — most urgent first.</param>
 public sealed record DashboardSummaryDto(
     int OpenTickets,
@@ -135,7 +135,7 @@ public sealed record DashboardAppliedFiltersDto(
 
 /// <summary>The KPI cards. All are current-state counts over active tickets in scope, except Pending Approval, which counts tickets (any status but the approval must be Pending) the caller may action, and the Awaiting Human Agent trio, which counts pending human work rather than tickets.</summary>
 /// <param name="OpenTickets">Active tickets: Open, InProgress, PendingCustomer — plus any historical ticket still sitting in the legacy PendingThirdParty status, which is non-terminal and therefore still work in hand.</param>
-/// <param name="MyTickets">Active tickets whose CurrentOwnerEmployeeId is the caller.</param>
+/// <param name="MyTickets">Tickets (any status) whose CurrentOwnerEmployeeId is the caller.</param>
 /// <param name="InDepartmentQueue">Active tickets with no current owner — queued to their responsible department.</param>
 /// <param name="SlaBreached">Active tickets whose SlaState is Breached.</param>
 /// <param name="DueToday">Active tickets whose current, unbreached SLA resolution deadline falls today (UTC calendar day).</param>

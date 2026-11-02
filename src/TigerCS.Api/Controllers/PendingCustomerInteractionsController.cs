@@ -5,6 +5,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -79,6 +80,7 @@ public class PendingCustomerInteractionsController(AgentHandoffAppService agentH
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <response code="200">The work list.</response>
     [HttpGet]
+    [RequirePermission(Permissions.InteractionsView)]
     [ProducesResponseType<AgentHandoffListResultDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> List(
         [FromQuery] int? departmentId,
@@ -142,6 +144,7 @@ public class PendingCustomerInteractionsController(AgentHandoffAppService agentH
     /// <response code="409">Another agent already holds this work (the response names them), the work was already completed or cancelled, the ticket behind it is closed, or the ticket moved underneath the request.</response>
     /// <response code="422">The caller is not an active member of the ticket's current department, so they cannot become its owner. Nothing was changed.</response>
     [HttpPost("{handoffId:long}/start")]
+    [RequirePermission(Permissions.InteractionsEdit)]
     [ProducesResponseType<AgentHandoffDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
@@ -172,6 +175,7 @@ public class PendingCustomerInteractionsController(AgentHandoffAppService agentH
     /// <response code="404">No such work item.</response>
     /// <response code="409">The work was already completed or cancelled.</response>
     [HttpPost("{handoffId:long}/complete")]
+    [RequirePermission(Permissions.InteractionsEdit)]
     [ProducesResponseType<AgentHandoffDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
@@ -204,6 +208,7 @@ public class PendingCustomerInteractionsController(AgentHandoffAppService agentH
     /// <response code="409">The work was already completed or cancelled.</response>
     /// <response code="422">No reason was given.</response>
     [HttpPost("{handoffId:long}/cancel")]
+    [RequirePermission(Permissions.InteractionsEdit)]
     [ProducesResponseType<AgentHandoffDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
@@ -270,6 +275,12 @@ public class PendingCustomerInteractionsController(AgentHandoffAppService agentH
                 + "still waiting and the ticket is untouched. Transfer the ticket to your department first, "
                 + "or ask a member of its current department to take it.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        AgentHandoffOutcome.TicketOwnedByAnotherEmployee => Problem(
+            type: "https://tigercs.internal/problems/ticket-owned-by-another-employee",
+            title: "The ticket is already owned by another employee",
+            detail: "A ticket has one owner. Accepting would take it from them, so nothing was changed. Ask a supervisor to reassign it.",
+            statusCode: StatusCodes.Status409Conflict),
 
         AgentHandoffOutcome.TicketClosed => Problem(
             type: "https://tigercs.internal/problems/ticket-closed",

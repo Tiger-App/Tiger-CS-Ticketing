@@ -1,0 +1,189 @@
+@page "/Admin/Users/{id:guid}/Permissions"
+@model TigerCS.Web.Pages.Admin.UserPermissionsModel
+@{
+    ViewData["Title"] = "Manage Permissions";
+    ViewData["ActiveNav"] = "admin";
+    ViewData["AdminSection"] = "users";
+    Layout = "_Layout";
+    var module = AdminModules.Users;
+    var p = Model.Permissions;
+    var locked = p is null || p.IsSelf || p.IsServiceIdentity;
+}
+
+<div class="page admin-page @module.Tone">
+    @await Html.PartialAsync("_AdminCrumbs", (module.Key, p?.DisplayName ?? "Permissions"))
+
+    @if (p is null)
+    {
+        <div class="panel">
+            <div class="error-state">
+                @await Html.PartialAsync("_AdminIcon", "warning")
+                <p>@(Model.LoadError ?? "The permissions could not be loaded.")</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        <header class="admin-head">
+            <div class="admin-head__main">
+                @await Html.PartialAsync("_AdminEyebrow", module.Key)
+                <h1 class="page-title">Manage Permissions</h1>
+                <p class="page-subtitle">
+                    <strong>@p.DisplayName</strong> (@p.UserName) - roles give a baseline; the overrides below apply to this person only.
+                    A denial always wins over a grant and over any role.
+                </p>
+            </div>
+            <div class="admin-head__actions">
+                <a class="btn" href="/Admin/Users/@p.EmployeeId">Back to user</a>
+            </div>
+        </header>
+
+        @await Html.PartialAsync("_AdminMessages", Model)
+
+        @if (p.IsSelf)
+        {
+            <div class="alert alert-error" role="note">
+                @await Html.PartialAsync("_AdminIcon", "lock")
+                <span>You cannot change your own permissions. Another System Administrator has to do it.</span>
+            </div>
+        }
+        else if (p.IsServiceIdentity)
+        {
+            <div class="alert alert-error" role="note">
+                @await Html.PartialAsync("_AdminIcon", "lock")
+                <span>This is an integration (service) account. Its access is fixed to the integration surface and cannot be customised.</span>
+            </div>
+        }
+        else if (p.IsReadOnlyCaller)
+        {
+            <div class="alert" role="note">
+                @await Html.PartialAsync("_AdminIcon", "warning")
+                <span>This person holds only read-only roles (Chairman/CEO, Reporting User), so permissions that change data cannot be granted. Assign a working role first.</span>
+            </div>
+        }
+
+        <div class="admin-grid">
+            <section class="panel admin-form-panel admin-grid__wide" aria-labelledby="roles-title">
+                <div class="panel__header">
+                    <h2 class="panel__title" id="roles-title">Roles</h2>
+                    <span class="panel__hint">The baseline every permission starts from</span>
+                </div>
+                <form method="post" asp-page-handler="Roles" asp-route-id="@p.EmployeeId" class="admin-form" id="roles-form">
+                    <div class="checkbox-grid">
+                        @foreach (var role in Model.RoleCatalog)
+                        {
+                            <label class="checkbox-field" title="@role.Description">
+                                <input type="checkbox" name="SelectedRoles" value="@role.RoleName" checked="@(p.Roles.Contains(role.RoleName) ? "checked" : null)" />
+                                @role.RoleName
+                            </label>
+                        }
+                    </div>
+                    <p class="field-hint">Changing roles changes the baseline below. The last active System Administrator cannot lose the role.</p>
+                    <div class="form-actions"><button type="submit" class="btn btn-gold btn-sm">Save Roles</button></div>
+                </form>
+            </section>
+
+            <section class="panel admin-form-panel admin-grid__wide" aria-labelledby="perm-title">
+                <div class="panel__header">
+                    <h2 class="panel__title" id="perm-title">Permissions</h2>
+                    <span class="panel__hint">Inherit = follow the roles · Grant = allow · Deny = refuse</span>
+                </div>
+                <form method="post" asp-page-handler="Save" asp-route-id="@p.EmployeeId" class="admin-form" id="permissions-form">
+                    @foreach (var group in p.Modules)
+                    {
+                        <fieldset class="perm-module" @(locked ? "disabled" : null)>
+                            <legend class="form-section__title">@group.Module</legend>
+                            <div class="table-scroll">
+                                <table class="data-table perm-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Permission</th>
+                                            <th>From roles</th>
+                                            <th>Override</th>
+                                            <th>Effective</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var perm in group.Permissions)
+                                        {
+                                            var name = $"Overrides[{perm.Key}]";
+                                            <tr data-permission="@perm.Key">
+                                                <td class="cell-wrap">
+                                                    <strong>@perm.Name</strong>
+                                                    @if (perm.IsAdministratorOnly)
+                                                    {
+                                                        <span class="badge badge-neutral" title="Can be denied, but never granted outside the System Administrator role">Administrator only</span>
+                                                    }
+                                                    <div class="cell-sub">@perm.Description</div>
+                                                </td>
+                                                <td>@(perm.FromRole ? "Yes" : "No")</td>
+                                                <td>
+                                                    <div class="perm-choice" role="radiogroup" aria-label="Override for @perm.Name">
+                                                        <label class="perm-choice__opt"><input type="radio" name="@name" value="Inherit" checked="@(perm.Override == "Inherit" ? "checked" : null)" /> Inherit</label>
+                                                        <label class="perm-choice__opt perm-choice__opt--grant @(perm.CanGrant ? "" : "is-disabled")" title="@(perm.CanGrant ? "" : "This permission cannot be granted to this person")"><input type="radio" name="@name" value="Grant" checked="@(perm.Override == "Grant" ? "checked" : null)" disabled="@(perm.CanGrant || perm.Override == "Grant" ? null : "disabled")" /> Grant</label>
+                                                        <label class="perm-choice__opt perm-choice__opt--deny"><input type="radio" name="@name" value="Deny" checked="@(perm.Override == "Deny" ? "checked" : null)" /> Deny</label>
+                                                    </div>
+                                                </td>
+                                                <td>
+                                                    @if (perm.IsEffective)
+                                                    {
+                                                        <span class="badge badge-tone">Allowed</span>
+                                                        <div class="cell-sub">@(perm.Source == "Granted" ? "granted to this person" : "from role")</div>
+                                                    }
+                                                    else
+                                                    {
+                                                        <span class="badge badge-neutral">@(perm.Source == "Denied" ? "Denied" : "Not allowed")</span>
+                                                        <div class="cell-sub">@(perm.Source == "Denied" ? "explicitly denied" : "no role grants it")</div>
+                                                    }
+                                                </td>
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        </fieldset>
+                    }
+
+                    <div class="form-group">
+                        <label class="form-label" for="Reason">Reason for the change (recorded in the audit log)</label>
+                        <input class="form-control" id="Reason" name="Reason" maxlength="500" autocomplete="off" @(locked ? "disabled" : null) />
+                    </div>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-gold btn-sm" @(locked ? "disabled" : null)>Save Permissions</button>
+                    </div>
+                </form>
+            </section>
+
+            <section class="panel admin-form-panel admin-grid__wide" aria-labelledby="history-title">
+                <div class="panel__header">
+                    <h2 class="panel__title" id="history-title">Recent permission changes</h2>
+                    <span class="panel__hint">From the audit log</span>
+                </div>
+                @if (p.RecentChanges.Count == 0)
+                {
+                    <div class="empty-state"><p>No permission overrides have been changed for this person.</p></div>
+                }
+                else
+                {
+                    <div class="table-scroll">
+                        <table class="data-table">
+                            <thead><tr><th>When</th><th>Changed by</th><th>Permission</th><th>Before</th><th>After</th></tr></thead>
+                            <tbody>
+                                @foreach (var c in p.RecentChanges)
+                                {
+                                    <tr>
+                                        <td class="text-secondary">@c.OccurredAtUtc.ToLocalTime().ToString("MMM d, yyyy HH:mm")</td>
+                                        <td>@(c.ChangedBy ?? "System")</td>
+                                        <td>@c.PermissionKey</td>
+                                        <td class="cell-wrap"><code>@c.Before</code></td>
+                                        <td class="cell-wrap"><code>@c.After</code></td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </section>
+        </div>
+    }
+</div>

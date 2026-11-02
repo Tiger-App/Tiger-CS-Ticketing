@@ -9,6 +9,7 @@ using TigerCS.Domain.Modules.CustomerReviews;
 using TigerCS.Domain.Modules.CustomerVerification;
 using TigerCS.Domain.Modules.GenesysIntegration;
 using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Domain.Modules.Notifications;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
@@ -54,6 +55,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
     public DbSet<Employee> Employees => Set<Employee>();
 
     public DbSet<Department> Departments => Set<Department>();
+
+    public DbSet<UserPermissionOverride> UserPermissionOverrides => Set<UserPermissionOverride>();
 
     public DbSet<UserDepartmentAssignment> UserDepartmentAssignments => Set<UserDepartmentAssignment>();
 
@@ -178,6 +181,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new ApplicationUserConfiguration());
         builder.ApplyConfiguration(new ApplicationRoleConfiguration());
         builder.ApplyConfiguration(new EmployeeConfiguration());
+        builder.ApplyConfiguration(new UserPermissionOverrideConfiguration());
         builder.ApplyConfiguration(new DepartmentConfiguration());
         builder.ApplyConfiguration(new UserDepartmentAssignmentConfiguration());
 

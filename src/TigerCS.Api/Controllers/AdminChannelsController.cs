@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.Administration.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -15,12 +16,14 @@ public class AdminChannelsController(AdminChannelAppService channels) : AdminCon
 {
     /// <summary>Every channel, ordered by display order then name, with its history reference count.</summary>
     [HttpGet]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<IReadOnlyList<AdminChannelDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> List([FromQuery] bool includeInactive = true, CancellationToken cancellationToken = default) =>
         Ok(await channels.ListAsync(includeInactive, cancellationToken));
 
     /// <summary>One channel.</summary>
     [HttpGet("{channelId:int:range(1,255)}")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<AdminChannelDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(byte channelId, CancellationToken cancellationToken)
@@ -31,6 +34,7 @@ public class AdminChannelsController(AdminChannelAppService channels) : AdminCon
 
     /// <summary>Adds a channel. Code must be unique.</summary>
     [HttpPost]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminChannelDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Create([FromBody] SaveChannelRequestDto request, CancellationToken cancellationToken) =>
@@ -39,6 +43,7 @@ public class AdminChannelsController(AdminChannelAppService channels) : AdminCon
 
     /// <summary>Edits a channel. Historical intake records and interactions keep referencing it by id, so they display the new name.</summary>
     [HttpPut("{channelId:int:range(1,255)}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminChannelDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -47,6 +52,7 @@ public class AdminChannelsController(AdminChannelAppService channels) : AdminCon
 
     /// <summary>Activate/deactivate — channels are never deleted; an inactive channel only disappears from new-ticket selection.</summary>
     [HttpPatch("{channelId:int:range(1,255)}/activation")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminChannelDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> SetActivation(byte channelId, [FromBody] SetActiveRequestDto request, CancellationToken cancellationToken) =>

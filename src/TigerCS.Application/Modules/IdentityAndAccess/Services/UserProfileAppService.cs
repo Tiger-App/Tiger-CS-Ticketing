@@ -1,5 +1,6 @@
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Application.Modules.IdentityAndAccess.Services;
 
@@ -7,7 +8,8 @@ namespace TigerCS.Application.Modules.IdentityAndAccess.Services;
 public sealed class UserProfileAppService(
     IEmployeeRepository employeeRepository,
     IUserRoleReader roleReader,
-    IUserDepartmentAssignmentRepository assignmentRepository)
+    IUserDepartmentAssignmentRepository assignmentRepository,
+    IUserPermissionOverrideRepository? permissionOverrides = null)
 {
     public async Task<CurrentUserResponseDto?> GetCurrentUserAsync(Guid employeeId, CancellationToken cancellationToken = default)
     {
@@ -24,6 +26,16 @@ public sealed class UserProfileAppService(
             .Select(a => new DepartmentMembershipDto(a.DepartmentId, a.Department.Name, a.IsPrimary))
             .ToList();
 
-        return new CurrentUserResponseDto(employee.EmployeeId, employee.DisplayName, roles, departments, employee.IsGeynessStaff);
+        var effects = permissionOverrides is null
+            ? new Dictionary<string, PermissionEffect>()
+            : (IReadOnlyDictionary<string, PermissionEffect>)await permissionOverrides.GetEffectsAsync(employeeId, cancellationToken);
+        var baseline = RolePermissionDefaults.ForRoles(roles);
+        var granted = PermissionCatalog.All.Select(p => p.Key)
+            .Where(k => EffectivePermissions.Resolve(k, baseline, effects) == PermissionSource.Granted).ToList();
+        var denied = effects.Where(e => e.Value == PermissionEffect.Deny).Select(e => e.Key).Order(StringComparer.Ordinal).ToList();
+
+        return new CurrentUserResponseDto(
+            employee.EmployeeId, employee.DisplayName, roles, departments, employee.IsGeynessStaff,
+            EffectivePermissions.Compute(roles, effects).Order(StringComparer.Ordinal).ToList(), granted, denied);
     }
 }

@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.Collections.Dto;
 using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -29,6 +30,7 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
     /// <param name="minAmount">Minimum outstanding amount: an instalment counts only when its remaining unpaid amount is &gt;= this value. Default 100.</param>
     /// <param name="cancellationToken">Request cancellation.</param>
     [HttpGet]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<PactReceivableCustomersDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -64,6 +66,7 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
     /// <param name="minTotal">With <c>view=units</c> only: keep units whose total (Due + Overdue) is GREATER than this value; omit for no minimum. <c>minAmount</c> is not applied per instalment in the unit view.</param>
     /// <param name="cancellationToken">Request cancellation.</param>
     [HttpGet("/api/collections/receivables/instalments")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<PactInstalmentsPageDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -82,6 +85,7 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
     /// while a refresh runs instead of re-reading the list. Never starts a refresh.
     /// </summary>
     [HttpGet("/api/collections/receivables/snapshot/status")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<SnapshotStatusDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
@@ -95,6 +99,7 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
 
     /// <summary>Active towers (number and name) for the tower dropdown. Read from the local table; PACT is not contacted.</summary>
     [HttpGet("/api/collections/receivables/towers")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<IReadOnlyList<CollectionsTowerDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
@@ -112,6 +117,7 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
     /// </summary>
     /// <param name="companyId">Optional 4 or 32: retry the refresh of that company only (over the standard window); the dates are then not used to decide whether to load.</param>
     [HttpPost("/api/collections/receivables/coverage/load")]
+    [RequirePermission(Permissions.CollectionsEdit)]
     [ProducesResponseType<ReceivablesRangeLoadDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ReceivablesRangeLoadDto>(StatusCodes.Status202Accepted)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]

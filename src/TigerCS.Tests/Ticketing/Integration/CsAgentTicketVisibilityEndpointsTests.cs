@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using TigerCS.Api.Controllers;
@@ -622,14 +622,22 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         var ticket = await CreateManualTicketAsync(creator, own);
         var (manager, _) = await ClientAsync(Roles.CsManager);
         var receiving = await NewDepartmentAsync();
-        var (receivingAgent, _) = await ClientAsync(departmentId: receiving);
+        var (receivingA, receivingAId) = await ClientAsync(departmentId: receiving);
+        var (receivingB, receivingBId) = await ClientAsync(departmentId: receiving);
 
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(colleague, ticket.TicketId));
         await TransferAsync(manager, ticket.TicketId, receiving);
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(colleague, ticket.TicketId));
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(receivingAgent, ticket.TicketId)); // a CS Agent's department grants nothing
+
+        // The transfer round-robins the ticket to ONE eligible agent of the receiving department; only that assignee sees it.
+        // A CS Agent's department membership alone still grants nothing.
+        var after = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        var (assignee, other) = after!.CurrentOwnerEmployeeId == receivingAId ? (receivingA, receivingB) : (receivingB, receivingA);
+        Assert.Contains(after.CurrentOwnerEmployeeId, new Guid?[] { receivingAId, receivingBId });
+        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(assignee, ticket.TicketId));
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(other, ticket.TicketId));
         Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(colleague));
-        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(receivingAgent));
+        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(other));
     }
 
     [Theory]

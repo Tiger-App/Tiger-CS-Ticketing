@@ -60,7 +60,8 @@ public sealed class AdministrationWebTests
 
         var policy = await factory.Services.GetRequiredService<IAuthorizationPolicyProvider>().GetPolicyAsync(AdministrationPolicy.Name);
         Assert.NotNull(policy);
-        var roleRequirement = Assert.Single(policy!.Requirements.OfType<Microsoft.AspNetCore.Authorization.Infrastructure.RolesAuthorizationRequirement>());
+        // The gate is the System Administrator role, or an explicit Administration grant - and never a denial (ViewerPermissionRequirement).
+        var roleRequirement = Assert.Single(policy!.Requirements.OfType<TigerCsWeb::TigerCS.Web.Services.Auth.ViewerPermissionRequirement>());
         Assert.Equal([Roles.SystemAdministrator], roleRequirement.AllowedRoles);
 
         // Anonymous requests to every admin page are sent to sign-in, never rendered.

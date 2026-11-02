@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.Collections.Dto;
 using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -18,6 +19,7 @@ public sealed class CollectionsCampaignsController(CollectionsCampaignAppService
 {
     /// <summary>Preview one communication stage, per unit, using current remaining balances from PACT companies 4 and 32. Only instalments due before the end of the current Dubai month are listed (Overdue: before the first day of the month, Due: inside it); <c>minTotal</c> keeps units whose Due + Overdue is greater than it (omit for no minimum). <c>paymentStatus</c> is Due, Overdue or Both (default): a single status keeps only that status' instalments in the figures; preview, counts and both CSV exports share it.</summary>
     [HttpGet("preview")]
+    [RequirePermission(Permissions.CampaignsView)]
     [ProducesResponseType<CollectionsCampaignPreviewDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -37,6 +39,7 @@ public sealed class CollectionsCampaignsController(CollectionsCampaignAppService
     /// <summary>Export the full filtered list. Review mode is for internal review; Genesys mode refuses any unresolved row,
     /// an unscheduled or non-current date, and internal legal referrals. CSV is returned in an internal JSON envelope.</summary>
     [HttpGet("export")]
+    [RequirePermission(Permissions.CampaignsExport)]
     [ProducesResponseType<CollectionsCampaignExportDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]

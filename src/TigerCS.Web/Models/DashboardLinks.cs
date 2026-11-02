@@ -23,9 +23,9 @@ public static class DashboardLinks
     /// <summary>Open Tickets: every active ticket in the filter context.</summary>
     public static string OpenTickets(DashboardAppliedFiltersDto f) => Build(f, includeDates: false, ("activeOnly", "true"));
 
-    /// <summary>My Tickets: active tickets the signed-in user owns — the agent filter is replaced by the viewer themself.</summary>
+    /// <summary>My Tickets: every ticket currently assigned to the signed-in user, in any status — the agent filter is replaced by the viewer themself. No active-only filter, so the list shows exactly what the card counted.</summary>
     public static string MyTickets(DashboardAppliedFiltersDto f, Guid viewerEmployeeId) =>
-        Build(f with { OwnerEmployeeId = viewerEmployeeId }, includeDates: false, ("activeOnly", "true"), (TicketsViews.QueryKey, TicketsView.My.Key()));
+        Build(f with { OwnerEmployeeId = viewerEmployeeId }, includeDates: false, (TicketsViews.QueryKey, TicketsView.My.Key()));
 
     public static string InDepartmentQueue(DashboardAppliedFiltersDto f) => Build(f, includeDates: false, ("inDepartmentQueue", "true"));
 

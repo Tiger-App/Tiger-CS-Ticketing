@@ -2,12 +2,15 @@ using Microsoft.AspNetCore.Mvc;
 using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
+using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 
 namespace TigerCS.Api.Controllers;
 
 [ApiController]
 [Route("api/departments")]
 [Tags(OpenApiTags.Departments)]
+[NoPermissionRequired("Reference data needed by every signed-in user.")]
 public class DepartmentsController(
     DepartmentUserAppService departmentUserAppService,
     DepartmentDirectoryAppService departmentDirectoryAppService) : ControllerBase

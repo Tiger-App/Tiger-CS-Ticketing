@@ -1,5 +1,7 @@
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
+using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
+using TigerCS.Tests.Administration.Services;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
@@ -129,6 +131,74 @@ public class RoundRobinAndOwnerPermissionTests
         Assert.Empty(f.Assignments.Added);
         var audit = Assert.Single(f.Audit.Written, w => w.Action == "AutoAssign");
         Assert.Null(audit.ActorEmployeeId);
+    }
+
+    private sealed class Registry(params Guid[] ids) : IServiceIdentityRegistry
+    {
+        public bool IsServiceIdentity(Guid employeeId) => ids.Contains(employeeId);
+
+        public IReadOnlyCollection<Guid> ServiceIdentityIds => ids;
+    }
+
+    [Fact]
+    public async Task RoundRobin_SkipsLockedReadOnlyServiceAndNonOperationalUsers_AndPicksOnlyOperationalOnes()
+    {
+        var departments = new FakeDepartmentRepository();
+        var department = departments.AddDepartment("Collection", "COLL");
+        var members = new FakeUserDepartmentAssignmentRepository();
+        var accounts = new FakeUserAccountManager();
+        var (employee, head, agent, locked, readOnly, reporting, supervisor, service) =
+            (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+        foreach (var (id, role) in new[]
+        {
+            (employee, Roles.DepartmentEmployee), (head, Roles.DepartmentHead), (agent, Roles.CsAgent), (locked, Roles.DepartmentEmployee),
+            (readOnly, Roles.ChairmanCeo), (reporting, Roles.ReportingUser), (supervisor, Roles.CsSupervisor), (service, Roles.CsAgent)
+        })
+        {
+            members.Assignments.Add(new UserDepartmentAssignment(id, department.DepartmentId, isPrimary: true, Now, assignedByEmployeeId: null));
+            accounts.Add(id, id.ToString("N"), role);
+        }
+
+        accounts.LockOut(locked);
+        var rotation = new FakeRotationRepository();
+        var auditWriter = new FakeAuditEntryWriter();
+        var autoAssignment = new TicketAutoAssignmentService(
+            new FakeRequestTypeAssignmentRuleRepository(), new FakeDepartmentWorkflowSettingsRepository(),
+            members, new FakeTicketAssignmentRepository(), auditWriter, rotation, departments, accounts, accounts, new Registry(service));
+
+        var picked = new List<Guid>();
+        for (var n = 1; n <= 6; n++)
+        {
+            var ticket = NewTicket(n, department.DepartmentId);
+            var result = await autoAssignment.ApplyCategoryRoutingAsync(
+                ticket, new AutoAssignmentResult(AutoAssignmentOutcome.NoRequestType), Now, Guid.NewGuid());
+            Assert.Equal(AutoAssignmentOutcome.AssignedRoundRobin, result.Outcome);
+            picked.Add(ticket.CurrentOwnerEmployeeId!.Value);
+        }
+
+        Assert.Equivalent(new[] { employee, head, agent }, picked.Distinct());
+    }
+
+    [Fact]
+    public async Task RoundRobin_InactiveDepartment_LeavesTheTicketInTheQueue()
+    {
+        var departments = new FakeDepartmentRepository();
+        var department = departments.AddDepartment("Collection", "COLL", isActive: false);
+        var members = new FakeUserDepartmentAssignmentRepository();
+        var accounts = new FakeUserAccountManager();
+        var id = Guid.NewGuid();
+        members.Assignments.Add(new UserDepartmentAssignment(id, department.DepartmentId, isPrimary: true, Now, assignedByEmployeeId: null));
+        accounts.Add(id, "u", Roles.DepartmentEmployee);
+        var autoAssignment = new TicketAutoAssignmentService(
+            new FakeRequestTypeAssignmentRuleRepository(), new FakeDepartmentWorkflowSettingsRepository(),
+            members, new FakeTicketAssignmentRepository(), new FakeAuditEntryWriter(), new FakeRotationRepository(), departments, accounts, accounts);
+        var ticket = NewTicket(1, department.DepartmentId);
+
+        var result = await autoAssignment.ApplyCategoryRoutingAsync(
+            ticket, new AutoAssignmentResult(AutoAssignmentOutcome.NoRequestType), Now, Guid.NewGuid());
+
+        Assert.Equal(AutoAssignmentOutcome.NoEligibleEmployee, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]

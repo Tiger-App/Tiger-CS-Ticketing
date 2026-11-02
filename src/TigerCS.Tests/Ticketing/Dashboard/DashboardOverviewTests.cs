@@ -60,7 +60,7 @@ public sealed class DashboardOverviewTests : IDisposable
     }
 
     [Fact]
-    public async Task MyTickets_CountsOnlyActiveTicketsCurrentlyOwnedByTheCaller()
+    public async Task MyTickets_CountsEveryTicketCurrentlyAssignedToTheCaller_IncludingResolved()
     {
         using (var context = _db.CreateContext())
         {
@@ -73,7 +73,8 @@ public sealed class DashboardOverviewTests : IDisposable
 
         var overview = await OverviewAsync(_db.CsAgentId, [Roles.CsAgent]);
 
-        Assert.Equal(2, overview.Kpis.MyTickets);
+        // Open + InProgress + Resolved (awaiting Close) — what the My Tickets list shows; other owners' and unowned tickets excluded.
+        Assert.Equal(3, overview.Kpis.MyTickets);
     }
 
     [Fact]
@@ -535,11 +536,13 @@ public sealed class DashboardOverviewTests : IDisposable
         var byPriority = await OverviewAsync(_db.CollectionsHeadId, [Roles.DepartmentHead],
             new DashboardOverviewRequestDto(PriorityId: (byte)PriorityLevel.High, ChannelId: WellKnownChannels.Phone));
 
-        // The Registration ticket the head also owns stays invisible.
-        Assert.Equal(1, byOwner.Kpis.OpenTickets);
-        Assert.Equal(1, byOwner.Kpis.MyTickets);
-        Assert.Equal(1, byPriority.VolumeTotal);
-        Assert.Equal(1, CountOf(byPriority.VolumeByChannel, "Phone"));
+        // The Registration ticket the head owns is visible too: a ticket assigned to you is always yours to see (My Tickets), whatever
+        // department it sits in. Nothing else outside the head's departments is visible - see the unowned-Registration case below.
+        Assert.Equal(2, byOwner.Kpis.OpenTickets);
+        Assert.Equal(2, byOwner.Kpis.MyTickets);
+        // High + Phone: the head's own Collections ticket and the Registration ticket assigned to them; the filters narrow, never widen.
+        Assert.Equal(2, byPriority.VolumeTotal);
+        Assert.Equal(2, CountOf(byPriority.VolumeByChannel, "Phone"));
     }
 
     // ---------------------------------------------------------------

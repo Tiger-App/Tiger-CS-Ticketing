@@ -5,6 +5,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -34,6 +35,7 @@ public class UsersController(
     /// <response code="200">Every active employee, ordered by display name, one row each.</response>
     /// <response code="403">The caller may not assign across departments.</response>
     [HttpGet("assignable")]
+    [RequirePermission(Permissions.TicketsAssign)]
     [Authorize(Policy = PolicyNames.CsManagerOrGeneralManager)]
     [ProducesResponseType<IReadOnlyList<AssignableUserDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status403Forbidden)]
@@ -47,6 +49,7 @@ public class UsersController(
     /// </remarks>
     /// <response code="200">The caller's employee id, display name, roles, and department memberships.</response>
     [HttpGet("me")]
+    [NoPermissionRequired("Self-service: every signed-in user reads their own profile.")]
     [AllowServiceIdentity]
     [ProducesResponseType<CurrentUserResponseDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Me(CancellationToken cancellationToken)
@@ -70,6 +73,7 @@ public class UsersController(
     /// <response code="404">No such employee.</response>
     /// <response code="409">Refused: this is the last active System Administrator.</response>
     [HttpPatch("{employeeId:guid}/activation")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
     [Authorize(Policy = PolicyNames.SystemAdministrator)]
     [ProducesResponseType<ActivationResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]

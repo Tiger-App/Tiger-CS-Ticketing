@@ -7,6 +7,7 @@ using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Domain.Modules.Collections.Review;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -26,46 +27,54 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
 
     /// <summary>The refresh run in progress, or the latest published one. Poll this to show progress.</summary>
     [HttpGet("runs/current")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<ReviewRunDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> CurrentRun(CancellationToken ct) =>
         Caller() is { } caller ? Result(await query.GetCurrentRunAsync(caller, ct)) : Unauthorized();
 
     /// <summary>One refresh run by id, with its progress and any failure.</summary>
     [HttpGet("runs/{runId:long}")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<ReviewRunDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Run(long runId, CancellationToken ct) =>
         Caller() is { } caller ? Result(await query.GetRunAsync(caller, runId, ct)) : Unauthorized();
 
     /// <summary>Queues a refresh job. Only one runs at a time; a second request returns the run already in progress.</summary>
     [HttpPost("refresh")]
+    [RequirePermission(Permissions.CollectionsEdit)]
     [ProducesResponseType<ReviewRunDto>(StatusCodes.Status202Accepted)]
     public async Task<IActionResult> Refresh([FromBody] StartRefreshRequest? request, CancellationToken ct) =>
         Caller() is { } caller ? Result(await refresh.StartAsync(caller, request?.CompanyId, ct)) : Unauthorized();
 
     /// <summary>Filtered, counted, server-side paged records of the current review data.</summary>
     [HttpGet("records")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<ReviewPageDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Records([FromQuery] ReviewFilter filter, [FromQuery] int page = 1, [FromQuery] int pageSize = 25, CancellationToken ct = default) =>
         Caller() is { } caller ? Result(await query.QueryAsync(caller, filter, page, pageSize, ct)) : Unauthorized();
 
     /// <summary>Every validation reason with its plain-language explanation (for the reason filter).</summary>
     [HttpGet("reasons")]
+    [RequirePermission(Permissions.CollectionsView)]
     public IActionResult Reasons() => Ok(ReviewReasons.All.Select(r => new ReviewReasonDto(r.Code, r.Kind.ToString(), r.Explanation)));
 
     /// <summary>Phone numbers held back because they would be called repeatedly (several units, or several reminder types for one unit), with customers and unit counts.</summary>
     [HttpGet("overlaps")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<OverlapPageDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Overlaps([FromQuery] int page = 1, [FromQuery] int pageSize = 25, CancellationToken ct = default) =>
         Caller() is { } caller ? Result(await query.OverlapsAsync(caller, page, pageSize, ct)) : Unauthorized();
 
     /// <summary>The exact count, totals by currency and contact list of a selection, with the fingerprint to confirm.</summary>
     [HttpPost("selection/summary")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<SelectionSummaryDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Summary([FromBody] SelectionRequest request, CancellationToken ct) =>
         Caller() is { } caller ? Result(await query.SummarizeAsync(caller, request, ct)) : Unauthorized();
 
     /// <summary>Approves the exact list (count and fingerprint must match) and queues the revalidation-and-upload job.</summary>
     [HttpPost("dispatches")]
+    [RequirePermission(Permissions.CollectionsSend)]
     [ProducesResponseType<DispatchDto>(StatusCodes.Status202Accepted)]
     public async Task<IActionResult> Confirm([FromBody] ConfirmDispatchRequest request, [FromHeader(Name = "Idempotency-Key")] string? headerKey, CancellationToken ct)
     {
@@ -76,17 +85,20 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
 
     /// <summary>The latest approved sends with their batch results.</summary>
     [HttpGet("dispatches")]
+    [RequirePermission(Permissions.CollectionsView)]
     public async Task<IActionResult> Dispatches(CancellationToken ct) =>
         Caller() is { } caller ? Result(await dispatch.ListAsync(caller, ct)) : Unauthorized();
 
     /// <summary>One approved send: initiator, totals, per-batch Genesys results. "Uploaded" never means the customer was contacted.</summary>
     [HttpGet("dispatches/{dispatchId:guid}")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<DispatchDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Dispatch(Guid dispatchId, CancellationToken ct) =>
         Caller() is { } caller ? Result(await dispatch.GetAsync(caller, dispatchId, ct)) : Unauthorized();
 
     /// <summary>The contacts of one send exactly as uploaded (the six Genesys contact-list columns) as a CSV file, for comparison with the Genesys list.</summary>
     [HttpGet("dispatches/{dispatchId:guid}/contacts")]
+    [RequirePermission(Permissions.CollectionsView)]
     [Produces("text/csv")]
     public async Task<IActionResult> DispatchContacts(Guid dispatchId, CancellationToken ct)
     {
@@ -97,12 +109,14 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
 
     /// <summary>Retries only the administrator report of a finished send. Never repeats the Genesys upload.</summary>
     [HttpPost("dispatches/{dispatchId:guid}/admin-email/retry")]
+    [RequirePermission(Permissions.CollectionsSend)]
     [ProducesResponseType<DispatchDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> RetryAdminEmail(Guid dispatchId, CancellationToken ct) =>
         Caller() is { } caller ? Result(await adminReport.RetryAsync(caller, dispatchId, ct)) : Unauthorized();
 
     /// <summary>Starts the paid-after-upload suppression sweep now (it also runs on a schedule when enabled).</summary>
     [HttpPost("suppression/sweep")]
+    [RequirePermission(Permissions.CollectionsEdit)]
     public async Task<IActionResult> SweepSuppression([FromServices] CollectionsAuthorizationService authorization, [FromServices] IReviewJobScheduler scheduler, CancellationToken ct)
     {
         if (Caller() is not { } caller) return Unauthorized();
@@ -113,12 +127,14 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
 
     /// <summary>Cancels an approved send that has not started yet and releases its records.</summary>
     [HttpPost("dispatches/{dispatchId:guid}/cancel")]
+    [RequirePermission(Permissions.CollectionsEdit)]
     [ProducesResponseType<DispatchDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Cancel(Guid dispatchId, CancellationToken ct) =>
         Caller() is { } caller ? Result(await dispatch.CancelAsync(caller, dispatchId, ct)) : Unauthorized();
 
     /// <summary>Resolves a batch with an unknown outcome after someone checked the Genesys contact list.</summary>
     [HttpPost("dispatches/{dispatchId:guid}/batches/{batchId:long}/reconcile")]
+    [RequirePermission(Permissions.CollectionsEdit)]
     [ProducesResponseType<DispatchDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Reconcile(Guid dispatchId, long batchId, [FromBody] ReconcileBatchRequest request, CancellationToken ct) =>
         Caller() is { } caller ? Result(await dispatch.ReconcileAsync(caller, dispatchId, batchId, request, ct)) : Unauthorized();

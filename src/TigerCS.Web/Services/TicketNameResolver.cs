@@ -37,7 +37,7 @@ namespace TigerCS.Web.Services;
 /// display up to the same endpoint is a separate follow-up, not done here.
 /// Registered scoped, so its per-request caches live for one page render.
 /// </summary>
-public sealed class TicketNameResolver(UsersApiClient usersApiClient, DepartmentsApiClient departmentsApiClient)
+public sealed class TicketNameResolver(UsersApiClient usersApiClient, DepartmentsApiClient departmentsApiClient, ViewerAccessService? viewerAccess = null)
 {
     private readonly Dictionary<int, string> _departmentNames = new();
     private readonly Dictionary<(int DepartmentId, Guid EmployeeId), string?> _employeeNames = new();
@@ -100,6 +100,9 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
     /// <summary>The caller's own department memberships — the only set of department id→name pairs the Api exposes.</summary>
     public IReadOnlyCollection<DepartmentMembershipDto> OwnDepartments { get; private set; } = [];
 
+    /// <summary>The caller's own explicit permission grants and denials from the same /me call (empty when none or unreadable).</summary>
+    public ViewerPermissions OwnPermissions { get; private set; } = ViewerPermissions.None;
+
     public async Task PrimeOwnDepartmentsAsync(CancellationToken cancellationToken)
     {
         if (_ownDepartmentsLoaded)
@@ -108,7 +111,7 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
         }
 
         _ownDepartmentsLoaded = true;
-        ApplyOwnDepartments(await usersApiClient.GetMeAsync(cancellationToken));
+        ApplyOwnDepartments(await GetMeAsync(cancellationToken));
     }
 
     /// <summary>
@@ -121,7 +124,7 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
     /// </summary>
     public async Task PrimeDepartmentsAsync(CancellationToken cancellationToken)
     {
-        var ownTask = _ownDepartmentsLoaded ? null : usersApiClient.GetMeAsync(cancellationToken);
+        var ownTask = _ownDepartmentsLoaded ? null : GetMeAsync(cancellationToken);
         var directoryTask = _directoryLoaded ? null : departmentsApiClient.GetDepartmentsAsync(activeOnly: false, cancellationToken);
         _ownDepartmentsLoaded = true;
         _directoryLoaded = true;
@@ -137,6 +140,10 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
         }
     }
 
+    /// <summary>The one /me call of the request when the shared viewer-access service is wired (production); a direct call otherwise.</summary>
+    private Task<ApiResult<CurrentUserResponseDto>> GetMeAsync(CancellationToken cancellationToken) =>
+        viewerAccess is not null ? viewerAccess.GetMeAsync(cancellationToken) : usersApiClient.GetMeAsync(cancellationToken);
+
     private void ApplyOwnDepartments(ApiResult<CurrentUserResponseDto> me)
     {
         if (!me.IsSuccess || me.Value is null)
@@ -145,6 +152,9 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
         }
 
         OwnDepartments = me.Value.Departments;
+        OwnPermissions = new ViewerPermissions(
+            new HashSet<string>(me.Value.GrantedPermissions ?? [], StringComparer.Ordinal),
+            new HashSet<string>(me.Value.DeniedPermissions ?? [], StringComparer.Ordinal));
         foreach (var department in me.Value.Departments)
         {
             _departmentNames[department.DepartmentId] = department.Name;

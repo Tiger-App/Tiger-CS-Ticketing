@@ -5,6 +5,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.CrmDocuments.Dto;
 using TigerCS.Application.Modules.CrmDocuments.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -27,6 +28,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/genesys/verification")]
 [Authorize(Policy = PolicyNames.CustomerVerification)]
 [Tags(OpenApiTags.Genesys)]
+[NoPermissionRequired("Genesys integration surface; reached by the integration service account, which cannot hold permission overrides.")]
 public class GenesysVerificationController(CustomerOtpAppService otpAppService) : ControllerBase
 {
     /// <summary>Find the CRM buyer by phone and list the units they can verify for.</summary>

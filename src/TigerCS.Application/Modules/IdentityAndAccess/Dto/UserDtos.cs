@@ -12,12 +12,18 @@ public sealed record DepartmentMembershipDto(int DepartmentId, string Name, bool
 /// <param name="Roles">Every role the caller holds, by name.</param>
 /// <param name="Departments">Every department the caller is assigned to.</param>
 /// <param name="IsGeynessStaff">Whether the caller is customer-service (Geyness) staff.</param>
+/// <param name="EffectivePermissions">Role baseline combined with the caller's own overrides (display only; the Api enforces).</param>
+/// <param name="GrantedPermissions">Permissions the caller holds through an explicit grant.</param>
+/// <param name="DeniedPermissions">Permissions explicitly denied to the caller - a UI must never offer these actions.</param>
 public sealed record CurrentUserResponseDto(
     Guid EmployeeId,
     string DisplayName,
     IReadOnlyCollection<string> Roles,
     IReadOnlyCollection<DepartmentMembershipDto> Departments,
-    bool IsGeynessStaff);
+    bool IsGeynessStaff,
+    IReadOnlyCollection<string>? EffectivePermissions = null,
+    IReadOnlyCollection<string>? GrantedPermissions = null,
+    IReadOnlyCollection<string>? DeniedPermissions = null);
 
 /// <summary>One member of a department (MVP-API-Contracts.md §1.4).</summary>
 /// <param name="EmployeeId">The member.</param>

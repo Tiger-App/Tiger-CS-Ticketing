@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Mvc;
 using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.CustomerReviews.Dto;
 using TigerCS.Application.Modules.CustomerReviews.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
+using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 
 namespace TigerCS.Api.Controllers;
 
@@ -15,6 +17,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/public/ticket-reviews")]
 [AllowAnonymous]
 [Tags(OpenApiTags.CustomerReviews)]
+[NoPermissionRequired("Anonymous customer review links.")]
 public class PublicTicketReviewsController(TicketReviewAppService reviewService) : ControllerBase
 {
     /// <summary>Checks a review link. Read-only: it never records a review, so link scanners that open it change nothing.</summary>

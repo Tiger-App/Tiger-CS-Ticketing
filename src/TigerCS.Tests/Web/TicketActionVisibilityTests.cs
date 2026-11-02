@@ -538,4 +538,67 @@ public sealed class TicketActionVisibilityTests
         Assert.DoesNotContain("TicketRoleSets.", html, StringComparison.Ordinal);
         Assert.DoesNotContain("SlaRoleSets.", html, StringComparison.Ordinal);
     }
+
+    // ---------------------------------------------------------------
+    // Employee permission overrides: deny always hides, grant never bypasses ticket-level scope
+    // ---------------------------------------------------------------
+
+    private static TicketActionContext WithOverrides(TicketActionContext c, string[] granted, string[] denied) =>
+        c with
+        {
+            ViewerGrantedPermissions = new HashSet<string>(granted, StringComparer.Ordinal),
+            ViewerDeniedPermissions = new HashSet<string>(denied, StringComparer.Ordinal)
+        };
+
+    [Fact]
+    public void The_assignee_can_resolve_and_close_their_own_ticket_unless_denied()
+    {
+        var own = Context(Owner, [Roles.DepartmentEmployee], currentOwner: Owner, viewerDepartmentIds: [TicketDepartmentId]);
+        Assert.True(TicketActions.CanResolve(own));
+        Assert.True(TicketActions.CanCloseTicket(own));
+
+        Assert.False(TicketActions.CanResolve(WithOverrides(own, [], [TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsResolve])));
+        Assert.False(TicketActions.CanCloseTicket(WithOverrides(own, [], [TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsClose])));
+    }
+
+    [Fact]
+    public void A_denial_hides_the_action_even_for_the_system_administrator_and_the_cs_manager()
+    {
+        var admin = Context(Stranger, [Roles.SystemAdministrator]);
+        Assert.True(TicketActions.CanResolve(admin));
+        Assert.False(TicketActions.CanResolve(WithOverrides(admin, [], [TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsResolve])));
+
+        var manager = Context(Stranger, [Roles.CsManager]);
+        Assert.True(TicketActions.CanTransferTicket(manager));
+        Assert.False(TicketActions.CanTransferTicket(WithOverrides(manager, [], [TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransfer])));
+    }
+
+    [Fact]
+    public void A_grant_satisfies_the_role_requirement_but_the_viewer_must_still_belong_to_the_ticket_department()
+    {
+        var grantResolve = new[] { TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsResolve };
+        var member = WithOverrides(Context(Stranger, [Roles.CsSupervisor], viewerDepartmentIds: [TicketDepartmentId]), grantResolve, []);
+        var outsider = WithOverrides(Context(Stranger, [Roles.CsSupervisor], viewerDepartmentIds: [OtherDepartmentId]), grantResolve, []);
+        var noGrant = Context(Stranger, [Roles.CsSupervisor], viewerDepartmentIds: [TicketDepartmentId]);
+
+        Assert.True(TicketActions.CanResolve(member));
+        Assert.False(TicketActions.CanResolve(outsider));
+        Assert.False(TicketActions.CanResolve(noGrant));
+
+        var grantTransfer = new[] { TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransfer };
+        Assert.True(TicketActions.CanTransferTicket(WithOverrides(Context(Stranger, [Roles.DepartmentEmployee], viewerDepartmentIds: [TicketDepartmentId]), grantTransfer, [])));
+        Assert.False(TicketActions.CanTransferTicket(WithOverrides(Context(Stranger, [Roles.DepartmentEmployee], viewerDepartmentIds: [OtherDepartmentId]), grantTransfer, [])));
+    }
+
+    [Fact]
+    public void A_read_only_viewer_never_gets_a_write_control_from_a_grant()
+    {
+        var ceo = WithOverrides(
+            Context(Stranger, [Roles.ChairmanCeo], viewerDepartmentIds: [TicketDepartmentId]),
+            [TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsResolve, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsClose, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransfer], []);
+
+        Assert.False(TicketActions.CanResolve(ceo));
+        Assert.False(TicketActions.CanCloseTicket(ceo));
+        Assert.False(TicketActions.CanTransferTicket(ceo));
+    }
 }

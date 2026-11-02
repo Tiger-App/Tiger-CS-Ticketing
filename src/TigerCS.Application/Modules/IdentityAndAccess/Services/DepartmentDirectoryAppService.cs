@@ -14,7 +14,7 @@ public sealed class DepartmentDirectoryAppService(IDepartmentRepository departme
     {
         var departments = await departmentRepository.ListAsync(activeOnly, cancellationToken);
         return departments
-            .Select(d => new DepartmentDto(d.DepartmentId, d.Name))
+            .Select(d => new DepartmentDto(d.DepartmentId, d.Name, d.Code))
             .OrderBy(d => d.Name, StringComparer.Ordinal)
             .ToList();
     }

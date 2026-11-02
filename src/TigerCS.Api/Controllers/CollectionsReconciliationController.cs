@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.Collections.Reconciliation;
 using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -24,18 +25,21 @@ public sealed class CollectionsReconciliationController(FinancialReconciliationS
 
     /// <summary>The source gate (why the financial source is or is not reconciled), the latest run with its per-unit differences, and recent runs.</summary>
     [HttpGet]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<ReconciliationOverviewDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Overview(CancellationToken ct) =>
         Caller() is { } caller ? Result(await service.OverviewAsync(caller, ct)) : Unauthorized();
 
     /// <summary>One run by id (poll it after starting one).</summary>
     [HttpGet("runs/{runId:guid}")]
+    [RequirePermission(Permissions.CollectionsView)]
     [ProducesResponseType<ReconciliationRunDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Run(Guid runId, CancellationToken ct) =>
         Caller() is { } caller ? Result(await service.GetRunAsync(caller, runId, ct)) : Unauthorized();
 
     /// <summary>Starts a reconciliation in the background. 409 while one is running or was started in the last two minutes.</summary>
     [HttpPost("run")]
+    [RequirePermission(Permissions.CollectionsEdit)]
     [ProducesResponseType<ReconciliationRunDto>(StatusCodes.Status202Accepted)]
     public async Task<IActionResult> Start([FromBody] StartRequest? request, CancellationToken ct) =>
         Caller() is { } caller ? Result(await service.StartAsync(caller, request?.CompanyId, ct)) : Unauthorized();

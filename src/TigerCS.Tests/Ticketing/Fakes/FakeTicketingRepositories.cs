@@ -469,6 +469,9 @@ public sealed class FakeTicketAssignmentRepository : ITicketAssignmentRepository
     public Task<TicketAssignment?> GetCurrentAsync(long ticketId, CancellationToken cancellationToken = default) =>
         Task.FromResult(Added.LastOrDefault(a => a.TicketId == ticketId && a.IsCurrent));
 
+    public Task<bool> HasSupersededAssignmentAsync(long ticketId, Guid employeeId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Added.Any(a => a.TicketId == ticketId && a.AssignedEmployeeId == employeeId && !a.IsCurrent));
+
     public Task AddAsync(TicketAssignment assignment, CancellationToken cancellationToken = default)
     {
         Added.Add(assignment);

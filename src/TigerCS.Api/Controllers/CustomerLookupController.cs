@@ -5,6 +5,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -25,6 +26,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/intake-records/{intakeRecordId:long}/customer-lookup")]
 [Authorize(Policy = PolicyNames.CustomerVerification)]
 [Tags(OpenApiTags.CustomerLookup)]
+[RequirePermission(Permissions.TicketsCreate)]
 public class CustomerLookupController(CustomerLookupAppService customerLookupAppService) : ControllerBase
 {
     /// <summary>Search the intake's Department-configured source(s) — or all of CRM/PACT/Tasleeh if no Department was selected — for its phone number.</summary>

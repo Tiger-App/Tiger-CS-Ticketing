@@ -6,6 +6,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
 using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -67,6 +68,7 @@ public class TicketSlaController(
     /// <response code="403">The ticket is outside the caller's department visibility.</response>
     /// <response code="404">No such ticket.</response>
     [HttpGet("sla")]
+    [RequirePermission(Permissions.TicketsView)]
     [ProducesResponseType<TicketSlaSummaryResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
@@ -112,6 +114,7 @@ public class TicketSlaController(
     /// <response code="409">A first response was already recorded, or the supplied `rowVersion` was stale.</response>
     /// <response code="422">The ticket is Closed — a closed ticket accepts no further changes.</response>
     [HttpPost("sla/first-response")]
+    [RequirePermission(Permissions.TicketsEscalate)]
     [ProducesResponseType<TicketSlaSummaryResponseDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -162,6 +165,7 @@ public class TicketSlaController(
     /// <response code="409">The supplied `rowVersion` was stale.</response>
     /// <response code="422">The ticket is Closed, the level is not an advance, or `level` and `triggerType` disagree about Level 4.</response>
     [HttpPost("escalations")]
+    [RequirePermission(Permissions.TicketsEscalate)]
     [ProducesResponseType<TicketEscalationResponseDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
@@ -205,6 +209,7 @@ public class TicketSlaController(
     /// <response code="403">The ticket is outside the caller's department visibility.</response>
     /// <response code="404">No such ticket.</response>
     [HttpGet("escalations")]
+    [RequirePermission(Permissions.TicketsView)]
     [ProducesResponseType<IReadOnlyList<TicketEscalationResponseDto>>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]

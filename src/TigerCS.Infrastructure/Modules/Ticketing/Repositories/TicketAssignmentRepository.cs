@@ -10,6 +10,9 @@ public sealed class TicketAssignmentRepository(TigerCsDbContext dbContext) : ITi
     public Task<TicketAssignment?> GetCurrentAsync(long ticketId, CancellationToken cancellationToken = default) =>
         dbContext.TicketAssignments.FirstOrDefaultAsync(a => a.TicketId == ticketId && a.IsCurrent, cancellationToken);
 
+    public Task<bool> HasSupersededAssignmentAsync(long ticketId, Guid employeeId, CancellationToken cancellationToken = default) =>
+        dbContext.TicketAssignments.AnyAsync(a => a.TicketId == ticketId && a.AssignedEmployeeId == employeeId && !a.IsCurrent, cancellationToken);
+
     public async Task AddAsync(TicketAssignment assignment, CancellationToken cancellationToken = default) =>
         await dbContext.TicketAssignments.AddAsync(assignment, cancellationToken);
 }

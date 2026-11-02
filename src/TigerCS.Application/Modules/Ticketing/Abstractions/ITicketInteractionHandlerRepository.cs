@@ -20,6 +20,13 @@ public interface ITicketInteractionHandlerRepository
     /// <summary>True when <paramref name="userId"/> handled at least one Genesys interaction on <paramref name="ticketId"/>.</summary>
     Task<bool> HasHandledAsync(long ticketId, Guid userId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// True when the user handled an interaction on the ticket AFTER its latest manual transfer (a Transfer that is not system routing).
+    /// A handler whose handling predates a transfer keeps read access (<see cref="HasHandledAsync"/>) but no longer modifies the ticket:
+    /// ordinary Resolve, Close and Transfer move with it. Handling recorded after the transfer counts again.
+    /// </summary>
+    Task<bool> HasActiveHandlerGrantAsync(long ticketId, Guid userId, CancellationToken cancellationToken = default);
+
     /// <summary>Every handler recorded for a ticket, oldest first.</summary>
     Task<IReadOnlyList<TicketInteractionHandler>> ListByTicketIdAsync(long ticketId, CancellationToken cancellationToken = default);
 }

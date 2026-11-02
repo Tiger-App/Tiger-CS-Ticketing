@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.Administration.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -19,17 +20,20 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 {
     /// <summary>The controlled step types and approval types the designer may offer.</summary>
     [HttpGet("catalog")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<WorkflowDesignerCatalogDto>(StatusCodes.Status200OK)]
     public IActionResult Catalog() => Ok(AdminWorkflowAppService.Catalog());
 
     /// <summary>Every workflow with its active and draft version numbers and usage counts.</summary>
     [HttpGet]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<IReadOnlyList<AdminWorkflowSummaryDto>>(StatusCodes.Status200OK)]
     public async Task<IActionResult> List([FromQuery] bool includeInactive = true, CancellationToken cancellationToken = default) =>
         Ok(await workflows.ListAsync(includeInactive, cancellationToken));
 
     /// <summary>One workflow with every version (Draft / Active / Historical, ticket counts) and the request types using it.</summary>
     [HttpGet("{workflowId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<AdminWorkflowDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> Get(int workflowId, CancellationToken cancellationToken)
@@ -40,6 +44,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Creates a workflow with a Draft version 1 pre-filled with the standard skeleton.</summary>
     [HttpPost]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminWorkflowDetailDto>(StatusCodes.Status201Created)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> Create([FromBody] CreateWorkflowRequestDto request, CancellationToken cancellationToken) =>
@@ -48,6 +53,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Renames a workflow or changes its description.</summary>
     [HttpPut("{workflowId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminWorkflowDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -56,6 +62,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Activate/deactivate a workflow; refused while active request types still use it.</summary>
     [HttpPatch("{workflowId:int}/activation")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<AdminWorkflowDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -64,6 +71,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>"Create New Version": a Draft copied from the Published version. 409 while a Draft already exists.</summary>
     [HttpPost("{workflowId:int}/versions")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -73,6 +81,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>One version with its steps, branches and (for a Draft) the current validation summary.</summary>
     [HttpGet("versions/{versionId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     public async Task<IActionResult> GetVersion(int versionId, CancellationToken cancellationToken)
@@ -83,6 +92,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Draft only: name, description and capability flags of the version.</summary>
     [HttpPut("versions/{versionId:int}/settings")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -92,6 +102,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Draft only: appends a step of a controlled type.</summary>
     [HttpPost("versions/{versionId:int}/steps")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -101,6 +112,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Draft only: edits a step's name, type, optionality and approval type.</summary>
     [HttpPut("versions/{versionId:int}/steps/{stepId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -110,6 +122,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Draft only: deletes a step and every branch pointing at it, renumbering the rest.</summary>
     [HttpDelete("versions/{versionId:int}/steps/{stepId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -118,6 +131,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Draft only: moves a step one position up or down.</summary>
     [HttpPost("versions/{versionId:int}/steps/{stepId:int}/move")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
@@ -126,6 +140,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Configures (or clears, with a null target) where an approval step's Approved/Rejected outcome leads.</summary>
     [HttpPut("versions/{versionId:int}/steps/{stepId:int}/transitions")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -135,6 +150,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Validates and publishes a Draft; the previously Published version becomes Historical. Existing tickets are untouched.</summary>
     [HttpPost("versions/{versionId:int}/publish")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<WorkflowVersionDetailDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
@@ -144,6 +160,7 @@ public class AdminWorkflowsController(AdminWorkflowAppService workflows) : Admin
 
     /// <summary>Deletes an unreferenced Draft. Published/Historical versions answer 409 — they are never deleted.</summary>
     [HttpDelete("versions/{versionId:int}")]
+    [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]

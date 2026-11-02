@@ -1,4 +1,4 @@
-// TigerCS.Web is referenced under an alias - see TigerCS.Tests.csproj.
+﻿// TigerCS.Web is referenced under an alias - see TigerCS.Tests.csproj.
 extern alias TigerCsWeb;
 
 using TigerCS.Domain.Modules.IdentityAndAccess;
@@ -40,7 +40,7 @@ public class ReadOnlyViewerActionTests
         Assert.False(TicketActions.CanEscalateToLevel4(context));
         Assert.False(TicketActions.CanClose(roles));
         Assert.False(TicketActions.CanReopen(roles));
-        Assert.False(TicketActions.CanTransfer(roles));
+        Assert.False(TicketActions.CanTransfer(context));
         Assert.False(TicketActions.CanAddNote(roles));
     }
 

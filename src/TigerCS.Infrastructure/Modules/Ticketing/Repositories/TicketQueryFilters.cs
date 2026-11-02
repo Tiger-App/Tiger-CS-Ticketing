@@ -37,11 +37,15 @@ internal static class TicketQueryFilters
     /// </summary>
     public static IQueryable<Ticket> VisibleTo(
         this IQueryable<Ticket> tickets, TigerCsDbContext dbContext, IReadOnlyCollection<int>? departmentIds, Guid? agentEmployeeId,
-        bool includeCreated = true, bool createdOnly = false)
+        bool includeCreated = true, bool createdOnly = false, Guid? ownerEmployeeId = null)
     {
         if (agentEmployeeId is not { } agentId)
         {
-            return tickets.InScope(departmentIds);
+            // A department-scoped employee ALWAYS sees the tickets currently assigned to them, whatever department those sit in now
+            // (My Tickets). It adds only their own tickets — never anyone else's. Set-based twin of TicketVisibilityRule's owner rule.
+            return departmentIds is not null && ownerEmployeeId is { } ownerId
+                ? tickets.Where(t => departmentIds.Contains(t.CurrentDepartmentId) || t.CurrentOwnerEmployeeId == ownerId)
+                : tickets.InScope(departmentIds);
         }
 
         if (createdOnly)

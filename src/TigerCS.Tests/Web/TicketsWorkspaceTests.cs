@@ -142,7 +142,7 @@ public sealed class TicketsWorkspaceTests
     {
         var nav = View("Shared", "_Nav.cshtml");
 
-        foreach (var item in new[] { "(\"dashboard\", \"Dashboard\", \"/Dashboard\")", "(\"customers\", \"Customers\", \"/Customers\")", "(\"tickets\", \"Tickets\", \"/Tickets\")", "(\"admin\", \"Administration\", \"/Admin\")" })
+        foreach (var item in new[] { "Add(\"dashboard\", \"Dashboard\", \"/Dashboard\"", "Add(\"customers\", \"Customers\", \"/Customers\"", "Add(\"tickets\", \"Tickets\", \"/Tickets\"", "(\"admin\", \"Administration\", \"/Admin\")" })
         {
             Assert.Contains(item, nav, StringComparison.Ordinal);
         }
@@ -565,7 +565,8 @@ public sealed class TicketsWorkspaceTests
 
         Assert.Equal("my", query["view"]);
         Assert.Equal(ViewerId.ToString(), query["ownerEmployeeId"]);
-        Assert.Equal("true", query["activeOnly"]);
+        // Every ticket currently assigned, in any status: no active-only narrowing, so the list matches the card.
+        Assert.False(query.ContainsKey("activeOnly"));
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.Administration.Services;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Api.Controllers;
 
@@ -12,6 +13,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/request-types")]
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Tags(OpenApiTags.RequestTypes)]
+[NoPermissionRequired("Reference data needed by every signed-in user.")]
 public class RequestTypesController(AdminRequestTypeAppService requestTypes) : ControllerBase
 {
     /// <summary>Active request types, filtered by department (the department the ticket's category routes to). Never includes inactive ones.</summary>

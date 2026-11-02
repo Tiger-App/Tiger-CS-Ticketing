@@ -139,7 +139,7 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
         [
             new KpiCard("Open Tickets", k.OpenTickets, null, DashboardLinks.OpenTickets(f), "Active tickets in scope"),
             new KpiCard("My Tickets", k.MyTickets, null,
-                viewer is null ? DashboardLinks.OpenTickets(f) : DashboardLinks.MyTickets(f, viewer.EmployeeId), "Active tickets assigned to you"),
+                viewer is null ? DashboardLinks.OpenTickets(f) : DashboardLinks.MyTickets(f, viewer.EmployeeId), "Tickets currently assigned to you"),
             // Tickets that have a responsible department but no assigned
             // owner sit in that department's queue — never "ownerless".
             new KpiCard("In Department Queue", k.InDepartmentQueue, k.InDepartmentQueue > 0 ? "attention" : null,

@@ -1,4 +1,4 @@
-using TigerCS.Domain.Modules.IdentityAndAccess;
+﻿using TigerCS.Domain.Modules.IdentityAndAccess;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
 
@@ -88,13 +88,23 @@ public static class TicketRoleSets
     public static readonly IReadOnlyCollection<string> AssignCrossDepartment = [Roles.CsManager];
 
     /// <summary>
-    /// Transfer (PR correction): CS Manager only. Every other role —
-    /// including Department Head and CS Supervisor, who retain Assign
-    /// authority above — is forbidden and must receive 403.
+    /// Transfer to another department: the Call Center layer (CS Agent, CS Supervisor, CS Manager). Role membership is only the first
+    /// half — <see cref="TicketAssignmentAppService"/> additionally scopes it: a CS Manager may transfer any ticket
+    /// (<see cref="TransferAnyTicket"/>); a CS Agent or CS Supervisor only a ticket they currently own, and a CS Supervisor also a ticket
+    /// of a department they belong to. Department Head and Department Employee remain refused.
     /// </summary>
-    public static readonly IReadOnlyCollection<string> Transfer = [Roles.CsManager];
+    public static readonly IReadOnlyCollection<string> Transfer = [Roles.CsAgent, Roles.CsSupervisor, Roles.CsManager];
 
-    /// <summary>Resolve: Department Employee/Head only (ISSUE-022, Management-Decisions.md — ticket task's explicit instruction). Never CS-layer, never cross-department — the resolving actor must also be department-scoped to the ticket's current department.</summary>
+    /// <summary>Transfer without a per-ticket scope: CS Manager only (and the ADR-0024 override). No other CS role gets cross-department transfer reach.</summary>
+    public static readonly IReadOnlyCollection<string> TransferAnyTicket = [Roles.CsManager];
+
+    /// <summary>
+    /// Roles that count as operational handlers for automatic Round Robin: they actually work tickets. Supervisors, managers, read-only
+    /// roles and administrators oversee or only read, so they are never handed work by rotation.
+    /// </summary>
+    public static readonly IReadOnlyCollection<string> RoundRobinEligible = [Roles.CsAgent, Roles.DepartmentEmployee, Roles.DepartmentHead];
+
+    /// <summary>Resolve by role: Department Employee/Head (a Head must belong to the ticket's department). Independently of this set, whoever the ticket is currently assigned to may Resolve and Close it, whatever their role or department (<c>TicketLifecycleAppService</c>); the CS layer has no role-based Resolve beyond that.</summary>
     public static readonly IReadOnlyCollection<string> Resolve = [Roles.DepartmentEmployee, Roles.DepartmentHead];
 
     /// <summary>Close: CS Agent/CS Supervisor/CS Manager only (ISSUE-022, Management-Decisions.md — task's explicit instruction). Cross-department — CS is inherently cross-department (Security-Architecture.md §3).</summary>
