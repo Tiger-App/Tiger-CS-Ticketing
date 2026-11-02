@@ -1,15 +1,19 @@
 ﻿/*
 ================================================================================
  Deploy_TigerCS_Prod_Migrations.sql
- TigerCS Ticketing - PRODUCTION deployment of four EF Core migrations
+ TigerCS Ticketing - PRODUCTION deployment of EF Core migrations (four new + one conditional older one)
  Target: server 10.10.10.124, database TigerCS_Ticketing_Prod
 --------------------------------------------------------------------------------
  Production's newest recorded migration is
    20261022090000_AddGenesysServiceRequestToTicketInteractions
- (36th). This script applies, in this order, ONLY the migrations of the current
- repository that are not yet recorded in dbo.__EFMigrationsHistory (verified with
- `dotnet ef migrations script <36th> --idempotent`, and
- `dotnet ef migrations has-pending-model-changes` = no drift):
+ This script applies, in this order, ONLY the migrations of the current repository
+ that are not yet recorded in dbo.__EFMigrationsHistory (`has-pending-model-changes` = no drift).
+ The repository has 41 migrations. Four are certainly newer than Production's latest; a fifth, OLDER one
+ (0. below) is applied only if Production's history lacks it - EF would apply it too, because it applies any
+ unrecorded migration regardless of order:
+
+   0. 20260912110119_AddExternalCustomerSnapshotToTickets   (conditional)
+        dbo.Tickets.ExternalCustomerEmail nvarchar(256) NULL, ExternalCustomerName nvarchar(200) NULL.
 
    1. 20261030061255_AddTicketInteractionHandlers
         new table dbo.TicketInteractionHandlers (+ 3 indexes, 3 foreign keys),
@@ -71,6 +75,7 @@ DECLARE @DryRun bit = 1;                    -- 1 = apply, verify, then ROLL BACK
 -------------------------------------------------------------------------------
 -- Constants
 -------------------------------------------------------------------------------
+DECLARE @M0 nvarchar(150) = N'20260912110119_AddExternalCustomerSnapshotToTickets';
 DECLARE @M1 nvarchar(150) = N'20261030061255_AddTicketInteractionHandlers';
 DECLARE @M2 nvarchar(150) = N'20261030062642_AddTicketTransferTracking';
 DECLARE @M3 nvarchar(150) = N'20261030073857_AddTicketCreatedBy';
@@ -157,11 +162,11 @@ BEGIN TRY
 
     IF @list IS NOT NULL
     BEGIN
-        SET @msg = N'Earlier migrations are missing from Production and must be applied first (this script only adds the four newest): ' + LEFT(@list, 1500);
+        SET @msg = N'Earlier migrations are missing from Production and must be applied first (this script only adds the newest ones): ' + LEFT(@list, 1500);
         THROW 50004, @msg, 1;
     END;
 
-    -- 1b. Tables and columns the four migrations build on.
+    -- 1b. Tables and columns the migrations build on.
     DECLARE @req TABLE (TableName sysname NOT NULL, ColumnName sysname NOT NULL);
     INSERT INTO @req (TableName, ColumnName) VALUES
         (N'Tickets', N'TicketId'), (N'Tickets', N'CurrentDepartmentId'),
@@ -188,16 +193,17 @@ BEGIN TRY
 
     -- 1c. Report the state found (informational) so a half-applied earlier attempt is visible in the output.
     --     (PRINT cannot contain a subquery, so the state is gathered into variables first.)
-    DECLARE @h1 nvarchar(10), @h2 nvarchar(10), @h3 nvarchar(10), @h4 nvarchar(10);
-    SELECT @h1 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M1) THEN N'recorded' ELSE N'pending' END,
+    DECLARE @h0 nvarchar(10), @h1 nvarchar(10), @h2 nvarchar(10), @h3 nvarchar(10), @h4 nvarchar(10);
+    SELECT @h0 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M0) THEN N'recorded' ELSE N'pending' END,
+           @h1 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M1) THEN N'recorded' ELSE N'pending' END,
            @h2 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M2) THEN N'recorded' ELSE N'pending' END,
            @h3 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M3) THEN N'recorded' ELSE N'pending' END,
            @h4 = CASE WHEN EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M4) THEN N'recorded' ELSE N'pending' END;
-    PRINT N'  history: M1 ' + @h1 + N' | M2 ' + @h2 + N' | M3 ' + @h3 + N' | M4 ' + @h4;
+    PRINT N'  history: M0 ' + @h0 + N' | M1 ' + @h1 + N' | M2 ' + @h2 + N' | M3 ' + @h3 + N' | M4 ' + @h4;
 
     -- History rows this repository does not know about (a newer build was deployed, or a manual row was inserted): informational.
     SELECT @list = STUFF((SELECT N', ' + h.MigrationId FROM dbo.__EFMigrationsHistory AS h
-        WHERE h.MigrationId NOT IN (SELECT MigrationId FROM @prior) AND h.MigrationId NOT IN (@M1, @M2, @M3, @M4)
+        WHERE h.MigrationId NOT IN (SELECT MigrationId FROM @prior) AND h.MigrationId NOT IN (@M0, @M1, @M2, @M3, @M4)
         FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'');
     IF @list IS NOT NULL PRINT N'  NOTE - history contains migrations unknown to this repository: ' + LEFT(@list, 1500);
 
@@ -238,13 +244,30 @@ BEGIN TRY
         THROW 50006, N'Another run of this script holds the deployment lock. Nothing was changed.', 1;
 
     ---------------------------------------------------------------------------
-    -- Migration 1 of 4: AddTicketInteractionHandlers
+    -- Migration 1 of 5 (conditional, OLDER than Production's newest): AddExternalCustomerSnapshotToTickets
     ---------------------------------------------------------------------------
-    IF EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M1)
-        PRINT N'[1/4] ' + @M1 + N' - already recorded, skipped';
+    IF EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M0)
+        PRINT N'[1/5] ' + @M0 + N' - already recorded, skipped';
     ELSE
     BEGIN
-        PRINT N'[1/4] ' + @M1 + N' - applying';
+        PRINT N'[1/5] ' + @M0 + N' - NOT recorded in Production: applying';
+
+        IF COL_LENGTH(N'dbo.Tickets', N'ExternalCustomerEmail') IS NULL
+            EXEC (N'ALTER TABLE dbo.Tickets ADD ExternalCustomerEmail nvarchar(256) NULL;');
+        IF COL_LENGTH(N'dbo.Tickets', N'ExternalCustomerName') IS NULL
+            EXEC (N'ALTER TABLE dbo.Tickets ADD ExternalCustomerName nvarchar(200) NULL;');
+
+        INSERT INTO dbo.__EFMigrationsHistory (MigrationId, ProductVersion) VALUES (@M0, @ProductVersion);
+    END;
+
+    ---------------------------------------------------------------------------
+    -- Migration 2 of 5: AddTicketInteractionHandlers
+    ---------------------------------------------------------------------------
+    IF EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M1)
+        PRINT N'[2/5] ' + @M1 + N' - already recorded, skipped';
+    ELSE
+    BEGIN
+        PRINT N'[2/5] ' + @M1 + N' - applying';
 
         IF OBJECT_ID(N'dbo.TicketInteractionHandlers', N'U') IS NULL
         BEGIN
@@ -302,13 +325,13 @@ BEGIN TRY
     END;
 
     ---------------------------------------------------------------------------
-    -- Migration 2 of 4: AddTicketTransferTracking
+    -- Migration 3 of 5: AddTicketTransferTracking
     ---------------------------------------------------------------------------
     IF EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M2)
-        PRINT N'[2/4] ' + @M2 + N' - already recorded, skipped';
+        PRINT N'[3/5] ' + @M2 + N' - already recorded, skipped';
     ELSE
     BEGIN
-        PRINT N'[2/4] ' + @M2 + N' - applying';
+        PRINT N'[3/5] ' + @M2 + N' - applying';
 
         IF COL_LENGTH(N'dbo.TicketWorkflowEvents', N'FromDepartmentId') IS NULL
             EXEC (N'ALTER TABLE dbo.TicketWorkflowEvents ADD FromDepartmentId int NULL;');
@@ -326,13 +349,13 @@ BEGIN TRY
     END;
 
     ---------------------------------------------------------------------------
-    -- Migration 3 of 4: AddTicketCreatedBy
+    -- Migration 4 of 5: AddTicketCreatedBy
     ---------------------------------------------------------------------------
     IF EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M3)
-        PRINT N'[3/4] ' + @M3 + N' - already recorded, skipped';
+        PRINT N'[4/5] ' + @M3 + N' - already recorded, skipped';
     ELSE
     BEGIN
-        PRINT N'[3/4] ' + @M3 + N' - applying';
+        PRINT N'[4/5] ' + @M3 + N' - applying';
 
         IF COL_LENGTH(N'dbo.Tickets', N'CreatedByEmployeeId') IS NULL
             EXEC (N'ALTER TABLE dbo.Tickets ADD CreatedByEmployeeId uniqueidentifier NULL;');
@@ -366,13 +389,13 @@ BEGIN TRY
     END;
 
     ---------------------------------------------------------------------------
-    -- Migration 4 of 4: AddDepartmentAssignmentRotation
+    -- Migration 5 of 5: AddDepartmentAssignmentRotation
     ---------------------------------------------------------------------------
     IF EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @M4)
-        PRINT N'[4/4] ' + @M4 + N' - already recorded, skipped';
+        PRINT N'[5/5] ' + @M4 + N' - already recorded, skipped';
     ELSE
     BEGIN
-        PRINT N'[4/4] ' + @M4 + N' - applying';
+        PRINT N'[5/5] ' + @M4 + N' - applying';
 
         IF OBJECT_ID(N'dbo.DepartmentAssignmentRotations', N'U') IS NULL
         BEGIN
@@ -399,7 +422,7 @@ BEGIN TRY
 
     -- 3a. History rows.
     SELECT @list = STUFF((SELECT N', ' + m.MigrationId
-        FROM (VALUES (@M1), (@M2), (@M3), (@M4)) AS m(MigrationId)
+        FROM (VALUES (@M0), (@M1), (@M2), (@M3), (@M4)) AS m(MigrationId)
         WHERE NOT EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory AS h WHERE h.MigrationId = m.MigrationId)
         FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'');
     IF @list IS NOT NULL
@@ -412,6 +435,8 @@ BEGIN TRY
     DECLARE @col TABLE (TableName sysname, ColumnName sysname, TypeName sysname, MaxLength smallint, IsNullable bit);
     INSERT INTO @col VALUES
         (N'Tickets',                    N'CreatedByEmployeeId',       N'uniqueidentifier', 16,  1),
+        (N'Tickets',                    N'ExternalCustomerEmail',     N'nvarchar',         512, 1),
+        (N'Tickets',                    N'ExternalCustomerName',      N'nvarchar',         400, 1),
         (N'TicketWorkflowEvents',       N'FromDepartmentId',          N'int',              4,   1),
         (N'TicketWorkflowEvents',       N'ToDepartmentId',            N'int',              4,   1),
         (N'TicketWorkflowEvents',       N'ToEmployeeId',              N'uniqueidentifier', 16,  1),
@@ -434,8 +459,8 @@ BEGIN TRY
         WHERE NOT EXISTS (
         SELECT 1 FROM sys.columns AS c
         JOIN sys.types AS t ON t.user_type_id = c.user_type_id
-        WHERE c.object_id = OBJECT_ID(N'dbo.' + e.TableName) AND c.name = e.ColumnName
-          AND t.name = e.TypeName AND c.max_length = e.MaxLength AND c.is_nullable = e.IsNullable)
+        WHERE c.object_id = OBJECT_ID(N'dbo.' + e.TableName) AND c.name COLLATE DATABASE_DEFAULT = e.ColumnName
+          AND t.name COLLATE DATABASE_DEFAULT = e.TypeName AND c.max_length = e.MaxLength AND c.is_nullable = e.IsNullable)
         FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'');
     IF @list IS NOT NULL
     BEGIN
@@ -467,8 +492,8 @@ BEGIN TRY
         WHERE ISNULL((SELECT STUFF((SELECT N',' + c.name FROM sys.indexes AS x
                           JOIN sys.index_columns AS ic ON ic.object_id = x.object_id AND ic.index_id = x.index_id AND ic.is_included_column = 0
                           JOIN sys.columns AS c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-                          WHERE x.object_id = OBJECT_ID(N'dbo.' + k.TableName) AND x.name = k.IndexName
-                          ORDER BY ic.key_ordinal FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 1, N'')), N'') <> k.KeyList
+                          WHERE x.object_id = OBJECT_ID(N'dbo.' + k.TableName) AND x.name COLLATE DATABASE_DEFAULT = k.IndexName
+                          ORDER BY ic.key_ordinal FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 1, N'')), N'') COLLATE DATABASE_DEFAULT <> k.KeyList
         FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'');
     IF @list IS NOT NULL
     BEGIN
@@ -478,7 +503,7 @@ BEGIN TRY
 
     SELECT @list = STUFF((SELECT N', ' + i.IndexName
         FROM @idx AS i
-        WHERE NOT EXISTS (SELECT 1 FROM sys.indexes AS x WHERE x.object_id = OBJECT_ID(N'dbo.' + i.TableName) AND x.name = i.IndexName AND x.is_unique = i.IsUnique)
+        WHERE NOT EXISTS (SELECT 1 FROM sys.indexes AS x WHERE x.object_id = OBJECT_ID(N'dbo.' + i.TableName) AND x.name COLLATE DATABASE_DEFAULT = i.IndexName AND x.is_unique = i.IsUnique)
         FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'');
     IF @list IS NOT NULL
     BEGIN
@@ -500,8 +525,8 @@ BEGIN TRY
     SELECT @list = STUFF((SELECT N', ' + f.FkName
         FROM @fk AS f
         WHERE NOT EXISTS (SELECT 1 FROM sys.foreign_keys AS k
-                          WHERE k.name = f.FkName AND k.parent_object_id = OBJECT_ID(N'dbo.' + f.ParentTable)
-                            AND k.referenced_object_id = OBJECT_ID(N'dbo.' + f.RefTable) AND k.delete_referential_action_desc = f.DeleteRule)
+                          WHERE k.name COLLATE DATABASE_DEFAULT = f.FkName AND k.parent_object_id = OBJECT_ID(N'dbo.' + f.ParentTable)
+                            AND k.referenced_object_id = OBJECT_ID(N'dbo.' + f.RefTable) AND k.delete_referential_action_desc COLLATE DATABASE_DEFAULT = f.DeleteRule)
         FOR XML PATH(N''), TYPE).value(N'.', N'nvarchar(max)'), 1, 2, N'');
     IF @list IS NOT NULL
     BEGIN
@@ -558,7 +583,7 @@ BEGIN TRY
     BEGIN
         -- R1: migration history
         SELECT MigrationId, ProductVersion FROM dbo.__EFMigrationsHistory
-        WHERE MigrationId IN (@M1, @M2, @M3, @M4) ORDER BY MigrationId;
+        WHERE MigrationId IN (@M0, @M1, @M2, @M3, @M4) ORDER BY MigrationId;
 
         -- R2: counts
         EXEC (N'
@@ -615,8 +640,8 @@ END CATCH;
 ================================================================================
  PREFLIGHT  (READ-ONLY - run these separately BEFORE the deployment, review, keep the output)
 --------------------------------------------------------------------------------
- -- P1. Compare Production's history with the repository's 40 migrations.
- --     Expect: MissingInProduction = exactly the four migrations of this script; UnknownInProduction = none.
+ -- P1. Compare Production's history with the repository's 41 migrations.
+ --     Expect: MissingInProduction = the four newest migrations (plus 20260912110119_AddExternalCustomerSnapshotToTickets if Production lacks it); UnknownInProduction = none.
  ;WITH Repo(MigrationId) AS (SELECT v FROM (VALUES
    (N'20260819072347_InitialIdentityAndAccess'),(N'20260820072044_AddCustomerVerification'),(N'20260820140000_AddTicketing'),
    (N'20260821090000_AddTicketOperations'),(N'20260821130000_AddSlaAndEscalation'),(N'20260822090000_AddNotificationsAndOutbox'),
@@ -624,7 +649,7 @@ END CATCH;
    (N'20260827090146_AddCrmBuyerLookupToTickets'),(N'20260901103309_AddExternalCustomerVerificationToTickets'),(N'20260903164723_AddWorkflowConfiguration'),
    (N'20260904075902_AddWorkflowAutomation'),(N'20260904082241_ReplaceInteractionContextWithTicketInteractions'),(N'20260904091143_AddApprovalWorkflow'),
    (N'20260908054944_AddWorkflowVersioning'),(N'20260909084839_AddChannels'),(N'20260910080219_AddGenesysIntegration'),
-   (N'20260911105154_AddGenesysAgentMappingAndInteractionOwnership'),(N'20260921133507_AddAgentHandoffTriggerAndConcurrency'),(N'20260928132618_AddGenesysScreenPopLaunches'),
+   (N'20260911105154_AddGenesysAgentMappingAndInteractionOwnership'),(N'20260912110119_AddExternalCustomerSnapshotToTickets'),(N'20260921133507_AddAgentHandoffTriggerAndConcurrency'),(N'20260928132618_AddGenesysScreenPopLaunches'),
    (N'20261005072511_AddCollectionsReminders'),(N'20261007093644_AddChatbotInactivityAndCrmDocumentCopies'),(N'20261007103153_AddResolutionClosedForCustomerInactivity'),
    (N'20261007180009_AddCustomerOtpVerification'),(N'20261008184722_AddSlaPauseAndPriorityDowngrade'),(N'20261009065134_AddCollectionsReviewAndGenesysDispatch'),
    (N'20261009074521_AddDispatchSuppressionAndVoiceEligibility'),(N'20261009102002_AddSmsChannelToCustomerOtp'),(N'20261012124810_AddAgentDeskDocumentDelivery'),
@@ -641,6 +666,8 @@ END CATCH;
  SELECT 'Table' AS Kind, N'TicketInteractionHandlers' AS Name, CASE WHEN OBJECT_ID(N'dbo.TicketInteractionHandlers', N'U') IS NULL THEN 'absent' ELSE 'PRESENT' END AS State
  UNION ALL SELECT 'Table', N'DepartmentAssignmentRotations', CASE WHEN OBJECT_ID(N'dbo.DepartmentAssignmentRotations', N'U') IS NULL THEN 'absent' ELSE 'PRESENT' END
  UNION ALL SELECT 'Column', N'Tickets.CreatedByEmployeeId', CASE WHEN COL_LENGTH(N'dbo.Tickets', N'CreatedByEmployeeId') IS NULL THEN 'absent' ELSE 'PRESENT' END
+ UNION ALL SELECT 'Column', N'Tickets.ExternalCustomerEmail', CASE WHEN COL_LENGTH(N'dbo.Tickets', N'ExternalCustomerEmail') IS NULL THEN 'absent' ELSE 'PRESENT' END
+ UNION ALL SELECT 'Column', N'Tickets.ExternalCustomerName', CASE WHEN COL_LENGTH(N'dbo.Tickets', N'ExternalCustomerName') IS NULL THEN 'absent' ELSE 'PRESENT' END
  UNION ALL SELECT 'Column', N'TicketWorkflowEvents.FromDepartmentId', CASE WHEN COL_LENGTH(N'dbo.TicketWorkflowEvents', N'FromDepartmentId') IS NULL THEN 'absent' ELSE 'PRESENT' END
  UNION ALL SELECT 'Column', N'TicketWorkflowEvents.ToDepartmentId', CASE WHEN COL_LENGTH(N'dbo.TicketWorkflowEvents', N'ToDepartmentId') IS NULL THEN 'absent' ELSE 'PRESENT' END
  UNION ALL SELECT 'Column', N'TicketWorkflowEvents.ToEmployeeId', CASE WHEN COL_LENGTH(N'dbo.TicketWorkflowEvents', N'ToEmployeeId') IS NULL THEN 'absent' ELSE 'PRESENT' END
@@ -670,15 +697,15 @@ END CATCH;
 ================================================================================
  POST-DEPLOYMENT VERIFICATION  (READ-ONLY - run after a real run, and keep the output)
 --------------------------------------------------------------------------------
- -- V1. The four migrations are recorded and the newest is the rotation one.
- SELECT TOP 6 MigrationId, ProductVersion FROM dbo.__EFMigrationsHistory ORDER BY MigrationId DESC;
+ -- V1. The migrations are recorded and the newest is the rotation one.
+ SELECT TOP 7 MigrationId, ProductVersion FROM dbo.__EFMigrationsHistory ORDER BY MigrationId DESC;
 
- -- V2. Columns: expect 17 rows (13 + 4 DepartmentAssignmentRotations/Tickets additions; see the script's @col list). Type/size/nullability:
+ -- V2. Columns (see the script's @col list). Type/size/nullability:
  SELECT o.name AS TableName, c.name AS ColumnName, t.name AS TypeName, c.max_length, c.is_nullable
  FROM sys.columns c JOIN sys.objects o ON o.object_id = c.object_id AND o.schema_id = SCHEMA_ID(N'dbo') JOIN sys.types t ON t.user_type_id = c.user_type_id
  WHERE (o.name = N'DepartmentAssignmentRotations')
     OR (o.name = N'TicketInteractionHandlers')
-    OR (o.name = N'Tickets' AND c.name = N'CreatedByEmployeeId')
+    OR (o.name = N'Tickets' AND c.name IN (N'CreatedByEmployeeId', N'ExternalCustomerEmail', N'ExternalCustomerName'))
     OR (o.name = N'TicketWorkflowEvents' AND c.name IN (N'FromDepartmentId', N'ToDepartmentId', N'ToEmployeeId', N'TransferReasonCode'))
  ORDER BY o.name, c.column_id;
 
