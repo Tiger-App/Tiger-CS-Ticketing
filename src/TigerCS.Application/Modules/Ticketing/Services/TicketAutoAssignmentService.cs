@@ -1,4 +1,4 @@
-﻿using TigerCS.Application.Abstractions;
+using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Reporting.Services;
@@ -105,7 +105,8 @@ public sealed class TicketAutoAssignmentService(
     IDepartmentRepository? departmentRepository = null,
     IUserRoleReader? roleReader = null,
     IUserAccountManager? accountManager = null,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    IServiceIdentityRegistry? serviceIdentities = null,
+    ITicketWorkflowEventRepository? workflowEventRepository = null)
 {
     /// <summary>
     /// Runs inside the caller's creation transaction, after the ticket row
@@ -355,6 +356,244 @@ public sealed class TicketAutoAssignmentService(
 
         return eligible;
     }
+
+    // ------------------------------------------------------------------------------------------------------------------------------
+    // Direct assignment to the agent who ANSWERED a Genesys interaction
+    // ------------------------------------------------------------------------------------------------------------------------------
+
+    /// <summary>
+    /// Whether the person Genesys reported as having answered can be given a Call Center ticket: not a service identity, account not locked
+    /// out, an operational (non read-only) role, and a member of the Call Center. Mapped-and-active is established earlier by the Genesys
+    /// resolver (<see cref="AnsweringAgentIssue.NotMapped"/> / <see cref="AnsweringAgentIssue.Inactive"/>). A lookup that cannot answer
+    /// counts AGAINST the person — the ticket then waits in the queue for a human to assign; it is never guessed onto somebody.
+    /// </summary>
+    public async Task<AnsweringAgentIssue> CheckAnsweringAgentAsync(
+        Guid employeeId, int callCenterDepartmentId, CancellationToken cancellationToken = default)
+    {
+        if (serviceIdentities?.IsServiceIdentity(employeeId) == true)
+        {
+            return AnsweringAgentIssue.ServiceAccount;
+        }
+
+        if (accountManager is not null)
+        {
+            var account = await accountManager.GetAccountAsync(employeeId, cancellationToken);
+            if (account is null)
+            {
+                return AnsweringAgentIssue.Inactive;
+            }
+
+            if (account.IsLockedOut)
+            {
+                return AnsweringAgentIssue.LockedOut;
+            }
+        }
+
+        if (!await userDepartmentAssignmentRepository.ExistsAsync(employeeId, callCenterDepartmentId, cancellationToken))
+        {
+            return AnsweringAgentIssue.NotCallCenterMember;
+        }
+
+        if (roleReader is not null)
+        {
+            var roles = await roleReader.GetRolesAsync(employeeId, cancellationToken);
+            if (Roles.IsReadOnlyCaller(roles) || !roles.Any(TicketRoleSets.RoundRobinEligible.Contains))
+            {
+                return AnsweringAgentIssue.NoOperationalRole;
+            }
+        }
+
+        return AnsweringAgentIssue.None;
+    }
+
+    /// <summary>
+    /// <b>The answering agent owns the ticket.</b> A mapped, eligible Call Center agent whom Genesys reported as CONNECTED to the interaction
+    /// (answered / accepted — the caller must never pass a ringing, offered or queue-only agent) is given the ticket directly, in the
+    /// Call Center. Round Robin is NOT consulted and its cursor is not advanced: the person who picked up the phone is the owner, not the
+    /// next name in the rotation. Round Robin remains only for a human handoff nobody has accepted yet.
+    ///
+    /// <list type="bullet">
+    /// <item><b>One owner, never overwritten.</b> A person who already owns the ticket (manual assignment, self-assignment, an earlier answer)
+    /// keeps it. Only an AUTOMATIC pre-assignment (Round Robin / rule, still Open, no human response — <see cref="TicketOwnershipRules"/>) yields
+    /// to the agent who actually answered; its assignment row is superseded, never deleted. The same agent reported twice writes nothing.</item>
+    /// <item><b>The assignment is the agent's own act.</b> The row and the audit entry carry the answering agent as actor (like a
+    /// self-assignment), so the result is human ownership and a later Genesys event can never mistake it for an automatic pre-assignment.</item>
+    /// <item><b>Unusable answering agent</b> (unmapped, deactivated, locked out, service account, not a Call Center member, no operational
+    /// role): the ticket is left in the Call Center queue — a stale automatic pre-assignment is released so it is not left with somebody who did
+    /// not answer — and a <see cref="WorkflowEventType.ManualAssignmentRequired"/> event plus an audit entry flag it for a supervisor. Written
+    /// once per (ticket, agent, reason). The ticket is never given to anyone else.</item>
+    /// <item><b>Once a person has transferred the ticket out, Genesys no longer moves it.</b> Any transfer that is not system routing makes this
+    /// a no-op, so a late "agent connected" update cannot pull the ticket back to the Call Center or take it from its new owner.</item>
+    /// <item>Status, SLA, priority, request type and every existing history row are untouched; only the department (when it was elsewhere) and
+    /// the owner move, each with its audit entry and a typed event.</item>
+    /// </list>
+    /// Runs inside the caller's transaction; the caller saves and handles a concurrency conflict (<see cref="AnswerAssignmentOutcome.ConcurrencyConflict"/>).
+    /// <c>routeToCallCenterIfAgentUnavailable</c>: when the answering agent is unusable and the ticket is NOT already in the Call Center, true moves it
+    /// there to be flagged (a human interaction is on it); false leaves it exactly where it is, writing nothing (nothing says a person is handling it).
+    /// </summary>
+    public async Task<AnswerAssignmentResult> ApplyAnsweringAgentAsync(
+        Ticket ticket, AnsweringAgent agent, string source, DateTime nowUtc, Guid correlationId, Guid? reportedByEmployeeId,
+        bool routeToCallCenterIfAgentUnavailable, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+        ArgumentNullException.ThrowIfNull(agent);
+
+        if (ticket.TicketStatus is TicketStatus.Closed or TicketStatus.Resolved)
+        {
+            return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "The ticket is closed or resolved.");
+        }
+
+        var callCenter = await ResolveCallCenterAsync(cancellationToken);
+        if (callCenter is null)
+        {
+            return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "No active Call Center department.");
+        }
+
+        // A person moved it on (Transfer / escalation): the transfer and its new owner stand. System routing does not count.
+        if (await HasPersonTransferAsync(ticket.TicketId, cancellationToken))
+        {
+            return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "A person transferred the ticket; it is left as they placed it.");
+        }
+
+        // Ownership first: never move or flag a ticket somebody already owns.
+        var previousOwner = ticket.CurrentOwnerEmployeeId;
+        if (previousOwner is not null)
+        {
+            if (agent.EmployeeId == previousOwner)
+            {
+                return new AnswerAssignmentResult(AnswerAssignmentOutcome.AlreadyOwnedByAnsweringAgent, previousOwner);
+            }
+
+            if (!await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken))
+            {
+                return new AnswerAssignmentResult(AnswerAssignmentOutcome.HumanOwnerKept, previousOwner);
+            }
+        }
+
+        var issue = agent.Issue != AnsweringAgentIssue.None || agent.EmployeeId is null
+            ? (agent.Issue != AnsweringAgentIssue.None ? agent.Issue : AnsweringAgentIssue.NotMapped)
+            : await CheckAnsweringAgentAsync(agent.EmployeeId.Value, callCenter.DepartmentId, cancellationToken);
+
+        if (issue != AnsweringAgentIssue.None && ticket.CurrentDepartmentId != callCenter.DepartmentId && !routeToCallCenterIfAgentUnavailable)
+        {
+            return new AnswerAssignmentResult(
+                AnswerAssignmentOutcome.NotApplicable, Issue: issue,
+                Detail: $"Answering agent unavailable ({issue}) and nothing says the ticket is human-managed; left where it is.");
+        }
+
+        var currentAssignment = await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken);
+        var wrote = false;
+
+        // Call Center first. TransferToDepartment clears the owner, so a stale automatic pre-assignment in the old department is released.
+        if (ticket.CurrentDepartmentId != callCenter.DepartmentId)
+        {
+            var fromDepartmentId = ticket.CurrentDepartmentId;
+            ticket.TransferToDepartment(callCenter.DepartmentId);
+            currentAssignment?.MarkSuperseded();
+            currentAssignment = null;
+            wrote = true;
+
+            await auditWriter.WriteAsync(
+                actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId={previousOwner?.ToString() ?? "DepartmentQueue"}",
+                afterValue: $"DepartmentId={callCenter.DepartmentId};Reason=Call answered by a Call Center agent — routed to Call Center;"
+                    + $"OriginatingDepartmentId={ticket.OriginatingDepartmentId} (unchanged);Source={source}"
+                    + (previousOwner is not null ? ";AutomaticPreAssignmentReleased=true" : string.Empty),
+                correlationId, cancellationToken);
+
+            if (workflowEventRepository is not null)
+            {
+                await workflowEventRepository.AddAsync(
+                    TicketWorkflowEvent.ForTransfer(
+                        ticket.TicketId, nowUtc, actorEmployeeId: null, TicketTransferReason.SystemRouting,
+                        fromDepartmentId, callCenter.DepartmentId, issue == AnsweringAgentIssue.None ? agent.EmployeeId : null,
+                        "Call answered by a Call Center agent — Call Center first", correlationId),
+                    cancellationToken);
+            }
+        }
+
+        if (issue == AnsweringAgentIssue.None)
+        {
+            var agentId = agent.EmployeeId!.Value;
+            currentAssignment?.MarkSuperseded();
+            ticket.AssignTo(agentId);
+
+            // The answering agent is the assigning actor: a human act, like a self-assignment, so this is NOT an automatic pre-assignment.
+            await ticketAssignmentRepository.AddAsync(
+                new TicketAssignment(ticket.TicketId, agentId, callCenter.DepartmentId, nowUtc, assigningActorEmployeeId: agentId),
+                cancellationToken);
+
+            await auditWriter.WriteAsync(
+                agentId, "AssignOnAnswer", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: previousOwner?.ToString() ?? "DepartmentQueue",
+                afterValue: $"AssignedEmployeeId={agentId};DepartmentId={callCenter.DepartmentId};Mode=DirectToAnsweringAgent;"
+                    + $"Trigger=GenesysAnswered;Source={source};GenesysUserId={agent.GenesysUserId}"
+                    + (reportedByEmployeeId is { } by ? $";ReportedBy={by}" : string.Empty)
+                    + (previousOwner is not null && ticket.CurrentDepartmentId == callCenter.DepartmentId && !wrote ? $";ReplacedAutomaticPreAssignment={previousOwner}" : string.Empty),
+                correlationId, cancellationToken);
+
+            return new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedToAnsweringAgent, agentId, Wrote: true);
+        }
+
+        // The answering agent cannot take it: keep it in the queue. Never a substitute person.
+        if (previousOwner is not null && !wrote)
+        {
+            currentAssignment?.MarkSuperseded();
+            ticket.ReleaseOwner();
+            wrote = true;
+            await auditWriter.WriteAsync(
+                actorEmployeeId: null, "Unassign", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: previousOwner.ToString(),
+                afterValue: $"DepartmentQueue;DepartmentId={ticket.CurrentDepartmentId};Reason=Automatic pre-assignment released — the agent who answered "
+                    + $"({agent.GenesysUserId}) cannot take the ticket ({issue}); manual assignment required;Source={source}",
+                correlationId, cancellationToken);
+        }
+
+        var marker = $"GenesysUserId={agent.GenesysUserId};Issue={issue}";
+        var alreadyFlagged = workflowEventRepository is not null
+            && (await workflowEventRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Any(e =>
+                e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note is not null && e.Note.Contains(marker, StringComparison.Ordinal));
+        if (alreadyFlagged)
+        {
+            return new AnswerAssignmentResult(AnswerAssignmentOutcome.AlreadyFlagged, Issue: issue, Wrote: wrote);
+        }
+
+        var note = $"Answered by Genesys agent {agent.GenesysUserId} — {Describe(issue)}. Left in the Call Center queue for manual assignment. [{marker}]";
+        if (workflowEventRepository is not null)
+        {
+            await workflowEventRepository.AddAsync(
+                new TicketWorkflowEvent(
+                    ticket.TicketId, WorkflowEventType.ManualAssignmentRequired, nowUtc, actorEmployeeId: null,
+                    ticketApprovalId: null, note, correlationId),
+                cancellationToken);
+        }
+
+        await auditWriter.WriteAsync(
+            actorEmployeeId: null, "AnswerAssignmentSkipped", "Ticket", ticket.TicketId.ToString(),
+            beforeValue: previousOwner?.ToString() ?? "DepartmentQueue",
+            afterValue: $"DepartmentQueue;DepartmentId={ticket.CurrentDepartmentId};Status=Unassigned;ManualAssignmentRequired=true;"
+                + $"GenesysUserId={agent.GenesysUserId};Issue={issue};Source={source}",
+            correlationId, cancellationToken);
+
+        return new AnswerAssignmentResult(AnswerAssignmentOutcome.QueuedForManualAssignment, Issue: issue, Wrote: true);
+    }
+
+    /// <summary>True when a PERSON has transferred the ticket (any transfer event that is not system routing, which includes escalations).</summary>
+    private async Task<bool> HasPersonTransferAsync(long ticketId, CancellationToken cancellationToken) =>
+        workflowEventRepository is not null
+        && (await workflowEventRepository.ListByTicketIdAsync(ticketId, cancellationToken)).Any(e =>
+            e.EventType == WorkflowEventType.TicketTransferred && e.TransferReasonCode != (byte)TicketTransferReason.SystemRouting);
+
+    private static string Describe(AnsweringAgentIssue issue) => issue switch
+    {
+        AnsweringAgentIssue.NotMapped => "that Genesys user is not mapped to a Ticketing user",
+        AnsweringAgentIssue.Inactive => "the mapped Ticketing user is deactivated",
+        AnsweringAgentIssue.LockedOut => "the mapped Ticketing account is locked out",
+        AnsweringAgentIssue.ServiceAccount => "the mapped user is a service account",
+        AnsweringAgentIssue.NotCallCenterMember => "the mapped user is not a Call Center member",
+        AnsweringAgentIssue.NoOperationalRole => "the mapped user holds no operational role",
+        _ => "the agent id is not usable"
+    };
 
     /// <summary>
     /// Self-assignment at manual creation: the CS Agent who created the ticket owns it, so they can see and work it.

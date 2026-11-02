@@ -68,7 +68,8 @@ public sealed class GenesysTicketUpdateAppService(
     GenesysRequestTypeClassificationAppService classificationAppService,
     TicketLifecycleAppService lifecycleAppService,
     GenesysAgentHandlingHistory handlingHistory,
-    GenesysInteractionHandlerRecorder? handlerRecorder = null)
+    GenesysInteractionHandlerRecorder? handlerRecorder = null,
+    GenesysAnsweringAgentAssignmentService? answeringAgentAssignment = null)
 {
     /// <summary>The exact closure reason recorded when the AI finishes the conversation.</summary>
     public const string ClosedByAiReason = "Closed by AI";
@@ -221,11 +222,14 @@ public sealed class GenesysTicketUpdateAppService(
         {
             if (handoff.Required == true)
             {
+                // routing.agentId is the agent Genesys reports as CONNECTED (answered). Passing it lets the handoff give the ticket straight to
+                // that agent instead of Round Robin; request.AgentId / handoff.AgentAvailable only say who is assigned, which is not an answer.
                 var requested = await agentHandoffAppService.RequestAsync(
                     callerEmployeeId,
                     new GenesysHandoffRequestDto(
                         conversationId, handoff.AgentAvailable, handoff.Mode, handoff.Reason, handoff.Trigger,
                         request.AgentId, request.AgentName, handoff.WorkItemId, TicketId: ticketId),
+                    options.AssignOnAnswer ? NullIfBlank(request.Routing?.AgentId) : null,
                     cancellationToken);
 
                 if (requested.Outcome is not (GenesysHandoffOutcome.HandoffRecorded or GenesysHandoffOutcome.AlreadyRequested))
@@ -286,6 +290,20 @@ public sealed class GenesysTicketUpdateAppService(
         if (request.Routing is not null || request.StartedAtUtc is not null)
         {
             await RecordRoutingAsync(callerEmployeeId, interaction, request, cancellationToken);
+        }
+
+        // The agent Genesys reports as CONNECTED (answered / accepted - never ringing or merely assigned) owns the ticket: given to them
+        // directly, in the Call Center, not to the next agent in the rotation. An agent who cannot take it (unmapped, deactivated, locked
+        // out ...) leaves the ticket in the Call Center queue flagged for manual assignment. A human owner, or a person's transfer, stands:
+        // later events never overwrite either. Idempotent per agent.
+        if (options.AssignOnAnswer && answeringAgentAssignment is not null && NullIfBlank(request.Routing?.AgentId) is { } answeringAgentId)
+        {
+            var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
+                callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken);
+            if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
+            {
+                return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);
+            }
         }
 
         // An agent connecting to a conversation whose human work is still

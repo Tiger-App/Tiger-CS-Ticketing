@@ -294,7 +294,20 @@ public sealed class GenesysInquiryIngestionAppService(
         TicketCreationResult creation;
         try
         {
-            creation = await ticketCreationAppService.CreateAsync(callerEmployeeId, request, cancellationToken);
+            // A call picked up by a human before the ticket exists names the agent who ANSWERED it: that agent owns the ticket (directly, in
+            // the Call Center) instead of Round Robin. Only a phone call, or an inquiry already marked as needing a person, is human-answered;
+            // an id on an AI-handled chat is not (a bot or a not-yet-connected agent must not drag the ticket into the Call Center).
+            AnsweringAgent? answering = null;
+            if (options.AssignOnAnswer
+                && NullIfBlank(inquiry.AgentId) is { } answeringAgentId
+                && (inquiry.Channel == GenesysChannel.Phone || inquiry.HumanFollowUpRequired == true)
+                && agent is not null)
+            {
+                answering = GenesysAnsweringAgentAssignmentService.ToAnsweringAgent(answeringAgentId, agent);
+            }
+
+            creation = await ticketCreationAppService.CreateAsync(
+                callerEmployeeId, request, cancellationToken, callerRoles: null, answeringAgent: answering);
         }
         catch (DuplicateWriteException)
         {
@@ -315,9 +328,11 @@ public sealed class GenesysInquiryIngestionAppService(
 
         // Interaction ownership: the resolved Ticketing user is recorded on
         // the originating interaction the creation just wrote (it is the
-        // one row carrying this conversation id). Ticket assignment is NOT
-        // touched — who handled the call and who owns the ticket are
-        // different facts.
+        // one row carrying this conversation id). That records who HANDLED
+        // the call. Who OWNS the ticket was decided inside the creation: a
+        // call a mapped, eligible Call Center agent answered is assigned
+        // directly to that agent (see answering above); nothing here changes
+        // ownership afterwards.
         if (agent is { IsResolved: true }
             && await conversationRepository.GetByConversationAndTicketAsync(conversationId, creation.Response.TicketId, cancellationToken) is { } originating)
         {

@@ -1,4 +1,4 @@
-﻿using System.ComponentModel.DataAnnotations;
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TigerCS.Application.Modules.Administration.Dto;
@@ -1500,6 +1500,9 @@ public sealed class TicketDetailsModel(
         nameof(WorkflowEventType.HandoffStarted) => "accepted the customer interaction",
         nameof(WorkflowEventType.HandoffCompleted) => "finished the customer interaction",
         nameof(WorkflowEventType.HandoffCancelled) => "stood down the request for a human agent",
+
+        // A call answered by an agent TigerCS could not hand the ticket to: left unowned in the Call Center queue for a supervisor to assign.
+        nameof(WorkflowEventType.ManualAssignmentRequired) => "needs manual assignment",
 
         // Record-only: the customer's word, not a status change — Resolve
         // and Close still happen through their own actions.
