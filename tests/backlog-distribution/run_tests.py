@@ -74,7 +74,7 @@ def execute(dry=True, batch=None, approved=None, services=(SVC,), **extra):
     if batch: p["BatchId"] = "'%s'" % batch
     if approved:
         approved = tuple(approved) + APPROVED[len(approved):]          # a 3-tuple keeps the fixture's held-back counts
-        p.update(ApprovedTicketCount=approved[0], ApprovedMovedTicketCount=approved[1], ApprovedAgentCount=approved[2],
+        p.update(ApprovedTicketCount=approved[0], ApprovedTransferCount=approved[1], ApprovedAgentCount=approved[2],
                  ApprovedHeldBackPendingApprovalCount=approved[3], ApprovedHeldBackActiveAiCount=approved[4])
     p.update(extra)
     return run_text(patch(EXECUTE, **p))
@@ -104,7 +104,7 @@ def digest(st):
 # ---------------------------------------------------------------------------------------------------------------------------------
 # independent oracle
 # ---------------------------------------------------------------------------------------------------------------------------------
-def held_sets():
+def held_sets(include_ai=False):
     """Independent re-implementation of the hold-back rules from raw rows: (base unowned ids, pending-approval ids, AI-only ids)."""
     base = {int(r[0]) for r in rows("SELECT t.TicketId FROM dbo.Tickets t WHERE t.TicketStatus IN (1,2,3,4) AND t.CurrentOwnerEmployeeId IS NULL "
                                     "AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId=t.TicketId AND a.IsCurrent=1)")}
@@ -120,9 +120,9 @@ def held_sets():
         live = any(x[0] == "2" and x[1] == "-" and x[2] == "-" and x[3] in ("0", "False") and x[4] == "-" for x in rs)
         human = any(x[3] in ("1", "True") for x in rs)
         if live and not human and t not in handoff: ai.add(t)
-    return base, pend, ai - pend
+    return base, pend, (set() if include_ai else ai - pend)
 
-def oracle(service_ids=(SVC,)):
+def oracle(service_ids=(SVC,), cs_only=True, include_ai=False):
     """Expected plan {ticketId: agentId} computed in Python from raw table data."""
     svc = {s.lower() for s in service_ids}
     cc = int(scalar("SELECT DepartmentId FROM dbo.Departments WHERE Code='CC' AND IsActive=1"))
@@ -133,12 +133,12 @@ def oracle(service_ids=(SVC,)):
     roles = {}
     for uid, name in rows("SELECT ur.UserId, r.Name FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id=ur.RoleId"):
         roles.setdefault(uid.lower(), set()).add(name)
-    ops = {"CS Agent", "Department Employee", "Department Head"}
+    ops = {"CS Agent"} if cs_only else {"CS Agent", "Department Employee", "Department Head"}
     agents = sorted({m[0].lower() for m in members
                      if m[1] == "0" and m[2] == "0" and m[0].lower() not in svc and roles.get(m[0].lower(), set()) & ops})
     cur = rows("SELECT CONVERT(nvarchar(36),LastAssignedEmployeeId) FROM dbo.DepartmentAssignmentRotations WHERE DepartmentId=%d" % cc)
     cursor = cur[0][0].lower() if cur and cur[0][0] != "NULL" else None
-    base, pend, ai_only = held_sets()
+    base, pend, ai_only = held_sets(include_ai)
     cands = [r for r in rows("SELECT CONVERT(nvarchar(30),t.CreatedAtUtc,121), t.TicketId, t.CurrentDepartmentId FROM dbo.Tickets t WHERE t.TicketStatus IN (1,2,3,4) "
                              "AND t.CurrentOwnerEmployeeId IS NULL AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId=t.TicketId AND a.IsCurrent=1)")
              if int(r[1]) not in pend and int(r[1]) not in ai_only]
@@ -162,7 +162,7 @@ def has(out, text): return text.lower() in out.lower()
 def last_batch_id(out):
     m = re.search(r"BatchId=([0-9A-Fa-f-]{36})", out); return m.group(1) if m else None
 
-ELIG, MOVED, AGENTS, HELD_APPR, HELD_AI = 72, 66, 4, 7, 5       # the fixture: 62 base + 10 'F-' tickets that carry approval/AI history
+ELIG, MOVED, AGENTS, HELD_APPR, HELD_AI = 72, 66, 3, 7, 5       # the fixture: 62 base + 10 'F-' tickets that carry approval/AI history; default pool = CS Agent role only (A1, A2, A3)
 APPROVED = (ELIG, MOVED, AGENTS, HELD_APPR, HELD_AI)
 BATCH = "11111111-2222-3333-4444-555555555555"
 
@@ -230,7 +230,7 @@ def t03_gates():
         rc, out = rc_out
         check(label, rc != 0 and has(out, text) and digest(state()) == before, out[-300:])
     refused("no approval counts -> refused", run_text(patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC])), "commit gates not satisfied")
-    refused("service ids not confirmed -> refused", run_text(patch(EXECUTE, DryRun=0, ApprovedTicketCount=ELIG, ApprovedMovedTicketCount=MOVED, ApprovedAgentCount=AGENTS, ApprovedHeldBackPendingApprovalCount=HELD_APPR, ApprovedHeldBackActiveAiCount=HELD_AI, services=[SVC])), "commit gates not satisfied")
+    refused("service ids not confirmed -> refused", run_text(patch(EXECUTE, DryRun=0, ApprovedTicketCount=ELIG, ApprovedTransferCount=MOVED, ApprovedAgentCount=AGENTS, ApprovedHeldBackPendingApprovalCount=HELD_APPR, ApprovedHeldBackActiveAiCount=HELD_AI, services=[SVC])), "commit gates not satisfied")
     refused("empty service list without acknowledgement -> refused", execute(False, approved=APPROVED, services=()), "service-account list is empty")
     refused("service id typo -> refused", execute(False, approved=APPROVED, services=("99999999-9999-9999-9999-999999999999",)), "not an employee")
     refused("wrong ticket count -> refused", execute(False, approved=(ELIG - 1, MOVED, AGENTS)), "backlog changed since the preview")
@@ -238,7 +238,7 @@ def t03_gates():
     refused("wrong agent count -> refused", execute(False, approved=(ELIG, MOVED, AGENTS + 1)), "ApprovedAgentCount")
     refused("wrong held-back PENDING-APPROVAL count -> refused", execute(False, approved=(ELIG, MOVED, AGENTS, HELD_APPR - 1, HELD_AI)), "backlog changed since the preview")
     refused("wrong held-back ACTIVE-AI count -> refused", execute(False, approved=(ELIG, MOVED, AGENTS, HELD_APPR, HELD_AI + 1)), "backlog changed since the preview")
-    refused("held-back counts missing -> refused", run_text(patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, ApprovedTicketCount=ELIG, ApprovedMovedTicketCount=MOVED, ApprovedAgentCount=AGENTS, services=[SVC])), "commit gates not satisfied")
+    refused("held-back counts missing -> refused", run_text(patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, ApprovedTicketCount=ELIG, ApprovedTransferCount=MOVED, ApprovedAgentCount=AGENTS, services=[SVC])), "commit gates not satisfied")
     # listing a REAL agent as a 'service account' removes them from the pool -> agent count gate trips
     refused("excluding one more agent changes the pool -> refused", execute(False, approved=APPROVED, services=(SVC, "00000000-0000-0000-0000-000000000002")), "ApprovedAgentCount")
     # DB-name guard
@@ -433,7 +433,7 @@ def t07_concurrency():
     print("T07 concurrency")
     restore(); pre = state()
     plan, origin, cc, agents = oracle()
-    slow = patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC], ApprovedTicketCount=ELIG, ApprovedMovedTicketCount=MOVED, ApprovedAgentCount=AGENTS, ApprovedHeldBackPendingApprovalCount=HELD_APPR, ApprovedHeldBackActiveAiCount=HELD_AI, BatchId="'%s'" % BATCH)
+    slow = patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC], ApprovedTicketCount=ELIG, ApprovedTransferCount=MOVED, ApprovedAgentCount=AGENTS, ApprovedHeldBackPendingApprovalCount=HELD_APPR, ApprovedHeldBackActiveAiCount=HELD_AI, BatchId="'%s'" % BATCH)
     slow = slow.replace("    -- (h) report", "    WAITFOR DELAY '00:00:14';\n    -- (h) report", 1)
     assert "WAITFOR DELAY" in slow
     res = {}
@@ -527,7 +527,7 @@ def t10_scale():
     check("preview completes (%.1fs)" % tp, rc == 0 and "READY" in out, out[-300:])
     t0 = time.time(); rc, out = execute(dry=True); td = time.time() - t0
     check("dry run completes (%.1fs) and rolls back" % td, rc == 0 and has(out, "ROLLED BACK"), out[-300:])
-    t0 = time.time(); rc, out = execute(dry=False, batch=BATCH, approved=(total, moved, 4, len(pend), len(ai_only))); tx = time.time() - t0
+    t0 = time.time(); rc, out = execute(dry=False, batch=BATCH, approved=(total, moved, len(agents), len(pend), len(ai_only))); tx = time.time() - t0
     check("commit of %d tickets completes (%.1fs)" % (total, tx), rc == 0 and has(out, "COMMITTED"), out[-300:])
     got = {int(r[0]): r[1].lower() for r in rows("SELECT TicketId, CONVERT(nvarchar(36),CurrentOwnerEmployeeId) FROM dbo.Tickets WHERE TicketStatus IN (1,2,3,4)")}
     check("all %d tickets match the independent oracle" % len(plan), all(got[t] == a for t, a in plan.items()))
@@ -639,7 +639,7 @@ def t12_active_ai():
 
 def window_run(inject_marker, extra_sql_for_window, wait=12, settle=5):
     """Run a real commit whose transaction pauses (WAITFOR) just before `inject_marker`; execute `extra_sql_for_window` from other sessions meanwhile."""
-    slow = patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC], ApprovedTicketCount=ELIG, ApprovedMovedTicketCount=MOVED, ApprovedAgentCount=AGENTS,
+    slow = patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC], ApprovedTicketCount=ELIG, ApprovedTransferCount=MOVED, ApprovedAgentCount=AGENTS,
                  ApprovedHeldBackPendingApprovalCount=HELD_APPR, ApprovedHeldBackActiveAiCount=HELD_AI, BatchId="'%s'" % BATCH)
     assert inject_marker in slow
     slow = slow.replace(inject_marker, "    WAITFOR DELAY '00:00:%02d';\n" % wait + inject_marker, 1)
@@ -711,8 +711,42 @@ def t13_concurrent_safeguards():
     check("no ticket is owned by an excluded account", bad == "0")
     check("every batch ticket has exactly one owner and one current assignment", scalar("SELECT COUNT(*) FROM dbo.Tickets t WHERE t.TicketId IN (SELECT TicketId FROM dbo.TicketAssignments WHERE IsCurrent=1 AND AssignedAtUtc=(SELECT OccurredAtUtc FROM dbo.AuditEntries WHERE Action='BacklogDistributionBatch')) AND (t.CurrentOwnerEmployeeId IS NULL OR (SELECT COUNT(*) FROM dbo.TicketAssignments a WHERE a.TicketId=t.TicketId AND a.IsCurrent=1)<>1)") == "0")
 
+def t14_switches():
+    print("T14 @CsAgentRoleOnly and @IncludeLiveAiConversations (both default to the safe setting; Preview and Execute must agree)")
+    restore()
+    rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC]))
+    check("default: Department Employee is shown as excluded by @CsAgentRoleOnly", any("DE Person" in l and "excluded by @CsAgentRoleOnly" in l for l in out.splitlines()))
+    # --- @CsAgentRoleOnly = 0 : the engine's full pool (CS Agent, Department Employee, Department Head)
+    rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC], CsAgentRoleOnly=0))
+    check("@CsAgentRoleOnly = 0: pool is the engine's full pool (4 agents)", re.search(r"\n%d\|%d\|4\|%d\|%d\s*\n" % (ELIG, MOVED, HELD_APPR, HELD_AI), out) is not None, out[-300:])
+    rc, out = execute(dry=False, batch=BATCH, approved=(ELIG, MOVED, AGENTS, HELD_APPR, HELD_AI), CsAgentRoleOnly=0)
+    check("...Execute with the DEFAULT approved agent count (3) is refused: pool differs from what was approved", rc != 0 and has(out, "ApprovedAgentCount"), out[-200:])
+    plan, origin, cc, agents = oracle(cs_only=False)
+    rc, out = execute(dry=False, batch=BATCH, approved=(ELIG, MOVED, 4, HELD_APPR, HELD_AI), CsAgentRoleOnly=0)
+    got = {int(r[0]): r[1].lower() for r in rows("SELECT TicketId, CONVERT(nvarchar(36),CurrentOwnerEmployeeId) FROM dbo.Tickets WHERE TicketStatus IN (1,2,3,4)")}
+    check("...with 4 agents it commits and equals the oracle (Department Employee included)", rc == 0 and all(got[t] == a for t, a in plan.items()) and any(a.startswith("f0000000") for a in plan.values()), out[-200:])
+    # --- default keeps the Department Employee out
+    restore(); plan, origin, cc, agents = oracle()
+    execute(dry=False, batch=BATCH, approved=APPROVED)
+    check("default: the Department Employee owns nothing", scalar("SELECT COUNT(*) FROM dbo.Tickets WHERE CurrentOwnerEmployeeId='f0000000-0000-0000-0000-000000000009'") == "0")
+    # --- @IncludeLiveAiConversations = 1
+    restore()
+    rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC], IncludeLiveAiConversations=1))
+    check("@IncludeLiveAiConversations = 1: the 5 AI-only tickets become eligible and are no longer listed as held back (approvals still held)",
+          re.search(r"\n%d\|%d\|%d\|%d\|0\s*\n" % (ELIG + HELD_AI, MOVED + HELD_AI, AGENTS, HELD_APPR), out) is not None and "ACTIVE AI CONVERSATION" not in out, out[-300:])
+    before = digest(state())
+    rc, out = execute(dry=False, approved=APPROVED, IncludeLiveAiConversations=1)
+    check("...Execute with the default (hold-back) approved counts is refused", rc != 0 and has(out, "backlog changed since the preview") and digest(state()) == before, out[-200:])
+    plan, origin, cc, agents = oracle(include_ai=True)
+    rc, out = execute(dry=False, batch=BATCH, approved=(ELIG + HELD_AI, MOVED + HELD_AI, AGENTS, HELD_APPR, 0), IncludeLiveAiConversations=1)
+    got = {int(r[0]): r[1].lower() for r in rows("SELECT TicketId, CONVERT(nvarchar(36),CurrentOwnerEmployeeId) FROM dbo.Tickets WHERE TicketStatus IN (1,2,3,4)")}
+    ai = ids(["H-AI-%d" % i for i in range(1, 6)]); appr = ids(["H-APR-%d" % i for i in range(1, 7)] + ["H-BOTH-1"])
+    check("...with the matching counts it commits: AI tickets moved and owned, pending approvals STILL untouched", rc == 0 and all(got[t] == a for t, a in plan.items())
+          and all(got[t] != "null" for t in ai) and all(got[t] == "null" for t in appr), out[-250:])
+    # --- default Execute vs a Preview that used a different toggle can never silently commit: counts differ => refused (covered above)
+
 TESTS = [t01_preview_readonly, t01b_preview_as_datareader, t02_dry_run, t03_gates, t04_commit, t05_rollback_clean, t06_rollback_touched, t06b_include_worked, t07_concurrency,
-         t08_race_between_preview_and_run, t09_cursor_and_pool_edges, t11_pending_approvals, t11b_approval_decided_between_preview_and_run, t12_active_ai, t13_concurrent_safeguards, t10_scale]
+         t08_race_between_preview_and_run, t09_cursor_and_pool_edges, t11_pending_approvals, t11b_approval_decided_between_preview_and_run, t12_active_ai, t13_concurrent_safeguards, t14_switches, t10_scale]
 
 if __name__ == "__main__":
     only = sys.argv[1:]

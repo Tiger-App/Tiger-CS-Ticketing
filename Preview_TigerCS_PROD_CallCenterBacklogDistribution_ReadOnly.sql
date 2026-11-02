@@ -23,7 +23,9 @@
 
  ROUND ROBIN (reproduces TicketAutoAssignmentService.AssignRoundRobinAsync / FilterEligibleAsync / DepartmentAssignmentRotation.PickNext):
    * pool       = members of the active CC department who are: not deactivated, not locked out, not a service identity, and hold at least one of
-                  CS Agent / Department Employee / Department Head (so read-only roles, supervisors, managers and admins are never dealt tickets)
+                  CS Agent / Department Employee / Department Head (so read-only roles, supervisors, managers and admins are never dealt tickets);
+                  with @CsAgentRoleOnly = 1 (default) additionally the CS Agent role - the role that can Transfer as owner (a Department Employee could
+                  Resolve/Close but not Transfer a Call Center ticket)
    * order      = ascending .NET Guid order == ordinal order of the canonical GUID text, so the script sorts on CONVERT(char(36), id) with a binary
                   collation (SQL Server's own uniqueidentifier ordering is different and is deliberately not used)
    * next agent = first eligible id greater than the persisted cursor (DepartmentAssignmentRotations.LastAssignedEmployeeId), wrapping to the first
@@ -50,6 +52,8 @@ DECLARE @ServiceIdentity TABLE (EmployeeId uniqueidentifier PRIMARY KEY);
 -- INSERT INTO @ServiceIdentity VALUES ('00000000-0000-0000-0000-000000000000');
 DECLARE @ServiceIdsConfirmed bit = 0;      -- set 1 once the list above is complete
 DECLARE @NoServiceAccountsExist bit = 0;   -- set 1 ONLY if you have confirmed there are no service/integration accounts at all (empty list)
+DECLARE @IncludeLiveAiConversations bit = 0;   -- MUST equal the Execute script's value. 0 = tickets with an ACTIVE AI conversation are held back (listed below)
+DECLARE @CsAgentRoleOnly bit = 1;              -- MUST equal the Execute script's value. 1 = only holders of the CS Agent role receive tickets (the role that can Transfer as owner)
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 0. Call Center department + rotation cursor
@@ -80,7 +84,9 @@ WHERE @CcId IS NOT NULL
   AND NOT (u.LockoutEnabled = 1 AND u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET())  -- locked accounts excluded
   AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId)             -- service accounts excluded
   AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId     -- read-only / non-operational excluded
-              WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'));
+              WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'))
+  AND (@CsAgentRoleOnly = 0 OR EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
+                                       WHERE ur.UserId = e.EmployeeId AND r.Name = N'CS Agent'));
 
 DECLARE @N int = (SELECT COUNT(*) FROM #Agents);
 
@@ -111,12 +117,12 @@ INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc, FromDepar
 SELECT ROW_NUMBER() OVER (ORDER BY b.CreatedAtUtc, b.TicketId), b.TicketId, b.TicketNumber, b.TicketStatus, b.CreatedAtUtc,
        b.FromDepartmentId, b.OriginatingDepartmentId, CASE WHEN b.FromDepartmentId <> @CcId THEN 1 ELSE 0 END
 FROM #Base AS b
-WHERE b.PendingApproval = 0 AND b.ActiveAi = 0;                        -- held-back tickets never enter the plan
+WHERE b.PendingApproval = 0 AND (b.ActiveAi = 0 OR @IncludeLiveAiConversations = 1);   -- held-back tickets never enter the plan
 
 DECLARE @Cand int = (SELECT COUNT(*) FROM #Cand);
 DECLARE @Moved int = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1);
 DECLARE @HeldApproval int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 1);                    -- pending approval (whether or not an AI conversation is also active)
-DECLARE @HeldAiOnly   int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND ActiveAi = 1);  -- active AI conversation, no pending approval
+DECLARE @HeldAiOnly   int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND ActiveAi = 1 AND @IncludeLiveAiConversations = 0);  -- active AI conversation, no pending approval
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 3. The Round Robin deal
@@ -177,10 +183,10 @@ ORDER BY Eligible DESC;
 -- ===========================================================================================================================
 SELECT d.Code AS DepartmentCode, d.Name AS DepartmentName,
        SUM(CASE WHEN b.PendingApproval = 1 THEN 1 ELSE 0 END) AS HeldBack_PendingApproval,
-       SUM(CASE WHEN b.PendingApproval = 0 AND b.ActiveAi = 1 THEN 1 ELSE 0 END) AS HeldBack_ActiveAiOnly,
+       SUM(CASE WHEN b.PendingApproval = 0 AND b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0 THEN 1 ELSE 0 END) AS HeldBack_ActiveAiOnly,
        COUNT(*) AS HeldBackTotal
 FROM #Base AS b JOIN dbo.Departments AS d ON d.DepartmentId = b.FromDepartmentId
-WHERE b.PendingApproval = 1 OR b.ActiveAi = 1
+WHERE b.PendingApproval = 1 OR (b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0)
 GROUP BY d.Code, d.Name
 UNION ALL
 SELECT N'** TOTAL **', NULL, @HeldApproval, @HeldAiOnly, @HeldApproval + @HeldAiOnly
@@ -197,7 +203,7 @@ SELECT b.TicketId, b.TicketNumber,
           FROM dbo.TicketApprovals ap WHERE ap.TicketId = b.TicketId AND ap.Status = 1) AS PendingApprovals,
        b.CreatedAtUtc
 FROM #Base AS b JOIN dbo.Departments AS d ON d.DepartmentId = b.FromDepartmentId
-WHERE b.PendingApproval = 1 OR b.ActiveAi = 1
+WHERE b.PendingApproval = 1 OR (b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0)
 ORDER BY CASE WHEN b.PendingApproval = 1 THEN 0 ELSE 1 END, d.Code, b.CreatedAtUtc, b.TicketId;
 
 -- ===========================================================================================================================
@@ -230,6 +236,9 @@ SELECT ISNULL(CONVERT(varchar(10), a.Rn), '-') AS RotationPosition, e.DisplayNam
             WHEN e.DeactivatedAtUtc IS NOT NULL THEN 'excluded: deactivated'
             WHEN u.LockoutEnabled = 1 AND u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET() THEN 'excluded: locked out'
             WHEN EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId) THEN 'excluded: service account'
+            WHEN @CsAgentRoleOnly = 1 AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
+                                                  WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'Department Employee', N'Department Head'))
+                                      THEN 'excluded by @CsAgentRoleOnly: engine-eligible but no CS Agent role (cannot Transfer as owner)'
             ELSE 'excluded: no operational role (read-only / supervisory / admin)' END AS RoundRobin,
        CASE WHEN a.EmployeeId IS NOT NULL AND a.EmployeeId = @Cursor THEN '<- last assigned (cursor)' ELSE '' END AS CursorMark,
        (SELECT COUNT(*) FROM dbo.Tickets t WHERE t.CurrentOwnerEmployeeId = e.EmployeeId AND t.TicketStatus IN (1, 2, 3, 4)) AS ActiveTicketsOwnedNow
@@ -284,7 +293,7 @@ ORDER BY d.Code, a.Rn;
 -- ===========================================================================================================================
 -- RESULT SET 6 - APPROVAL VALUES: copy these FIVE numbers into the execution script's commit gates
 -- ===========================================================================================================================
-SELECT @Cand AS ApprovedTicketCount, @Moved AS ApprovedMovedTicketCount, @N AS ApprovedAgentCount,
+SELECT @Cand AS ApprovedTicketCount, @Moved AS ApprovedTransferCount, @N AS ApprovedAgentCount,
        @HeldApproval AS ApprovedHeldBackPendingApprovalCount, @HeldAiOnly AS ApprovedHeldBackActiveAiCount;
 
 -- ===========================================================================================================================

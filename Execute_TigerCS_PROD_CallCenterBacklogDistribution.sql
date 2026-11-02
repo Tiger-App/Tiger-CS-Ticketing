@@ -29,7 +29,7 @@
  SAFETY:
    * DB-name guard; hard abort on any schema difference it depends on (incl. the unique filtered index "one current assignment per ticket").
    * @DryRun = 1 (DEFAULT): performs every write, runs every validation, prints the result sets, then ROLLS BACK.
-   * COMMIT GATES (all required for @DryRun = 0): @ApprovedTicketCount, @ApprovedMovedTicketCount, @ApprovedAgentCount, @ApprovedHeldBackPendingApprovalCount and
+   * COMMIT GATES (all required for @DryRun = 0): @ApprovedTicketCount, @ApprovedTransferCount, @ApprovedAgentCount, @ApprovedHeldBackPendingApprovalCount and
      @ApprovedHeldBackActiveAiCount must equal what the run computes (copy the five numbers from the preview); service-account exclusions confirmed (@ServiceIdsConfirmed = 1 AND ids listed, or @NoServiceAccountsExist = 1) and every
      listed id must be a real employee; no earlier batch present.
    * Concurrency: sp_getapplock (blocks a second concurrent run); the CC rotation row is locked UPDLOCK/ROWLOCK exactly like the live app, so live
@@ -53,12 +53,14 @@ SET LOCK_TIMEOUT 20000;                 -- fail fast (20 s) instead of hanging b
 -- ------------------------------------------------ PARAMETERS ----------------------------------------------------------------
 DECLARE @DryRun                  bit              = 1;     -- 1 = do everything, then ROLL BACK (default).  0 = COMMIT.
 DECLARE @ApprovedTicketCount     int              = NULL;  -- commit gate: preview "ApprovedTicketCount"
-DECLARE @ApprovedMovedTicketCount int             = NULL;  -- commit gate: preview "ApprovedMovedTicketCount" (tickets that change department)
+DECLARE @ApprovedTransferCount   int             = NULL;  -- commit gate: preview "ApprovedTransferCount" (tickets that change department)
 DECLARE @ApprovedAgentCount      int              = NULL;  -- commit gate: preview "ApprovedAgentCount"
 DECLARE @ApprovedHeldBackPendingApprovalCount int = NULL;  -- commit gate: preview "ApprovedHeldBackPendingApprovalCount" (tickets left alone: pending approval)
 DECLARE @ApprovedHeldBackActiveAiCount        int = NULL;  -- commit gate: preview "ApprovedHeldBackActiveAiCount" (tickets left alone: active AI conversation only)
 DECLARE @ServiceIdsConfirmed     bit              = 0;     -- commit gate: set 1 only after listing ALL service-account ids below
 DECLARE @NoServiceAccountsExist  bit              = 0;     -- commit gate alternative: 1 ONLY if confirmed that no service/integration accounts exist (list stays empty)
+DECLARE @IncludeLiveAiConversations bit          = 0;     -- keep 0 unless explicitly approved: 0 = tickets with an ACTIVE AI conversation are held back. MUST equal the Preview's value
+DECLARE @CsAgentRoleOnly         bit              = 1;     -- 1 = only holders of the CS Agent role receive tickets (can Transfer as owner). MUST equal the Preview's value
 DECLARE @AllowSecondBatch        bit              = 0;     -- keep 0: this is a ONE-TIME operation
 DECLARE @BatchId                 uniqueidentifier = NEWID();-- correlation id of every row this run writes; needed by the rollback script
 DECLARE @ExpectedDb              sysname          = N'TigerCS_Ticketing_Prod';
@@ -123,7 +125,7 @@ IF EXISTS (SELECT 1 FROM dbo.DepartmentWorkflowSettings WHERE DepartmentId = @Cc
 
 IF @DryRun = 0
 BEGIN
-    IF ISNULL(@ServiceIdsConfirmed, 0) <> 1 OR @ApprovedTicketCount IS NULL OR @ApprovedMovedTicketCount IS NULL OR @ApprovedAgentCount IS NULL
+    IF ISNULL(@ServiceIdsConfirmed, 0) <> 1 OR @ApprovedTicketCount IS NULL OR @ApprovedTransferCount IS NULL OR @ApprovedAgentCount IS NULL
        OR @ApprovedHeldBackPendingApprovalCount IS NULL OR @ApprovedHeldBackActiveAiCount IS NULL
         THROW 50307, 'ABORTED: commit gates not satisfied - set @ServiceIdsConfirmed = 1 and the five approved counts (tickets, moved, agents, held-back pending approvals, held-back active AI) from the approved preview.', 1;
     IF NOT EXISTS (SELECT 1 FROM @ServiceIdentity) AND ISNULL(@NoServiceAccountsExist, 0) <> 1
@@ -204,7 +206,9 @@ BEGIN TRY
       AND NOT (u.LockoutEnabled = 1 AND u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET())
       AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId)
       AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
-                  WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'));
+                  WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'))
+      AND (@CsAgentRoleOnly = 0 OR EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
+                                           WHERE ur.UserId = e.EmployeeId AND r.Name = N'CS Agent'));
     SET @N = (SELECT COUNT(*) FROM #Agents);
     IF @N = 0 THROW 50311, 'ABORTED: no eligible Call Center agent.', 1;
     IF @DryRun = 0 AND @N <> @ApprovedAgentCount
@@ -225,10 +229,10 @@ BEGIN TRY
       AND t.CurrentOwnerEmployeeId IS NULL
       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1)
       AND NOT EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1)
-      AND NOT (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+      AND (@IncludeLiveAiConversations = 1 OR NOT (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
                      AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
-       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4)));
+       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4))));
     SET @Cand = (SELECT COUNT(*) FROM #Cand);
     SET @Moved = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1);
     -- held-back counts (read only, not locked): approval-pending tickets (with or without an AI conversation) and AI-only tickets
@@ -237,17 +241,17 @@ BEGIN TRY
       AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1) AND EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1);
     SELECT @HeldAiOnly = COUNT(*) FROM dbo.Tickets AS t
     WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NULL
-      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1) AND NOT EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1) AND (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+      AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1) AND NOT EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1) AND @IncludeLiveAiConversations = 0 AND (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
                      AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4)));
     IF @Cand = 0 THROW 50313, 'NOTHING TO DO: no eligible unowned tickets. Nothing was changed.', 1;
-    IF @DryRun = 0 AND (@Cand <> @ApprovedTicketCount OR @Moved <> @ApprovedMovedTicketCount
+    IF @DryRun = 0 AND (@Cand <> @ApprovedTicketCount OR @Moved <> @ApprovedTransferCount
                         OR @HeldApproval <> @ApprovedHeldBackPendingApprovalCount OR @HeldAiOnly <> @ApprovedHeldBackActiveAiCount)
     BEGIN
         SET @msg = N'ABORTED: eligible tickets = ' + CONVERT(nvarchar(10), @Cand) + N' (moved ' + CONVERT(nvarchar(10), @Moved) + N', held back: approvals '
                  + CONVERT(nvarchar(10), @HeldApproval) + N', AI ' + CONVERT(nvarchar(10), @HeldAiOnly) + N') but approved = '
-                 + CONVERT(nvarchar(10), @ApprovedTicketCount) + N' (moved ' + CONVERT(nvarchar(10), @ApprovedMovedTicketCount) + N', held back: approvals '
+                 + CONVERT(nvarchar(10), @ApprovedTicketCount) + N' (moved ' + CONVERT(nvarchar(10), @ApprovedTransferCount) + N', held back: approvals '
                  + CONVERT(nvarchar(10), @ApprovedHeldBackPendingApprovalCount) + N', AI ' + CONVERT(nvarchar(10), @ApprovedHeldBackActiveAiCount)
                  + N'). The backlog changed since the preview - re-run the preview and re-approve.';
         THROW 50314, @msg, 1;
@@ -321,7 +325,7 @@ BEGIN TRY
     -- Anything that appeared since selection aborts the WHOLE run (re-preview, re-approve): a held-back ticket must never be moved.
     IF EXISTS (SELECT 1 FROM #Plan p JOIN dbo.Tickets t ON t.TicketId = p.TicketId WHERE EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1))
         THROW 50340, 'ABORTED: a planned ticket gained a PENDING APPROVAL while the run was in progress. Whole run rolled back - re-run the preview.', 1;
-    IF EXISTS (SELECT 1 FROM #Plan p JOIN dbo.Tickets t ON t.TicketId = p.TicketId WHERE (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
+    IF @IncludeLiveAiConversations = 0 AND EXISTS (SELECT 1 FROM #Plan p JOIN dbo.Tickets t ON t.TicketId = p.TicketId WHERE (EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL
                      AND i.InactivityClosedAtUtc IS NULL AND i.RequiresHumanFollowUp = 0 AND i.HandledByUserId IS NULL)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4))))
@@ -334,7 +338,9 @@ BEGIN TRY
                      AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId)
                      AND EXISTS (SELECT 1 FROM dbo.UserDepartmentAssignments a WHERE a.EmployeeId = e.EmployeeId AND a.DepartmentId = @CcId)
                      AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
-                                 WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'))))
+                                 WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'))
+                     AND (@CsAgentRoleOnly = 0 OR EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
+                                                          WHERE ur.UserId = e.EmployeeId AND r.Name = N'CS Agent'))))
         THROW 50342, 'ABORTED: a new owner is no longer an eligible Call Center agent (deactivated / locked / removed from CC / lost role) - whole run rolled back.', 1;
 
     -- (g) validation INSIDE the transaction: any failure rolls everything back ------------------------------------------------------
