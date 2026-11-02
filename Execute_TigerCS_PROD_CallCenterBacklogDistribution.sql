@@ -35,8 +35,8 @@
    * @DryRun = 1 (DEFAULT): performs every write, runs every validation, prints the result sets, then ROLLS BACK.
    * COMMIT GATES (all required for @DryRun = 0): @ApprovedTicketCount, @ApprovedTransferCount, @ApprovedReassignedCount, @ApprovedAgentCount,
      @ApprovedHeldBackPendingApprovalCount and @ApprovedHeldBackActiveAiCount must equal what the run computes (copy the six numbers from the preview);
-     service-account exclusions confirmed (@ServiceIdsConfirmed = 1 AND ids listed, or @NoServiceAccountsExist = 1) and every listed id must be a real
-     employee; no earlier batch present.
+     service-account exclusions confirmed (ids listed AND @ServiceIdsConfirmed = 1, OR empty list AND @NoServiceAccountsExist = 1; never both) and every
+     listed id must be a real employee; no earlier batch present.
    * Concurrency: sp_getapplock (blocks a second concurrent run); the CC rotation row is locked UPDLOCK/ROWLOCK exactly like the live app, so live
      intake serializes behind this run; candidate tickets are locked UPDLOCK/ROWLOCK, re-checked in the UPDATE (still Open, same owner, same department,
      same RowVersion) and the run aborts if even one row differs - so a person's concurrent reassignment either completes first (counts then differ and the
@@ -135,20 +135,30 @@ DECLARE @CcId int = (SELECT DepartmentId FROM dbo.Departments WHERE Code = N'CC'
 IF EXISTS (SELECT 1 FROM dbo.DepartmentWorkflowSettings WHERE DepartmentId = @CcId AND AllowAssignment = 0)
     THROW 50305, 'ABORTED: Call Center workflow settings disable assignment; the engine would leave tickets unassigned, so this script does too.', 1;
 
+-- Service-account gate (IDENTICAL rule in the Preview script):
+--   list NOT empty : @ServiceIdsConfirmed = 1 required, @NoServiceAccountsExist must be 0, every id must be a real employee.
+--   list EMPTY     : the ONLY accepted state is @NoServiceAccountsExist = 1 (verified: no service/integration accounts in appsettings).
+--                    @ServiceIdsConfirmed is not required then - there is no list to confirm.
+DECLARE @ServiceListCount int = (SELECT COUNT(*) FROM @ServiceIdentity);
 IF @DryRun = 0
 BEGIN
-    IF ISNULL(@ServiceIdsConfirmed, 0) <> 1 OR @ApprovedTicketCount IS NULL OR @ApprovedTransferCount IS NULL OR @ApprovedReassignedCount IS NULL OR @ApprovedAgentCount IS NULL
+    IF @ApprovedTicketCount IS NULL OR @ApprovedTransferCount IS NULL OR @ApprovedReassignedCount IS NULL OR @ApprovedAgentCount IS NULL
        OR @ApprovedHeldBackPendingApprovalCount IS NULL OR @ApprovedHeldBackActiveAiCount IS NULL
-        THROW 50307, 'ABORTED: commit gates not satisfied - set @ServiceIdsConfirmed = 1 and the six approved counts (tickets, moved, reassigned, agents, held-back pending approvals, held-back active AI) from the approved preview.', 1;
-    IF NOT EXISTS (SELECT 1 FROM @ServiceIdentity) AND ISNULL(@NoServiceAccountsExist, 0) <> 1
+        THROW 50307, 'ABORTED: commit gates not satisfied - set the six approved counts (tickets, moved, reassigned, agents, held-back pending approvals, held-back active AI) from the approved preview.', 1;
+    IF @ServiceListCount > 0 AND ISNULL(@NoServiceAccountsExist, 0) = 1
+        THROW 50350, 'ABORTED: contradictory service-account gates - ids are listed but @NoServiceAccountsExist = 1. Keep only one.', 1;
+    IF @ServiceListCount > 0 AND ISNULL(@ServiceIdsConfirmed, 0) <> 1
+        THROW 50307, 'ABORTED: commit gates not satisfied - service-account ids are listed but @ServiceIdsConfirmed <> 1.', 1;
+    IF @ServiceListCount = 0 AND ISNULL(@NoServiceAccountsExist, 0) <> 1
         THROW 50308, 'ABORTED: the service-account list is empty. List every service/integration account id, or set @NoServiceAccountsExist = 1 if you have confirmed there are none.', 1;
     IF EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId))
         THROW 50309, 'ABORTED: a listed service-account id is not an employee (typo?). Fix the list.', 1;
 END
 ELSE
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM @ServiceIdentity) PRINT N'WARNING: service-account list is empty - a real run would be refused unless @NoServiceAccountsExist = 1.';
-    IF ISNULL(@ServiceIdsConfirmed, 0) <> 1 PRINT N'WARNING: @ServiceIdsConfirmed = 0 - a real run would be refused.';
+    IF @ServiceListCount = 0 AND ISNULL(@NoServiceAccountsExist, 0) <> 1 PRINT N'WARNING: service-account list is empty and @NoServiceAccountsExist = 0 - a real run would be refused.';
+    IF @ServiceListCount > 0 AND ISNULL(@ServiceIdsConfirmed, 0) <> 1 PRINT N'WARNING: ids are listed but @ServiceIdsConfirmed = 0 - a real run would be refused.';
+    IF @ServiceListCount > 0 AND ISNULL(@NoServiceAccountsExist, 0) = 1 PRINT N'WARNING: ids are listed AND @NoServiceAccountsExist = 1 (contradiction) - a real run would be refused.';
 END;
 
 -- ---------------------------------------------------- before-snapshot of tables (informational) -----------------------------------

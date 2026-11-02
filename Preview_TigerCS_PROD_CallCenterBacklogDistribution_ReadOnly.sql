@@ -56,7 +56,7 @@ IF COL_LENGTH(N'dbo.TicketInteractions', N'RequiresHumanFollowUp') IS NULL OR OB
 -- Edits the variable table only; nothing persists.
 DECLARE @ServiceIdentity TABLE (EmployeeId uniqueidentifier PRIMARY KEY);
 -- INSERT INTO @ServiceIdentity VALUES ('00000000-0000-0000-0000-000000000000');
-DECLARE @ServiceIdsConfirmed bit = 0;      -- set 1 once the list above is complete
+DECLARE @ServiceIdsConfirmed bit = 0;      -- set 1 once the list above is complete (only needed when ids are listed)
 DECLARE @NoServiceAccountsExist bit = 0;   -- set 1 ONLY if you have confirmed there are no service/integration accounts at all (empty list)
 DECLARE @IncludeLiveAiConversations bit = 0;   -- MUST equal the Execute script's value. 0 = tickets with an ACTIVE AI conversation are held back (listed below)
 DECLARE @CsAgentRoleOnly bit = 1;              -- MUST equal the Execute script's value. 1 = only holders of the CS Agent role receive tickets (the role that can Transfer as owner)
@@ -209,7 +209,10 @@ SELECT @@SERVERNAME AS [Server], DB_NAME() AS [Database], SYSUTCDATETIME() AS Pr
            WHEN @HasRotationTable = 0                            THEN 'BLOCKER: dbo.DepartmentAssignmentRotations is missing - apply Deploy_TigerCS_Prod_Migrations.sql first'
            WHEN @AssignmentAllowed = 0                           THEN 'BLOCKER: Call Center workflow settings disable assignment (the engine would leave tickets in the queue)'
            WHEN @N = 0                                           THEN 'BLOCKER: no eligible Call Center agent'
-           WHEN @ServiceIdsConfirmed = 0                         THEN 'BLOCKER: service-account exclusions not confirmed (@ServiceIdsConfirmed = 0) - a service account could be listed as an agent below'
+           WHEN EXISTS (SELECT 1 FROM @ServiceIdentity) AND @NoServiceAccountsExist = 1
+                                                                 THEN 'BLOCKER: contradictory service-account gates - ids are listed but @NoServiceAccountsExist = 1'
+           WHEN EXISTS (SELECT 1 FROM @ServiceIdentity) AND @ServiceIdsConfirmed = 0
+                                                                 THEN 'BLOCKER: service-account exclusions not confirmed (@ServiceIdsConfirmed = 0) - a service account could be listed as an agent below'
            WHEN NOT EXISTS (SELECT 1 FROM @ServiceIdentity) AND @NoServiceAccountsExist = 0
                                                                  THEN 'BLOCKER: service-account list is empty - list the ids, or set @NoServiceAccountsExist = 1 if there are none'
            WHEN EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE NOT EXISTS (SELECT 1 FROM dbo.Employees e WHERE e.EmployeeId = s.EmployeeId))
