@@ -33,6 +33,7 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// <param name="ClosedTo">Only Closed tickets whose latest closure was on or before this UTC calendar day.</param>
 /// <param name="CreatedByMe">True ("Created by Me"): only tickets the caller created — including ones that have since moved to another department, which a CS Agent keeps read-only access to. Never widens visibility: it only narrows the caller's own scope.</param>
 /// <param name="Escalated">Supervisor review: only tickets an agent passed up as UnableToResolve or NeedsEscalation. Requires a supervisory role (CS Supervisor, CS Manager, Department Head, General Manager, Chairman/CEO); other callers get 403. Narrows the caller's normal visibility, never widens it.</param>
+/// <param name="AvailableToTake">Only the unassigned, human-handling tickets a Call Center agent may take ownership of (active, no owner, no pending approval, no active AI conversation). Narrows the caller's normal visibility, never widens it. The Call Center agent's default list and Call Center department filter already include these tickets (read-only until taken).</param>
 public sealed record TicketListRequestDto(
     int? DepartmentId,
     int? CategoryId,
@@ -60,7 +61,8 @@ public sealed record TicketListRequestDto(
     DateOnly? ClosedFrom = null,
     DateOnly? ClosedTo = null,
     bool? CreatedByMe = null,
-    bool? Escalated = null);
+    bool? Escalated = null,
+    bool? AvailableToTake = null);
 
 /// <summary>One row of the ticket queue (MVP-API-Contracts.md §3.2).</summary>
 /// <param name="TicketId">The ticket.</param>
@@ -133,6 +135,7 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="OriginatingChannelId">The channel the ticket ENTERED the system on (its originating interaction's channel) — never changed by later interactions on other channels; null for tickets predating the interaction model. Populated on detail reads.</param>
 /// <param name="OriginatingChannelName">The originating channel's display name, resolved from channel configuration — still shown for a channel that has since been deactivated. Populated on detail reads.</param>
 /// <param name="ViewerActsAsInteractionHandler">True when the caller is a CS Agent Genesys reported as handling this ticket's interaction, belongs to its department and nobody else owns it: the server lets them Resolve, Close and Transfer it. Populated on detail reads; the UI uses it to show those actions.</param>
+/// <param name="CanTakeOwnership">True when THIS caller may take ownership of this ticket right now - decided by the very same policy the <c>POST /ownership</c> endpoint applies (Call Center agent, ticket unassigned, active, human-handling, no pending approval), so the UI shows the action exactly when the API would accept it. Populated on detail reads.</param>
 /// <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
 /// <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
 /// <param name="IsClassified">False while the ticket has no Category yet — an inquiry captured before anyone read the request. The UI shows "Unclassified" and offers the classify action rather than rendering a missing category.</param>
@@ -206,7 +209,8 @@ public sealed record TicketDetailDto(
     int TransferCount = 0,
     int EscalationCount = 0,
     string? FirstHandledByName = null,
-    string? ResolvedByName = null);
+    string? ResolvedByName = null,
+    bool CanTakeOwnership = false);
 
 public enum TicketQueryOutcome
 {
@@ -326,7 +330,19 @@ public enum TicketMutationOutcome
     CategoryDepartmentMismatch,
 
     /// <summary>Classification: the selected priority does not exist.</summary>
-    PriorityNotFound
+    PriorityNotFound,
+
+    /// <summary>Take Ownership: somebody already owns the ticket (another agent may have just taken it). Never taken over - 409.</summary>
+    TicketAlreadyOwned,
+
+    /// <summary>Take Ownership: the ticket is Resolved or Closed - terminal tickets are never taken over.</summary>
+    ClaimNotAllowedForStatus,
+
+    /// <summary>Take Ownership: an AI conversation is still handling the ticket.</summary>
+    ClaimBlockedByActiveAiConversation,
+
+    /// <summary>Take Ownership: the ticket has a pending approval and stays with its approvers.</summary>
+    ClaimBlockedByPendingApproval
 }
 
 public sealed record TicketMutationResult(TicketMutationOutcome Outcome, TicketDetailDto? Response = null)
@@ -351,6 +367,10 @@ public sealed record ChangeStatusRequestDto(string NewStatus, byte[] RowVersion,
 /// <param name="RowVersion">Required. The <c>rowVersion</c> from the ticket you read. A stale value is answered with 409.</param>
 public sealed record ResolveTicketRequestDto(
     string ResolutionOutcome, string ResolutionNote, byte? ReasonCode, long? DuplicateOfTicketId, byte[] RowVersion);
+
+/// <summary>Take ownership of an unassigned ticket (Call Center agents). The ticket moves to the Call Center and is assigned to the caller.</summary>
+/// <param name="RowVersion">Optional. The <c>rowVersion</c> from the ticket you read; a stale value is answered with 409. Even when omitted, the claim is atomic: two agents can never both take the same ticket.</param>
+public sealed record TakeOwnershipRequestDto(byte[]? RowVersion = null);
 
 /// <summary>Close a resolved ticket (MVP-API-Contracts.md §3.10).</summary>
 /// <param name="RowVersion">Required. The <c>rowVersion</c> from the ticket you read. A stale value is answered with 409.</param>

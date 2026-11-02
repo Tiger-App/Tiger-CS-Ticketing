@@ -32,7 +32,8 @@ public sealed class TicketQueryAppService(
     ITicketInteractionHandlerRepository? handlerRepository = null,
     IServiceIdentityRegistry? serviceIdentities = null,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
-    IEmployeeRepository? employeeRepository = null)
+    IEmployeeRepository? employeeRepository = null,
+    TicketClaimPolicy? claimPolicy = null)
 {
     /// <summary>Whether the caller may use the supervisor escalation-review filter (<c>escalated=true</c>).</summary>
     public static bool CanReviewEscalations(IReadOnlyCollection<string> callerRoles) =>
@@ -55,6 +56,15 @@ public sealed class TicketQueryAppService(
 
         var visibleDepartmentIds = await ResolveTicketViewDepartmentIdsAsync(callerEmployeeId, callerRoles, cancellationToken);
         var agentScope = ResolveTicketListAgentScope(callerEmployeeId, callerRoles);
+
+        // A restricted CS Agent who may take ownership also SEES (read-only) the unassigned human-handling tickets of every department, and the
+        // Call Center filter lists them too. Only an eligible Call Center agent ever gets this; for everyone else the list is exactly as before.
+        var seesClaimablePool = claimPolicy is not null
+            && IsRestrictedAgent(callerEmployeeId, callerRoles)
+            && await claimPolicy.IsEligibleClaimerAsync(callerEmployeeId, callerRoles, cancellationToken);
+        var callCenterFilter = seesClaimablePool
+            && request.DepartmentId is { } filterDepartmentId
+            && await claimPolicy!.IsCallCenterDepartmentAsync(filterDepartmentId, cancellationToken);
 
         var page = request.Page < 1 ? 1 : request.Page;
         var pageSize = request.PageSize is < 1 or > 200 ? 50 : request.PageSize;
@@ -105,7 +115,10 @@ public sealed class TicketQueryAppService(
             AgentScopeEmployeeId: agentScope,
             CreatedByEmployeeId: request.CreatedByMe == true ? callerEmployeeId : null,
             CreatedOnlyScope: IsGenesysIntegration(callerEmployeeId, callerRoles),
-            OwnerVisibilityEmployeeId: callerEmployeeId);
+            OwnerVisibilityEmployeeId: callerEmployeeId,
+            IncludeClaimable: seesClaimablePool,
+            AvailableToTakeOnly: request.AvailableToTake == true,
+            DepartmentFilterIncludesClaimable: callCenterFilter);
 
         var result = await ticketRepository.SearchAsync(query, cancellationToken);
 
@@ -151,6 +164,10 @@ public sealed class TicketQueryAppService(
         var detail = ToDetailDto(ticket) with
         {
             IsReadOnlyAccess = accessLevel == TicketAccessLevel.ReadOnly,
+            // The same policy the Take Ownership endpoint applies - the UI shows the action exactly when the API would accept it.
+            CanTakeOwnership = claimPolicy is not null
+                && ticket.CurrentOwnerEmployeeId is null
+                && (await claimPolicy.DecideAsync(callerEmployeeId, callerRoles, ticketId, cancellationToken)).Allowed,
             ViewerActsAsInteractionHandler = accessLevel == TicketAccessLevel.Full
                 && await TicketOwnershipRules.IsActingInteractionHandlerAsync(
                     handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken),
@@ -410,7 +427,7 @@ public sealed class TicketQueryAppService(
     internal Task<TicketAccessLevel> GetTicketAccessAsync(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
         TicketVisibilityRule.GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy);
 
     /// <summary>May the caller MODIFY this ticket (add a note, claim, close…): Full access only — a creator's read-only access does not qualify.</summary>
     internal Task<bool> CanModifyTicketAsync(
@@ -422,7 +439,7 @@ public sealed class TicketQueryAppService(
     internal Task<bool> CanViewTicketAsync(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
         TicketVisibilityRule.CanViewTicketAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy);
 
     /// <summary>
     /// The server-side gate for an id-addressed request (a direct URL or API call): is this ticket visible to the caller? Used by the API's

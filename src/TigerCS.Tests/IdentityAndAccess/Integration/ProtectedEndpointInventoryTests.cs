@@ -54,6 +54,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["GET /api/tickets"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetTicketQueue_Returns200),
         ["GET /api/tickets/{ticketId:long}"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetTicketDetail_ForATicketInADepartmentTheAdministratorDoesNotBelongTo_Returns200),
         ["POST /api/tickets/{ticketId:long}/assignment"] = nameof(SystemAdministratorEndpointAuthorizationTests.AssignTicket_Returns200),
+        ["POST /api/tickets/{ticketId:long}/ownership"] = nameof(SystemAdministratorEndpointAuthorizationTests.TakeOwnership_IsRefused_BecauseTheCallerMustThemselvesBeACallCenterAgent_AndTheTicketIsUntouched),
         ["POST /api/tickets/{ticketId:long}/transfer"] = nameof(SystemAdministratorEndpointAuthorizationTests.TransferTicket_Returns200),
         ["POST /api/tickets/{ticketId:long}/status"] = nameof(SystemAdministratorEndpointAuthorizationTests.ChangeTicketStatus_Returns200),
         ["POST /api/tickets/{ticketId:long}/resolution"] = nameof(SystemAdministratorEndpointAuthorizationTests.ResolveAndCloseTicket_BothReturn200),

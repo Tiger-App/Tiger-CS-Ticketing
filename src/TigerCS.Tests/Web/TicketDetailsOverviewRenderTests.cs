@@ -94,6 +94,38 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
     }
 
     // ---------------------------------------------------------------
+    // Take Ownership - the button follows the server's answer
+    // ---------------------------------------------------------------
+
+    [Fact]
+    public async Task AWaitingTicketOfAnotherDepartment_OffersTakeOwnership_WhenTheServerSaysTheViewerMayTakeIt_AndNothingElse()
+    {
+        var html = await Page(120, dumpAs: "take-ownership-offered");
+
+        Assert.Contains("id=\"take-ownership-notice\"", html, StringComparison.Ordinal);
+        Assert.Contains("id=\"action-take-ownership\"", html, StringComparison.Ordinal);
+        Assert.Contains("Take Ownership", html, StringComparison.Ordinal);
+        Assert.Contains("queue with no assignee", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("read-only-notice", html, StringComparison.Ordinal);      // not the "you created this" message
+        // Until it is theirs the ticket is read-only: no Close, Transfer, Resolve or classify controls.
+        Assert.DoesNotContain("id=\"action-close\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("data-classify-form", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("name=\"Transfer.TargetDepartmentId\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("name=\"Resolve.ResolutionOutcome\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AWaitingTicket_OffersNoTakeOwnership_WhenTheServerSaysTheViewerMayNotTakeIt()
+    {
+        var html = await Page(121, dumpAs: "take-ownership-not-offered");
+
+        Assert.DoesNotContain("action-take-ownership", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("take-ownership-notice", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("asp-page-handler", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("handler=TakeOwnership", html, StringComparison.Ordinal);
+    }
+
+    // ---------------------------------------------------------------
     // Classify
     // ---------------------------------------------------------------
 
@@ -416,6 +448,12 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
                     CrmBuyerCustomerName: "Mariam Al Falasi", CrmBuyerProjectName: "Tiger Tower", CrmBuyerUnitNumber: "T-1204",
                     RequestTypeId: 10, RequestTypeName: "Complaint Handling", WorkflowName: "Standard Request", WorkflowVersionNumber: 1,
                     OriginatingChannelId: 3, OriginatingChannelName: "WhatsApp"),
+                // A Call Center agent opening another department's waiting ticket: read-only, and the server says they may take it.
+                120 => new(120, "TG-REG-20261022-0120", Registration, Registration, null, null, null, null, 3, "Open", "Unverified", "None", "Running", null, null,
+                    "Old registration request", 0, created, row, IsClassified: false, IsReadOnlyAccess: true, CanTakeOwnership: true),
+                // The same shape, but the server says they may NOT take it (e.g. an explicit Deny): nothing is offered.
+                121 => new(121, "TG-REG-20261022-0121", Registration, Registration, null, null, null, null, 3, "Open", "Unverified", "None", "Running", null, null,
+                    "Old registration request", 0, created, row, IsClassified: false, IsReadOnlyAccess: true, CanTakeOwnership: false),
                 // Another department's unclassified ticket.
                 105 => new(105, "TG-REG-20261022-0005", Registration, Registration, null, null, null, null, 3, "Open", "Unverified", "None", "Running", null, null,
                     "Needs the SPA link", 0, created, row, IsClassified: false),
