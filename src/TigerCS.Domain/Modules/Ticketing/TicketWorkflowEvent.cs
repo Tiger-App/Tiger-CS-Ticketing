@@ -119,7 +119,15 @@ public enum WorkflowEventType : byte
     /// actor; the receiving agent, when mapped, is <see cref="TicketWorkflowEvent.ToEmployeeId"/>; unmapped agents
     /// are preserved verbatim in the note.
     /// </summary>
-    GenesysCallTransferred = 19
+    GenesysCallTransferred = 19,
+
+    /// <summary>
+    /// Genesys reported a Call Center call as answered by an agent TigerCS cannot hand the ticket to — not mapped to a Ticketing user,
+    /// deactivated, locked out, a service account, or not an operational Call Center member. The ticket is deliberately left in the Call
+    /// Center queue, unowned, and this event is the flag that a supervisor must assign it manually: it is never given to a different person
+    /// by Round Robin. History only; the note names the Genesys agent and the reason. No schema change (the column is a tinyint).
+    /// </summary>
+    ManualAssignmentRequired = 20
 }
 
 /// <summary>

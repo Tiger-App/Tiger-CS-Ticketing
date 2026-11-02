@@ -1,4 +1,4 @@
-﻿using TigerCS.Application.Abstractions;
+using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Abstractions;
@@ -59,10 +59,20 @@ public sealed class GenesysAgentHandoffAppService(
     TimeProvider timeProvider,
     IDepartmentRepository? departmentRepository = null,
     ITicketAssignmentRepository? ticketAssignmentRepository = null,
-    Ticketing.Services.TicketAutoAssignmentService? autoAssignmentService = null)
+    Ticketing.Services.TicketAutoAssignmentService? autoAssignmentService = null,
+    GenesysAnsweringAgentAssignmentService? answeringAgents = null)
 {
+    public Task<GenesysHandoffResult> RequestAsync(
+        Guid callerEmployeeId, GenesysHandoffRequestDto request, CancellationToken cancellationToken = default) =>
+        RequestAsync(callerEmployeeId, request, connectedAgentId: null, cancellationToken);
+
+    /// <summary>
+    /// <paramref name="connectedAgentId"/> is the Genesys User ID of an agent the SAME update reported as CONNECTED (answered) — not the
+    /// request's own <c>AgentId</c>, which may only be an assigned/ringing agent. A connected, eligible Call Center agent is given the ticket
+    /// directly; Round Robin runs only when nobody has accepted the interaction yet.
+    /// </summary>
     public async Task<GenesysHandoffResult> RequestAsync(
-        Guid callerEmployeeId, GenesysHandoffRequestDto request, CancellationToken cancellationToken = default)
+        Guid callerEmployeeId, GenesysHandoffRequestDto request, string? connectedAgentId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
 
@@ -204,10 +214,23 @@ public sealed class GenesysAgentHandoffAppService(
                     "Human agent requested — Call Center first", requestCorrelationId),
                 cancellationToken);
 
-            // Call Center first, then ONE eligible Call Center agent by Round Robin (the queue, visibly unassigned, when nobody is eligible).
+            // Call Center first. If a mapped agent has already ANSWERED this interaction (connected, not merely assigned or ringing) they own the
+            // ticket directly - or, when they cannot take it, it waits in the queue flagged for manual assignment; never a different person.
+            // Only when nobody has accepted the interaction yet does ONE eligible Call Center agent get it by Round Robin (the queue, visibly
+            // unassigned, when nobody is eligible).
             if (autoAssignmentService is not null)
             {
-                await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, requestCorrelationId, cancellationToken);
+                var answered = await ResolveAnsweringAgentAsync(connectedAgentId, interaction, cancellationToken);
+                if (answered is not null)
+                {
+                    await autoAssignmentService.ApplyAnsweringAgentAsync(
+                        ticket, answered, "HandoffRequest", now, requestCorrelationId, callerEmployeeId,
+                        routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+                }
+                else
+                {
+                    await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, requestCorrelationId, cancellationToken);
+                }
             }
         }
 
@@ -250,6 +273,29 @@ public sealed class GenesysAgentHandoffAppService(
         return new GenesysHandoffResult(
             GenesysHandoffOutcome.HandoffRecorded, handoff.TicketAgentHandoffId,
             ticket.TicketId, ticket.TicketNumber, handoff.Status.ToString());
+    }
+
+    /// <summary>
+    /// The agent who has ANSWERED this interaction, when one is known: the connected agent the same update named, else the first handler the
+    /// integration recorded from a connected/handling event. Null means nobody has accepted it (Round Robin applies). An id that cannot be
+    /// resolved is still an answering agent - an unusable one - so the ticket is flagged rather than handed to somebody else.
+    /// </summary>
+    private async Task<Ticketing.Services.AnsweringAgent?> ResolveAnsweringAgentAsync(
+        string? connectedAgentId, TicketInteraction interaction, CancellationToken cancellationToken)
+    {
+        if (!options.AssignOnAnswer)
+        {
+            return null;     // rollback lever: Round Robin for every ticket that needs a person, as before
+        }
+
+        if (NullIfBlank(connectedAgentId) is { } hinted && answeringAgents is not null)
+        {
+            return await answeringAgents.ResolveAsync(hinted, cancellationToken);
+        }
+
+        return interaction.HandledByUserId is { } handledBy && NullIfBlank(interaction.GenesysAgentUserId) is { } handlerGenesysId
+            ? new Ticketing.Services.AnsweringAgent(handlerGenesysId, handledBy)
+            : null;
     }
 
     /// <summary>

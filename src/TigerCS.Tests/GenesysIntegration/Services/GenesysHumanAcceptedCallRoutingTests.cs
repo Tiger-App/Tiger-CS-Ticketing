@@ -29,7 +29,12 @@ public class GenesysHumanAcceptedCallRoutingTests
                 new UserDepartmentAssignment(id, f.CallCenter!.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
         }
 
-        f.MapAgent(HumanGenesysId);
+        // The mapped human who accepts calls is a Call Center agent. Since "the agent who answers owns the ticket", the ticket goes to
+        // THEM (not to a Round Robin pick), so they are part of the Call Center roster the assertions below check against.
+        var human = f.MapAgent(HumanGenesysId);
+        f.DepartmentAssignments.Assignments.Add(
+            new UserDepartmentAssignment(human, f.CallCenter!.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
+        agents = [.. agents, human];
         return new Scenario(f, accounting, agents);
     }
 
@@ -84,15 +89,19 @@ public class GenesysHumanAcceptedCallRoutingTests
     }
 
     [Fact]
-    public async Task PhoneCallNamingAnUnmappedAgent_IsNotGuessedToBeHuman()
+    public async Task PhoneCallNamingAnUnmappedAgent_WaitsInTheCallCenterQueue_Flagged_AndIsNeverGivenToAnotherAgent()
     {
         var s = Build();
 
-        // An unmapped id may be a bot or virtual agent: nothing is inferred from it, and an active AI call is not rerouted.
-        var ticket = await IngestAsync(s, "ph-unmapped", GenesysChannel.Phone, agentId: "some-bot-or-unmapped-id");
+        // A voice call picked up by an agent TigerCS cannot map: the person who answered cannot be given the ticket, and nobody else
+        // may be handed it by Round Robin. It waits, unowned, in the Call Center queue and is flagged for manual assignment.
+        var ticket = await IngestAsync(s, "ph-unmapped", GenesysChannel.Phone, agentId: "some-unmapped-id");
 
-        Assert.Equal(s.Accounting.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(s.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(s.Accounting.DepartmentId, ticket.OriginatingDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(s.F.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
+        Assert.DoesNotContain(s.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticket.TicketId.ToString());
     }
 
     [Theory]

@@ -73,6 +73,7 @@ public sealed class TicketCreationAppService(
     /// <param name="callerEmployeeId">The creating employee.</param>
     /// <param name="request">The ticket to create.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="answeringAgent">Set only by the Genesys ingestion for a call a human agent already answered; see <see cref="TicketAutoAssignmentService.ApplyAnsweringAgentAsync"/>.</param>
     /// <param name="callerRoles">
     /// The caller's roles, when the caller is a person acting in the UI/API. Needed only for self-assignment: a CS Agent who creates a
     /// ticket by hand owns it unless they chose the Department Queue (see <c>TicketAutoAssignmentService.TrySelfAssignAsync</c>). Left
@@ -80,7 +81,7 @@ public sealed class TicketCreationAppService(
     /// </param>
     public async Task<TicketCreationResult> CreateAsync(
         Guid callerEmployeeId, CreateTicketRequestDto request, CancellationToken cancellationToken = default,
-        IReadOnlyCollection<string>? callerRoles = null)
+        IReadOnlyCollection<string>? callerRoles = null, AnsweringAgent? answeringAgent = null)
     {
         var intakeRecord = await intakeRecordRepository.GetByIdAsync(request.IntakeRecordId, cancellationToken);
         if (intakeRecord is null)
@@ -238,7 +239,8 @@ public sealed class TicketCreationAppService(
         // category's department; a Genesys inquiry the AI is still handling (no human follow-up requested) does not — it only reaches
         // the Call Center when a person is actually asked for (GenesysAgentHandoffAppService), so an AI-resolved ticket is never
         // routed there needlessly. No active Call Center department configured -> the previous behaviour, reported as a blocker.
-        var needsHuman = request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp;
+        // A call a person already ANSWERED is human work by definition (answeringAgent is built server-side by the Genesys ingestion, never from the client).
+        var needsHuman = request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp || answeringAgent is not null;
         var callCenter = needsHuman ? await autoAssignmentService.ResolveCallCenterAsync(cancellationToken) : null;
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
@@ -392,7 +394,18 @@ public sealed class TicketCreationAppService(
 
             // Mandatory: neither AssignToDepartmentQueue nor creator self-assignment can bypass it. With no eligible agent the ticket stays
             // in the Call Center queue, audited as Unassigned.
-            await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
+            // The one exception: a call a mapped agent already ANSWERED goes to that agent directly (or waits in the queue, flagged, when they
+            // cannot take it) - never to the next agent in the rotation.
+            if (answeringAgent is not null)
+            {
+                await autoAssignmentService.ApplyAnsweringAgentAsync(
+                    ticket, answeringAgent, "Inquiry", now, correlationId, callerEmployeeId,
+                    routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+            }
+            else
+            {
+                await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
+            }
         }
         else
         {

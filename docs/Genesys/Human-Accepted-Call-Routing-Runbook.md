@@ -3,6 +3,14 @@
 Trigger: Production ticket `TG-ACC-20261102-0021` (Genesys PHONE) stayed **Open, unassigned, in Accounting**; many PHONE tickets carry no
 human-follow-up flag. Nothing in this document deploys or writes to Production — every SQL block below is a read-only `SELECT`.
 
+> **Update — the agent who answers owns the ticket** (`docs/Genesys-Answering-Agent-Routing.md`). Everything below about *recognising* a human-handled
+> call is unchanged, but **who gets the ticket** changed: when the human evidence is a **mapped, eligible Call Center agent** at phone pickup
+> (`PhonePickupByMappedAgent`) or **connected** (`routing.agentId`, `MappedAgentConnected`), the ticket is assigned **directly to that agent** — no Round
+> Robin turn is spent. Round Robin remains for evidence that names no answering agent (explicit flag, a handoff assigned/ringing agent, a `HumanAgent`
+> transcript line) and for a handoff nobody accepted. Two behaviours differ from the text below: an **unmapped** agent id at a **phone** pickup, and a mapped
+> person who cannot own a Call Center ticket, are no longer ignored — the ticket waits **unowned in the Call Center queue, flagged**
+> (`ManualAssignmentRequired`) for manual assignment (never a Round Robin pick). Kill-switch: `Genesys:AssignOnAnswer=false` restores the text below exactly.
+
 ## 1. Root cause (code, on `main` before this change)
 
 | # | Finding | Where |

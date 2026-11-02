@@ -88,6 +88,14 @@ public sealed class GenesysOptions
     public bool AutoRaiseHandoffOnConversationEnd { get; set; }
 
     /// <summary>
+    /// <b>Who answered owns the ticket</b> (<c>Genesys:AssignOnAnswer</c>, default <b>true</b>): a Genesys call answered by a mapped, eligible
+    /// Call Center agent is assigned DIRECTLY to that agent instead of going through Round Robin, and an answering agent who cannot take it
+    /// leaves the ticket flagged in the Call Center queue. Set it to <c>false</c> to restore the previous behaviour (Round Robin for every
+    /// ticket that needs a person; the answering agent only recorded as a handler) without redeploying - the rollback lever for this rule.
+    /// </summary>
+    public bool AssignOnAnswer { get; set; } = true;
+
+    /// <summary>
     /// The code of the department that acts as the <b>safe classification queue</b> (<c>Genesys:ClassificationDepartmentCode</c>, e.g. the
     /// department whose staff triage Unclassified tickets). Used only when configuration cannot place a Genesys ticket: no department,
     /// queue mapping or valid request type named one, or a supplied request type is unusable (unmapped intent, retired department, no

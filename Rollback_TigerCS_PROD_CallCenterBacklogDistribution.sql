@@ -11,7 +11,8 @@
                  * owner = the agent the batch assigned, department = Call Center, status Open/InProgress/Pending (not Resolved/Closed)
                  * the batch's assignment row is still the ONE current row, and no later assignment row exists (no reassignment / transfer since)
                  * nobody has worked it since the batch: no first human response, no status-history row (any status change / pending / resolve),
-                   no note, no interaction-handler record and no other workflow event (transfer, handoff, reopen, Genesys event ...) after the batch
+                   no note, no interaction-handler record, no NEW interaction (e.g. a new AI/customer conversation), no NEW approval request and no
+                 other workflow event (transfer, handoff, reopen, Genesys event ...) after the batch
    SKIP      - anything else. It is listed with the reason and left EXACTLY as found: a human owns that work now.
                (@IncludeWorked = 1 lifts only the "nobody worked it" test, only with explicit approval; owner / department / assignment checks always apply.)
 
@@ -23,7 +24,8 @@
    * + 1 'Transfer' audit row and + 1 TicketTransferred/SystemRouting workflow event (CC -> original) for a ticket that had been moved
    * + 1 'AutoAssignRollback' audit row
  Round Robin cursor is restored to its pre-batch value IF no ticket has been dealt from it since (otherwise left alone - a cursor position is harmless).
- NEVER touched: OriginatingDepartmentId, RequestTypeId, category, priority, status, SLA, history, notes, approvals, interactions, notifications.
+ NEVER touched: OriginatingDepartmentId, RequestTypeId, category, priority, status, SLA, history, notes, approvals, interactions (incl. AI conversations), notifications.
+ The tickets the batch HELD BACK (pending approval / active AI conversation) were never part of the batch, so rollback cannot reach them.
  NEVER deleted or edited: any audit row, workflow event, status history, assignment row.
 
  HOW TO RUN: set @BatchId, run with @DryRun = 1 (default; shows what would roll back / be skipped, then rolls back), review, set @DryRun = 0.
@@ -131,6 +133,8 @@ BEGIN TRY
     OUTER APPLY (SELECT (SELECT COUNT(*) FROM dbo.TicketStatusHistory h WHERE h.TicketId = w.TicketId AND h.OccurredAtUtc > @BatchAt)
                       + (SELECT COUNT(*) FROM dbo.TicketNotes n WHERE n.TicketId = w.TicketId AND n.CreatedAtUtc > @BatchAt)
                       + (SELECT COUNT(*) FROM dbo.TicketInteractionHandlers ih WHERE ih.TicketId = w.TicketId AND ih.RecordedAtUtc > @BatchAt)
+                      + (SELECT COUNT(*) FROM dbo.TicketApprovals ap WHERE ap.TicketId = w.TicketId AND ap.RequestedAtUtc > @BatchAt)
+                      + (SELECT COUNT(*) FROM dbo.TicketInteractions ix WHERE ix.TicketId = w.TicketId AND ix.CreatedAtUtc > @BatchAt)
                       + (SELECT COUNT(*) FROM dbo.TicketWorkflowEvents ev WHERE ev.TicketId = w.TicketId AND ev.OccurredAtUtc > @BatchAt AND ev.CorrelationId <> @BatchId)
                       + CASE WHEN t.FirstHumanResponseAtUtc > @BatchAt THEN 1 ELSE 0 END AS n) AS worked;
 
