@@ -7,8 +7,9 @@
  Run it from a read-only login. It changes nothing, takes no locks that block the application (READ UNCOMMITTED), and can be re-run any time.
 
  It answers, BEFORE anything is executed:
-   1. Which tickets are in scope (Open / InProgress / Pending, Call Center, no owner, no current assignment)?
-   2. Which tickets are out of scope and why (other departments, drift anomalies, Resolved/Closed)?
+   1. Which tickets are in scope (Open / InProgress / Pending, ANY department, no owner, no current assignment)? Those outside the Call
+      Center would be TRANSFERRED to it first (CurrentDepartmentId only - Originating department, number, status, SLA untouched).
+   2. Which tickets are held back or untouched and why (live AI conversations, owned tickets, drift anomalies, Resolved/Closed)?
    3. Which Call Center agents are eligible, in exact Round Robin order, with their current workload?
    4. How many tickets each agent WOULD receive, and the exact ticket -> agent plan.
 
@@ -43,6 +44,8 @@ END;
 DECLARE @ServiceIdentity TABLE (EmployeeId uniqueidentifier PRIMARY KEY);
 -- INSERT INTO @ServiceIdentity VALUES ('00000000-0000-0000-0000-000000000000');
 DECLARE @ServiceIdsConfirmed bit = 0;   -- set to 1 once the list above is complete (an empty list with 0 is reported as a BLOCKER)
+DECLARE @IncludeLiveAiConversations bit = 0;   -- must equal the Execute script's value. 0 = live Genesys AI conversations are held back (listed below)
+DECLARE @CsAgentRoleOnly bit = 1;              -- must equal the Execute script's value. 1 = only holders of the CS Agent role receive work
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 0. Call Center department + rotation cursor
@@ -76,25 +79,41 @@ WHERE @CcId IS NOT NULL
   AND NOT (u.LockoutEnabled = 1 AND u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET())  -- locked accounts excluded
   AND NOT EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId)             -- service accounts excluded
   AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId     -- read-only / non-operational excluded
-              WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'));
+              WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'CS Agent', N'Department Employee', N'Department Head'))
+  AND (@CsAgentRoleOnly = 0 OR EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
+                                       WHERE ur.UserId = e.EmployeeId AND r.Name = N'CS Agent'));
 
 DECLARE @N int = (SELECT COUNT(*) FROM #Agents);
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 2. Candidate tickets (the only tickets that would ever be touched)
 -- ---------------------------------------------------------------------------------------------------------------------------
-CREATE TABLE #Cand (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL, CreatedAtUtc datetime2 NOT NULL);
+CREATE TABLE #Cand (Seq int NOT NULL PRIMARY KEY, TicketId bigint NOT NULL, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL, CreatedAtUtc datetime2 NOT NULL,
+                    SrcDeptId int NOT NULL, SrcDeptCode nvarchar(50) NULL);
+CREATE TABLE #Held (TicketId bigint NOT NULL PRIMARY KEY, TicketNumber nvarchar(40) NULL, TicketStatus tinyint NOT NULL, SrcDeptCode nvarchar(50) NULL, CreatedAtUtc datetime2 NOT NULL);
 
-INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc)
-SELECT ROW_NUMBER() OVER (ORDER BY t.CreatedAtUtc, t.TicketId), t.TicketId, t.TicketNumber, t.TicketStatus, t.CreatedAtUtc
+-- unowned, active, no current assignment, ANY department; split into "in scope" and "held back: live AI conversation"
+SELECT t.TicketId, t.TicketNumber, t.TicketStatus, t.CreatedAtUtc, t.CurrentDepartmentId, d.Code AS DeptCode,
+       CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i
+                         WHERE i.TicketId = t.TicketId AND i.IsOriginatingInteraction = 1 AND i.GenesysConversationId IS NOT NULL
+                           AND i.RequiresHumanFollowUp = 0 AND i.EndedAtUtc IS NULL AND i.InactivityClosedAtUtc IS NULL) THEN 1 ELSE 0 END AS LiveAi
+INTO #All
 FROM dbo.Tickets AS t
+JOIN dbo.Departments AS d ON d.DepartmentId = t.CurrentDepartmentId
 WHERE @CcId IS NOT NULL
-  AND t.CurrentDepartmentId = @CcId
   AND t.TicketStatus IN (1, 2, 3, 4)                                   -- Open, InProgress, Pending*
   AND t.CurrentOwnerEmployeeId IS NULL                                 -- no owner
   AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1);   -- and no active assignment
 
+INSERT #Cand (Seq, TicketId, TicketNumber, TicketStatus, CreatedAtUtc, SrcDeptId, SrcDeptCode)
+SELECT ROW_NUMBER() OVER (ORDER BY CreatedAtUtc, TicketId), TicketId, TicketNumber, TicketStatus, CreatedAtUtc, CurrentDepartmentId, DeptCode
+FROM #All WHERE @IncludeLiveAiConversations = 1 OR LiveAi = 0;
+
+INSERT #Held (TicketId, TicketNumber, TicketStatus, SrcDeptCode, CreatedAtUtc)
+SELECT TicketId, TicketNumber, TicketStatus, DeptCode, CreatedAtUtc FROM #All WHERE @IncludeLiveAiConversations = 0 AND LiveAi = 1;
+
 DECLARE @Cand int = (SELECT COUNT(*) FROM #Cand);
+DECLARE @Transfers int = (SELECT COUNT(*) FROM #Cand WHERE SrcDeptId <> @CcId);
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 3. The Round Robin deal
@@ -112,7 +131,7 @@ IF @N > 0
 -- RESULT SET 1 - Verdict
 -- ===========================================================================================================================
 SELECT @@SERVERNAME AS [Server], DB_NAME() AS [Database], SYSUTCDATETIME() AS PreviewAtUtc,
-       @CcId AS CallCenterDepartmentId, @N AS EligibleAgents, @Cand AS TicketsToAssign,
+       @CcId AS CallCenterDepartmentId, @N AS EligibleAgents, @Cand AS TicketsToAssign, @Transfers AS TicketsToTransferToCallCenter,
        @Cursor AS RotationCursor_LastAssignedEmployeeId,
        CASE
            WHEN @CcCount <> 1                                    THEN 'BLOCKER: expected exactly one active department with Code=CC, found ' + CONVERT(varchar(10), @CcCount)
@@ -125,20 +144,27 @@ SELECT @@SERVERNAME AS [Server], DB_NAME() AS [Database], SYSUTCDATETIME() AS Pr
            ELSE 'READY' END AS Verdict;
 
 -- ===========================================================================================================================
--- RESULT SET 2 - Scope reconciliation: every unowned non-terminal ticket, by department and why it is / is not in scope
+-- RESULT SET 2 - Scope reconciliation: every unowned non-terminal ticket, by department, and what would happen to it
 -- ===========================================================================================================================
 SELECT d.Code AS DepartmentCode, d.Name AS DepartmentName,
        SUM(CASE WHEN t.TicketStatus = 1 THEN 1 ELSE 0 END) AS [Open],
        SUM(CASE WHEN t.TicketStatus = 2 THEN 1 ELSE 0 END) AS InProgress,
        SUM(CASE WHEN t.TicketStatus IN (3, 4) THEN 1 ELSE 0 END) AS Pending,
        COUNT(*) AS TotalUnowned,
-       CASE WHEN d.DepartmentId = @CcId THEN 'IN SCOPE (Call Center pool)'
-            ELSE 'OUT OF SCOPE - not a Call Center ticket; needs a separate decision (see runbook, "Tickets outside Call Center")' END AS Scope
+       (SELECT COUNT(*) FROM #Cand c WHERE c.SrcDeptId = d.DepartmentId) AS InScope,
+       (SELECT COUNT(*) FROM #Held h WHERE h.SrcDeptCode = d.Code)       AS HeldBack_LiveAiConversation,
+       CASE WHEN d.DepartmentId = @CcId THEN 'Call Center: assigned in place (no department change)'
+            ELSE 'transferred to Call Center (CurrentDepartmentId only), then assigned' END AS WhatHappens
 FROM dbo.Tickets AS t
 JOIN dbo.Departments AS d ON d.DepartmentId = t.CurrentDepartmentId
 WHERE t.TicketStatus IN (1, 2, 3, 4) AND t.CurrentOwnerEmployeeId IS NULL
+  AND NOT EXISTS (SELECT 1 FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1)
 GROUP BY d.DepartmentId, d.Code, d.Name
 ORDER BY CASE WHEN d.DepartmentId = @CcId THEN 0 ELSE 1 END, COUNT(*) DESC;
+
+-- Held back (NOT touched unless @IncludeLiveAiConversations = 1): live Genesys AI conversations. Moving them would switch off AI closure / inactivity rules.
+SELECT TicketNumber, SrcDeptCode, CASE TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' ELSE 'Pending' END AS [Status], CreatedAtUtc
+FROM #Held ORDER BY CreatedAtUtc;
 
 -- Counts of what is excluded and untouched, for the sign-off:
 SELECT
@@ -165,6 +191,9 @@ SELECT ISNULL(CONVERT(varchar(10), a.Rn), '-') AS RotationPosition, e.DisplayNam
             WHEN e.DeactivatedAtUtc IS NOT NULL THEN 'excluded: deactivated'
             WHEN u.LockoutEnabled = 1 AND u.LockoutEnd IS NOT NULL AND u.LockoutEnd > SYSDATETIMEOFFSET() THEN 'excluded: locked out'
             WHEN EXISTS (SELECT 1 FROM @ServiceIdentity s WHERE s.EmployeeId = e.EmployeeId) THEN 'excluded: service account'
+            WHEN @CsAgentRoleOnly = 1 AND EXISTS (SELECT 1 FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId
+                                                  WHERE ur.UserId = e.EmployeeId AND r.Name IN (N'Department Employee', N'Department Head'))
+                                      THEN 'excluded by @CsAgentRoleOnly: engine-eligible but no CS Agent role (cannot Transfer as owner)'
             ELSE 'excluded: no operational role (read-only / supervisory / admin)' END AS RoundRobin,
        CASE WHEN a.EmployeeId IS NOT NULL AND a.EmployeeId = @Cursor THEN '<- last assigned (cursor)' ELSE '' END AS CursorMark,
        (SELECT COUNT(*) FROM dbo.Tickets t WHERE t.CurrentOwnerEmployeeId = e.EmployeeId AND t.TicketStatus IN (1, 2, 3, 4)) AS ActiveTicketsOwnedNow
@@ -206,12 +235,12 @@ SELECT MIN(cnt) AS MinPerAgent, MAX(cnt) AS MaxPerAgent, MAX(cnt) - MIN(cnt) AS 
 FROM (SELECT a.Rn, COUNT(p.TicketId) AS cnt FROM #Agents a LEFT JOIN #Plan p ON p.AgentRn = a.Rn GROUP BY a.Rn) x;
 
 -- Values to copy into the execution script's approval gates:
-SELECT @Cand AS ApprovedTicketCount_for_execution_script, @N AS ApprovedAgentCount_for_execution_script;
+SELECT @Cand AS ApprovedTicketCount_for_execution_script, @Transfers AS ApprovedTransferCount_for_execution_script, @N AS ApprovedAgentCount_for_execution_script;
 
 -- ===========================================================================================================================
 -- RESULT SET 5 - Exact plan: ticket -> agent (ticket numbers only; no customer data)
 -- ===========================================================================================================================
-SELECT c.Seq AS DealOrder, c.TicketId, c.TicketNumber,
+SELECT c.Seq AS DealOrder, c.TicketId, c.TicketNumber, c.SrcDeptCode AS FromDepartment, CASE WHEN c.SrcDeptId <> @CcId THEN 'TRANSFER to CC + assign' ELSE 'assign in CC' END AS Action,
        CASE c.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' WHEN 3 THEN 'PendingCustomer' WHEN 4 THEN 'PendingThirdParty' END AS [Status],
        c.CreatedAtUtc, a.DisplayName AS WouldBeAssignedTo, a.UserName
 FROM #Cand AS c
@@ -223,4 +252,4 @@ ORDER BY c.Seq;
 SELECT TOP (1) a.DisplayName AS CursorWouldMoveTo, a.EmployeeId
 FROM #Plan p JOIN #Agents a ON a.Rn = p.AgentRn ORDER BY p.Seq DESC;
 
-DROP TABLE #Plan; DROP TABLE #Cand; DROP TABLE #Agents;
+DROP TABLE #Plan; DROP TABLE #Cand; DROP TABLE #Held; DROP TABLE #All; DROP TABLE #Agents;
