@@ -1,4 +1,4 @@
-using TigerCS.Application.Modules.Ticketing.Abstractions;
+﻿using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.Ticketing.Dto;
@@ -132,6 +132,7 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="WorkflowVersionNumber">The pinned version's number ("V2") — populated on detail reads.</param>
 /// <param name="OriginatingChannelId">The channel the ticket ENTERED the system on (its originating interaction's channel) — never changed by later interactions on other channels; null for tickets predating the interaction model. Populated on detail reads.</param>
 /// <param name="OriginatingChannelName">The originating channel's display name, resolved from channel configuration — still shown for a channel that has since been deactivated. Populated on detail reads.</param>
+/// <param name="ViewerActsAsInteractionHandler">True when the caller is a CS Agent Genesys reported as handling this ticket's interaction, belongs to its department and nobody else owns it: the server lets them Resolve, Close and Transfer it. Populated on detail reads; the UI uses it to show those actions.</param>
 /// <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
 /// <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
 /// <param name="IsClassified">False while the ticket has no Category yet — an inquiry captured before anyone read the request. The UI shows "Unclassified" and offers the classify action rather than rendering a missing category.</param>
@@ -198,6 +199,7 @@ public sealed record TicketDetailDto(
     string? OriginatingChannelName = null,
     bool IsClassified = true,
     bool IsReadOnlyAccess = false,
+    bool ViewerActsAsInteractionHandler = false,
     Guid? CreatedByEmployeeId = null,
     Guid? FirstHandledByEmployeeId = null,
     Guid? ResolvedByEmployeeId = null,

@@ -1,3 +1,16 @@
+# Reconciliation with the parallel workflow-fix line (release candidate)
+
+This branch now also contains `claude/admiring-maxwell-6wvhed` (Round Robin eligibility hardening, role-scoped Transfer, single-owner
+enforcement, interaction-based authority, My Tickets visibility, and `Deploy_TigerCS_Prod_Migrations.sql`). Where both lines changed the same rule:
+* Transfer permission = the other line's rule (CS Manager any ticket; CS Agent/Supervisor their own; Supervisor their department); **plus** this line's
+  request-type restriction for any non-administrative transfer out of Call Center (department code `CC`).
+* Round Robin eligibility = the other line's (not locked out, not a service identity, operational role) over this line's Call Center intake.
+* `AddDepartmentAssignmentRotation.sql` (root) is the UAT record only; Production uses `Deploy_TigerCS_Prod_Migrations.sql`.
+* `Verify_TigerCS_CallCenter_Agents_ReadOnly.sql` lists who Round Robin can assign in `CC` (SELECT only).
+* NOT included: `claude/cool-cannon-1r4eug` (per-user permissions + migration `AddUserPermissionOverrides`) - a fifth migration outside the approved four.
+
+---
+
 # Finalization (supersedes the earlier "queue option" and "handler" notes)
 
 * `assignToDepartmentQueue` and creator self-assignment **cannot bypass** Call Center intake: the ticket enters Call Center and one agent is picked by Round Robin. With no eligible agent (or assignment disabled) it stays in the Call Center queue, audited `Status=Unassigned`. Only when no active `CC` department exists does the old routing apply.

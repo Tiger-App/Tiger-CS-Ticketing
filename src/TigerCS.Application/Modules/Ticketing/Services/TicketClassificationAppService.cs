@@ -232,7 +232,7 @@ public sealed class TicketClassificationAppService(
 
                 var configured = await autoAssignmentService!.ApplyAsync(
                     ticket, now, correlationId, AutoAssignmentTrigger.CategoryRouted, cancellationToken);
-                await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, configured, now, correlationId, cancellationToken);
+                await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, configured, now, correlationId, cancellationToken: cancellationToken);
 
                 if (workflowEventRepository is not null)
                 {

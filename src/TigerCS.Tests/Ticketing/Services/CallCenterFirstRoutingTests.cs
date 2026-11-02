@@ -81,7 +81,7 @@ public class CallCenterFirstRoutingTests
 
             Assignment = new TicketAssignmentAppService(
                 Tickets, Assignments, Members, Departments, UnitOfWork, Audit, TimeProvider.System, Settings, AutoAssignment,
-                Events, RequestTypes);
+                Events, requestTypeRepository: RequestTypes);
         }
 
         public Guid AddMember(Department department)

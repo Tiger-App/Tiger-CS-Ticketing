@@ -143,7 +143,8 @@ public sealed class DashboardAppService(
             ReviewsAreTest: notificationMode?.IsTest == true,
             AgentScopeEmployeeId: agentScope,
             DepartmentId: request.DepartmentId,
-            CreatedOnlyScope: ticketQueryAppService.IsGenesysIntegration(callerEmployeeId, callerRoles));
+            CreatedOnlyScope: ticketQueryAppService.IsGenesysIntegration(callerEmployeeId, callerRoles),
+            OwnerVisibilityEmployeeId: callerEmployeeId);
 
         var snapshot = await dashboardQueryRepository.GetOverviewAsync(query, cancellationToken);
 

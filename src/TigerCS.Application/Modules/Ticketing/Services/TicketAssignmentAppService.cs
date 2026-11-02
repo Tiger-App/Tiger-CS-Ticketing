@@ -1,3 +1,4 @@
+﻿using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
@@ -25,6 +26,7 @@ public sealed class TicketAssignmentAppService(
     IDepartmentWorkflowSettingsRepository departmentWorkflowSettingsRepository,
     TicketAutoAssignmentService autoAssignmentService,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
+    ITicketInteractionHandlerRepository? handlerRepository = null,
     IRequestTypeRepository? requestTypeRepository = null)
 {
     /// <summary>
@@ -139,8 +141,9 @@ public sealed class TicketAssignmentAppService(
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
-        catch (TicketConcurrentlyModifiedException)
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {
+            // Lost the race: another request changed the ticket, or already made someone its current assignee (unique current assignment).
             return TicketMutationResult.Failure(TicketMutationOutcome.ConcurrencyConflict);
         }
 
@@ -149,10 +152,11 @@ public sealed class TicketAssignmentAppService(
     }
 
     /// <summary>
-    /// Transfer authority: the CS Manager, and — Call Center first — the Call Center agent the ticket is currently assigned to, who either
-    /// resolves/closes it or transfers it to the department its request type belongs to. Every other role (including Department Head and
-    /// CS Supervisor, who retain Assign authority) is forbidden. Once transferred, the previous owner no longer owns the ticket, so the
-    /// owner-based right ends with the hand-over.
+    /// Transfer authority is the Call Center layer, scoped per ticket — never global: a CS Manager may transfer any ticket; a CS Agent or
+    /// CS Supervisor only a ticket currently assigned to them, and a CS Supervisor also a ticket of a department they belong to.
+    /// Department Head, Department Employee and every other role are forbidden. After the move, the target department's rule or Round Robin
+    /// picks the assignee (never a random employee). A ticket leaving the Call Center that is classified can only go to its request type's
+    /// department (except for the CS Manager's administrative transfer).
     /// </summary>
     public async Task<TicketMutationResult> TransferAsync(
         Guid callerEmployeeId,
@@ -167,13 +171,21 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
         }
 
-        var isManager = callerRoles.Any(TicketRoleSets.Transfer.Contains);
-        var isCallCenterOwner = !isManager
-            && !Roles.IsReadOnlyCaller(callerRoles)
-            && ticket.CurrentOwnerEmployeeId == callerEmployeeId
-            && await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
-            && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken);
-        if (!AuthorizationGate.Evaluate(callerRoles, () => isManager || isCallCenterOwner))
+        var transferAuthorized = await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
+            callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains)
+            || (callerRoles.Any(TicketRoleSets.Transfer.Contains)
+                && (ticket.CurrentOwnerEmployeeId == callerEmployeeId
+                    || await TicketOwnershipRules.IsActingInteractionHandlerAsync(
+                        handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken, ticketAssignmentRepository)
+                    || (callerRoles.Contains(Roles.CsSupervisor)
+                        && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken)))));
+
+        var isAdministrativeTransfer = AuthorizationOverride.AppliesTo(callerRoles)
+            || callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains);
+        var fromCallCenter = !isAdministrativeTransfer
+            && await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
+
+        if (!transferAuthorized)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
@@ -192,7 +204,7 @@ public sealed class TicketAssignmentAppService(
 
         // A Call Center agent transfers by Request Type: once the ticket is classified, the destination is the department that owns its
         // request type. (A CS Manager keeps the unrestricted manual transfer.)
-        if (isCallCenterOwner
+        if (fromCallCenter
             && ticket.RequestTypeId is { } classifiedRequestTypeId
             && requestTypeRepository is not null
             && await requestTypeRepository.GetByIdAsync(classifiedRequestTypeId, cancellationToken) is { } classifiedRequestType
@@ -207,7 +219,7 @@ public sealed class TicketAssignmentAppService(
         // role gate above.
         var sourceSettings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(
             ticket.CurrentDepartmentId, cancellationToken);
-        if (!isCallCenterOwner && sourceSettings is { AllowTransferToOtherDepartments: false })
+        if (!fromCallCenter && sourceSettings is { AllowTransferToOtherDepartments: false })
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.DisabledByDepartmentSettings);
         }
@@ -249,7 +261,8 @@ public sealed class TicketAssignmentAppService(
         // straight from department B to department C.
         ticket.TransferToDepartment(request.TargetDepartmentId);
 
-        // Single ownership: the previous owner's assignment row ends with the hand-over, whatever the destination then does.
+        // Single current owner: the previous assignment ends with the transfer (history row kept, just no longer current), so the previous
+        // owner holds no ownership-based right on the ticket whether or not the new department can assign it to anyone.
         (await ticketAssignmentRepository.GetCurrentAsync(ticketId, cancellationToken))?.MarkSuperseded();
 
         await auditWriter.WriteAsync(
@@ -317,8 +330,9 @@ public sealed class TicketAssignmentAppService(
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
-        catch (TicketConcurrentlyModifiedException)
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {
+            // Lost the race: another request changed the ticket, or already made someone its current assignee (unique current assignment).
             return TicketMutationResult.Failure(TicketMutationOutcome.ConcurrencyConflict);
         }
 

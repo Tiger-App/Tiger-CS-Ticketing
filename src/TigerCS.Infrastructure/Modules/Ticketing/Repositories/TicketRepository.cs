@@ -20,7 +20,7 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
     {
         var filtered = dbContext.Tickets.AsQueryable();
 
-        filtered = filtered.VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope);
+        filtered = filtered.VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.OwnerVisibilityEmployeeId);
 
         if (query.DepartmentId is { } departmentId)
         {
@@ -273,7 +273,7 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
     public async Task<DashboardSnapshot> GetDashboardSnapshotAsync(
         DashboardSnapshotQuery query, CancellationToken cancellationToken = default)
     {
-        var visible = dbContext.Tickets.AsQueryable().VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope);
+        var visible = dbContext.Tickets.AsQueryable().VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.CallerEmployeeId);
 
         // Same "active" set as TicketQueryFilters.Active, legacy
         // PendingThirdParty included — see its remark for why.

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TigerCS.Application.Modules.Administration.Dto;
@@ -968,7 +968,7 @@ public sealed class TicketDetailsModel(
         ClassifyNotice = ClassifyNotice.For(
             ClassifyOptions,
             TicketDisplay.AssignedDepartmentLabel(ticket.CurrentDepartmentId, nameResolver.TryGetDepartmentName(ticket.CurrentDepartmentId)),
-            Viewer, TicketActions.CanTransfer(Viewer?.Roles));
+            Viewer, TicketActions.CanTransfer(ActionContext));
 
         var current = ticket.PriorityId ?? 4;
         ClassifyPriorities = Enumerable.Range(1, current).Select(p => (byte)p).ToList();
@@ -1168,7 +1168,8 @@ public sealed class TicketDetailsModel(
                 Viewer.EmployeeId,
                 ticket.CurrentOwnerEmployeeId,
                 ticket.CurrentDepartmentId,
-                [.. nameResolver.OwnDepartments.Select(d => d.DepartmentId)]);
+                [.. nameResolver.OwnDepartments.Select(d => d.DepartmentId)],
+                ticket.ViewerActsAsInteractionHandler);
 
         StatusTargets = TicketStatusTransitions.AllowedTargetsFrom(ticket.TicketStatus);
 
@@ -1200,9 +1201,10 @@ public sealed class TicketDetailsModel(
     /// </summary>
     private async Task LoadTransferTargetsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
-        // The CS Manager transfers any ticket; the Call Center agent the ticket is assigned to transfers it onward (Call Center first).
-        var isManager = TicketActions.CanTransfer(Viewer?.Roles);
-        CanTransfer = isManager || TicketActions.IsPotentialCallCenterTransferer(ActionContext);
+        // Permission mirrors the API's rule (CS Manager any ticket; CS Agent/Supervisor their own; Supervisor their department).
+        var isManager = ActionContext is { } actionContext
+            && (actionContext.OverrideApplies || actionContext.HasAnyRole(TicketRoleSets.TransferAnyTicket));
+        CanTransfer = TicketActions.CanTransfer(ActionContext);
         TransferTargets = [];
         TransferTargetsUnavailable = false;
 
@@ -1214,19 +1216,7 @@ public sealed class TicketDetailsModel(
         var active = await nameResolver.GetActiveDepartmentsAsync(cancellationToken);
         if (active is null)
         {
-            // Only a viewer whose right does not depend on the directory is told it is unavailable; the owner-based right needs it
-            // to confirm the Call Center, so without it nothing is offered.
-            TransferTargetsUnavailable = isManager;
-            CanTransfer = isManager;
-            return;
-        }
-
-        if (!isManager
-            && !active.Any(d => d.DepartmentId == ticket.CurrentDepartmentId
-                && string.Equals(d.Code, TigerCS.Application.Modules.Reporting.Services.TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase)))
-        {
-            // The owner-based right belongs to the Call Center (department code CC) only; the API enforces the same.
-            CanTransfer = false;
+            TransferTargetsUnavailable = true;
             return;
         }
 
@@ -1237,9 +1227,11 @@ public sealed class TicketDetailsModel(
                 .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
         ];
 
-        // Call Center transfers a classified ticket to the department that owns its request type — selected for the agent, and the only
-        // choice offered. (The API refuses any other target.)
-        if (!isManager && ticket.RequestTypeId is { } requestTypeId && requestTypesApiClient is not null)
+        // A Call Center agent (department identified by CODE, never by name) transfers a classified ticket to the department that owns its
+        // request type — selected for them and the only choice offered. The API refuses any other target; the CS Manager is unrestricted.
+        var inCallCenter = active.Any(d => d.DepartmentId == ticket.CurrentDepartmentId
+            && string.Equals(d.Code, TigerCS.Application.Modules.Reporting.Services.TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase));
+        if (inCallCenter && !isManager && ticket.RequestTypeId is { } requestTypeId && requestTypesApiClient is not null)
         {
             var options = await requestTypesApiClient.GetOptionsAsync(null, cancellationToken);
             var owningDepartmentId = options.IsSuccess ? options.Value?.FirstOrDefault(r => r.RequestTypeId == requestTypeId)?.DepartmentId : null;

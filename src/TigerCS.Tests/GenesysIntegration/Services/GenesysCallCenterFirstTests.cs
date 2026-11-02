@@ -123,7 +123,7 @@ public class GenesysCallCenterFirstTests
             f.Tickets, f.TicketAssignments, f.DepartmentAssignments, f.Departments, f.UnitOfWork, f.Audit, TimeProvider.System,
             f.DepartmentSettings,
             new TicketAutoAssignmentService(f.AssignmentRules, f.DepartmentSettings, f.DepartmentAssignments, f.TicketAssignments, f.Audit, f.Rotation, f.Departments),
-            f.WorkflowEvents, f.RequestTypes);
+            f.WorkflowEvents, requestTypeRepository: f.RequestTypes);
         var wrong = await assignment.TransferAsync(
             agent, [Roles.CsAgent], ticket.TicketId, new TransferTicketRequestDto(bot.DepartmentId, "x", []));
         Assert.Equal(TicketMutationOutcome.TransferTargetMustMatchRequestType, wrong.Outcome);

@@ -409,7 +409,7 @@ public sealed class TicketCreationAppService(
                     or AutoAssignmentOutcome.ConfiguredAssigneeNotInDepartment)
                 && await autoAssignmentService.IsCallCenterRoutingAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
             {
-                automatic = await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, automatic, now, correlationId, cancellationToken);
+                automatic = await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, automatic, now, correlationId, cancellationToken: cancellationToken);
             }
 
             if (request.GenesysContext is null

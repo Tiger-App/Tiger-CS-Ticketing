@@ -1,8 +1,10 @@
-using TigerCS.Application.Abstractions;
+﻿using TigerCS.Application.Abstractions;
+using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Reporting.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
+using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Domain.Modules.WorkflowConfiguration;
 
@@ -100,7 +102,10 @@ public sealed class TicketAutoAssignmentService(
     ITicketAssignmentRepository ticketAssignmentRepository,
     IAuditEntryWriter auditWriter,
     IAssignmentRotationRepository? rotationRepository = null,
-    IDepartmentRepository? departmentRepository = null)
+    IDepartmentRepository? departmentRepository = null,
+    IUserRoleReader? roleReader = null,
+    IUserAccountManager? accountManager = null,
+    IServiceIdentityRegistry? serviceIdentities = null)
 {
     /// <summary>
     /// Runs inside the caller's creation transaction, after the ticket row
@@ -233,7 +238,8 @@ public sealed class TicketAutoAssignmentService(
         Ticket ticket, AutoAssignmentResult configured, AutoAssignmentTrigger trigger, DateTime nowUtc, Guid correlationId,
         CancellationToken cancellationToken = default)
     {
-        if (ticket.CurrentOwnerEmployeeId is not null
+        if (rotationRepository is null
+            || ticket.CurrentOwnerEmployeeId is not null
             || configured.Outcome is not (AutoAssignmentOutcome.NoRequestType or AutoAssignmentOutcome.NoRuleConfigured
                 or AutoAssignmentOutcome.ConfiguredAssigneeNotInDepartment))
         {
@@ -251,8 +257,9 @@ public sealed class TicketAutoAssignmentService(
 
     /// <summary>Call Center category routing (kept for existing callers): <see cref="ApplyRoundRobinFallbackAsync"/> with the category trigger.</summary>
     public Task<AutoAssignmentResult> ApplyCategoryRoutingAsync(
-        Ticket ticket, AutoAssignmentResult configured, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default) =>
-        ApplyRoundRobinFallbackAsync(ticket, configured, AutoAssignmentTrigger.CategoryRouted, nowUtc, correlationId, cancellationToken);
+        Ticket ticket, AutoAssignmentResult configured, DateTime nowUtc, Guid correlationId,
+        AutoAssignmentTrigger trigger = AutoAssignmentTrigger.CategoryRouted, CancellationToken cancellationToken = default) =>
+        ApplyRoundRobinFallbackAsync(ticket, configured, trigger, nowUtc, correlationId, cancellationToken);
 
     /// <summary>
     /// Assigns to the next eligible active member of the ticket's CURRENT department. The persisted cursor is row-locked for the
@@ -269,9 +276,18 @@ public sealed class TicketAutoAssignmentService(
                 $"{ruleText}: Round Robin is not available", trigger, correlationId, cancellationToken);
         }
 
+        // The pool is the ticket's CURRENT department, and that department must exist and be active.
+        if (departmentRepository is not null
+            && await departmentRepository.GetByIdAsync(ticket.CurrentDepartmentId, cancellationToken) is not { IsActive: true })
+        {
+            return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
+                $"{ruleText}: department {ticket.CurrentDepartmentId} is missing or inactive; Status=Unassigned",
+                trigger, correlationId, cancellationToken);
+        }
+
         var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(
             ticket.CurrentDepartmentId, activeEmployeesOnly: true, cancellationToken);
-        var eligible = members.Select(m => m.EmployeeId).Distinct().ToList();
+        var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), cancellationToken);
         if (eligible.Count == 0)
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
@@ -301,6 +317,43 @@ public sealed class TicketAutoAssignmentService(
             correlationId, cancellationToken);
 
         return new AutoAssignmentResult(AutoAssignmentOutcome.AssignedRoundRobin, next);
+    }
+
+    /// <summary>
+    /// Narrows a department's active members to who may be handed work by rotation: not a service identity (the Genesys integration
+    /// account), not locked out, and holding at least one operational role (<see cref="TicketRoleSets.RoundRobinEligible"/>) — so
+    /// read-only users, supervisors/managers and administrators are skipped. A lookup that cannot answer excludes the person: rotation
+    /// never guesses. (The three readers are optional only so unit tests can build the service bare; the composition root supplies all.)
+    /// </summary>
+    private async Task<List<Guid>> FilterEligibleAsync(IEnumerable<Guid> candidateIds, CancellationToken cancellationToken)
+    {
+        var eligible = new List<Guid>();
+        foreach (var id in candidateIds)
+        {
+            if (serviceIdentities?.IsServiceIdentity(id) == true)
+            {
+                continue;
+            }
+
+            if (accountManager is not null
+                && await accountManager.GetAccountAsync(id, cancellationToken) is not { IsLockedOut: false })
+            {
+                continue;
+            }
+
+            if (roleReader is not null)
+            {
+                var roles = await roleReader.GetRolesAsync(id, cancellationToken);
+                if (Roles.IsReadOnlyCaller(roles) || !roles.Any(TicketRoleSets.RoundRobinEligible.Contains))
+                {
+                    continue;
+                }
+            }
+
+            eligible.Add(id);
+        }
+
+        return eligible;
     }
 
     /// <summary>

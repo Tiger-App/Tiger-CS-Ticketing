@@ -107,6 +107,12 @@ public enum AgentHandoffOutcome
     ConcurrencyConflict,
 
     /// <summary>
+    /// The ticket is already owned by another person (not an automatic pre-assignment). Accepting would silently take it from them, so it is
+    /// refused: a ticket has one owner, and a supervisor reassigns it deliberately (Assign/Transfer, which is audited).
+    /// </summary>
+    TicketOwnedByAnotherEmployee,
+
+    /// <summary>
     /// The accepting employee is not an active member of the ticket's current
     /// department, so accepting would have to assign the ticket to a
     /// non-member — which MVP-API-Contracts.md §3.5 forbids and
