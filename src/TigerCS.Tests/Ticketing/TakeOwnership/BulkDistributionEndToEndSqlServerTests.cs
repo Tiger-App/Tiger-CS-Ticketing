@@ -135,6 +135,12 @@ public sealed class BulkDistributionEndToEndSqlServerTests : IDisposable
         }
 
         using var factory = new TigerCsApiFactory { SqlServerConnectionString = ConnectionString };
+        using (var scope = factory.Services.CreateScope())
+        {
+            // the application's OWN schema, created from the EF model (the scripts are then run against exactly this)
+            await scope.ServiceProvider.GetRequiredService<TigerCsDbContext>().Database.EnsureCreatedAsync();
+        }
+
         await factory.SeedPrioritiesAsync();
         var cc = await factory.CreateDepartmentAsync("Call Center", "CC");
         var accounting = await factory.CreateDepartmentAsync("Accounting", "ACCT");
@@ -266,6 +272,7 @@ public sealed class BulkDistributionEndToEndSqlServerTests : IDisposable
 
         using var verify = factory.Services.CreateScope();
         var verifyDb = verify.ServiceProvider.GetRequiredService<TigerCsDbContext>();
-        Assert.Empty(await verifyDb.TicketAssignments.AsNoTracking().Where(a2 => a2.IsCurrent).GroupBy(a2 => a2.TicketId).Where(g => g.Count() > 1).ToListAsync());
+        var currentTicketIds = await verifyDb.TicketAssignments.AsNoTracking().Where(a2 => a2.IsCurrent).Select(a2 => a2.TicketId).ToListAsync();
+        Assert.Equal(currentTicketIds.Count, currentTicketIds.Distinct().Count());   // never two current assignments for one ticket
     }
 }
