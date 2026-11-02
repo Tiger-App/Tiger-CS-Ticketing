@@ -65,7 +65,8 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext) : IDash
 
         // ---- KPIs (current state) ----
         var openTickets = await backlog.CountAsync(cancellationToken);
-        var myTickets = await backlog.CountAsync(t => t.CurrentOwnerEmployeeId == query.CallerEmployeeId, cancellationToken);
+        // Every ticket currently assigned to the caller, in any status (Resolved awaiting Close included) — exactly the My Tickets list.
+        var myTickets = await scoped.CountAsync(t => t.CurrentOwnerEmployeeId == query.CallerEmployeeId, cancellationToken);
         var inDepartmentQueue = await backlog.CountAsync(t => t.CurrentOwnerEmployeeId == null, cancellationToken);
         var slaBreached = await backlog.CountAsync(t => t.SlaState == SlaState.Breached, cancellationToken);
         var dueToday = await backlog.DueOnUtcDay(dbContext, query.TodayStartUtc).CountAsync(cancellationToken);

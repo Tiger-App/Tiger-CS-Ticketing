@@ -60,7 +60,7 @@ public sealed class DashboardOverviewTests : IDisposable
     }
 
     [Fact]
-    public async Task MyTickets_CountsOnlyActiveTicketsCurrentlyOwnedByTheCaller()
+    public async Task MyTickets_CountsEveryTicketCurrentlyAssignedToTheCaller_IncludingResolved()
     {
         using (var context = _db.CreateContext())
         {
@@ -73,7 +73,8 @@ public sealed class DashboardOverviewTests : IDisposable
 
         var overview = await OverviewAsync(_db.CsAgentId, [Roles.CsAgent]);
 
-        Assert.Equal(2, overview.Kpis.MyTickets);
+        // Open + InProgress + Resolved (awaiting Close) — what the My Tickets list shows; other owners' and unowned tickets excluded.
+        Assert.Equal(3, overview.Kpis.MyTickets);
     }
 
     [Fact]

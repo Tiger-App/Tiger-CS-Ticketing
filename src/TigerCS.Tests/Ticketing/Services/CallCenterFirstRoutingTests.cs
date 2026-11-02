@@ -184,16 +184,16 @@ public class CallCenterFirstRoutingTests
     }
 
     [Fact]
-    public async Task DepartmentQueueRequested_StaysUnassignedInTheCallCenterQueue()
+    public async Task DepartmentQueueRequested_DoesNotBypassTheMandatoryCallCenterAssignment()
     {
         var env = new Env();
-        env.AddMember(env.CallCenter!);
+        var agent = env.AddMember(env.CallCenter!);
 
         var result = await env.CreateManualAsync(env.Cs, queue: true);
 
         var ticket = Stored(env, result);
         Assert.Equal(env.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]

@@ -390,19 +390,9 @@ public sealed class TicketCreationAppService(
                 }
             }
 
-            if (request.AssignToDepartmentQueue == true)
-            {
-                // The caller explicitly asked for the queue: the ticket waits, unassigned, in the Call Center queue.
-                await auditWriter.WriteAsync(
-                    actorEmployeeId: null, "AutoAssign", "Ticket", ticket.TicketId.ToString(),
-                    beforeValue: null,
-                    afterValue: $"DepartmentQueue;DepartmentId={ticket.CurrentDepartmentId};Trigger={AutoAssignmentTrigger.CallCenterIntake};Reason=Department queue requested at creation",
-                    correlationId, cancellationToken);
-            }
-            else
-            {
-                await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
-            }
+            // Mandatory: neither AssignToDepartmentQueue nor creator self-assignment can bypass it. With no eligible agent the ticket stays
+            // in the Call Center queue, audited as Unassigned.
+            await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
         }
         else
         {

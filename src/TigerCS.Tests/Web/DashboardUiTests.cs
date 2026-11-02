@@ -248,7 +248,7 @@ public sealed class DashboardUiTests
         var byLabel = model.Cards.ToDictionary(c => c.Label, c => Query(c.Href!));
 
         Assert.Equal("true", byLabel["Open Tickets"]["activeOnly"]);
-        Assert.Equal("true", byLabel["My Tickets"]["activeOnly"]);
+        Assert.False(byLabel["My Tickets"].ContainsKey("activeOnly"));
         Assert.Equal(ViewerId.ToString(), byLabel["My Tickets"]["ownerEmployeeId"]);
         Assert.Equal("true", byLabel["In Department Queue"]["inDepartmentQueue"]);
         Assert.Equal("true", byLabel["SLA Breached"]["slaBreached"]);

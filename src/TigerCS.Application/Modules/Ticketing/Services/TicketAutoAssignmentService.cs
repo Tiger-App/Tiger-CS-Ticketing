@@ -218,7 +218,7 @@ public sealed class TicketAutoAssignmentService(
         if (settings is { AllowAssignment: false })
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.AssignmentDisabledForDepartment,
-                "Call Center workflow settings disable assignment", AutoAssignmentTrigger.CallCenterIntake, correlationId, cancellationToken);
+                "Call Center workflow settings disable assignment; Status=Unassigned", AutoAssignmentTrigger.CallCenterIntake, correlationId, cancellationToken);
         }
 
         return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, AutoAssignmentTrigger.CallCenterIntake, ruleId: null, cancellationToken);

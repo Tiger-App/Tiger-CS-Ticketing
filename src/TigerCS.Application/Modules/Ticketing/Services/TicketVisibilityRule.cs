@@ -184,14 +184,22 @@ public static class TicketVisibilityRule
 
             if (ticket.CurrentOwnerEmployeeId == callerEmployeeId
                 || (handlerRepository is not null
-                    && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken))
+                    && await handlerRepository.HasActiveHandlerGrantAsync(ticket.TicketId, callerEmployeeId, cancellationToken))
                 || await CanViewDepartmentAsync(
                     userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket.CurrentDepartmentId, serviceIdentities, cancellationToken))
             {
                 return TicketAccessLevel.Full;
             }
 
-            return ticket.CreatedByEmployeeId == callerEmployeeId ? TicketAccessLevel.ReadOnly : TicketAccessLevel.None;
+            // A handler whose handling predates a manual transfer keeps following the ticket, read-only (like a creator).
+            if (ticket.CreatedByEmployeeId == callerEmployeeId
+                || (handlerRepository is not null
+                    && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken)))
+            {
+                return TicketAccessLevel.ReadOnly;
+            }
+
+            return TicketAccessLevel.None;
         }
     }
 

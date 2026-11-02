@@ -1,3 +1,14 @@
+# Finalization (supersedes the earlier "queue option" and "handler" notes)
+
+* `assignToDepartmentQueue` and creator self-assignment **cannot bypass** Call Center intake: the ticket enters Call Center and one agent is picked by Round Robin. With no eligible agent (or assignment disabled) it stays in the Call Center queue, audited `Status=Unassigned`. Only when no active `CC` department exists does the old routing apply.
+* After a **manual** Transfer (any reason except system routing) the previous owner has no ownership, and a Genesys handler whose handling was recorded *before* the transfer is downgraded to read-only (cannot Resolve/Close/Transfer). Handling recorded after the transfer counts again. Supervisor/Manager/Administrator permissions are role-based and unchanged. (`ITicketInteractionHandlerRepository.HasActiveHandlerGrantAsync`)
+* Call Center is identified by department **code `CC`** everywhere (`GET /api/departments` now returns `code`).
+* A Call Center owner transferring a classified ticket is offered only the request type's department (pre-selected); the API returns `422 transfer-target-must-match-request-type` otherwise.
+* My Tickets card, its link and the list all mean "every ticket currently assigned to me, any status" (Resolved included).
+* Production DB: `DepartmentAssignmentRotations` script added as `AddDepartmentAssignmentRotation.sql` (not executed). No other schema change in this release.
+
+---
+
 # FINAL RULE — Call Center is the first human-handling department for ALL channels
 
 Supersedes the Genesys-only wording in the Flow table below.

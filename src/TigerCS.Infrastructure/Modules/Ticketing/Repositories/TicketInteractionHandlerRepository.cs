@@ -32,6 +32,19 @@ public sealed class TicketInteractionHandlerRepository(TigerCsDbContext dbContex
         dbContext.TicketInteractionHandlers.AsNoTracking().AnyAsync(
             h => h.TicketId == ticketId && h.HandledByUserId == userId, cancellationToken);
 
+    public async Task<bool> HasActiveHandlerGrantAsync(long ticketId, Guid userId, CancellationToken cancellationToken = default)
+    {
+        var lastTransferUtc = await dbContext.TicketWorkflowEvents.AsNoTracking()
+            .Where(e => e.TicketId == ticketId
+                && e.EventType == WorkflowEventType.TicketTransferred
+                && e.TransferReasonCode != (byte)TicketTransferReason.SystemRouting)
+            .MaxAsync(e => (DateTime?)e.OccurredAtUtc, cancellationToken);
+
+        return await dbContext.TicketInteractionHandlers.AsNoTracking().AnyAsync(
+            h => h.TicketId == ticketId && h.HandledByUserId == userId
+                && (lastTransferUtc == null || h.RecordedAtUtc > lastTransferUtc), cancellationToken);
+    }
+
     public async Task<IReadOnlyList<TicketInteractionHandler>> ListByTicketIdAsync(long ticketId, CancellationToken cancellationToken = default) =>
         await dbContext.TicketInteractionHandlers.AsNoTracking()
             .Where(h => h.TicketId == ticketId)

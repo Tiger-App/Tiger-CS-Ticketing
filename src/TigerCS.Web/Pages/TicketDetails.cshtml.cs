@@ -1223,9 +1223,9 @@ public sealed class TicketDetailsModel(
 
         if (!isManager
             && !active.Any(d => d.DepartmentId == ticket.CurrentDepartmentId
-                && string.Equals(d.Name, "Call Center", StringComparison.OrdinalIgnoreCase)))
+                && string.Equals(d.Code, TigerCS.Application.Modules.Reporting.Services.TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase)))
         {
-            // The owner-based right belongs to the Call Center only; the API enforces the same.
+            // The owner-based right belongs to the Call Center (department code CC) only; the API enforces the same.
             CanTransfer = false;
             return;
         }
@@ -1236,6 +1236,18 @@ public sealed class TicketDetailsModel(
                 .Where(d => d.DepartmentId != ticket.CurrentDepartmentId)
                 .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
         ];
+
+        // Call Center transfers a classified ticket to the department that owns its request type — selected for the agent, and the only
+        // choice offered. (The API refuses any other target.)
+        if (!isManager && ticket.RequestTypeId is { } requestTypeId && requestTypesApiClient is not null)
+        {
+            var options = await requestTypesApiClient.GetOptionsAsync(null, cancellationToken);
+            var owningDepartmentId = options.IsSuccess ? options.Value?.FirstOrDefault(r => r.RequestTypeId == requestTypeId)?.DepartmentId : null;
+            TransferTargets = owningDepartmentId is { } owning
+                ? [.. TransferTargets.Where(d => d.DepartmentId == owning)]
+                : [];
+            TransferTargetsUnavailable = owningDepartmentId is null;
+        }
     }
 
     /// <summary>

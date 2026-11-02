@@ -295,7 +295,7 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
         var criticalOrHigh = await active.CountAsync(t => t.PriorityId != null && t.PriorityId <= 2, cancellationToken);
         var pendingCustomer = await visible.CountAsync(t => t.TicketStatus == TicketStatus.PendingCustomer, cancellationToken);
         var reopened = await active.CountAsync(t => t.ReopenCount > 0, cancellationToken);
-        var myTickets = await active.CountAsync(t => t.CurrentOwnerEmployeeId == query.CallerEmployeeId, cancellationToken);
+        var myTickets = await visible.CountAsync(t => t.CurrentOwnerEmployeeId == query.CallerEmployeeId, cancellationToken);
 
         // At risk: a pending, unbreached deadline on the current SLA period
         // falls due within the window — either clock; a First Response
