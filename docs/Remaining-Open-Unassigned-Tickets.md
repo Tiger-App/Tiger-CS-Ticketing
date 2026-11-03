@@ -30,21 +30,28 @@ Code paths that leave a human-required ticket unowned (all before this change ha
 
 ## 2. Fix (code)
 `CallCenterUnassignedWorkReconciler` + Hangfire job `call-center-unassigned-work` re-evaluate Open, **unowned** tickets only and
-use the existing engine: answering agent (`ApplyAnsweringAgentAsync`) else Call Center Round Robin
-(`RouteExistingTicketToCallCenterAsync` / `AssignCallCenterIntakeAsync`, rotation cursor row-locked). One transaction and DI scope per ticket;
+use the existing engine: the confirmed Genesys answering agent (`ApplyAnsweringAgentAsync`) else Call Center Round Robin restricted to
+**CS Agents** (`RouteExistingTicketToCallCenterAsync` / `AssignCallCenterIntakeAsync`, rotation cursor row-locked). One transaction and DI scope per ticket;
 owner re-checked inside the transaction; lost races reported, never retried blindly. It never touches owned tickets, active AI, completed AI,
 pending approvals, tickets the CC transferred onward or a person released.
 
-Config (`CallCenterReconciliation`, all **off / dry-run** by default): `Enabled`, `DryRun`, `IntervalMinutes`, `BatchSize`,
+**Runs independently of Hangfire.** It is its own hosted service (`CallCenterUnassignedWorkHostedService`): it does NOT need
+`BackgroundJobs:Enabled`, so enabling it never starts the SLA / Collections / outbox jobs. Runs never overlap: an in-process gate plus a
+SQL Server `sp_getapplock` (session scoped, released automatically if the process dies) make a second run/worker/server skip.
+Logs (ticket number + id only): `Reconciliation eligible`, `DRY RUN: would reconcile`, `Reconciliation ASSIGNED`, `... changed concurrently`,
+`... no eligible Call Center CS Agent` (warning), `Reconciliation FAILED` (error), and a summary line with examined / eligible / assigned /
+would-assign / no-agent / lost-race / failed / skipped-by-class / `MaxAssignmentsPerRun reached`.
+
+Config (`CallCenterReconciliation`, all **off / dry-run** by default): `Enabled`, `DryRun`, `CsAgentRoleOnly` (true), `IntervalMinutes`, `BatchSize`,
 `MaxAssignmentsPerRun`, `StaleAiAfterHours`, `AssignStaleAi`, `MinTicketAgeMinutes`.
 
 ## 3. Safe one-time correction (proposal — do not run until approved)
 1. Run the read-only diagnostic from a `db_datareader` login; compare counts with item 2.
-2. Fix data prerequisites it shows: eligible Call Center agents exist (`CcMembers_EligibleForRoundRobin`), unmapped Genesys ids added to `AspNetUsers.GenesysUserId`, `BackgroundJobs:Enabled=true`.
+2. Fix data prerequisites it shows: eligible Call Center **CS Agents** exist (`CcMembers_EligibleAndCsAgentRole`), unmapped Genesys ids added to `AspNetUsers.GenesysUserId`. (`BackgroundJobs:Enabled` is NOT required.)
 3. Deploy API with `CallCenterReconciliation:Enabled=true, DryRun=true`. The log line `Call Center reconciliation (DRY RUN ...)` lists class counts and the ticket ids it would act on; they must match `TotalWouldBeAssigned` in the diagnostic.
 4. Approve, then set `DryRun=false` with `MaxAssignmentsPerRun` (e.g. 50). Each assignment writes the usual `AutoAssign`/`Transfer` audit rows and workflow event; superseded assignment rows are kept.
 5. After the backlog is drained, leave `Enabled=true, DryRun=false` as the permanent safety net, or set `Enabled=false`.
-Rollback: set `Enabled=false`; individual tickets can be reassigned by a supervisor through the normal Assign action (history is preserved).
+Rollback: set `Enabled=false` (picked up within a minute, no restart; or recycle the app pool); individual tickets can be reassigned by a supervisor through the normal Assign action (history is preserved).
 
 ## 4. Deployment
-API only (reconciler, job, repository, config). Web is unaffected by this change. No database migration, no new table/column.
+API only (reconciler, hosted service, repository, config). Web is unaffected by this part. No database migration, no new table/column.

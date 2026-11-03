@@ -311,10 +311,6 @@ using (var backgroundJobScope = app.Services.CreateScope())
     // is false.
     app.Services.UseTigerCsRecurringChatbotInactivityClose(backgroundJobOptions);
 
-    // Safety net for human work that has no owner: OFF and dry-run by default (CallCenterReconciliation section).
-    app.Services.UseTigerCsRecurringCallCenterReconciliation(
-        backgroundJobOptions,
-        backgroundJobScope.ServiceProvider.GetRequiredService<IOptions<TigerCS.Application.Modules.Ticketing.Services.CallCenterReconciliationOptions>>().Value);
     if (!backgroundJobOptions.Enabled)
     {
         app.Logger.LogWarning(

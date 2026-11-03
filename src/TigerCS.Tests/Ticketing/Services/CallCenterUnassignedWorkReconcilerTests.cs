@@ -19,7 +19,7 @@ public class CallCenterUnassignedWorkReconcilerTests
 {
     private static readonly DateTime Now = new(2026, 11, 3, 9, 0, 0, DateTimeKind.Utc);
 
-    private sealed class FakeRotation : IAssignmentRotationRepository
+    internal sealed class FakeRotation : IAssignmentRotationRepository
     {
         public Dictionary<int, DepartmentAssignmentRotation> Rows { get; } = [];
         public Task<DepartmentAssignmentRotation> GetForUpdateAsync(int departmentId, DateTime nowUtc, CancellationToken cancellationToken = default)
@@ -29,7 +29,7 @@ public class CallCenterUnassignedWorkReconcilerTests
         }
     }
 
-    private sealed class StubEvidence : ITicketUnassignedWorkRepository
+    internal sealed class StubEvidence : ITicketUnassignedWorkRepository
     {
         public Dictionary<long, UnassignedTicketEvidence> Rows { get; } = [];
         public Task<IReadOnlyList<UnassignedTicketEvidence>> ListOpenUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default) =>
@@ -43,7 +43,7 @@ public class CallCenterUnassignedWorkReconcilerTests
         public override DateTimeOffset GetUtcNow() => new(Now, TimeSpan.Zero);
     }
 
-    private sealed class Env
+    internal sealed class Env
     {
         public FakeDepartmentRepository Departments { get; } = new();
         public FakeTicketRepository Tickets { get; } = new();
@@ -54,6 +54,7 @@ public class CallCenterUnassignedWorkReconcilerTests
         public FakeRotation Rotation { get; } = new();
         public FakeTicketingUnitOfWork UnitOfWork { get; } = new();
         public StubEvidence Evidence { get; } = new();
+        public FakeUserRoleReader RoleReader { get; } = new();
         public Department CallCenter { get; }
         public Department Leasing { get; }
         public CallCenterUnassignedWorkReconciler Reconciler { get; }
@@ -64,7 +65,7 @@ public class CallCenterUnassignedWorkReconcilerTests
             Leasing = Departments.AddDepartment("Leasing Customer Services", "LCS");
             var engine = new TicketAutoAssignmentService(
                 new FakeRequestTypeAssignmentRuleRepository(), new FakeDepartmentWorkflowSettingsRepository(), Members, Assignments, Audit,
-                Rotation, Departments, workflowEventRepository: Events);
+                Rotation, Departments, roleReader: RoleReader, workflowEventRepository: Events);
             Reconciler = new CallCenterUnassignedWorkReconciler(Evidence, Tickets, engine, UnitOfWork, new FixedClock());
         }
 
@@ -73,8 +74,18 @@ public class CallCenterUnassignedWorkReconcilerTests
             {
                 var id = Guid.NewGuid();
                 Members.Assignments.Add(new UserDepartmentAssignment(id, CallCenter.DepartmentId, isPrimary: true, Now, assignedByEmployeeId: null));
+                RoleReader.Add(id, Roles.CsAgent);
                 return id;
             }).OrderBy(i => i)];
+
+        /// <summary>A Call Center member who is eligible for ordinary rotation but is NOT a CS Agent (Department Employee).</summary>
+        public Guid AddNonCsAgentMember()
+        {
+            var id = Guid.NewGuid();
+            Members.Assignments.Add(new UserDepartmentAssignment(id, CallCenter.DepartmentId, isPrimary: true, Now, assignedByEmployeeId: null));
+            RoleReader.Add(id, Roles.DepartmentEmployee);
+            return id;
+        }
 
         /// <summary>An Open ticket sitting in the Leasing queue, plus the evidence about it.</summary>
         public async Task<Ticket> AddQueuedTicketAsync(Func<UnassignedTicketEvidence, UnassignedTicketEvidence>? shape = null, Department? department = null, bool owned = false)
@@ -306,6 +317,47 @@ public class CallCenterUnassignedWorkReconcilerTests
 
         Assert.Equal(UnassignedTicketAction.None, listed.Single(l => l.Evidence.TicketId == fresh.TicketId).Classification.Action);
         Assert.Equal(UnassignedTicketAction.RoundRobinCallCenter, listed.Single(l => l.Evidence.TicketId == old.TicketId).Classification.Action);
+    }
+
+    [Fact]
+    public async Task RoundRobin_IsRestrictedToCsAgents_ADepartmentEmployeeInTheCallCenterNeverReceivesTickets()
+    {
+        var env = new Env();
+        var nonAgent = env.AddNonCsAgentMember();
+        var agents = env.AddCallCenterAgents(2);
+        var tickets = new List<Ticket>();
+        for (var i = 0; i < 6; i++) tickets.Add(await env.AddQueuedTicketAsync());
+
+        foreach (var t in tickets) await env.Reconciler.TryReconcileAsync(t.TicketId, Live(), false);
+
+        Assert.DoesNotContain(tickets, t => t.CurrentOwnerEmployeeId == nonAgent);
+        Assert.All(agents, a => Assert.Equal(3, tickets.Count(t => t.CurrentOwnerEmployeeId == a)));
+    }
+
+    [Fact]
+    public async Task WhenOnlyNonCsAgentsExist_NothingIsAssigned_AndTheTicketIsReported()
+    {
+        var env = new Env();
+        env.AddNonCsAgentMember();
+        var ticket = await env.AddQueuedTicketAsync();
+
+        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+
+        Assert.Equal(ReconcileOutcome.NoEligibleAgent, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task CsAgentRoleOnly_Off_RestoresTheOrdinaryRotation()
+    {
+        var env = new Env();
+        var nonAgent = env.AddNonCsAgentMember();
+        var ticket = await env.AddQueuedTicketAsync();
+
+        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, new CallCenterReconciliationOptions { Enabled = true, DryRun = false, CsAgentRoleOnly = false }, false);
+
+        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, result.Outcome);
+        Assert.Equal(nonAgent, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]

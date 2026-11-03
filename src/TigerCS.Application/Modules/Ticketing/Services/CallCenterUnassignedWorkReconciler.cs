@@ -1,5 +1,6 @@
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
+using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
@@ -28,6 +29,9 @@ public sealed class CallCenterReconciliationOptions
 
     /// <summary>Treat stale AI tickets as human work. Default false: nobody asked a person for them.</summary>
     public bool AssignStaleAi { get; set; }
+
+    /// <summary>Round Robin deals only to holders of the CS Agent role (the role that can Transfer as owner). Default true; the answering-agent path is unaffected.</summary>
+    public bool CsAgentRoleOnly { get; set; } = true;
 
     /// <summary>A just-created ticket is given time to be routed by its own request before the reconciler looks at it.</summary>
     public int MinTicketAgeMinutes { get; set; } = 3;
@@ -100,6 +104,7 @@ public sealed class CallCenterUnassignedWorkReconciler(
         var callCenter = await autoAssignment.ResolveCallCenterAsync(cancellationToken);
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var stale = options.StaleAiAfterHours is { } h ? TimeSpan.FromHours(h) : (TimeSpan?)null;
+        var requiredRole = options.CsAgentRoleOnly ? Roles.CsAgent : null;
 
         var evidence = await evidenceRepository.GetEvidenceAsync(ticketId, cancellationToken);
         if (evidence is null)
@@ -154,11 +159,11 @@ public sealed class CallCenterUnassignedWorkReconciler(
                 if (ticket.CurrentDepartmentId != callCenter.DepartmentId)
                 {
                     await autoAssignment.RouteExistingTicketToCallCenterAsync(
-                        ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to Call Center", cancellationToken);
+                        ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to Call Center", cancellationToken, requiredRole);
                 }
                 else
                 {
-                    await autoAssignment.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
+                    await autoAssignment.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken, requiredRole);
                 }
 
                 if (ticket.CurrentOwnerEmployeeId is { } owner)
