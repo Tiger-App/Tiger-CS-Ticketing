@@ -1,37 +1,46 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Services;
 
 namespace TigerCS.Infrastructure.BackgroundJobs;
 
 /// <summary>
-/// The recurring safety net behind "a ticket that needs a person never silently stays without an owner". It only schedules and isolates:
-/// <see cref="CallCenterUnassignedWorkReconciler"/> owns every rule. OFF by default (<c>CallCenterReconciliation:Enabled</c>) and dry-run by
-/// default (<c>DryRun</c>): a dry run writes nothing and logs exactly which tickets it would give to whom.
-///
-/// <para>One DI scope (one DbContext) per ticket, so a lost race cannot poison the next one. Only counts and ticket ids are logged.</para>
+/// One reconciliation pass. It only schedules and isolates: <see cref="CallCenterUnassignedWorkReconciler"/> owns every rule.
+/// Disabled and dry-run by default. One DI scope (one DbContext) per ticket, so a lost race cannot poison the next one. Logs ticket ids
+/// and numbers only - no customer data.
 /// </summary>
 public sealed class CallCenterUnassignedWorkJob(
-    IServiceScopeFactory scopeFactory, IOptions<CallCenterReconciliationOptions> options, ILogger<CallCenterUnassignedWorkJob> logger)
+    IServiceScopeFactory scopeFactory, IOptionsMonitor<CallCenterReconciliationOptions> options,
+    ICallCenterReconciliationRunLock runLock, ILogger<CallCenterUnassignedWorkJob> logger)
 {
-    public const string RecurringJobId = "call-center-unassigned-work";
-
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        var settings = options.Value;
+        var settings = options.CurrentValue;
         if (!settings.Enabled)
         {
             return;
         }
 
-        var byClass = new Dictionary<UnassignedTicketClass, int>();
-        var byOutcome = new Dictionary<ReconcileOutcome, int>();
-        var wouldAct = new List<long>();
-        long after = 0;
-        int examined = 0, written = 0, failed = 0;
+        await using var handle = await runLock.TryAcquireAsync(cancellationToken);
+        if (handle is null)
+        {
+            logger.LogWarning("Call Center reconciliation: another run is in progress; this run is skipped (runs never overlap).");
+            return;
+        }
 
-        while (examined < settings.BatchSize * 20)   // bounded: at most 20 pages per run
+        var mode = settings.DryRun ? "DRY RUN - nothing written" : "LIVE";
+        var limit = Math.Max(0, settings.MaxAssignmentsPerRun);
+        var bySkipClass = new Dictionary<UnassignedTicketClass, int>();
+        long after = 0;
+        int examined = 0, eligible = 0, assigned = 0, wouldAssign = 0, noAgent = 0, lostRace = 0, noLonger = 0, failed = 0, acted = 0;
+        var limitReached = false;
+
+        logger.LogInformation("Call Center reconciliation started ({Mode}); batch {Batch}, max assignments per run {Max}, CS Agents only {CsOnly}.",
+            mode, settings.BatchSize, limit, settings.CsAgentRoleOnly);
+
+        while (examined < Math.Max(1, settings.BatchSize) * 20 && !limitReached)   // bounded: at most 20 pages per run
         {
             cancellationToken.ThrowIfCancellationRequested();
 
@@ -51,36 +60,70 @@ public sealed class CallCenterUnassignedWorkJob(
             {
                 after = Math.Max(after, evidence.TicketId);
                 examined++;
-                byClass[classification.Class] = byClass.GetValueOrDefault(classification.Class) + 1;
 
-                if (classification.Action == UnassignedTicketAction.None || (!settings.DryRun && written >= settings.MaxAssignmentsPerRun))
+                if (classification.Action == UnassignedTicketAction.None)
                 {
+                    bySkipClass[classification.Class] = bySkipClass.GetValueOrDefault(classification.Class) + 1;
+                    logger.LogDebug("Reconciliation skipped ticket {TicketNumber} (#{TicketId}): {Class}.", evidence.TicketNumber, evidence.TicketId, classification.Class);
                     continue;
                 }
+
+                if (acted >= limit)
+                {
+                    limitReached = true;
+                    break;
+                }
+
+                eligible++;
+                acted++;
+                logger.LogInformation("Reconciliation eligible: ticket {TicketNumber} (#{TicketId}) is {Class} -> {Action}.",
+                    evidence.TicketNumber, evidence.TicketId, classification.Class, classification.Action);
 
                 try
                 {
                     await using var scope = scopeFactory.CreateAsyncScope();
                     var result = await scope.ServiceProvider.GetRequiredService<CallCenterUnassignedWorkReconciler>()
                         .TryReconcileAsync(evidence.TicketId, settings, settings.DryRun, cancellationToken);
-                    byOutcome[result.Outcome] = byOutcome.GetValueOrDefault(result.Outcome) + 1;
-                    if (result.Outcome == ReconcileOutcome.WouldAct) wouldAct.Add(evidence.TicketId);
-                    if (result.Outcome is ReconcileOutcome.AssignedToAnsweringAgent or ReconcileOutcome.AssignedRoundRobin) written++;
+
+                    switch (result.Outcome)
+                    {
+                        case ReconcileOutcome.WouldAct:
+                            wouldAssign++;
+                            logger.LogInformation("DRY RUN: would reconcile ticket {TicketNumber} (#{TicketId}) as {Class}.", evidence.TicketNumber, evidence.TicketId, result.Class);
+                            break;
+                        case ReconcileOutcome.AssignedToAnsweringAgent:
+                        case ReconcileOutcome.AssignedRoundRobin:
+                            assigned++;
+                            logger.LogInformation("Reconciliation ASSIGNED ticket {TicketNumber} (#{TicketId}) [{Class}] to employee {EmployeeId} via {Outcome}.",
+                                evidence.TicketNumber, evidence.TicketId, result.Class, result.AssignedEmployeeId, result.Outcome);
+                            break;
+                        case ReconcileOutcome.NoEligibleAgent:
+                            noAgent++;
+                            logger.LogWarning("Reconciliation: ticket {TicketNumber} (#{TicketId}) [{Class}] needs a person but no eligible Call Center CS Agent exists; left queued, retried next run.",
+                                evidence.TicketNumber, evidence.TicketId, result.Class);
+                            break;
+                        case ReconcileOutcome.LostRace:
+                            lostRace++;
+                            logger.LogWarning("Reconciliation: ticket {TicketNumber} (#{TicketId}) changed concurrently; the other writer's result stands.", evidence.TicketNumber, evidence.TicketId);
+                            break;
+                        default:
+                            noLonger++;
+                            logger.LogInformation("Reconciliation skipped ticket {TicketNumber} (#{TicketId}): no longer applicable ({Outcome}).", evidence.TicketNumber, evidence.TicketId, result.Outcome);
+                            break;
+                    }
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     failed++;
-                    logger.LogError(ex, "Unassigned-work reconciliation failed for ticket {TicketId}; it is retried on the next run.", evidence.TicketId);
+                    logger.LogError(ex, "Reconciliation FAILED for ticket {TicketNumber} (#{TicketId}); it is retried on the next run.", evidence.TicketNumber, evidence.TicketId);
                 }
             }
         }
 
         logger.LogInformation(
-            "Call Center reconciliation ({Mode}): examined {Examined} unowned Open tickets; classes {Classes}; outcomes {Outcomes}; failed {Failed}.{WouldAct}",
-            settings.DryRun ? "DRY RUN - nothing written" : "LIVE", examined,
-            string.Join(", ", byClass.Select(p => $"{p.Key}={p.Value}")),
-            string.Join(", ", byOutcome.Select(p => $"{p.Key}={p.Value}")),
-            failed,
-            wouldAct.Count > 0 ? $" Would act on ticket ids: {string.Join(",", wouldAct.Take(200))}" : string.Empty);
+            "Call Center reconciliation finished ({Mode}): examined {Examined}; eligible {Eligible}; assigned {Assigned}; would-assign {WouldAssign}; no eligible agent {NoAgent}; "
+            + "lost race {LostRace}; no longer applicable {NoLonger}; failed {Failed}; skipped by class [{Skipped}]; MaxAssignmentsPerRun reached {LimitReached}.",
+            mode, examined, eligible, assigned, wouldAssign, noAgent, lostRace, noLonger, failed,
+            string.Join(", ", bySkipClass.Select(p => $"{p.Key}={p.Value}")), limitReached);
     }
 }
