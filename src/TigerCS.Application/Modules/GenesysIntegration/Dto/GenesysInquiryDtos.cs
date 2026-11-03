@@ -20,8 +20,17 @@ public enum GenesysChannel
 
     WhatsApp = 3,
 
-    /// <summary>A social-media direct message (Instagram, Facebook, X, …) that Genesys routes as one conversation.</summary>
-    SocialMedia = 4
+    /// <summary>
+    /// A social-media direct message from a platform that has no channel of its own (X, Telegram, …), or one whose platform Genesys did not
+    /// name. Instagram and Facebook Messenger are <see cref="Instagram"/> and <see cref="Facebook"/>, never this value.
+    /// </summary>
+    SocialMedia = 4,
+
+    /// <summary>An Instagram direct message — recorded under its own <c>INSTAGRAM</c> channel so it is findable under Instagram.</summary>
+    Instagram = 5,
+
+    /// <summary>A Facebook Messenger conversation — recorded under its own <c>FACEBOOK</c> channel so it is findable under Facebook.</summary>
+    Facebook = 6
 }
 
 /// <summary>

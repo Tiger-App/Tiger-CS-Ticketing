@@ -299,12 +299,14 @@ public sealed class GenesysInquiryIngestionAppService(
         try
         {
             // A call picked up by a human before the ticket exists names the agent who ANSWERED it: that agent owns the ticket (directly, in
-            // the Call Center) instead of Round Robin. Only a phone call, or an inquiry already marked as needing a person, is human-answered;
-            // an id on an AI-handled chat is not (a bot or a not-yet-connected agent must not drag the ticket into the Call Center).
+            // the Call Center) instead of Round Robin. Only a PHONE inquiry is, by contract, created at pickup. On every digital channel
+            // (chat, WhatsApp, Instagram, Facebook, social) a top-level agentId is only who is offered/assigned/queued - never proof that the
+            // agent accepted - so it is NOT an answer, even beside humanFollowUpRequired: such a ticket goes to the Call Center and Round Robin,
+            // and the agent only takes it when a later update reports them CONNECTED (routing.agentId), which replaces that automatic pick.
             AnsweringAgent? answering = null;
             if (options.AssignOnAnswer
                 && NullIfBlank(inquiry.AgentId) is { } answeringAgentId
-                && (inquiry.Channel == GenesysChannel.Phone || inquiry.HumanFollowUpRequired == true)
+                && inquiry.Channel == GenesysChannel.Phone
                 && agent is not null)
             {
                 answering = GenesysAnsweringAgentAssignmentService.ToAnsweringAgent(answeringAgentId, agent);
@@ -612,6 +614,8 @@ public sealed class GenesysInquiryIngestionAppService(
             GenesysChannel.WebsiteChat => "Website chat started via Genesys",
             GenesysChannel.WhatsApp => "WhatsApp conversation started via Genesys",
             GenesysChannel.SocialMedia => "Social media conversation started via Genesys",
+            GenesysChannel.Instagram => "Instagram conversation started via Genesys",
+            GenesysChannel.Facebook => "Facebook Messenger conversation started via Genesys",
             _ => "Customer inquiry received via Genesys"
         };
     }

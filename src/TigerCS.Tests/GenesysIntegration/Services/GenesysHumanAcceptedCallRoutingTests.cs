@@ -108,6 +108,8 @@ public class GenesysHumanAcceptedCallRoutingTests
     [InlineData(GenesysChannel.WebsiteChat)]
     [InlineData(GenesysChannel.WhatsApp)]
     [InlineData(GenesysChannel.SocialMedia)]
+    [InlineData(GenesysChannel.Instagram)]
+    [InlineData(GenesysChannel.Facebook)]
     public async Task DigitalConversationNamingAMappedAgentAtCreation_IsNotYetHuman_UntilAgentIsReportedConnected(GenesysChannel channel)
     {
         var s = Build();
@@ -125,6 +127,9 @@ public class GenesysHumanAcceptedCallRoutingTests
     [InlineData(GenesysChannel.Phone)]
     [InlineData(GenesysChannel.WebsiteChat)]
     [InlineData(GenesysChannel.WhatsApp)]
+    [InlineData(GenesysChannel.Instagram)]
+    [InlineData(GenesysChannel.Facebook)]
+    [InlineData(GenesysChannel.SocialMedia)]
     public async Task MappedAgentReportedConnectedOnAnUpdate_RoutesTheAiCreatedTicket_ToCallCenter_WithOneAgent(GenesysChannel channel)
     {
         var s = Build();

@@ -72,6 +72,8 @@ public class GenesysCreateTicketOptionalFieldsTests
     [InlineData(GenesysChannel.WebsiteChat, "Website chat started via Genesys")]
     [InlineData(GenesysChannel.WhatsApp, "WhatsApp conversation started via Genesys")]
     [InlineData(GenesysChannel.SocialMedia, "Social media conversation started via Genesys")]
+    [InlineData(GenesysChannel.Instagram, "Instagram conversation started via Genesys")]
+    [InlineData(GenesysChannel.Facebook, "Facebook Messenger conversation started via Genesys")]
     public async Task WithoutSubject_CreatesTheTicket_WithTheFactualChannelSummary(GenesysChannel channel, string expectedSummary)
     {
         var f = new GenesysServiceFixture();
