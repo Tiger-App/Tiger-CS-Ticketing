@@ -150,7 +150,8 @@ public static class TicketVisibilityRule
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
         CancellationToken cancellationToken = default,
-        TicketClaimPolicy? claimPolicy = null)
+        TicketClaimPolicy? claimPolicy = null,
+        DateTime? inactivityReopenCutoffUtc = null)
     {
         ArgumentNullException.ThrowIfNull(userDepartmentAssignmentRepository);
         ArgumentNullException.ThrowIfNull(ticket);
@@ -196,6 +197,8 @@ public static class TicketVisibilityRule
             // and what a department role of theirs covers. Having created or handled the ticket in the past grants nothing by itself: once
             // another CS Agent owns it, or nobody does, it is not theirs to see.
             if (await CanFollowDepartmentWorkAsync(userDepartmentAssignmentRepository, callerEmployeeId, ticket, cancellationToken)
+                || await CanReopenInactivityClosureAsync(
+                    userDepartmentAssignmentRepository, callerEmployeeId, ticket, inactivityReopenCutoffUtc, cancellationToken)
                 || await CanViewDepartmentAsync(
                     userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket.CurrentDepartmentId, serviceIdentities, cancellationToken))
             {
@@ -228,6 +231,21 @@ public static class TicketVisibilityRule
         && !await userDepartmentAssignmentRepository.HoldsRoleAsync(owner, Roles.CsAgent, cancellationToken)
         && await userDepartmentAssignmentRepository.IsResponsibleCsAgentAsync(ticket.TicketId, ticket.CreatedByEmployeeId, callerEmployeeId, cancellationToken);
 
+    /// <summary>
+    /// The inactivity-closure exception: an UNOWNED ticket the chatbot closed for customer inactivity, still inside the reopen window
+    /// (<paramref name="inactivityReopenCutoffUtc"/> = now minus the window), stays visible to - and reopenable by - its last responsible CS Agent.
+    /// Without a cutoff (a caller that does not model it) the exception is off, so this fails closed. Nothing else about the agent's earlier
+    /// handling or creation of the ticket is restored. The set-based twin is <c>TicketQueryFilters.VisibleTo</c>.
+    /// </summary>
+    public static async Task<bool> CanReopenInactivityClosureAsync(
+        IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository, Guid callerEmployeeId, Ticket ticket,
+        DateTime? inactivityReopenCutoffUtc, CancellationToken cancellationToken = default) =>
+        inactivityReopenCutoffUtc is { } cutoff
+        && ticket.TicketStatus == TicketStatus.Closed
+        && ticket.CurrentOwnerEmployeeId is null
+        && await userDepartmentAssignmentRepository.IsResponsibleForInactivityClosureAsync(
+            ticket.TicketId, ticket.CreatedByEmployeeId, callerEmployeeId, cutoff, cancellationToken);
+
     /// <summary>May the caller open and read the ticket — Full or ReadOnly access. Reads (details, history, notes list, SLA, interactions…) use this.</summary>
     public static async Task<bool> CanViewTicketAsync(
         IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
@@ -237,9 +255,11 @@ public static class TicketVisibilityRule
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
         CancellationToken cancellationToken = default,
-        TicketClaimPolicy? claimPolicy = null) =>
+        TicketClaimPolicy? claimPolicy = null,
+        DateTime? inactivityReopenCutoffUtc = null) =>
         await GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy)
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy,
+            inactivityReopenCutoffUtc)
         != TicketAccessLevel.None;
 
     /// <summary>
@@ -254,9 +274,11 @@ public static class TicketVisibilityRule
         IReadOnlyCollection<string> callerRoles,
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        DateTime? inactivityReopenCutoffUtc = null) =>
         await GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken)
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken,
+            claimPolicy: null, inactivityReopenCutoffUtc)
         == TicketAccessLevel.Full;
 }
 

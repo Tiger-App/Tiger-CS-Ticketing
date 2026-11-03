@@ -105,6 +105,13 @@ public sealed class FakeUserDepartmentAssignmentRepository : IUserDepartmentAssi
         Task.FromResult(EveryUserIsResponsible
             || (ResponsibleCsAgentByTicket.TryGetValue(ticketId, out var agent) && agent == employeeId));
 
+    /// <summary>(ticket, employee) pairs that are the responsible CS Agent of an inactivity-closed ticket still inside the reopen window.</summary>
+    public readonly HashSet<(long TicketId, Guid EmployeeId)> InactivityClosureResponsible = [];
+
+    public Task<bool> IsResponsibleForInactivityClosureAsync(
+        long ticketId, Guid? creatorEmployeeId, Guid employeeId, DateTime closedNotBeforeUtc, CancellationToken cancellationToken = default) =>
+        Task.FromResult(InactivityClosureResponsible.Contains((ticketId, employeeId)));
+
     public Task<bool> HoldsRoleAsync(Guid employeeId, string roleName, CancellationToken cancellationToken = default) =>
         Task.FromResult(RolesByEmployee.TryGetValue(employeeId, out var roles) && roles.Contains(roleName));
 

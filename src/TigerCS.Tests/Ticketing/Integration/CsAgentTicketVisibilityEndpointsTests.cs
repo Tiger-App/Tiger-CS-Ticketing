@@ -705,6 +705,46 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
+    public async Task ADepartmentTransfer_KeepsTheResponsibleCsAgentAsOwner_DepartmentStaffWorkIt_AndTheAgentNeverTakesOwnershipAgain()
+    {
+        var own = await DepartmentAsync();
+        var (agent, agentId) = await ClientAsync(departmentId: own);
+        var (otherAgent, _) = await ClientAsync(departmentId: own);
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var receiving = await NewDepartmentAsync();
+        var (worker, _) = await ClientAsync(Roles.DepartmentEmployee, departmentId: receiving);
+        var ticket = await CreateManualTicketAsync(agent, own);
+        var current = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+
+        // The department changes; no assignee is named, so the CS Agent stays on the ticket.
+        var transfer = await manager.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/transfer",
+            new TransferTicketRequestDto(receiving, "Belongs to the receiving team.", Convert.FromBase64String(current!.RowVersion), null));
+        Assert.Equal(HttpStatusCode.OK, transfer.StatusCode);
+
+        Assert.Equal(agentId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));            // still the responsible agent's ticket
+        var afterTransfer = await (await agent.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.False(afterTransfer!.IsReadOnlyAccess);                                                 // full access, no Take Ownership step
+        Assert.False(afterTransfer.CanTakeOwnership);
+        Assert.Equal(receiving, afterTransfer.CurrentDepartmentId);
+        Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
+
+        // Department staff do their authorized work without replacing the responsible CS Agent.
+        var note = await worker.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/notes", new CreateNoteRequestDto("Looking into it."));
+        Assert.Equal(HttpStatusCode.Created, note.StatusCode);
+        Assert.Equal(agentId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
+
+        // An explicit manager reassignment is still the only way the agent changes (and it still needs a reason).
+        var (_, otherAgentId) = await ClientAsync(departmentId: receiving);
+        var again = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        var withoutReason = await manager.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/assignment", new AssignTicketRequestDto(otherAgentId, Convert.FromBase64String(again!.RowVersion), null));
+        Assert.NotEqual(HttpStatusCode.OK, withoutReason.StatusCode);
+        Assert.Equal(agentId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
+    }
+
+    [Fact]
     public async Task DepartmentWork_ThenCsFollowUpAndClosure_ThroughTheRealEndpoints_WhileOtherAgentsStayOut()
     {
         var own = await DepartmentAsync();
@@ -746,6 +786,48 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
         Assert.Equal(workerId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
+    }
+
+    [Fact]
+    public async Task AnInactivityClosedTicket_IsViewedAndReopenedByItsLastResponsibleCsAgent_InsideTheWindow_ThroughTheRealEndpoints()
+    {
+        var own = await DepartmentAsync();
+        var (agent, agentId) = await ClientAsync(departmentId: own);
+        var (otherAgent, _) = await ClientAsync(departmentId: own);
+        var ticket = await CreateManualTicketAsync(agent, own, departmentQueue: true);   // unowned; the creating CS Agent is responsible
+        await _factory.CloseForInactivityAsync(ticket.TicketId, DateTime.UtcNow.AddDays(-2));
+
+        // Visible to them: detail (full access), list, and the other read endpoints; closed to every other CS Agent.
+        var detail = await (await agent.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", detail!.TicketStatus);
+        Assert.False(detail.IsReadOnlyAccess);
+        Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
+        Assert.Equal(HttpStatusCode.OK, (await agent.GetAsync($"/api/tickets/{ticket.TicketId}/history")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
+        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(otherAgent));
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await otherAgent.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/reopen", new ReopenTicketRequestDto("Mine now.", own, Convert.FromBase64String(detail.RowVersion)))).StatusCode);
+
+        // They reopen it within the existing window.
+        var reopen = await agent.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/reopen",
+            new ReopenTicketRequestDto("Customer wrote back after the bot closed the chat.", own, Convert.FromBase64String(detail.RowVersion)));
+        Assert.Equal(HttpStatusCode.OK, reopen.StatusCode);
+        Assert.Equal("InProgress", (await reopen.Content.ReadFromJsonAsync<TicketDetailDto>())!.TicketStatus);
+        Assert.NotEqual(Guid.Empty, agentId);
+    }
+
+    [Fact]
+    public async Task AnInactivityClosedTicket_OutsideTheWindow_IsNotVisibleToTheCreatorAnyMore()
+    {
+        var own = await DepartmentAsync();
+        var (agent, _) = await ClientAsync(departmentId: own);
+        var ticket = await CreateManualTicketAsync(agent, own, departmentQueue: true);
+        await _factory.CloseForInactivityAsync(ticket.TicketId, DateTime.UtcNow.AddDays(-9));
+
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(agent, ticket.TicketId));
+        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(agent));
     }
 
     [Fact]

@@ -254,37 +254,40 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
     }
 
     [Fact]
-    public async Task ACsAgentOutsideTheTicketsDepartment_Gets422_AndChangesNothing()
+    public async Task ACsAgentWhoOwnsTheTicketOutsideItsDepartment_AcceptsWithoutTakingOwnershipAgain()
     {
-        // A CS Agent Genesys has connected to the call (so they can see the
-        // ticket) but who belongs to another department passes authorization
-        // and is stopped by the membership invariant instead — the
-        // distinction the two outcomes exist to draw.
+        // A department change keeps the responsible CS Agent on the ticket, so the owner is not a member of the receiving department. They
+        // accept the pending work as the owner: no Take Ownership step and no department-membership requirement.
         var (genesys, _) = await ClientForAsync(Roles.CsAgent);
         var (ticketId, handoffId, _) = await WaitingInteractionAsync(genesys);
 
         var otherDepartmentId = await _factory.CreateDepartmentAsync(
             "Other CS " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
-        var (outsideAgent, outsideAgentId) = await ClientForAsync(Roles.CsAgent, otherDepartmentId);
-        await OwnAsync(ticketId, outsideAgentId);
+        var (owner, ownerId) = await ClientForAsync(Roles.CsAgent, otherDepartmentId);
+        await OwnAsync(ticketId, ownerId);
 
-        var started = await outsideAgent.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { });
+        var started = await owner.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { });
 
-        Assert.Equal(HttpStatusCode.UnprocessableEntity, started.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+        Assert.Equal(ownerId, (await started.Content.ReadFromJsonAsync<AgentHandoffDto>())!.AssignedEmployeeId);
+        var ticket = await (await owner.GetAsync($"/api/tickets/{ticketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("InProgress", ticket!.TicketStatus);
+        Assert.Equal(ownerId, ticket.CurrentOwnerEmployeeId);   // still theirs; ownership never changed
+    }
 
-        // The work is still waiting and unclaimed...
-        var list = await (await outsideAgent.GetAsync("/api/pending-customer-interactions"))
-            .Content.ReadFromJsonAsync<AgentHandoffListResultDto>();
-        var row = Assert.Single(list!.Items, i => i.TicketAgentHandoffId == handoffId);
-        Assert.Equal("WaitingForAgent", row.Status);
-        Assert.Null(row.AssignedEmployeeId);
+    [Fact]
+    public async Task ACsAgentOutsideTheTicketsDepartment_WhoDoesNotOwnIt_IsRefused_AndChangesNothing()
+    {
+        var (genesys, _) = await ClientForAsync(Roles.CsAgent);
+        var (ticketId, handoffId, _) = await WaitingInteractionAsync(genesys);
+        var otherDepartmentId = await _factory.CreateDepartmentAsync(
+            "Other CS " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        var (outsider, _) = await ClientForAsync(Roles.CsAgent, otherDepartmentId);
 
-        // ...and the ticket is untouched.
-        var ticket = await (await outsideAgent.GetAsync($"/api/tickets/{ticketId}"))
-            .Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.Equal("Open", ticket!.TicketStatus);
-        // (Unchanged: still held by the agent the test assigned it to - a CS Agent sees only an assigned ticket - not taken by the refused start.)
-        Assert.Equal(outsideAgentId, ticket.CurrentOwnerEmployeeId);
+        var started = await outsider.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { });
+
+        Assert.Equal(HttpStatusCode.Forbidden, started.StatusCode);
+        Assert.Null(await _factory.GetTicketCurrentOwnerAsync(ticketId));
     }
 
     [Fact]
@@ -296,11 +299,10 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
         var newDepartmentId = await _factory.CreateDepartmentAsync(
             "Receiving " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
         var (receivingAgent, receivingAgentId) = await ClientForAsync(Roles.CsAgent, newDepartmentId);
-        await OwnAsync(ticketId, receivingAgentId);
 
-        // Refused while the ticket is elsewhere.
+        // Refused while the ticket is elsewhere and not theirs.
         Assert.Equal(
-            HttpStatusCode.UnprocessableEntity,
+            HttpStatusCode.Forbidden,
             (await receivingAgent.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { })).StatusCode);
 
         // A CS Manager performs the existing Department Transfer.

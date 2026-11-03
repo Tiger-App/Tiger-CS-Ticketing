@@ -204,6 +204,81 @@ public sealed class CsAgentTicketVisibilitySqlServerTests : IDisposable
     }
 
     [VisibilitySqlServerFact]
+    public async Task AnInactivityClosedTicket_IsVisibleToItsLastResponsibleCsAgent_OnlyInsideTheReopenWindow_OnARealSqlServer()
+    {
+        CreateDatabase();
+        var me = Guid.NewGuid();
+        var other = Guid.NewGuid();
+        var nowUtc = DateTime.UtcNow;
+        long inside, outside, normalClosure;
+        using (var context = CreateContext())
+        {
+            context.Database.Migrate();
+            var cs = new Department("Customer Service", "CSI");
+            context.Departments.Add(cs);
+            AddPerson(context, me, "Me");
+            AddPerson(context, other, "Other");
+            context.SaveChanges();
+            var csAgentRole = context.Roles.FirstOrDefault(r => r.Name == Roles.CsAgent);
+            if (csAgentRole is null)
+            {
+                csAgentRole = new ApplicationRole(Roles.CsAgent, "CS Agent") { Id = Guid.NewGuid(), NormalizedName = Roles.CsAgent.ToUpperInvariant() };
+                context.Roles.Add(csAgentRole);
+                context.SaveChanges();
+            }
+
+            context.UserRoles.AddRange(
+                new Microsoft.AspNetCore.Identity.IdentityUserRole<Guid> { UserId = me, RoleId = csAgentRole.Id },
+                new Microsoft.AspNetCore.Identity.IdentityUserRole<Guid> { UserId = other, RoleId = csAgentRole.Id });
+            context.SaveChanges();
+
+            long Closed(int n, DateTime closedAtUtc, bool inactivity)
+            {
+                // Created by me and never assigned to a CS Agent, so I am the responsible CS Agent (creator fallback).
+                var ticket = Ticket.CreateUnclassified($"TG-SQL-20261103-{n:D4}", cs.DepartmentId, $"Inactivity {n}", closedAtUtc.AddDays(-1));
+                ticket.RecordCreator(me);
+                context.Tickets.Add(ticket);
+                context.SaveChanges();
+                var previous = ticket.CloseForCustomerInactivity();
+                context.SaveChanges();
+                context.TicketResolutions.Add(inactivity
+                    ? TicketResolution.ForCustomerInactivity(ticket.TicketId, "No reply.", other, closedAtUtc)
+                    : new TicketResolution(ticket.TicketId, ResolutionOutcome.Cancelled, "Cancelled by staff.", null, null, other, closedAtUtc));
+                context.TicketStatusHistoryEntries.Add(new TicketStatusHistory(
+                    ticket.TicketId, TicketStatusDimension.TicketStatus, (byte)previous, (byte)TicketStatus.Closed,
+                    actorEmployeeId: null, actorIsSystem: true, note: null, Guid.NewGuid(), closedAtUtc));
+                context.SaveChanges();
+                return ticket.TicketId;
+            }
+
+            inside = Closed(1, nowUtc.AddDays(-2), inactivity: true);
+            outside = Closed(2, nowUtc.AddDays(-9), inactivity: true);
+            normalClosure = Closed(3, nowUtc.AddDays(-1), inactivity: false);   // not an inactivity closure: no exception
+        }
+
+        using var read = CreateContext();
+        var assignments = new UserDepartmentAssignmentRepository(read);
+        var cutoff = nowUtc.AddDays(-ReopenPolicy.DefaultWindowDays);
+
+        async Task<TicketAccessLevel> AccessAsync(Guid caller, long id) => await TicketVisibilityRule.GetTicketAccessAsync(
+            assignments, handlerRepository: null, caller, Agent, (await read.Tickets.FindAsync(id))!, inactivityReopenCutoffUtc: cutoff);
+
+        Assert.Equal(TicketAccessLevel.Full, await AccessAsync(me, inside));
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(me, outside));
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(me, normalClosure));
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(other, inside));
+
+        var query = new TicketQueryAppService(
+            new TicketRepository(read), assignments, new FakeTicketResolutionRepository(), new FakeTicketStatusHistoryRepository(),
+            ReopenPolicy.Default, TimeProvider.System);
+        var mine = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 100));
+        Assert.Equal(new[] { inside }, mine.Items.Select(i => i.TicketId).ToArray());
+        Assert.Equal(1, mine.TotalCount);
+        var theirs = await query.GetQueueAsync(other, Agent, new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 100));
+        Assert.Empty(theirs.Items);
+    }
+
+    [VisibilitySqlServerFact]
     public void BothMigrations_PreserveExistingRows_Backfill_AndTolerateBeingReRun()
     {
         CreateDatabase();

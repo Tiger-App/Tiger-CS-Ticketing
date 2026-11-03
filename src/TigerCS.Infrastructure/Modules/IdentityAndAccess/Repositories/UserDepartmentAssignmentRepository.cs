@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Infrastructure.Persistence;
 
 namespace TigerCS.Infrastructure.Modules.IdentityAndAccess.Repositories;
@@ -21,6 +22,23 @@ public sealed class UserDepartmentAssignmentRepository(TigerCsDbContext dbContex
     public Task<bool> ExistsAsync(Guid employeeId, int departmentId, CancellationToken cancellationToken = default) =>
         dbContext.UserDepartmentAssignments
             .AnyAsync(a => a.EmployeeId == employeeId && a.DepartmentId == departmentId, cancellationToken);
+
+    public async Task<bool> IsResponsibleForInactivityClosureAsync(
+        long ticketId, Guid? creatorEmployeeId, Guid employeeId, DateTime closedNotBeforeUtc, CancellationToken cancellationToken = default)
+    {
+        var closedByInactivity = await dbContext.TicketResolutions
+            .AnyAsync(r => r.TicketId == ticketId && r.IsCurrent && r.ClosedForCustomerInactivity, cancellationToken);
+        if (!closedByInactivity)
+        {
+            return false;
+        }
+
+        var closedAt = await dbContext.TicketStatusHistoryEntries
+            .Where(h => h.TicketId == ticketId && h.Dimension == TicketStatusDimension.TicketStatus && h.NewValue == (byte)TicketStatus.Closed)
+            .MaxAsync(h => (DateTime?)h.OccurredAtUtc, cancellationToken);
+        return closedAt >= closedNotBeforeUtc
+            && await IsResponsibleCsAgentAsync(ticketId, creatorEmployeeId, employeeId, cancellationToken);
+    }
 
     public Task<bool> HoldsRoleAsync(Guid employeeId, string roleName, CancellationToken cancellationToken = default) =>
         dbContext.UserRoles.AnyAsync(

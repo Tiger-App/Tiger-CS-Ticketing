@@ -554,7 +554,8 @@ public sealed class TicketLifecycleAppService(
         // ...and the resource-level half: an agent may only reopen a ticket
         // they may modify under the existing visibility rules (a creator's read-only access is not enough).
         if (!await TicketVisibilityRule.CanModifyTicketAsync(
-                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken,
+                inactivityReopenCutoffUtc: reopenEligibilityService.WindowStartUtc(timeProvider.GetUtcNow().UtcDateTime)))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }

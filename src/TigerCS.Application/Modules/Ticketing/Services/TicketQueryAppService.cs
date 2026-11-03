@@ -428,19 +428,25 @@ public sealed class TicketQueryAppService(
     internal Task<TicketAccessLevel> GetTicketAccessAsync(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
         TicketVisibilityRule.GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy,
+            InactivityReopenCutoffUtc());
+
+    /// <summary>The start of the existing reopen window: an inactivity-closed ticket closed before this can no longer be reopened (and no longer opens its last responsible agent).</summary>
+    private DateTime InactivityReopenCutoffUtc() => timeProvider.GetUtcNow().UtcDateTime - reopenPolicy.Window;
 
     /// <summary>May the caller MODIFY this ticket (add a note, claim, close…): Full access only — a creator's read-only access does not qualify.</summary>
     internal Task<bool> CanModifyTicketAsync(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
         TicketVisibilityRule.CanModifyTicketAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken,
+            InactivityReopenCutoffUtc());
 
     /// <summary>May the caller see this ticket — by department, because it is assigned to them or they handled one of its Genesys interactions, or (read-only) because they created it.</summary>
     internal Task<bool> CanViewTicketAsync(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
         TicketVisibilityRule.CanViewTicketAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy,
+            InactivityReopenCutoffUtc());
 
     /// <summary>
     /// The server-side gate for an id-addressed request (a direct URL or API call): is this ticket visible to the caller? Used by the API's

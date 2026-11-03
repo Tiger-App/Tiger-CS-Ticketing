@@ -31,9 +31,14 @@ internal static class TicketQueryFilters
     /// <remarks>
     /// <paramref name="createdOnly"/> (the Genesys integration account) replaces all of the above with <c>CreatedByEmployeeId == agent</c>.
     /// </remarks>
+    /// <summary>The start of the reopen window at the current instant, for the inactivity-closure exception of <see cref="VisibleTo"/>.</summary>
+    public static DateTime InactivityReopenCutoff(Application.Modules.Ticketing.Services.ReopenPolicy? policy, TimeProvider? clock) =>
+        (clock ?? TimeProvider.System).GetUtcNow().UtcDateTime - (policy ?? Application.Modules.Ticketing.Services.ReopenPolicy.Default).Window;
+
     public static IQueryable<Ticket> VisibleTo(
         this IQueryable<Ticket> tickets, TigerCsDbContext dbContext, IReadOnlyCollection<int>? departmentIds, Guid? agentEmployeeId,
-        bool createdOnly = false, Guid? ownerEmployeeId = null, bool includeClaimable = false)
+        bool createdOnly = false, Guid? ownerEmployeeId = null, bool includeClaimable = false,
+        DateTime? inactivityReopenCutoffUtc = null)
     {
         if (agentEmployeeId is not { } agentId)
         {
@@ -54,28 +59,45 @@ internal static class TicketQueryFilters
         var departments = departmentIds?.ToList() ?? [];
         var csAgentRole = Roles.CsAgent;
 
-        // Set-based twin of TicketVisibilityRule.CanFollowDepartmentWorkAsync. A department employee (an owner who is not a CS Agent) is
-        // working the ticket, and the caller is its responsible CS Agent: the employee on the most recent CS-Agent assignment row, or - when no
-        // CS Agent was ever assigned - the ticket's creator. Correlated EXISTS only, so a ticket is still one row.
+        // "I am the ticket's responsible CS Agent": the employee on the most recent CS-Agent assignment row, or - when no CS Agent was ever
+        // assigned - the ticket's creator. Correlated EXISTS only, so a ticket is still one row.
+        Expression<Func<Ticket, bool>> isResponsible = t =>
+            dbContext.TicketAssignments.Any(a => a.TicketId == t.TicketId
+                && a.AssignedEmployeeId == agentId
+                && !dbContext.TicketAssignments.Any(later => later.TicketId == t.TicketId
+                    && later.TicketAssignmentId > a.TicketAssignmentId
+                    && dbContext.UserRoles.Any(ur => ur.UserId == later.AssignedEmployeeId
+                        && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == csAgentRole))))
+            || (t.CreatedByEmployeeId == agentId
+                && !dbContext.TicketAssignments.Any(a => a.TicketId == t.TicketId
+                    && dbContext.UserRoles.Any(ur => ur.UserId == a.AssignedEmployeeId
+                        && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == csAgentRole))));
+
+        // Set-based twin of TicketVisibilityRule.CanFollowDepartmentWorkAsync: a department employee (an owner who is not a CS Agent) is
+        // working the ticket, and the caller is its responsible CS Agent.
         Expression<Func<Ticket, bool>> followsDepartmentWork = t =>
             t.CurrentOwnerEmployeeId != null
             && t.CurrentOwnerEmployeeId != agentId
             && !dbContext.UserRoles.Any(ur => ur.UserId == t.CurrentOwnerEmployeeId
-                && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == csAgentRole))
-            && (dbContext.TicketAssignments.Any(a => a.TicketId == t.TicketId
-                    && a.AssignedEmployeeId == agentId
-                    && !dbContext.TicketAssignments.Any(later => later.TicketId == t.TicketId
-                        && later.TicketAssignmentId > a.TicketAssignmentId
-                        && dbContext.UserRoles.Any(ur => ur.UserId == later.AssignedEmployeeId
-                            && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == csAgentRole))))
-                || (t.CreatedByEmployeeId == agentId
-                    && !dbContext.TicketAssignments.Any(a => a.TicketId == t.TicketId
-                        && dbContext.UserRoles.Any(ur => ur.UserId == a.AssignedEmployeeId
-                            && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == csAgentRole)))));
+                && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == csAgentRole));
 
         Expression<Func<Ticket, bool>> visible = ((Expression<Func<Ticket, bool>>)(t => t.CurrentOwnerEmployeeId == agentId))
-            .OrElse(followsDepartmentWork)
+            .OrElse(followsDepartmentWork.AndAlso(isResponsible))
             .OrElse(t => departments.Contains(t.CurrentDepartmentId));
+
+        if (inactivityReopenCutoffUtc is { } cutoff)
+        {
+            // Set-based twin of TicketVisibilityRule.CanReopenInactivityClosureAsync: an UNOWNED ticket the chatbot closed for customer
+            // inactivity, closed within the reopen window, stays visible to its last responsible CS Agent - and to no one else new.
+            Expression<Func<Ticket, bool>> inactivityClosure = t =>
+                t.TicketStatus == TicketStatus.Closed
+                && t.CurrentOwnerEmployeeId == null
+                && dbContext.TicketResolutions.Any(r => r.TicketId == t.TicketId && r.IsCurrent && r.ClosedForCustomerInactivity)
+                && dbContext.TicketStatusHistoryEntries
+                    .Where(h => h.TicketId == t.TicketId && h.Dimension == TicketStatusDimension.TicketStatus && h.NewValue == (byte)TicketStatus.Closed)
+                    .Max(h => (DateTime?)h.OccurredAtUtc) >= cutoff;
+            visible = visible.OrElse(inactivityClosure.AndAlso(isResponsible));
+        }
 
         // Call Center agents also SEE (read-only) the unassigned human-handling tickets they may take ownership of. This only widens the
         // list for a caller the application service has already proven eligible; the same predicate gates the Take Ownership action.

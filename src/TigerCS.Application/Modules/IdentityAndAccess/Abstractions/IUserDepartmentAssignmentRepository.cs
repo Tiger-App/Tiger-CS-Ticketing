@@ -25,6 +25,15 @@ public interface IUserDepartmentAssignmentRepository
     /// </summary>
     Task<bool> IsResponsibleCsAgentAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Whether the ticket's CURRENT resolution is the chatbot inactivity closure, it was closed at or after <paramref name="closedNotBeforeUtc"/>
+    /// (the start of the existing reopen window), and <paramref name="employeeId"/> is its responsible CS Agent
+    /// (<see cref="IsResponsibleCsAgentAsync"/>). The one exception that lets the last responsible CS Agent see and reopen an
+    /// unowned, inactivity-closed ticket; it grants nothing for any other closure.
+    /// </summary>
+    Task<bool> IsResponsibleForInactivityClosureAsync(
+        long ticketId, Guid? creatorEmployeeId, Guid employeeId, DateTime closedNotBeforeUtc, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<UserDepartmentAssignment>> GetByDepartmentIdAsync(
         int departmentId, bool activeEmployeesOnly, CancellationToken cancellationToken = default);
 

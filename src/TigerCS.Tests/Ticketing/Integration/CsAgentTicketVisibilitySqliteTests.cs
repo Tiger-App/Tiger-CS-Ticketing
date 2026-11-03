@@ -193,6 +193,96 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         Assert.Equal([closed], await QueueAsync(_agentA, Agent, Everything() with { TicketStatus = "Closed" }));
     }
 
+    // =====================================================================
+    // Inactivity closure: the last responsible CS Agent keeps view + reopen inside the existing window
+    // =====================================================================
+
+    [Fact]
+    public async Task AnInactivityClosedTicket_StaysVisibleToTheLastResponsibleCsAgent_OnlyInsideTheReopenWindow()
+    {
+        var now = DashboardSqliteFixture.Now;
+        long inside, boundary, outside;
+        using (var context = _db.CreateContext())
+        {
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
+            inside = _db.AddInactivityClosedTicket(context, _db.CustomerServiceId, now.AddDays(-2)).TicketId;
+            boundary = _db.AddInactivityClosedTicket(context, _db.CustomerServiceId, now.AddDays(-7)).TicketId;      // the last allowed moment
+            outside = _db.AddInactivityClosedTicket(context, _db.CustomerServiceId, now.AddDays(-7).AddMinutes(-1)).TicketId;
+            foreach (var id in new[] { inside, boundary, outside })
+            {
+                _db.AddAssignmentHistory(context, context.Tickets.Find(id)!, _agentA);   // A was the last CS Agent on each
+            }
+        }
+
+        Assert.Equal([inside, boundary], await QueueAsync(_agentA, Agent));
+        Assert.DoesNotContain(outside, await QueueAsync(_agentA, Agent));
+        Assert.Empty(await QueueAsync(_agentB, Agent));
+        using var read = _db.CreateContext();
+        var query = _db.CreateQueryService(read);
+        Assert.Equal(TicketQueryOutcome.Success, (await query.GetDetailAsync(_agentA, Agent, inside)).Outcome);
+        Assert.Equal(TicketAccess.Allowed, await query.CheckAccessAsync(_agentA, Agent, inside));      // Full: the reopen's resource check
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await query.GetDetailAsync(_agentA, Agent, outside)).Outcome);
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await query.GetDetailAsync(_agentB, Agent, inside)).Outcome);
+    }
+
+    [Fact]
+    public async Task TheInactivityExceptionRestoresNothingElse_NotOtherClosuresNotPastHandlersNotPastCreators()
+    {
+        var now = DashboardSqliteFixture.Now;
+        long resolvedClosed, handledAndCreatedByA, assignedToB;
+        using (var context = _db.CreateContext())
+        {
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
+
+            // A normally closed, unowned ticket that A was responsible for: not an inactivity closure, so no exception.
+            var normal = _db.AddTicket(context, _db.CustomerServiceId, status: TicketStatus.Closed, closedAtUtc: now.AddDays(-1));
+            context.Database.ExecuteSqlInterpolated($"UPDATE Tickets SET CurrentOwnerEmployeeId = NULL WHERE TicketId = {normal.TicketId}");
+            _db.AddAssignmentHistory(context, normal, _agentA);
+            resolvedClosed = normal.TicketId;
+
+            // An inactivity closure whose last CS Agent was B: A merely created it and handled the interaction.
+            var theirs = _db.AddInactivityClosedTicket(context, _db.CustomerServiceId, now.AddDays(-1), creator: _agentA);
+            _db.AddHandler(context, theirs, _agentA);
+            _db.AddAssignmentHistory(context, theirs, _agentB);
+            handledAndCreatedByA = theirs.TicketId;
+
+            // An inactivity-closed ticket still assigned to B (the chatbot never closes owned tickets, but the predicate must not leak one).
+            var owned = _db.AddInactivityClosedTicket(context, _db.CustomerServiceId, now.AddDays(-1), owner: _agentB);
+            _db.AddAssignmentHistory(context, owned, _agentA);
+            assignedToB = owned.TicketId;
+        }
+
+        var seenByA = await QueueAsync(_agentA, Agent);
+        Assert.DoesNotContain(resolvedClosed, seenByA);
+        Assert.DoesNotContain(handledAndCreatedByA, seenByA);
+        Assert.DoesNotContain(assignedToB, seenByA);
+        Assert.Empty(seenByA);
+    }
+
+    [Fact]
+    public async Task ACreatingCsAgentIsResponsibleForAnInactivityClosure_OnlyWhileNoCsAgentWasEverAssigned()
+    {
+        var now = DashboardSqliteFixture.Now;
+        long id;
+        using (var context = _db.CreateContext())
+        {
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
+            id = _db.AddInactivityClosedTicket(context, _db.CustomerServiceId, now.AddDays(-1), creator: _agentA).TicketId;
+        }
+
+        Assert.Equal([id], await QueueAsync(_agentA, Agent));
+        using (var context = _db.CreateContext())
+        {
+            _db.AddAssignmentHistory(context, context.Tickets.Find(id)!, _agentB);   // a CS Agent was assigned: responsibility moved
+        }
+
+        Assert.Empty(await QueueAsync(_agentA, Agent));
+        Assert.Equal([id], await QueueAsync(_agentB, Agent));
+    }
+
     [Fact]
     public async Task WithNoCsAgentEverAssigned_TheCreatingCsAgentIsTheResponsibleOne_UntilAnotherIsAssigned()
     {

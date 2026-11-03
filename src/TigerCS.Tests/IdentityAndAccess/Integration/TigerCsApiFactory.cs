@@ -642,6 +642,23 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>
+    /// Closes an UNOWNED ticket exactly as the chatbot inactivity job does (domain closure, the flagged "inactivity" resolution and the Closed
+    /// history row) at <paramref name="closedAtUtc"/>, without running the job's timers.
+    /// </summary>
+    public async Task CloseForInactivityAsync(long ticketId, DateTime closedAtUtc)
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        var ticket = await db.Tickets.FirstAsync(t => t.TicketId == ticketId);
+        var previous = ticket.CloseForCustomerInactivity();
+        db.TicketResolutions.Add(TicketResolution.ForCustomerInactivity(ticketId, "No reply from the customer.", Guid.NewGuid(), closedAtUtc));
+        db.TicketStatusHistoryEntries.Add(new TicketStatusHistory(
+            ticketId, TicketStatusDimension.TicketStatus, (byte)previous, (byte)TicketStatus.Closed,
+            actorEmployeeId: null, actorIsSystem: true, note: null, Guid.NewGuid(), closedAtUtc));
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
     /// Makes <paramref name="userId"/> the ticket's current owner (as an unassigned ticket's first assignment): the CS Agent a ticket is
     /// assigned to. This changes the ticket's RowVersion - re-read it before a request that carries one.
     /// </summary>
