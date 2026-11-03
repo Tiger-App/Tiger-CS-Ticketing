@@ -12,17 +12,18 @@
     var nowUtc = DateTime.UtcNow;
     var viewKey = TicketsView.Pending.Key();
 
-    string PageUrl(int p) => Url.Page("/Tickets", new
+    // A plain query string, NOT Url.Page: "page" is the reserved Razor Pages route value (see TicketsPaging).
+    string PageUrl(int p) => TicketsPaging.Url(new Dictionary<string, string?>
     {
-        view = viewKey,
-        channelId = Model.ChannelId,
-        departmentId = Model.DepartmentId,
-        mineOnly = Model.MineOnly ? "true" : null,
-        unassignedOnly = Model.UnassignedOnly ? "true" : null,
-        includeResolved = Model.IncludeResolved ? "true" : null,
-        page = p,
-        pageSize = Model.PageSize
-    }) ?? TicketsView.Pending.Href();
+        ["view"] = viewKey,
+        ["channelId"] = Model.ChannelId?.ToString(),
+        ["departmentId"] = Model.DepartmentId?.ToString(),
+        ["mineOnly"] = Model.MineOnly ? "true" : null,
+        ["unassignedOnly"] = Model.UnassignedOnly ? "true" : null,
+        ["includeResolved"] = Model.IncludeResolved ? "true" : null,
+        ["page"] = p.ToString(),
+        ["pageSize"] = Model.PageSize.ToString()
+    });
 }
 
 @if (Model.PendingActionError is not null)

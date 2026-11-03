@@ -773,7 +773,7 @@ else
                                 else
                                 {
                                     <ol class="timeline">
-                                        @foreach (var entry in Model.ActivityFeed.Take(3))
+                                        @foreach (var entry in Model.ActivityFeed.TakeLast(3).Reverse())
                                         {
                                             var iconCss = entry.Kind switch { "escalation" => "icon-critical", "transfer" => "icon-warning", "note" => "icon-info", "reopen" => "icon-warning", "approval" => "icon-info", _ => "icon-quiet" };
                                             <li class="timeline-item">
@@ -953,34 +953,97 @@ else
                 <div class="tab-panel" id="panel-activity">
                     <div class="detail-layout">
                         <div class="facts-panel facts-panel--flat">
-                            <div class="facts-section__title">Timeline</div>
+                            <div class="facts-section__title">Timeline <span class="timeline-zone">All times in @TicketDisplay.ActivityTimeZoneLabel</span></div>
+                            @if (Model.ActivityTimelineUnavailable)
+                            {
+                                <p class="field-hint" data-activity-timeline-unavailable>Only the basic history is shown: the full activity timeline is unavailable right now. Reload the page to retry.</p>
+                            }
                             @if (Model.ActivityFeed.Count == 0)
                             {
                                 <div class="empty-state"><p>No activity recorded yet.</p></div>
                             }
                             else
                             {
-                                <ol class="timeline">
+                                <ol class="timeline" data-activity-timeline>
                                     @foreach (var entry in Model.ActivityFeed)
                                     {
-                                        var iconCss = entry.Kind switch { "escalation" => "icon-critical", "note" => "icon-info", "reopen" => "icon-warning", "approval" => "icon-info", _ => "icon-quiet" };
-                                        <li class="timeline-item">
+                                        var iconCss = entry.Kind switch { "escalation" => "icon-critical", "anomaly" => "icon-critical", "closure" => "icon-warning", "note" => "icon-info", "reopen" => "icon-warning", "approval" => "icon-info", "handoff" => "icon-info", _ => "icon-quiet" };
+                                        var evt = entry.Event;
+                                        <li class="timeline-item" data-activity-kind="@entry.Kind">
                                             <span class="timeline-icon @iconCss"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4" fill="currentColor" /></svg></span>
                                             <div class="timeline-row">
-                                                <span class="timeline-text"><strong>@entry.Actor</strong> — @entry.Description</span>
-                                                <span class="timeline-time">@entry.TimestampUtc.ToLocalTime().ToString("MMM d, HH:mm")</span>
+                                                @if (evt is not null)
+                                                {
+                                                    <span class="timeline-text"><strong>@evt.EventName</strong> &mdash; <span class="timeline-actor" data-actor-type="@evt.ActorType">@evt.ActorName</span> <small class="timeline-actor-type">(@evt.ActorType)</small></span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="timeline-text"><strong>@entry.Actor</strong> &mdash; @entry.Description</span>
+                                                }
+                                                <span class="timeline-time">@TicketDisplay.DubaiTimestamp(entry.TimestampUtc)</span>
                                             </div>
+                                            @if (evt is not null)
+                                            {
+                                                <div class="timeline-detail">@evt.Description</div>
+                                                @if (!string.IsNullOrWhiteSpace(evt.Reason))
+                                                {
+                                                    <div class="timeline-detail">Reason: @evt.Reason</div>
+                                                }
+                                                @if (evt.PreviousValue is not null || evt.NewValue is not null)
+                                                {
+                                                    <div class="timeline-detail">@(evt.PreviousValue ?? "Not recorded") &rarr; @(evt.NewValue ?? "Not recorded")</div>
+                                                }
+                                                @if (evt.RecordedAtUtc is { } recordedAt)
+                                                {
+                                                    <div class="timeline-detail">Recorded by TigerCS at @TicketDisplay.DubaiTimestamp(recordedAt) &mdash; later than the event itself (delayed delivery).</div>
+                                                }
+                                                @if (!string.IsNullOrWhiteSpace(evt.TimeNote))
+                                                {
+                                                    <div class="timeline-detail">@evt.TimeNote</div>
+                                                }
+                                                @if (evt.Closure is { } closure)
+                                                {
+                                                    <dl class="timeline-closure" data-closure>
+                                                        <div><dt>Closed by</dt><dd>@closure.ClosedByType &mdash; @closure.ClosedByName</dd></div>
+                                                        <div><dt>Closed at</dt><dd>@TicketDisplay.DubaiTimestamp(closure.ClosedAtUtc) (Asia/Dubai)</dd></div>
+                                                        <div><dt>Reason</dt><dd>@closure.Reason <small>(@closure.ReasonCode &middot; source: @closure.EvidenceSource)</small></dd></div>
+                                                        <div><dt>Customer interaction already ended?</dt><dd>@closure.CustomerInteractionEnded &mdash; @closure.CustomerInteractionEndedDetail</dd></div>
+                                                        <div><dt>Human agent connected / responding?</dt><dd>@closure.HumanAgentConnected &mdash; @closure.HumanAgentDetail</dd></div>
+                                                        @if (closure.HumanActivityAfterClosure)
+                                                        {
+                                                            <div><dt>Human activity after closure</dt><dd>@closure.Assessment &mdash; @closure.AssessmentDetail</dd></div>
+                                                        }
+                                                    </dl>
+                                                }
+                                                @if (evt.TicketInteractionId is not null)
+                                                {
+                                                    <div class="timeline-detail"><label class="link-muted tab-jump" for="tab-details">Open Conversation History (Overview)</label></div>
+                                                }
+                                            }
                                             @if (!string.IsNullOrEmpty(entry.Detail))
                                             {
                                                 <div class="timeline-detail">@entry.Detail</div>
                                             }
-                                            @if (!string.IsNullOrEmpty(entry.Note))
+                                            @if (evt is null && !string.IsNullOrEmpty(entry.Note))
                                             {
                                                 <div class="timeline-note @(entry.IsHuman ? "timeline-note--human" : "timeline-note--system")">@entry.Note</div>
                                             }
                                         </li>
                                     }
                                 </ol>
+                            }
+
+                            @if (Model.ActivityEvidenceGaps.Count > 0)
+                            {
+                                <details class="more-details" data-activity-evidence-gaps>
+                                    <summary>Evidence the timeline could not find (@Model.ActivityEvidenceGaps.Count)</summary>
+                                    <ul>
+                                        @foreach (var gap in Model.ActivityEvidenceGaps)
+                                        {
+                                            <li>@gap</li>
+                                        }
+                                    </ul>
+                                </details>
                             }
 
                             @if (!isClosed && !Model.IsReadOnlyAccess && TicketActions.CanAddNote(Model.Viewer?.Roles))

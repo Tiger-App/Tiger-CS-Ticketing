@@ -139,7 +139,7 @@ Every request below carries `Authorization: Bearer <token>`. Request bodies are 
 }
 ```
 `200 OK` on any repeat of the same `conversationId` (same ticket, no second ticket): `"outcome": "AlreadyIngested"` with `conversationId`, `ticketId`, `ticketNumber`.
-`channel`: `Phone`, `LiveChat` (aliases `WebsiteChat`, `WebMessaging`), `WhatsApp`, `SocialMedia`. The ticket is created **Unclassified**, on the default priority (Normal), with **no human handoff** — `classificationStatus: "AwaitingClassification"` means "still unclassified", not "waiting for an agent".
+`channel`: `Phone`, `LiveChat` (aliases `WebsiteChat`, `WebChat`, `WebMessaging`), `WhatsApp`, `Instagram`, `Facebook` (alias `FacebookMessenger`), `SocialMedia` (generic: X/Telegram/other). **Architect must send `Instagram` and `Facebook` as their own values** — `SocialMedia` files the ticket under the generic Social Media channel and it will not appear under Instagram/Facebook. The ticket is created **Unclassified**, on the default priority (Normal), with **no human handoff** — `classificationStatus: "AwaitingClassification"` means "still unclassified", not "waiting for an agent".
 
 ### 4.2 Update the Request Type after AI intent classification
 

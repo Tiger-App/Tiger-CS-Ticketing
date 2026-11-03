@@ -9,37 +9,38 @@
     var isMyView = Model.View == TicketsView.My;
     var showAssigneeFilter = !isMyView && Model.AssigneeDepartmentId is not null;
 
-    string PageUrl(int p) => Url.Page("/Tickets", new
+    // A plain query string, NOT Url.Page: "page" is the reserved Razor Pages route value, so Url.Page(..., new { page = p }) drops the page number.
+    string PageUrl(int p) => TicketsPaging.Url(new Dictionary<string, string?>
     {
-        view = viewKey,
-        departmentId = Model.DepartmentId,
-        priorityId = Model.PriorityId,
-        ticketStatus = isClosedView ? null : Model.TicketStatus,
-        verificationStatus = Model.VerificationStatus,
-        ownerEmployeeId = isMyView ? null : Model.OwnerEmployeeId,
-        search = Model.Search,
-        sortBy = Model.SortBy,
-        sortDir = Model.SortDir,
-        page = p,
-        pageSize = Model.PageSize,
-        channelId = Model.ChannelId,
-        requestTypeId = Model.RequestTypeId,
-        activeOnly = Model.ActiveOnly ? "true" : null,
-        inDepartmentQueue = Model.InDepartmentQueue ? "true" : null,
-        availableToTake = Model.AvailableToTake ? "true" : null,
-        slaBreached = Model.SlaBreached ? "true" : null,
-        dueToday = Model.DueToday ? "true" : null,
-        backlogAge = Model.BacklogAge,
-        pendingApproval = Model.PendingApproval ? "true" : null,
-        unclassified = Model.Unclassified ? "true" : null,
-        createdByMe = Model.CreatedByMe ? "true" : null,
-        escalated = Model.Escalated ? "true" : null,
-        closureCategory = Model.ClosureCategory,
-        closedFrom = Model.ClosedFrom?.ToString("yyyy-MM-dd"),
-        closedTo = Model.ClosedTo?.ToString("yyyy-MM-dd"),
-        createdFrom = Model.CreatedFrom?.ToString("yyyy-MM-dd"),
-        createdTo = Model.CreatedTo?.ToString("yyyy-MM-dd")
-    }) ?? Model.View.Href();
+        ["view"] = viewKey,
+        ["departmentId"] = Model.DepartmentId?.ToString(),
+        ["priorityId"] = Model.PriorityId?.ToString(),
+        ["ticketStatus"] = isClosedView ? null : Model.TicketStatus,
+        ["verificationStatus"] = Model.VerificationStatus,
+        ["ownerEmployeeId"] = isMyView ? null : Model.OwnerEmployeeId?.ToString(),
+        ["search"] = Model.Search,
+        ["sortBy"] = Model.SortBy,
+        ["sortDir"] = Model.SortDir,
+        ["page"] = p.ToString(),
+        ["pageSize"] = Model.PageSize.ToString(),
+        ["channelId"] = Model.ChannelId?.ToString(),
+        ["requestTypeId"] = Model.RequestTypeId?.ToString(),
+        ["activeOnly"] = Model.ActiveOnly ? "true" : null,
+        ["inDepartmentQueue"] = Model.InDepartmentQueue ? "true" : null,
+        ["availableToTake"] = Model.AvailableToTake ? "true" : null,
+        ["slaBreached"] = Model.SlaBreached ? "true" : null,
+        ["dueToday"] = Model.DueToday ? "true" : null,
+        ["backlogAge"] = Model.BacklogAge,
+        ["pendingApproval"] = Model.PendingApproval ? "true" : null,
+        ["unclassified"] = Model.Unclassified ? "true" : null,
+        ["createdByMe"] = Model.CreatedByMe ? "true" : null,
+        ["escalated"] = Model.Escalated ? "true" : null,
+        ["closureCategory"] = Model.ClosureCategory,
+        ["closedFrom"] = Model.ClosedFrom?.ToString("yyyy-MM-dd"),
+        ["closedTo"] = Model.ClosedTo?.ToString("yyyy-MM-dd"),
+        ["createdFrom"] = Model.CreatedFrom?.ToString("yyyy-MM-dd"),
+        ["createdTo"] = Model.CreatedTo?.ToString("yyyy-MM-dd")
+    });
 }
 
 <form class="filter-bar" id="ticketFilters" method="get">
@@ -135,6 +136,21 @@
         </div>
     }
 
+    @if (Model.Channels.Count > 0)
+    {
+        @* The channel the ticket ENTERED on (its originating interaction): Phone, WhatsApp, Live Chat, Instagram, Facebook, ... *@
+        <div class="field-group">
+            <label class="field-label" for="channelId">Channel</label>
+            <select class="field-select" id="channelId" name="channelId" data-autosubmit>
+                <option value="">All channels</option>
+                @foreach (var channel in Model.Channels.OrderByDescending(c => c.IsActive).ThenBy(c => c.DisplayOrder).ThenBy(c => c.Name))
+                {
+                    <option value="@channel.ChannelId" selected="@(Model.ChannelId == channel.ChannelId)">@channel.Name@(channel.IsActive ? "" : " (inactive)")</option>
+                }
+            </select>
+        </div>
+    }
+
     <div class="field-group">
         <label class="field-label" for="verificationStatus">Verification</label>
         <select class="field-select" id="verificationStatus" name="verificationStatus" data-autosubmit>
@@ -192,7 +208,7 @@
     @if (isClosedView && Model.SlaBreached) { <input type="hidden" name="slaBreached" value="true" /> }
     @if (isClosedView && Model.DueToday) { <input type="hidden" name="dueToday" value="true" /> }
     @if (Model.DepartmentId is { } drilldownDepartmentId && Model.NameResolver.OwnDepartments.Count == 0) { <input type="hidden" name="departmentId" value="@drilldownDepartmentId" /> }
-    @if (Model.ChannelId is { } channelId) { <input type="hidden" name="channelId" value="@channelId" /> }
+    @if (Model.Channels.Count == 0 && Model.ChannelId is { } channelId) { <input type="hidden" name="channelId" value="@channelId" /> }
     @if (Model.RequestTypeId is { } requestTypeId) { <input type="hidden" name="requestTypeId" value="@requestTypeId" /> }
     @if (Model.ActiveOnly) { <input type="hidden" name="activeOnly" value="true" /> }
     @if (Model.BacklogAge is { } backlogAge) { <input type="hidden" name="backlogAge" value="@backlogAge" /> }

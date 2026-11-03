@@ -140,6 +140,9 @@ public sealed class GenesysServiceFixture
 
     public FakeAssignmentRotationRepository Rotation { get; } = new();
 
+    /// <summary>Internal notes - written by people only, so any note on a ticket is human work.</summary>
+    public FakeTicketNoteRepository TicketNotes { get; } = new();
+
     /// <summary>
     /// Identity accounts of the Call Center agents, present only when the fixture was built with <c>strictAccounts</c>: then the assignment
     /// service checks lockout / account existence (and roles) exactly as production does, so a test can lock an agent out. Every agent a
@@ -210,7 +213,8 @@ public sealed class GenesysServiceFixture
         var autoAssignment = callCenterFirst
             ? new TicketAutoAssignmentService(
                 AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, Rotation, Departments,
-                roleReader: Accounts, accountManager: Accounts, serviceIdentities: ServiceIdentities, workflowEventRepository: WorkflowEvents)
+                roleReader: Accounts, accountManager: Accounts, serviceIdentities: ServiceIdentities, workflowEventRepository: WorkflowEvents,
+                ticketNoteRepository: TicketNotes)
             : new TicketAutoAssignmentService(
                 AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit);
         AutoAssignment = autoAssignment;
@@ -317,7 +321,7 @@ public sealed class GenesysServiceFixture
             answeringAgentAssignment: AnsweringAgents);
 
         InactivityClose = new ChatbotInactivityCloseAppService(
-            Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock);
+            Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock, Audit);
 
         AgentContext = new GenesysAgentContextAppService(
             Options, AgentResolution, Conversations, Tickets, UnitOfWork, Audit, HandlingHistory);

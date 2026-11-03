@@ -69,9 +69,21 @@ Architect flows) is in `docs/Genesys/Genesys-Cloud-Configuration.md`.
 `POST /api/genesys/tickets`
 
 One endpoint for **every** channel — `Phone`, `LiveChat`, `WhatsApp`,
-`SocialMedia`. `WebsiteChat` and `WebMessaging` are accepted as the same Live
-Chat channel. There is no per-channel endpoint and no per-channel
-ticket-creation code.
+`Instagram`, `Facebook`, `SocialMedia`. `WebsiteChat`, `WebChat` and
+`WebMessaging` are accepted as the same Live Chat channel; `FacebookMessenger`
+and `Messenger` as Facebook. Send Instagram and Facebook as their own values:
+`SocialMedia` files the ticket under the generic Social Media channel (`SOCIAL_DM`)
+and it will not appear under Instagram/Facebook. There is no per-channel
+endpoint and no per-channel ticket-creation code.
+
+**Who owns a human-handled ticket (every channel).** A ticket that needs a person
+goes to the Call Center. If Genesys reports an agent as *connected*
+(`routing.agentId` on an update; on **Phone** only, also the `agentId` of the
+pickup inquiry) the ticket is given directly to that mapped Call Center agent.
+On digital channels a top-level `agentId` is only an offered/assigned/queued
+agent — it is never treated as acceptance. With no accepted agent, Round Robin
+picks one eligible Call Center agent; a later *connected* report replaces that
+automatic pick, but never a person's ownership or a completed transfer.
 
 **Idempotent on `conversationId`.** The first accepted event creates the
 ticket; every retry returns *that same ticket* with `outcome:

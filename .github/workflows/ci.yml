@@ -9,6 +9,18 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    # A real SQL Server so the SQL Server integration tests (ownership races, unique-index and row-version guarantees, migrated-schema
+    # checks) EXECUTE instead of being reported as skipped. Each test creates and drops its own throw-away database.
+    services:
+      sqlserver:
+        image: mcr.microsoft.com/mssql/server:2022-latest
+        env:
+          ACCEPT_EULA: "Y"
+          MSSQL_SA_PASSWORD: "Ci-Validation-Only-Passw0rd!"
+        ports:
+          - 1433:1433
+    env:
+      TIGERCS_TEST_SQL_SERVER: "Server=localhost,1433;User Id=sa;Password=Ci-Validation-Only-Passw0rd!;TrustServerCertificate=True;"
     defaults:
       run:
         working-directory: src
@@ -28,8 +40,23 @@ jobs:
       - name: Build
         run: dotnet build TigerCS.slnx --no-restore --configuration Release
 
-      - name: Test
-        run: dotnet test TigerCS.slnx --no-build --configuration Release
+      - name: Wait for SQL Server
+        run: |
+          for i in $(seq 1 40); do
+            (echo > /dev/tcp/localhost/1433) >/dev/null 2>&1 && break
+            sleep 3
+          done
+          sleep 10
+
+      - name: Test (Release, with SQL Server integration tests)
+        run: dotnet test TigerCS.slnx --no-build --configuration Release --logger "trx;LogFileName=results.trx"
+
+      - name: Fail if the SQL Server integration tests were skipped
+        run: |
+          # The suite reports them SKIPPED (never "passed") without TIGERCS_TEST_SQL_SERVER. Make a mis-wired CI visible.
+          skipped=$(grep -ho 'Not executed: TIGERCS_TEST_SQL_SERVER' $(find . -name results.trx) | wc -l)
+          echo "SQL Server tests skipped: $skipped"
+          test "$skipped" -eq 0
 
   campaign-ui-scripts:
     runs-on: ubuntu-latest

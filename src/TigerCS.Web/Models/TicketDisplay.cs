@@ -28,6 +28,13 @@ public static class TicketDisplay
     public static string UaeDateTime(DateTime utc) =>
         DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("d MMM yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
+    /// <summary>The label every Activity timestamp is shown in — Asia/Dubai is UTC+4 all year (no daylight saving).</summary>
+    public const string ActivityTimeZoneLabel = "Asia/Dubai (UTC+4)";
+
+    /// <summary>A UTC instant as Asia/Dubai time with seconds, for the Activity timeline: "3 Nov 2026 08:26:41". The caller labels the zone once with <see cref="ActivityTimeZoneLabel"/>.</summary>
+    public static string DubaiTimestamp(DateTime utc) =>
+        DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("d MMM yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+
     /// <summary>Gold filled stars then grey empty ones for a 1–5 rating, as plain text characters.</summary>
     public static string StarsFor(int rating) => new string('★', Math.Clamp(rating, 0, 5)) + new string('☆', 5 - Math.Clamp(rating, 0, 5));
 

@@ -85,7 +85,8 @@ public sealed class ChatbotInactivityCloseAppService(
     IDepartmentRepository departmentRepository,
     TicketLifecycleAppService lifecycleAppService,
     ITicketingUnitOfWork unitOfWork,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IAuditEntryWriter? auditWriter = null)
 {
     /// <summary>Upper bound on candidates examined per job run; the next run takes the rest.</summary>
     public const int BatchSize = 100;
@@ -164,6 +165,14 @@ public sealed class ChatbotInactivityCloseAppService(
             || await CustomerInactivityScope.IsCallCenterTicketAsync(ticket!, departmentRepository, cancellationToken)
             || await handoffRepository.GetOpenByInteractionIdAsync(interaction.TicketInteractionId, cancellationToken) is not null;
 
+        // A human agent is working the conversation (a HumanAgent line is in the transcript): the customer's silence is not abandonment,
+        // so the ticket is never closed for inactivity — even when no owner, handler or handoff has been recorded yet.
+        var humanActive = !excluded && await HumanAgentHasSpokenAsync(interaction, cancellationToken);
+        if (humanActive)
+        {
+            return await StandDownForHumanAsync(interaction, ticket!, reporter, cancellationToken);
+        }
+
         if (excluded)
         {
             // Out of scope (closed, human-managed, Call Center): stop tracking so it is not re-examined every run.
@@ -193,6 +202,11 @@ public sealed class ChatbotInactivityCloseAppService(
             || ticket.CurrentOwnerEmployeeId is not null
             || await handoffRepository.GetOpenByInteractionIdAsync(interaction.TicketInteractionId, cancellationToken) is not null;
 
+        if (!excluded && await HumanAgentHasSpokenAsync(interaction, cancellationToken))
+        {
+            return await StandDownForHumanAsync(interaction, ticket!, reporter, cancellationToken);
+        }
+
         if (excluded)
         {
             // Stop re-examining it every run; a later chatbot prompt starts a new timer.
@@ -200,6 +214,34 @@ public sealed class ChatbotInactivityCloseAppService(
         }
 
         return await CloseAsync(interaction, ticket!, reporter!.Value, ReasonFor((int)timeout.TotalMinutes), cancellationToken);
+    }
+
+    private async Task<bool> HumanAgentHasSpokenAsync(TicketInteraction interaction, CancellationToken cancellationToken) =>
+        (await conversationRepository.ListMessagesAsync(interaction.TicketInteractionId, cancellationToken))
+        .Any(m => m.Sender == InteractionMessageSender.HumanAgent);
+
+    /// <summary>
+    /// A person has spoken in the conversation: mark the ticket as human work (sticky, stops both clocks) and record why nothing was closed.
+    /// Nothing is closed or reopened; the audit entry is the evidence the Activity timeline shows.
+    /// </summary>
+    private async Task<ChatbotInactivityCloseOutcome> StandDownForHumanAsync(
+        TicketInteraction interaction, Ticket ticket, Guid? reporter, CancellationToken cancellationToken)
+    {
+        interaction.MarkRequiresHumanFollowUp();
+        if (auditWriter is not null)
+        {
+            await auditWriter.WriteAsync(
+                reporter,
+                "ChatbotInactivityCloseSkippedHumanActive",
+                "Ticket",
+                ticket.TicketId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                beforeValue: null,
+                afterValue: $"TicketId={ticket.TicketId};InteractionId={interaction.TicketInteractionId};Reason=HumanAgentActive;TicketStatus={ticket.TicketStatus}",
+                correlationId: Guid.NewGuid(),
+                cancellationToken);
+        }
+
+        return await SaveExcludedAsync(cancellationToken);
     }
 
     private async Task<ChatbotInactivityCloseOutcome> CloseAsync(

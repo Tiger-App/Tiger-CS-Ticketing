@@ -310,6 +310,7 @@ using (var backgroundJobScope = app.Services.CreateScope())
     // so it is safe across restarts. Also a no-op when BackgroundJobs:Enabled
     // is false.
     app.Services.UseTigerCsRecurringChatbotInactivityClose(backgroundJobOptions);
+
     if (!backgroundJobOptions.Enabled)
     {
         app.Logger.LogWarning(

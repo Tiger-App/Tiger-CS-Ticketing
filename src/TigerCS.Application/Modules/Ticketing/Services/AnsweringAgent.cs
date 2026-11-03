@@ -27,6 +27,9 @@ public enum AnsweringAgentIssue
     /// <summary>The mapped user holds no operational role (read-only, supervisory or administrative only).</summary>
     NoOperationalRole,
 
+    /// <summary>The mapped user is a Call Center member with an operational role but not the CS Agent role; the Call Center gives tickets to CS Agents only.</summary>
+    NotCsAgent,
+
     /// <summary>The id Genesys sent is blank or malformed.</summary>
     InvalidId
 }

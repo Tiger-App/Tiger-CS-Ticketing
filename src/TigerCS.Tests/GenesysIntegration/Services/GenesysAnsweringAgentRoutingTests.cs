@@ -523,17 +523,27 @@ public class GenesysAnsweringAgentRoutingTests
     }
 
     [Fact]
-    public async Task MappedAgentWhoAnsweredAChatThatNeedsAPerson_IsAssignedDirectlyAtCreation()
+    public async Task ChatCreatedWithATopLevelAgentIdAndHumanFollowUp_IsNotAnAnswer_ItGoesToRoundRobin_UntilTheAgentIsReportedConnected()
     {
         var w = NewWorld();
 
+        // A top-level agentId on a digital channel is only who is offered/assigned/queued: not proof of acceptance, even with
+        // humanFollowUpRequired. The ticket enters the Call Center and Round Robin gives it to ONE eligible agent.
         var result = await w.F.Ingestion.IngestAsync(
             ServiceAccount,
             new GenesysInquiryDto("conv-chat-answered", GenesysChannel.WebsiteChat, CustomerPhone: "+971500000001",
                 DepartmentId: w.Cs.DepartmentId, AgentId: w.Answering.GenesysId, HumanFollowUpRequired: true));
 
-        AssertSingleOwner(w, result.Ticket!.TicketId, w.Answering.Id);
-        Assert.True(RoundRobinCursorUntouched(w));
+        var ticket = w.Ticket(result.Ticket!.TicketId);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticket.TicketId.ToString());
+        Assert.False(RoundRobinCursorUntouched(w));
+
+        // The agent actually connects: the automatic pick is replaced by the agent who accepted.
+        await ConnectAsync(w, new Ingested(ticket.TicketId, "conv-chat-answered"), w.Answering.GenesysId);
+
+        AssertSingleOwner(w, ticket.TicketId, w.Answering.Id);
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------

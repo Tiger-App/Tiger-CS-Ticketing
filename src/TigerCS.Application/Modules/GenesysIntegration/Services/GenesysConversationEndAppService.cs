@@ -222,6 +222,7 @@ public sealed class GenesysConversationEndAppService(
 
         var all = stored.Concat(pending).ToList();
         var firstHumanAt = await TryRecordFirstHumanResponseAsync(callerEmployeeId, ticket, all, cancellationToken);
+        await ApplyHumanActivityAsync(callerEmployeeId, ticket, interaction, pending, cancellationToken);
 
         await auditWriter.WriteAsync(
             callerEmployeeId,
@@ -239,9 +240,10 @@ public sealed class GenesysConversationEndAppService(
         {
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
-        catch (DuplicateWriteException)
+        catch (Exception ex) when (ex is DuplicateWriteException or TicketConcurrentlyModifiedException)
         {
-            // A concurrent delivery stored a message at the same position. Nothing of this delivery was kept; resending is safe because
+            // A concurrent delivery stored a message at the same position (or the inactivity job won a race for this interaction's clocks).
+            // Nothing of this delivery was kept; resending is safe because
             // storage is idempotent.
             return GenesysTranscriptAppendResult.Failure(
                 GenesysTranscriptAppendOutcome.Conflict,
@@ -250,6 +252,41 @@ public sealed class GenesysConversationEndAppService(
 
         await transaction.CommitAsync(cancellationToken);
         return new GenesysTranscriptAppendResult(GenesysTranscriptAppendOutcome.Appended, pending.Count, all.Count);
+    }
+
+    /// <summary>
+    /// A human agent's line arrived: the conversation is no longer the bot's to close for silence, so both inactivity clocks stop at once
+    /// (the closing job re-checks for human lines too, so a later customer message cannot restart a clock that would close it). If the ticket
+    /// is already Closed, the arrival is recorded in the audit trail — forward-compatible evidence of when TigerCS received the reply, which
+    /// the Activity timeline uses to tell a delayed event from a premature closure. Nothing is reopened and no history is rewritten.
+    /// </summary>
+    private async Task ApplyHumanActivityAsync(
+        Guid callerEmployeeId, Ticket? ticket, TicketInteraction interaction, IReadOnlyList<TicketInteractionMessage> appended,
+        CancellationToken cancellationToken)
+    {
+        var human = appended.Where(m => m.Sender == InteractionMessageSender.HumanAgent).OrderBy(m => m.SentAtUtc).ToList();
+        if (human.Count == 0)
+        {
+            return;
+        }
+
+        interaction.StopTrackingCustomerInteraction();
+        interaction.CancelAwaitingCustomerReply();
+
+        if (ticket is { TicketStatus: TicketStatus.Closed })
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId,
+                "TicketHumanActivityAfterClosure",
+                "Ticket",
+                ticket.TicketId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                beforeValue: null,
+                afterValue:
+                    $"TicketId={ticket.TicketId};ConversationId={interaction.GenesysConversationId};InteractionId={interaction.TicketInteractionId};"
+                    + $"AgentName={human[0].SenderName ?? "(none)"};HumanMessages={human.Count};FirstSentAtUtc={human[0].SentAtUtc:O};TicketStatus={ticket.TicketStatus}",
+                correlationId: Guid.NewGuid(),
+                cancellationToken);
+        }
     }
 
     /// <summary>Adds every message not already stored, in delivered order, continuing the stored sequence.</summary>

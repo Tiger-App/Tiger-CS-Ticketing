@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using TigerCS.Application.Modules.Collections;
 using TigerCS.Application.Modules.Collections.Review;
 using TigerCS.Application.Modules.SlaAndEscalation.Abstractions;
+using TigerCS.Application.Modules.Ticketing.Services;
 
 namespace TigerCS.Infrastructure.BackgroundJobs;
 
@@ -30,6 +31,12 @@ public static class BackgroundJobServiceCollectionExtensions
             ?? new BackgroundJobOptions();
 
         services.Configure<OutboxDispatchOptions>(configuration.GetSection(OutboxDispatchOptions.SectionName));
+        // Call Center unassigned-work reconciliation: its own hosted service, deliberately NOT part of Hangfire, so it runs (or not) regardless of
+        // BackgroundJobs:Enabled. Off and dry-run by default.
+        services.Configure<CallCenterReconciliationOptions>(configuration.GetSection(CallCenterReconciliationOptions.SectionName));
+        services.AddSingleton<TigerCS.Application.Modules.Ticketing.Abstractions.ICallCenterReconciliationRunLock, CallCenterReconciliationRunLock>();
+        services.AddScoped<CallCenterUnassignedWorkJob>();
+        services.AddHostedService<CallCenterUnassignedWorkHostedService>();
 
         // Tells the Collections pages whether the scheduled snapshot refresh really exists in this process (informational; registered whether or not Hangfire runs).
         services.AddSingleton<TigerCS.Application.Modules.Collections.Abstractions.ISnapshotSchedule>(sp =>

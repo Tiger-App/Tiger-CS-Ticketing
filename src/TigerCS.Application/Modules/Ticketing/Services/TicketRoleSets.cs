@@ -104,6 +104,9 @@ public static class TicketRoleSets
     /// </summary>
     public static readonly IReadOnlyCollection<string> RoundRobinEligible = [Roles.CsAgent, Roles.DepartmentEmployee, Roles.DepartmentHead];
 
+    /// <summary>Business decision: automatic assignment in the Call Center (department code CC) - Round Robin AND the confirmed Genesys answering agent - goes to CS Agents only. Does not affect any other department.</summary>
+    public static readonly IReadOnlyCollection<string> CallCenterAutoAssignable = [Roles.CsAgent];
+
     /// <summary>Resolve by role: Department Employee/Head (a Head must belong to the ticket's department). Independently of this set, whoever the ticket is currently assigned to may Resolve and Close it, whatever their role or department (<c>TicketLifecycleAppService</c>); the CS layer has no role-based Resolve beyond that.</summary>
     public static readonly IReadOnlyCollection<string> Resolve = [Roles.DepartmentEmployee, Roles.DepartmentHead];
 

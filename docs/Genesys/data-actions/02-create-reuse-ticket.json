@@ -41,7 +41,7 @@
           },
           "channel": {
             "type": "string",
-            "description": "Phone or LiveChat (WhatsApp, SocialMedia also accepted)."
+            "description": "Phone, LiveChat, WhatsApp, Instagram, Facebook or SocialMedia (X/Telegram/other social). Send Instagram and Facebook as their own values - SocialMedia files the ticket under the generic Social Media channel, not under Instagram/Facebook."
           },
           "customerPhone": {
             "type": "string",

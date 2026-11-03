@@ -43,7 +43,7 @@ public sealed class UnclassifiedFilterTests
         var views = Read("TigerCS.Web/Models/TicketsView.cs");
 
         Assert.Contains("name=\"unclassified\"", list);
-        Assert.Contains("unclassified = Model.Unclassified ? \"true\" : null", list);
+        Assert.Contains("[\"unclassified\"] = Model.Unclassified ? \"true\" : null", list);
         Assert.Contains("Unclassified ? true : null", page);
         Assert.Contains("\"unclassified\"", views);
     }

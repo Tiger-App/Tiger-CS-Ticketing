@@ -191,14 +191,16 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
         // every ticket nobody has judged above every Critical one. An
         // unjudged ticket is not urgent; it sorts last either way, and the
         // secondary key still surfaces the oldest of them first.
+        // Every ordering ends in TicketId: bulk-created/imported tickets share a CreatedAtUtc, and without a unique final key SQL Server may
+        // order the ties differently per page query - rows then repeat on one page and vanish from the next.
         filtered = query.SortBy switch
         {
             TicketSortBy.Priority => query.SortDescending
-                ? filtered.OrderBy(t => t.PriorityId == null).ThenByDescending(t => t.PriorityId).ThenByDescending(t => t.CreatedAtUtc)
-                : filtered.OrderBy(t => t.PriorityId == null).ThenBy(t => t.PriorityId).ThenByDescending(t => t.CreatedAtUtc),
+                ? filtered.OrderBy(t => t.PriorityId == null).ThenByDescending(t => t.PriorityId).ThenByDescending(t => t.CreatedAtUtc).ThenByDescending(t => t.TicketId)
+                : filtered.OrderBy(t => t.PriorityId == null).ThenBy(t => t.PriorityId).ThenByDescending(t => t.CreatedAtUtc).ThenByDescending(t => t.TicketId),
             _ => query.SortDescending
-                ? filtered.OrderByDescending(t => t.CreatedAtUtc)
-                : filtered.OrderBy(t => t.CreatedAtUtc)
+                ? filtered.OrderByDescending(t => t.CreatedAtUtc).ThenByDescending(t => t.TicketId)
+                : filtered.OrderBy(t => t.CreatedAtUtc).ThenBy(t => t.TicketId)
         };
 
         var items = await filtered

@@ -59,7 +59,7 @@ public sealed class GenesysAnsweringAgentAssignmentService(
     /// </summary>
     public async Task<AnswerAssignmentResult> ApplyConnectedAgentAsync(
         Guid callerEmployeeId, Ticket ticket, TicketInteraction interaction, string genesysAgentId, string source,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool firstResponseIsFromTheAnsweringAgent = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         ArgumentNullException.ThrowIfNull(interaction);
@@ -87,7 +87,8 @@ public sealed class GenesysAnsweringAgentAssignmentService(
 
         var result = await autoAssignment.ApplyAnsweringAgentAsync(
             ticket, agent, source, timeProvider.GetUtcNow().UtcDateTime, Guid.NewGuid(), callerEmployeeId,
-            routeToCallCenterIfAgentUnavailable: humanManaged, cancellationToken);
+            routeToCallCenterIfAgentUnavailable: humanManaged, cancellationToken,
+            firstResponseIsFromTheAnsweringAgent: firstResponseIsFromTheAnsweringAgent);
 
         if (!result.Wrote)
         {

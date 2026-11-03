@@ -44,7 +44,8 @@ public sealed class AgentHandoffAppService(
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ITicketNoteRepository? ticketNoteRepository = null)
 {
     /// <summary>
     /// The agent work list — every customer interaction waiting for a human,
@@ -203,7 +204,7 @@ public sealed class AgentHandoffAppService(
         if ((handoff.AssignedEmployeeId is null || handoff.AssignedEmployeeId == callerEmployeeId)
             && ticket.CurrentOwnerEmployeeId is { } existingOwner
             && existingOwner != callerEmployeeId
-            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken))
+            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken, ticketNoteRepository))
         {
             return AgentHandoffResult.Failure(AgentHandoffOutcome.TicketOwnedByAnotherEmployee);
         }

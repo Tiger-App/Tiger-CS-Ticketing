@@ -15,7 +15,8 @@
                  * nobody has worked it since the batch: no first human response, no status-history row (any status change / pending / resolve),
                    no note, no interaction-handler record, no NEW interaction (e.g. a new AI/customer conversation), no NEW approval request and no
                  other workflow event (transfer, handoff, reopen, Genesys event ...) after the batch
-   SKIP      - anything else. It is listed with the reason and left EXACTLY as found: a human owns that work now.
+   SKIP      - the current owner is a RECORDED HUMAN HANDLER of the ticket (they actually handled the interaction, so they own it - never taken from them,
+               even with @IncludeWorked = 1); anything else. It is listed with the reason and left EXACTLY as found: a human owns that work now.
                (@IncludeWorked = 1 lifts only the "nobody worked it" test, only with explicit approval; owner / department / assignment checks always apply.)
 
  For each ROLLBACK ticket the pre-batch state is restored:
@@ -118,6 +119,7 @@ BEGIN TRY
             WHEN t.CurrentDepartmentId <> @CcId                      THEN 'SKIP'
             WHEN t.CurrentOwnerEmployeeId IS NULL                    THEN 'SKIP'
             WHEN t.CurrentOwnerEmployeeId <> w.AgentId               THEN 'SKIP'
+            WHEN hnd.IsHandler = 1                                   THEN 'SKIP'
             WHEN t.TicketStatus <> 1                                 THEN 'SKIP'
             WHEN cur.n <> 1 OR cur.RowOk = 0                         THEN 'SKIP'
             WHEN later.n > 0                                         THEN 'SKIP'
@@ -129,6 +131,7 @@ BEGIN TRY
             WHEN t.CurrentDepartmentId <> @CcId                      THEN N'transferred out of Call Center since the batch'
             WHEN t.CurrentOwnerEmployeeId IS NULL                    THEN N'no owner now (already released)'
             WHEN t.CurrentOwnerEmployeeId <> w.AgentId               THEN N'owner changed since the batch (reassigned) - human ownership preserved'
+            WHEN hnd.IsHandler = 1                                   THEN N'the current owner is a recorded human handler of this ticket (TicketInteractionHandlers / HandledByUserId) - ownership preserved'
             WHEN t.TicketStatus <> 1                                 THEN N'no longer Open (work started / resolved / closed since the batch)'
             WHEN cur.n <> 1 OR cur.RowOk = 0                         THEN N'current assignment is not the batch row'
             WHEN later.n > 0                                         THEN N'a later assignment row exists'
@@ -144,6 +147,9 @@ BEGIN TRY
                                                      AND a.AssignedAtUtc = @BatchAt AND a.AssignedDepartmentId = @CcId))
                              THEN 0 ELSE 1 END AS RowOk) AS cur
     OUTER APPLY (SELECT COUNT(*) AS n FROM dbo.TicketAssignments a WHERE a.TicketId = w.TicketId AND a.AssignedAtUtc > @BatchAt) AS later
+    -- the person who actually handled the interaction owns the ticket: if that person is the batch's agent, rolling back would take it from them
+    OUTER APPLY (SELECT CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = w.TicketId AND h.HandledByUserId = w.AgentId)
+                               OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = w.TicketId AND i.HandledByUserId = w.AgentId) THEN 1 ELSE 0 END AS IsHandler) AS hnd
     OUTER APPLY (SELECT COUNT(*) AS n FROM dbo.TicketAssignments a WHERE a.TicketAssignmentId = w.PrevAssignmentId AND a.TicketId = w.TicketId AND a.IsCurrent = 0) AS prev
     OUTER APPLY (SELECT (SELECT COUNT(*) FROM dbo.TicketStatusHistory h WHERE h.TicketId = w.TicketId AND h.OccurredAtUtc > @BatchAt)
                       + (SELECT COUNT(*) FROM dbo.TicketNotes n WHERE n.TicketId = w.TicketId AND n.CreatedAtUtc > @BatchAt)

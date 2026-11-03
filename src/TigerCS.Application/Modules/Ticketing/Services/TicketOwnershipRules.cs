@@ -13,19 +13,27 @@ public static class TicketOwnershipRules
     /// <summary>
     /// True only when the ticket's current owner was put there by AUTOMATION and no person has touched it since: the current assignment row
     /// names that owner with a null assigning actor (the system — rule/Round Robin), the ticket is still Open, and no human response has been
-    /// recorded. Anything else — a manual assignment, a self-assignment, an accepted handoff, work started, a reply sent, or a missing
-    /// assignment row (legacy data) — is treated as genuine human ownership. When in doubt the answer is false, so ownership is never
-    /// overwritten on a guess.
+    /// recorded (unless <c>firstResponseIsFromTheIncomingAgent</c>: that response is the very reply of the agent now taking the ticket, recorded
+    /// in the same Genesys update, so it says nothing about the provisional owner). Anything else — a manual assignment, a self-assignment, an accepted handoff, work started, a reply sent, an internal note
+    /// (only a person permitted to modify the ticket can write one, so it is human work even though it changes neither status nor owner),
+    /// or a missing assignment row (legacy data) — is treated as genuine human ownership. When in doubt the answer is false, so ownership is
+    /// never overwritten on a guess.
     /// </summary>
     public static async Task<bool> IsAutomaticPreAssignmentAsync(
-        ITicketAssignmentRepository? assignmentRepository, Ticket ticket, CancellationToken cancellationToken = default)
+        ITicketAssignmentRepository? assignmentRepository, Ticket ticket, CancellationToken cancellationToken = default,
+        ITicketNoteRepository? noteRepository = null, bool firstResponseIsFromTheIncomingAgent = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
 
         if (assignmentRepository is null
             || ticket.CurrentOwnerEmployeeId is not { } owner
             || ticket.TicketStatus != TicketStatus.Open
-            || ticket.FirstHumanResponseAtUtc is not null)
+            || (ticket.FirstHumanResponseAtUtc is not null && !firstResponseIsFromTheIncomingAgent))
+        {
+            return false;
+        }
+
+        if (noteRepository is not null && await noteRepository.CountByTicketIdAsync(ticket.TicketId, cancellationToken) > 0)
         {
             return false;
         }

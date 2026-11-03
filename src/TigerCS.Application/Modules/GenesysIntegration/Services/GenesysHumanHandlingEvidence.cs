@@ -81,6 +81,23 @@ public static class GenesysHumanHandlingEvidence
             : GenesysHumanSignal.None;
     }
 
+    /// <summary>
+    /// The Genesys id of the person who actually wrote to the customer: the <c>senderId</c> of the FIRST <c>HumanAgent</c> line this update
+    /// carries (they received the interaction first), or null when there is none. Evidence of WHO answered, so the ticket goes to that
+    /// person - not to the next name in a rotation.
+    /// </summary>
+    public static string? FirstHumanSenderId(GenesysTicketUpdateDto request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return (request.Transcript ?? [])
+            .Concat(request.Ended?.Transcript ?? [])
+            .Where(m => string.Equals(m.Sender?.Trim(), "HumanAgent", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.SenderId))
+            .OrderBy(m => m.SentAtUtc)
+            .Select(m => m.SenderId!.Trim())
+            .FirstOrDefault();
+    }
+
     private static bool HasHumanLine(IReadOnlyList<GenesysTranscriptMessageDto>? messages) =>
         messages is not null
         && messages.Any(m => string.Equals(m.Sender?.Trim(), "HumanAgent", StringComparison.OrdinalIgnoreCase)
