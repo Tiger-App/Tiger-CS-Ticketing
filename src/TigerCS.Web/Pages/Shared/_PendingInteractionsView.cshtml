@@ -12,22 +12,18 @@
     var nowUtc = DateTime.UtcNow;
     var viewKey = TicketsView.Pending.Key();
 
-    // "page" is the reserved route key that names the Razor Page itself, so Url.Page silently DROPS a route value called "page" (Next/Prev
-    // would reload page 1). The page number is appended to the query string by hand instead.
-    string PageUrl(int p)
+    // A plain query string, NOT Url.Page: "page" is the reserved Razor Pages route value (see TicketsPaging).
+    string PageUrl(int p) => TicketsPaging.Url(new Dictionary<string, string?>
     {
-        var baseUrl = Url.Page("/Tickets", new
-    {
-        view = viewKey,
-        channelId = Model.ChannelId,
-        departmentId = Model.DepartmentId,
-        mineOnly = Model.MineOnly ? "true" : null,
-        unassignedOnly = Model.UnassignedOnly ? "true" : null,
-        includeResolved = Model.IncludeResolved ? "true" : null,
-        pageSize = Model.PageSize
-        }) ?? TicketsView.Pending.Href();
-        return baseUrl + (baseUrl.Contains('?') ? "&" : "?") + "page=" + p;
-    }
+        ["view"] = viewKey,
+        ["channelId"] = Model.ChannelId?.ToString(),
+        ["departmentId"] = Model.DepartmentId?.ToString(),
+        ["mineOnly"] = Model.MineOnly ? "true" : null,
+        ["unassignedOnly"] = Model.UnassignedOnly ? "true" : null,
+        ["includeResolved"] = Model.IncludeResolved ? "true" : null,
+        ["page"] = p.ToString(),
+        ["pageSize"] = Model.PageSize.ToString()
+    });
 }
 
 @if (Model.PendingActionError is not null)

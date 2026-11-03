@@ -9,42 +9,38 @@
     var isMyView = Model.View == TicketsView.My;
     var showAssigneeFilter = !isMyView && Model.AssigneeDepartmentId is not null;
 
-    // "page" is the reserved route key that names the Razor Page itself, so Url.Page silently DROPS a route value called "page" (Next/Prev
-    // would reload page 1). The page number is appended to the query string by hand instead.
-    string PageUrl(int p)
+    // A plain query string, NOT Url.Page: "page" is the reserved Razor Pages route value, so Url.Page(..., new { page = p }) drops the page number.
+    string PageUrl(int p) => TicketsPaging.Url(new Dictionary<string, string?>
     {
-        var baseUrl = Url.Page("/Tickets", new
-    {
-        view = viewKey,
-        departmentId = Model.DepartmentId,
-        priorityId = Model.PriorityId,
-        ticketStatus = isClosedView ? null : Model.TicketStatus,
-        verificationStatus = Model.VerificationStatus,
-        ownerEmployeeId = isMyView ? null : Model.OwnerEmployeeId,
-        search = Model.Search,
-        sortBy = Model.SortBy,
-        sortDir = Model.SortDir,
-        pageSize = Model.PageSize,
-        channelId = Model.ChannelId,
-        requestTypeId = Model.RequestTypeId,
-        activeOnly = Model.ActiveOnly ? "true" : null,
-        inDepartmentQueue = Model.InDepartmentQueue ? "true" : null,
-        availableToTake = Model.AvailableToTake ? "true" : null,
-        slaBreached = Model.SlaBreached ? "true" : null,
-        dueToday = Model.DueToday ? "true" : null,
-        backlogAge = Model.BacklogAge,
-        pendingApproval = Model.PendingApproval ? "true" : null,
-        unclassified = Model.Unclassified ? "true" : null,
-        createdByMe = Model.CreatedByMe ? "true" : null,
-        escalated = Model.Escalated ? "true" : null,
-        closureCategory = Model.ClosureCategory,
-        closedFrom = Model.ClosedFrom?.ToString("yyyy-MM-dd"),
-        closedTo = Model.ClosedTo?.ToString("yyyy-MM-dd"),
-        createdFrom = Model.CreatedFrom?.ToString("yyyy-MM-dd"),
-        createdTo = Model.CreatedTo?.ToString("yyyy-MM-dd")
-        }) ?? Model.View.Href();
-        return baseUrl + (baseUrl.Contains('?') ? "&" : "?") + "page=" + p;
-    }
+        ["view"] = viewKey,
+        ["departmentId"] = Model.DepartmentId?.ToString(),
+        ["priorityId"] = Model.PriorityId?.ToString(),
+        ["ticketStatus"] = isClosedView ? null : Model.TicketStatus,
+        ["verificationStatus"] = Model.VerificationStatus,
+        ["ownerEmployeeId"] = isMyView ? null : Model.OwnerEmployeeId?.ToString(),
+        ["search"] = Model.Search,
+        ["sortBy"] = Model.SortBy,
+        ["sortDir"] = Model.SortDir,
+        ["page"] = p.ToString(),
+        ["pageSize"] = Model.PageSize.ToString(),
+        ["channelId"] = Model.ChannelId?.ToString(),
+        ["requestTypeId"] = Model.RequestTypeId?.ToString(),
+        ["activeOnly"] = Model.ActiveOnly ? "true" : null,
+        ["inDepartmentQueue"] = Model.InDepartmentQueue ? "true" : null,
+        ["availableToTake"] = Model.AvailableToTake ? "true" : null,
+        ["slaBreached"] = Model.SlaBreached ? "true" : null,
+        ["dueToday"] = Model.DueToday ? "true" : null,
+        ["backlogAge"] = Model.BacklogAge,
+        ["pendingApproval"] = Model.PendingApproval ? "true" : null,
+        ["unclassified"] = Model.Unclassified ? "true" : null,
+        ["createdByMe"] = Model.CreatedByMe ? "true" : null,
+        ["escalated"] = Model.Escalated ? "true" : null,
+        ["closureCategory"] = Model.ClosureCategory,
+        ["closedFrom"] = Model.ClosedFrom?.ToString("yyyy-MM-dd"),
+        ["closedTo"] = Model.ClosedTo?.ToString("yyyy-MM-dd"),
+        ["createdFrom"] = Model.CreatedFrom?.ToString("yyyy-MM-dd"),
+        ["createdTo"] = Model.CreatedTo?.ToString("yyyy-MM-dd")
+    });
 }
 
 <form class="filter-bar" id="ticketFilters" method="get">
