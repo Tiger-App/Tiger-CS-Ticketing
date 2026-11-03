@@ -126,6 +126,33 @@ public sealed class DashboardSqliteFixture : IDisposable
     /// Records <paramref name="userId"/> as having handled a Genesys interaction on the ticket, on the ticket's own interaction (created
     /// here as a Phone interaction when the ticket has none) or on <paramref name="interactionNumber"/>-th additional one.
     /// </summary>
+    /// <summary>Gives the (bare-id) employee the CS Agent Identity role, so the visibility rule recognises them as a CS Agent.</summary>
+    public void MakeCsAgent(TigerCsDbContext context, Guid employeeId)
+    {
+        var role = context.Roles.FirstOrDefault(r => r.Name == Roles.CsAgent);
+        if (role is null)
+        {
+            role = new ApplicationRole(Roles.CsAgent, "CS Agent") { Id = Guid.NewGuid(), NormalizedName = Roles.CsAgent.ToUpperInvariant() };
+            context.Roles.Add(role);
+            context.SaveChanges();
+        }
+
+        if (!context.UserRoles.Any(ur => ur.UserId == employeeId && ur.RoleId == role.Id))
+        {
+            context.UserRoles.Add(new Microsoft.AspNetCore.Identity.IdentityUserRole<Guid> { UserId = employeeId, RoleId = role.Id });
+            context.SaveChanges();
+        }
+    }
+
+    /// <summary>An earlier (superseded) assignment of the ticket to <paramref name="employeeId"/> - the history that makes a CS Agent its responsible agent.</summary>
+    public void AddAssignmentHistory(TigerCsDbContext context, Ticket ticket, Guid employeeId)
+    {
+        var row = new TicketAssignment(ticket.TicketId, employeeId, ticket.CurrentDepartmentId, Now.AddHours(-2), assigningActorEmployeeId: null);
+        row.MarkSuperseded();
+        context.TicketAssignments.Add(row);
+        context.SaveChanges();
+    }
+
     public TicketInteractionHandler AddHandler(TigerCsDbContext context, Ticket ticket, Guid userId, bool additionalInteraction = false)
     {
         var interaction = additionalInteraction

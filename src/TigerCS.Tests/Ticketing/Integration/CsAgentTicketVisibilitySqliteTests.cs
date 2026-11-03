@@ -46,13 +46,13 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
     // =====================================================================
 
     [Fact]
-    public async Task TheQueue_ShowsAssignedAndHandledTickets_AndNoOthers_InTheSameDepartment()
+    public async Task TheQueue_ShowsOnlyTheTicketsAssignedToTheAgent_NotHandledOrUnassignedOnes_InTheSameDepartment()
     {
-        long assignedToA, handledByA, bothAssignedAndHandled, assignedToB, unassigned;
+        long assignedToA, bothAssignedAndHandled, handledByA, assignedToB, unassigned;
         using (var context = _db.CreateContext())
         {
             assignedToA = _db.AddTicket(context, _db.CustomerServiceId, owner: _agentA).TicketId;
-            handledByA = _db.AddTicket(context, _db.CustomerServiceId).TicketId;
+            handledByA = _db.AddTicket(context, _db.CustomerServiceId).TicketId;               // handled, but nobody owns it
             _db.AddHandler(context, context.Tickets.Find(handledByA)!, _agentA);
             bothAssignedAndHandled = _db.AddTicket(context, _db.CustomerServiceId, owner: _agentA).TicketId;
             _db.AddHandler(context, context.Tickets.Find(bothAssignedAndHandled)!, _agentA);
@@ -63,30 +63,33 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
 
         var seenByA = await QueueAsync(_agentA, Agent);
 
-        Assert.Equal([assignedToA, handledByA, bothAssignedAndHandled], seenByA);
+        Assert.Equal([assignedToA, bothAssignedAndHandled], seenByA);
+        Assert.DoesNotContain(handledByA, seenByA);
         Assert.DoesNotContain(assignedToB, seenByA);
         Assert.DoesNotContain(unassigned, seenByA);
     }
 
     [Fact]
-    public async Task ATicketHandledByTwoAgents_IsInBothQueues_AndNotInAThirds()
+    public async Task ATicketHandledByTwoAgents_IsOnlyInTheQueueOfTheOneItIsAssignedTo()
     {
         long transferred;
         using (var context = _db.CreateContext())
         {
-            var ticket = _db.AddTicket(context, _db.CustomerServiceId);
+            var ticket = _db.AddTicket(context, _db.CustomerServiceId, owner: _agentB);
             transferred = ticket.TicketId;
             _db.AddHandler(context, ticket, _agentA);
             _db.AddHandler(context, ticket, _agentB, additionalInteraction: true);
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
         }
 
-        Assert.Equal([transferred], await QueueAsync(_agentA, Agent));
         Assert.Equal([transferred], await QueueAsync(_agentB, Agent));
+        Assert.Empty(await QueueAsync(_agentA, Agent));          // handled it first, then it went to B
         Assert.Empty(await QueueAsync(Guid.NewGuid(), Agent));
     }
 
     [Fact]
-    public async Task Reassigning_RemovesTheAssignmentGrant_ButNotTheHandlingGrant()
+    public async Task Reassigning_ToAnotherCsAgent_RemovesTheTicketFromThePreviousAgent_EvenIfTheyHandledIt()
     {
         long assignedOnly, assignedAndHandled;
         using (var context = _db.CreateContext())
@@ -96,6 +99,8 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
             _db.AddHandler(context, second, _agentA);
             assignedOnly = first.TicketId;
             assignedAndHandled = second.TicketId;
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
         }
 
         Assert.Equal([assignedOnly, assignedAndHandled], await QueueAsync(_agentA, Agent));
@@ -110,8 +115,106 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
             context.SaveChanges();
         }
 
-        Assert.Equal([assignedAndHandled], await QueueAsync(_agentA, Agent));       // lost one, kept the one it handled
+        Assert.Empty(await QueueAsync(_agentA, Agent));                                  // both gone, handled or not
         Assert.Equal([assignedOnly, assignedAndHandled], await QueueAsync(_agentB, Agent));
+    }
+
+    [Fact]
+    public async Task ADepartmentEmployeeWorkingTheTicket_LeavesItVisibleToTheResponsibleCsAgentOnly()
+    {
+        var departmentEmployee = Guid.NewGuid();
+        long worked, unrelated;
+        using (var context = _db.CreateContext())
+        {
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
+            // A owned it, the department took it over: A is the latest CS Agent on its assignment history.
+            var ticket = _db.AddTicket(context, _db.CollectionsId, owner: departmentEmployee);
+            _db.AddAssignmentHistory(context, ticket, _agentA);
+            worked = ticket.TicketId;
+            // Department work nobody here was responsible for.
+            unrelated = _db.AddTicket(context, _db.CollectionsId, owner: departmentEmployee).TicketId;
+        }
+
+        Assert.Equal([worked], await QueueAsync(_agentA, Agent));    // follow-up and closure
+        Assert.Empty(await QueueAsync(_agentB, Agent));
+        Assert.DoesNotContain(unrelated, await QueueAsync(_agentA, Agent));
+        using var read = _db.CreateContext();
+        Assert.Equal(TicketQueryOutcome.Success, (await _db.CreateQueryService(read).GetDetailAsync(_agentA, Agent, worked)).Outcome);
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await _db.CreateQueryService(read).GetDetailAsync(_agentB, Agent, worked)).Outcome);
+    }
+
+    [Fact]
+    public async Task WhenTheDepartmentHandsTheTicketToAnotherCsAgent_TheEarlierResponsibleAgentLosesIt_AndItClosesOutOfTheirView()
+    {
+        var departmentEmployee = Guid.NewGuid();
+        long id;
+        using (var context = _db.CreateContext())
+        {
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
+            var ticket = _db.AddTicket(context, _db.CollectionsId, owner: departmentEmployee);
+            _db.AddAssignmentHistory(context, ticket, _agentA);
+            id = ticket.TicketId;
+        }
+
+        Assert.Equal([id], await QueueAsync(_agentA, Agent));
+
+        using (var context = _db.CreateContext())
+        {
+            // The latest CS Agent on the history is now B, and B owns it.
+            var ticket = context.Tickets.Find(id)!;
+            _db.AddAssignmentHistory(context, ticket, _agentB);
+            ticket.AssignTo(_agentB);
+            context.SaveChanges();
+        }
+
+        Assert.Empty(await QueueAsync(_agentA, Agent));
+        Assert.Equal([id], await QueueAsync(_agentB, Agent));
+    }
+
+    [Fact]
+    public async Task ResolvedAndClosedDepartmentWork_StaysVisibleToTheResponsibleCsAgent_UntilAnotherCsAgentOwnsIt()
+    {
+        var departmentEmployee = Guid.NewGuid();
+        long resolved, closed;
+        using (var context = _db.CreateContext())
+        {
+            _db.MakeCsAgent(context, _agentA);
+            var r = _db.AddTicket(context, _db.CollectionsId, owner: departmentEmployee, status: TicketStatus.Resolved);
+            var c = _db.AddTicket(context, _db.CollectionsId, owner: departmentEmployee, status: TicketStatus.Closed);
+            _db.AddAssignmentHistory(context, r, _agentA);
+            _db.AddAssignmentHistory(context, c, _agentA);
+            resolved = r.TicketId;
+            closed = c.TicketId;
+        }
+
+        Assert.Equal([resolved, closed], await QueueAsync(_agentA, Agent));
+        Assert.Equal([closed], await QueueAsync(_agentA, Agent, Everything() with { TicketStatus = "Closed" }));
+    }
+
+    [Fact]
+    public async Task WithNoCsAgentEverAssigned_TheCreatingCsAgentIsTheResponsibleOne_UntilAnotherIsAssigned()
+    {
+        var departmentEmployee = Guid.NewGuid();
+        long id;
+        using (var context = _db.CreateContext())
+        {
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
+            id = AddCreatedTicket(context, _agentA, _db.CollectionsId, owner: departmentEmployee).TicketId;   // rule-assigned straight to a department employee
+        }
+
+        Assert.Equal([id], await QueueAsync(_agentA, Agent));
+        Assert.Empty(await QueueAsync(_agentB, Agent));
+
+        using (var context = _db.CreateContext())
+        {
+            _db.AddAssignmentHistory(context, context.Tickets.Find(id)!, _agentB);   // a CS Agent is assigned later: responsibility moves
+        }
+
+        Assert.Empty(await QueueAsync(_agentA, Agent));
+        Assert.Equal([id], await QueueAsync(_agentB, Agent));
     }
 
     [Fact]
@@ -225,7 +328,7 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         {
             _db.AddTicket(context, _db.CustomerServiceId, owner: _agentA, priorityId: (byte)TigerCS.Domain.Modules.SlaAndEscalation.PriorityLevel.High);
             var handled = _db.AddTicket(context, _db.CollectionsId);
-            _db.AddHandler(context, handled, _agentA);
+            _db.AddHandler(context, handled, _agentA);                          // handled, unassigned: not visible
             _db.AddTicket(context, _db.CustomerServiceId, owner: _agentB);   // not visible
             _db.AddTicket(context, _db.CollectionsId);                       // unassigned, not visible
             _db.AddTicket(context, _db.RegistrationId, owner: _agentB, status: TicketStatus.InProgress); // not visible
@@ -236,15 +339,15 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         var agentView = await service.GetOverviewAsync(_agentA, Agent, new DashboardOverviewRequestDto());
         var supervisorView = await service.GetOverviewAsync(Guid.NewGuid(), Supervisor, new DashboardOverviewRequestDto());
 
-        Assert.Equal(2, agentView.Kpis.OpenTickets);
+        Assert.Equal(1, agentView.Kpis.OpenTickets);
         Assert.Equal(1, agentView.Kpis.MyTickets);
-        Assert.Equal(1, agentView.Kpis.InDepartmentQueue); // the unassigned ticket the agent handled
-        Assert.Equal(2, agentView.VolumeTotal);
-        Assert.Equal(2, agentView.VolumeByDepartment.Sum(d => d.Count));
-        Assert.Equal(2, agentView.StatusBreakdown.Sum(d => d.Count));
-        Assert.Equal(2, agentView.PriorityBreakdown.Sum(d => d.Count));
-        Assert.Equal(2, agentView.BacklogAgeing.Sum(d => d.Count));
-        Assert.Equal(2, agentView.RecentTickets.Count);
+        Assert.Equal(0, agentView.Kpis.InDepartmentQueue);
+        Assert.Equal(1, agentView.VolumeTotal);
+        Assert.Equal(1, agentView.VolumeByDepartment.Sum(d => d.Count));
+        Assert.Equal(1, agentView.StatusBreakdown.Sum(d => d.Count));
+        Assert.Equal(1, agentView.PriorityBreakdown.Sum(d => d.Count));
+        Assert.Equal(1, agentView.BacklogAgeing.Sum(d => d.Count));
+        Assert.Single(agentView.RecentTickets);
         Assert.Equal(5, supervisorView.Kpis.OpenTickets);
     }
 
@@ -254,7 +357,7 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         using (var context = _db.CreateContext())
         {
             _db.AddTicket(context, _db.CustomerServiceId, owner: _agentA);
-            _db.AddHandler(context, _db.AddTicket(context, _db.CollectionsId), _agentA);
+            _db.AddHandler(context, _db.AddTicket(context, _db.CollectionsId), _agentA);   // handled but unassigned: not the agent's
             _db.AddTicket(context, _db.CustomerServiceId, owner: _agentB);
             _db.AddTicket(context, _db.CollectionsId);
         }
@@ -262,12 +365,10 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         using var read = _db.CreateContext();
         var summary = await _db.CreateService(read).GetSummaryAsync(_agentA, Agent);
 
-        Assert.Equal(2, summary.OpenTickets);
+        Assert.Equal(1, summary.OpenTickets);
         Assert.Equal(1, summary.MyTickets);
-        Assert.Equal(1, summary.Unassigned);
-        // "Requiring attention" is breached / high / unassigned work: of the agent's two, only the unassigned one they handled qualifies —
-        // and the other unassigned Collections ticket (nobody they know handled it) must not appear.
-        Assert.Equal(_db.CollectionsId, Assert.Single(summary.AttentionTickets).CurrentDepartmentId);
+        Assert.Equal(0, summary.Unassigned);
+        Assert.DoesNotContain(summary.AttentionTickets, t => t.CurrentDepartmentId == _db.CollectionsId);   // unassigned work never appears
     }
 
     [Fact]
@@ -338,7 +439,7 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         {
             _db.AddTicket(context, _db.CustomerServiceId, owner: _agentA, customerName: "Visible Customer");
             _db.AddTicket(context, _db.CustomerServiceId, owner: _agentB, customerName: "Hidden Customer");
-            _db.AddHandler(context, _db.AddTicket(context, _db.CollectionsId, customerName: "Handled Customer"), _agentA);
+            _db.AddHandler(context, _db.AddTicket(context, _db.CollectionsId, customerName: "Handled Customer"), _agentA);   // handled only: not visible
         }
 
         using var read = _db.CreateContext();
@@ -348,7 +449,7 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         var asAgent = await directory.ListAsync(_agentA, Agent, new CustomerDirectoryListRequestDto(PageSize: 50));
         var asSupervisor = await directory.ListAsync(Guid.NewGuid(), Supervisor, new CustomerDirectoryListRequestDto(PageSize: 50));
 
-        Assert.Equal(["Handled Customer", "Visible Customer"], asAgent.Items.Select(i => i.DisplayName ?? "").Order().ToArray());
+        Assert.Equal(["Visible Customer"], asAgent.Items.Select(i => i.DisplayName ?? "").Order().ToArray());
         Assert.Equal(3, asSupervisor.Items.Count);
 
         var hidden = asSupervisor.Items.Single(i => i.DisplayName == "Hidden Customer");
@@ -454,8 +555,8 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         Assert.Equal("genesys-agent-a", row.GenesysAgentUserId);
         Assert.Equal(InteractionHandlerSource.Legacy, row.Source);
         Assert.Empty(read.TicketInteractionHandlers.Where(h => h.TicketId == withoutHandler));
-        // ...and the agent then sees exactly that ticket.
-        Assert.Equal([withHandler], await QueueAsync(_agentA, Agent));
+        // ...but handling a ticket grants no visibility by itself: the unassigned ticket is not the agent's.
+        Assert.Empty(await QueueAsync(_agentA, Agent));
     }
 
     // =====================================================================
@@ -471,7 +572,7 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
     }
 
     [Fact]
-    public async Task ACreatorKeepsTheTicketAfterItMovesDepartment_AsReadOnly_InTheQueueDashboardAndDetail()
+    public async Task ACreatorLosesAnUnassignedTicketThatMovesDepartment_InTheQueueDashboardAndDetail()
     {
         long id;
         using (var context = _db.CreateContext())
@@ -480,41 +581,62 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
             AddCreatedTicket(context, _agentB, _db.CustomerServiceId, owner: _agentB);  // someone else's
         }
 
+        Assert.Equal([id], await QueueAsync(_agentA, Agent));
+
         using (var context = _db.CreateContext())
         {
-            context.Tickets.Find(id)!.TransferToDepartment(_db.CollectionsId);
+            context.Tickets.Find(id)!.TransferToDepartment(_db.CollectionsId);   // system routing that clears the owner
+            context.SaveChanges();
+        }
+
+        Assert.Empty(await QueueAsync(_agentA, Agent));
+        using var read = _db.CreateContext();
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await _db.CreateQueryService(read).GetDetailAsync(_agentA, Agent, id)).Outcome);
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await _db.CreateQueryService(read).GetDetailAsync(_agentB, Agent, id)).Outcome);
+
+        var overview = await _db.CreateService(read).GetOverviewAsync(_agentA, Agent, new DashboardOverviewRequestDto());
+        Assert.Equal(0, overview.Kpis.OpenTickets);
+    }
+
+    [Fact]
+    public async Task ABusinessTransfer_KeepsTheOwner_SoTheAgentKeepsFullAccess_InTheQueueAndDetail()
+    {
+        long id;
+        using (var context = _db.CreateContext())
+        {
+            id = AddCreatedTicket(context, _agentA, _db.CustomerServiceId, owner: _agentA).TicketId;
+        }
+
+        using (var context = _db.CreateContext())
+        {
+            context.Tickets.Find(id)!.TransferToDepartment(_db.CollectionsId, preserveOwner: true);
             context.SaveChanges();
         }
 
         Assert.Equal([id], await QueueAsync(_agentA, Agent));
-        Assert.Empty(await QueueAsync(Guid.NewGuid(), Agent));
-
         using var read = _db.CreateContext();
         var detail = await _db.CreateQueryService(read).GetDetailAsync(_agentA, Agent, id);
         Assert.Equal(TicketQueryOutcome.Success, detail.Outcome);
-        Assert.True(detail.Response!.IsReadOnlyAccess);
-        Assert.Equal(_db.CollectionsId, detail.Response.CurrentDepartmentId);
-        Assert.Equal(TicketQueryOutcome.Forbidden, (await _db.CreateQueryService(read).GetDetailAsync(_agentB, Agent, id)).Outcome);
-
-        var overview = await _db.CreateService(read).GetOverviewAsync(_agentA, Agent, new DashboardOverviewRequestDto());
-        Assert.Equal(1, overview.Kpis.OpenTickets);
-        Assert.Equal(0, overview.Kpis.MyTickets);   // the owner was cleared by the transfer
+        Assert.False(detail.Response!.IsReadOnlyAccess);
     }
 
     [Fact]
-    public async Task CreatedByMe_NarrowsToTheCallersCreations_AndNeverToSomeoneElses()
+    public async Task CreatedByMe_NarrowsToTheCallersVisibleCreations_AndNeverToSomeoneElses()
     {
         long mineMoved, mineAssigned, assignedButNotMine;
         using (var context = _db.CreateContext())
         {
-            mineMoved = AddCreatedTicket(context, _agentA, _db.CollectionsId).TicketId;
+            _db.MakeCsAgent(context, _agentA);
+            _db.MakeCsAgent(context, _agentB);
+            mineMoved = AddCreatedTicket(context, _agentA, _db.CollectionsId).TicketId;   // created by A, unassigned: no longer visible
             mineAssigned = AddCreatedTicket(context, _agentA, _db.CustomerServiceId, owner: _agentA).TicketId;
             assignedButNotMine = AddCreatedTicket(context, _agentB, _db.CustomerServiceId, owner: _agentA).TicketId;
         }
 
-        Assert.Equal([mineMoved, mineAssigned], await QueueAsync(_agentA, Agent, Everything() with { CreatedByMe = true }));
-        Assert.Equal([mineMoved, mineAssigned, assignedButNotMine], await QueueAsync(_agentA, Agent));
-        Assert.Equal([assignedButNotMine], await QueueAsync(_agentB, Agent, Everything() with { CreatedByMe = true }));
+        Assert.Equal([mineAssigned], await QueueAsync(_agentA, Agent, Everything() with { CreatedByMe = true }));
+        Assert.Equal([mineAssigned, assignedButNotMine], await QueueAsync(_agentA, Agent));
+        Assert.DoesNotContain(mineMoved, await QueueAsync(_agentA, Agent));
+        Assert.Empty(await QueueAsync(_agentB, Agent, Everything() with { CreatedByMe = true }));   // B created one, but it is A's now
     }
 
     [Fact]
@@ -535,8 +657,8 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
             [], AgentScopeEmployeeId: _agentA, ClaimableDepartmentIds: [_db.CustomerServiceId]));
 
         Assert.DoesNotContain(list.Items, i => i.Handoff.TicketAgentHandoffId == handoffId);
-        // ...while the ticket itself is still theirs to read.
-        Assert.Contains(ticketId, await QueueAsync(_agentA, Agent));
+        // ...and, being unassigned, it is no longer theirs to read just because they created it.
+        Assert.DoesNotContain(ticketId, await QueueAsync(_agentA, Agent));
     }
 
     [Fact]

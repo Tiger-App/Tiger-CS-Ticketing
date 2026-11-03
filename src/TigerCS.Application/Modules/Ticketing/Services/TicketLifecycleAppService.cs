@@ -405,8 +405,12 @@ public sealed class TicketLifecycleAppService(
 
         // Close is a cross-department right of the CS layer; a CS Agent may use it only on a ticket they can see — and never on one they
         // used to own: ownership ended with the transfer/reassignment, so handling the interaction earlier no longer carries a right to act.
+        // The one exception is the RESPONSIBLE CS Agent while a department employee holds the ticket: having handed the work to the department
+        // is not a loss of ownership in this sense - they follow it up and close it (TicketVisibilityRule.CanFollowDepartmentWorkAsync).
         if (!isCurrentOwner
-            && (await TicketOwnershipRules.WasPreviousOwnerAsync(ticketAssignmentRepository, ticket, callerEmployeeId, cancellationToken)
+            && ((await TicketOwnershipRules.WasPreviousOwnerAsync(ticketAssignmentRepository, ticket, callerEmployeeId, cancellationToken)
+                    && !await TicketVisibilityRule.CanFollowDepartmentWorkAsync(
+                        userDepartmentAssignmentRepository, callerEmployeeId, ticket, cancellationToken))
                 || !await TicketVisibilityRule.PassesAgentScopeAsync(
                     userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken)))
         {

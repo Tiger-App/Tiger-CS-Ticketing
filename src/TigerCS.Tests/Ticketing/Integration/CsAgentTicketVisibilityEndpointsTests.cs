@@ -107,22 +107,24 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     // =====================================================================
 
     [Fact]
-    public async Task TheTicketList_HoldsOnlyTheTicketsAssignedToTheAgentOrHandledByThem()
+    public async Task TheTicketList_HoldsOnlyTheTicketsAssignedToTheAgent_NotOnesTheyOnlyAnsweredOrUnassignedOnes()
     {
         var (genesys, _) = await ClientAsync();
         var (manager, _) = await ClientAsync(Roles.CsManager);
         var gA = NewGenesysId();
         var (agentA, agentAId) = await ClientAsync(genesysUserId: gA);
 
-        var (answered, _) = await GenesysTicketAsync(genesys, answeredBy: gA);   // A answered the call
+        var (answered, _) = await GenesysTicketAsync(genesys, answeredBy: gA);   // A answered the call, but nobody assigned it to A
         var (assigned, _) = await GenesysTicketAsync(genesys);                   // assigned to A by a manager
         await AssignAsync(manager, assigned, agentAId);
         var (neither, _) = await GenesysTicketAsync(genesys);                    // same department, nobody
 
         var seen = await ListedIdsAsync(agentA);
 
-        Assert.Equal([answered, assigned], seen);
+        Assert.Equal([assigned], seen);
+        Assert.DoesNotContain(answered, seen);
         Assert.DoesNotContain(neither, seen);
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(agentA, answered));
         Assert.Contains(neither, await ListedIdsAsync(manager));
     }
 
@@ -138,16 +140,17 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
 
     [Theory]
     [MemberData(nameof(TicketReads))]
-    public async Task ByDirectUrl_AStrangerIsRefusedOnEveryTicketRead_WhileTheAgentWhoHandledItIsNot(string suffix)
+    public async Task ByDirectUrl_AStrangerIsRefusedOnEveryTicketRead_WhileTheAssignedAgentIsNot(string suffix)
     {
         var (genesys, _) = await ClientAsync();
-        var gA = NewGenesysId();
-        var (handler, _) = await ClientAsync(genesysUserId: gA);
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var (assignee, assigneeId) = await ClientAsync();
         var (stranger, _) = await ClientAsync();
-        var (ticketId, _) = await GenesysTicketAsync(genesys, answeredBy: gA);
+        var (ticketId, _) = await GenesysTicketAsync(genesys);
+        await AssignAsync(manager, ticketId, assigneeId);
 
         var refused = await stranger.GetAsync($"/api/tickets/{ticketId}{suffix}");
-        var allowed = await handler.GetAsync($"/api/tickets/{ticketId}{suffix}");
+        var allowed = await assignee.GetAsync($"/api/tickets/{ticketId}{suffix}");
 
         Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         Assert.NotEqual(HttpStatusCode.Forbidden, allowed.StatusCode);
@@ -310,26 +313,28 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     // =====================================================================
 
     [Fact]
-    public async Task ATransferredCall_IsVisibleToBothAgents_NotToAThird_AndAnAnsweredCallBeatsAnUnrelatedDepartment()
+    public async Task ATransferredCall_IsVisibleOnlyToTheAgentWhoNowOwnsIt()
     {
         var (genesys, _) = await ClientAsync();
+        var (manager, _) = await ClientAsync(Roles.CsManager);
         var gA = NewGenesysId();
         var gB = NewGenesysId();
-        var (first, _) = await ClientAsync(genesysUserId: gA);
-        var (second, _) = await ClientAsync(genesysUserId: gB);
+        var (first, firstId) = await ClientAsync(genesysUserId: gA);
+        var (second, secondId) = await ClientAsync(genesysUserId: gB);
         var (third, _) = await ClientAsync(genesysUserId: NewGenesysId());
         var (ticketId, conversationId) = await GenesysTicketAsync(genesys, answeredBy: gA);
+        await AssignAsync(manager, ticketId, firstId);                                    // A answered and owns it
 
-        // Before the transfer only the agent who answered has it.
         Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(first, ticketId));
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(second, ticketId));
 
-        await ConnectAsync(genesys, ticketId, conversationId, gB);                        // A transfers to B; B connects
+        await ConnectAsync(genesys, ticketId, conversationId, gB);                        // A transfers to B; B connects...
+        await AssignAsync(manager, ticketId, secondId);                                   // ...and the ticket moves to B
 
-        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(first, ticketId));        // the one who transferred away keeps it
-        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(second, ticketId));       // the one who received it has it
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(third, ticketId)); // a mapped agent who touched nothing
-        Assert.Contains(ticketId, await ListedIdsAsync(first));
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(first, ticketId)); // handled it, but it is B's now
+        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(second, ticketId));
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(third, ticketId));
+        Assert.DoesNotContain(ticketId, await ListedIdsAsync(first));
         Assert.Contains(ticketId, await ListedIdsAsync(second));
         Assert.DoesNotContain(ticketId, await ListedIdsAsync(third));
     }
@@ -376,7 +381,8 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     {
         var (genesys, _) = await ClientAsync();
         var gA = NewGenesysId();
-        var (agent, _) = await ClientAsync(genesysUserId: gA);
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var (agent, agentId) = await ClientAsync(genesysUserId: gA);
         var (supervisor, _) = await ClientAsync(Roles.CsSupervisor);
         var (ticketId, conversationId) = await GenesysTicketAsync(genesys);
         var raised = await genesys.PatchAsJsonAsync(
@@ -395,6 +401,9 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
             (await agent.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { })).StatusCode);
 
         await ConnectAsync(genesys, ticketId, conversationId, gA);          // Genesys connects the agent
+        Assert.DoesNotContain(handoffId, await WorkSeenBy(agent));          // connecting alone grants no visibility
+
+        await AssignAsync(manager, ticketId, agentId);                      // once the ticket is theirs, so is its work
 
         Assert.Contains(handoffId, await WorkSeenBy(agent));
     }
@@ -407,7 +416,7 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         var gA = NewGenesysId();
         var (agent, agentId) = await ClientAsync(genesysUserId: gA);
         var (supervisor, _) = await ClientAsync(Roles.CsSupervisor);
-        await GenesysTicketAsync(genesys, answeredBy: gA);
+        await GenesysTicketAsync(genesys, answeredBy: gA);   // answered, not assigned: not counted
         var (assigned, _) = await GenesysTicketAsync(genesys);
         await AssignAsync(manager, assigned, agentId);
         await GenesysTicketAsync(genesys);   // unrelated, same department
@@ -416,10 +425,10 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         var supervisorOverview = await (await supervisor.GetAsync("/api/dashboard/overview")).Content.ReadFromJsonAsync<DashboardOverviewDto>();
         var summary = await (await agent.GetAsync("/api/dashboard")).Content.ReadFromJsonAsync<DashboardSummaryDto>();
 
-        Assert.Equal(2, agentOverview!.Kpis.OpenTickets);
-        Assert.Equal(2, agentOverview.VolumeTotal);
+        Assert.Equal(1, agentOverview!.Kpis.OpenTickets);
+        Assert.Equal(1, agentOverview.VolumeTotal);
         Assert.Equal(1, agentOverview.Kpis.MyTickets);
-        Assert.Equal(2, summary!.OpenTickets);
+        Assert.Equal(1, summary!.OpenTickets);
         Assert.True(supervisorOverview!.Kpis.OpenTickets >= 3);
     }
 
@@ -496,7 +505,7 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
-    public async Task WhenTheAgentSelectsTheDepartmentQueue_TheTicketStaysUnassigned_AndTheCreatorCanOnlyReadIt()
+    public async Task WhenTheAgentSelectsTheDepartmentQueue_TheTicketStaysUnassigned_AndIsNotTheCreatorsToSee()
     {
         var department = await DepartmentAsync();
         var (creator, _) = await ClientAsync(departmentId: department);
@@ -504,8 +513,8 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         var ticket = await CreateManualTicketAsync(creator, department, departmentQueue: true);
 
         Assert.Null(await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
-        var detail = await (await creator.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.True(detail!.IsReadOnlyAccess); // theirs to follow, not to work: it is in the queue, not assigned to them
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(creator, ticket.TicketId));   // in the queue, not assigned: creating it grants nothing
+        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(creator));
     }
 
     [Fact]
@@ -665,24 +674,24 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
-    public async Task TheCreator_CanOpenFollowAndReadTheTicket_BeforeAndAfterItIsTransferred()
+    public async Task TheCreator_KeepsFullAccessAsTheResponsibleCsAgent_WhenADepartmentEmployeeTakesTheTicketOver()
     {
         var own = await DepartmentAsync();
         var (creator, _) = await ClientAsync(departmentId: own);
         var (manager, _) = await ClientAsync(Roles.CsManager);
         var ticket = await CreateManualTicketAsync(creator, own);
 
-        // Before: theirs by self-assignment — full access, not read-only.
+        // Before: theirs by self-assignment - full access.
         var before = await (await creator.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.False(before!.IsReadOnlyAccess);
         Assert.Equal(HttpStatusCode.Created, (await creator.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/notes", new CreateNoteRequestDto("Customer called again."))).StatusCode);
 
         var receiving = await NewDepartmentAsync();
-        await TransferAsync(manager, ticket.TicketId, receiving);
+        await TransferAsync(manager, ticket.TicketId, receiving);   // the receiving department's employee now owns it
 
-        // After: still readable — status, department, owner, history, updates — and flagged read-only.
+        // After: the department employee owns it, the creating CS Agent is still responsible for it - full access to follow up and close.
         var after = await (await creator.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.True(after!.IsReadOnlyAccess);
+        Assert.False(after!.IsReadOnlyAccess);
         Assert.Equal(receiving, after.CurrentDepartmentId);
         Assert.NotNull(after.CurrentOwnerEmployeeId);   // reassigned explicitly on transfer: never ownerless
         foreach (var suffix in new[] { "/history", "/notes", "/interactions", "/sla", "/escalations", "/approvals", "/customer-history", "/reviews" })
@@ -691,14 +700,26 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         }
 
         var notes = await (await creator.GetAsync($"/api/tickets/{ticket.TicketId}/notes")).Content.ReadFromJsonAsync<TicketNoteListResultDto>();
-        Assert.Contains(notes!.Items, n => n.NoteText == "Customer called again.");   // the updates are readable too
-
-        // The approvals view the page is built from offers a read-only creator nothing to do.
-        var approvals = await (await creator.GetAsync($"/api/tickets/{ticket.TicketId}/approvals")).Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
-        Assert.False(approvals!.CallerCanRecordEvents);
-        Assert.All(approvals.Approvals, a => Assert.False(a.CallerCanDecide));
-        Assert.All(approvals.RequestableApprovals, r => Assert.False(r.CallerCanRequest));
+        Assert.Contains(notes!.Items, n => n.NoteText == "Customer called again.");
         Assert.Contains(ticket.TicketId, await ListedIdsAsync(creator));
+    }
+
+    [Fact]
+    public async Task OnceAnotherCsAgentOwnsTheTicket_TheCreatorAndEarlierResponsibleAgentLoseItEntirely()
+    {
+        var own = await DepartmentAsync();
+        var (creator, _) = await ClientAsync(departmentId: own);
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var (successor, successorId) = await ClientAsync(departmentId: own);
+        var ticket = await CreateManualTicketAsync(creator, own);
+        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(creator, ticket.TicketId));
+
+        await AssignAsync(manager, ticket.TicketId, successorId);   // reassigned to another CS Agent
+
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(creator, ticket.TicketId));
+        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(creator));
+        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(successor, ticket.TicketId));
+        Assert.Equal(successorId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));   // ownership untouched by the filter
     }
 
     [Fact]
@@ -730,34 +751,38 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
 
     [Theory]
     [MemberData(nameof(TicketWrites))]
-    public async Task ACreatorOutsideTheDepartment_GetsReadOnlyAccess_EveryModificationIs403(string suffix)
+    public async Task AFormerOwnerWhoseTicketWentToAnotherCsAgent_IsRefusedEveryModification_With403(string suffix)
     {
         var own = await DepartmentAsync();
         var (creator, _) = await ClientAsync(departmentId: own);
-        var (ticketId, _, manager) = await CreatedThenTransferredAsync(creator, own);
-        var before = await (await manager.GetAsync($"/api/tickets/{ticketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var (_, successorId) = await ClientAsync(departmentId: own);
+        var ticket = await CreateManualTicketAsync(creator, own);
+        await AssignAsync(manager, ticket.TicketId, successorId);
+        var before = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
 
-        var response = await creator.PostAsJsonAsync($"/api/tickets/{ticketId}/{suffix}", new { });
+        var response = await creator.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/{suffix}", new { });
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        var after = await (await manager.GetAsync($"/api/tickets/{ticketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        var after = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.Equal(before!.RowVersion, after!.RowVersion);   // nothing changed
     }
 
     [Fact]
-    public async Task ACreatorOutsideTheDepartment_CannotAddANote_EvenWithAValidBody()
+    public async Task AFormerOwner_CannotAddANote_EvenWithAValidBody_OnceAnotherCsAgentOwnsTheTicket()
     {
         var own = await DepartmentAsync();
-        var (creator, creatorId) = await ClientAsync(departmentId: own);
-        var (ticketId, _, manager) = await CreatedThenTransferredAsync(creator, own);
+        var (creator, _) = await ClientAsync(departmentId: own);
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var (_, successorId) = await ClientAsync(departmentId: own);
+        var ticket = await CreateManualTicketAsync(creator, own);
+        await AssignAsync(manager, ticket.TicketId, successorId);
 
-        var note = await creator.PostAsJsonAsync($"/api/tickets/{ticketId}/notes", new CreateNoteRequestDto("Still me."));
+        var note = await creator.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/notes", new CreateNoteRequestDto("Still me."));
 
         Assert.Equal(HttpStatusCode.Forbidden, note.StatusCode);
-        var notes = await (await manager.GetAsync($"/api/tickets/{ticketId}/notes")).Content.ReadFromJsonAsync<TicketNoteListResultDto>();
+        var notes = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}/notes")).Content.ReadFromJsonAsync<TicketNoteListResultDto>();
         Assert.DoesNotContain(notes!.Items, n => n.NoteText == "Still me.");
-        Assert.NotNull(await _factory.GetTicketCurrentOwnerAsync(ticketId));   // reassigned explicitly on transfer: never ownerless
-        Assert.NotEqual(Guid.Empty, creatorId);
     }
 
     [Fact]
