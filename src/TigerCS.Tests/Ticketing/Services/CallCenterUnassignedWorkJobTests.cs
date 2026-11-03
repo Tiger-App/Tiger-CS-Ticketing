@@ -36,6 +36,8 @@ public class CallCenterUnassignedWorkJobTests
         return (new CallCenterUnassignedWorkJob(services.GetRequiredService<IServiceScopeFactory>(), new Monitor(options), runLock, log), log, runLock);
     }
 
+    private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string here = "") => here;
+
     [Fact]
     public void ShippedDefaults_AreDisabled_DryRun_CsAgentsOnly()
     {
@@ -44,10 +46,11 @@ public class CallCenterUnassignedWorkJobTests
         Assert.True(defaults.DryRun);
         Assert.True(defaults.CsAgentRoleOnly);
 
-        var json = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "appsettings.json"));
+        var json = File.ReadAllText(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(ThisFile())!, "..", "..", "..", "TigerCS.Api", "appsettings.json")));
         var section = new ConfigurationBuilder().AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json))).Build().GetSection("CallCenterReconciliation").Get<CallCenterReconciliationOptions>()!;
         Assert.False(section.Enabled);
         Assert.True(section.DryRun);
+        Assert.True(section.CsAgentRoleOnly);
     }
 
     [Fact]
