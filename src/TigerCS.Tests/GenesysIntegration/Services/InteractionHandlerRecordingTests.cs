@@ -8,7 +8,7 @@ using TigerCS.Tests.GenesysIntegration.Fakes;
 namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
-/// Which Genesys events make an agent a recorded <b>handler</b> of an interaction — and so give them the ticket. The integration used to
+/// Which Genesys events make an agent a recorded <b>handler</b> of an interaction (which by itself grants no ticket visibility). The integration used to
 /// keep one handler per interaction (the first, never overwritten), so a transferred call only ever named the first agent. It now records
 /// every agent Genesys reports as connected, and nothing that is merely an assignment, a ring or a screen pop.
 /// </summary>
@@ -88,6 +88,10 @@ public class InteractionHandlerRecordingTests
         Assert.Equal(agent, handler.HandledByUserId);
         Assert.Equal(InteractionHandlerSource.Routing, handler.Source);
         Assert.Equal(connectedAt, handler.ConnectedAtUtc);
+
+        // Being recorded as the handler grants nothing by itself; the ticket is the agent's once it is assigned to them.
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(agent, Agent, ticketId)).Outcome);
+        f.Tickets.All.Single(t => t.TicketId == ticketId).AssignTo(agent);
         Assert.Equal(TicketQueryOutcome.Success, (await f.StrictTicketQuery.GetDetailAsync(agent, Agent, ticketId)).Outcome);
     }
 
@@ -129,9 +133,16 @@ public class InteractionHandlerRecordingTests
         Assert.Equal(first, interaction.HandledByUserId);   // unchanged: "who took it first"
         Assert.Equal(AgentBId, interaction.GenesysAgentId); // the current routing
 
-        // Both agents — the one who transferred away and the one who received it — can open the ticket; a third cannot.
-        Assert.Equal(TicketQueryOutcome.Success, (await f.StrictTicketQuery.GetDetailAsync(first, Agent, ticketId)).Outcome);
+        // Handling grants nothing: until the ticket is assigned, neither the agent who transferred away nor the one who received it can open it.
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(first, Agent, ticketId)).Outcome);
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(second, Agent, ticketId)).Outcome);
+
+        // Once it is assigned to the agent the call went to, only that agent can open it - not the one who handled it first, nor a third.
+        f.DepartmentAssignments.RolesByEmployee[first] = [Roles.CsAgent];
+        f.DepartmentAssignments.RolesByEmployee[second] = [Roles.CsAgent];
+        f.Tickets.All.Single(t => t.TicketId == ticketId).AssignTo(second);
         Assert.Equal(TicketQueryOutcome.Success, (await f.StrictTicketQuery.GetDetailAsync(second, Agent, ticketId)).Outcome);
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(first, Agent, ticketId)).Outcome);
         Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(Guid.NewGuid(), Agent, ticketId)).Outcome);
     }
 
@@ -256,8 +267,13 @@ public class InteractionHandlerRecordingTests
 
         var handler = Assert.Single(f.Handlers.All);
         Assert.Equal(second.Ticket.TicketId, handler.TicketId);
-        Assert.Equal(TicketQueryOutcome.Success, (await f.StrictTicketQuery.GetDetailAsync(agent, Agent, second.Ticket.TicketId)).Outcome);
+
+        // Handling grants no visibility on either ticket; the agent sees the one that is assigned to them, and still not its sibling.
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(agent, Agent, second.Ticket.TicketId)).Outcome);
         Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(agent, Agent, first.Ticket!.TicketId)).Outcome);
+        f.Tickets.All.Single(t => t.TicketId == second.Ticket.TicketId).AssignTo(agent);
+        Assert.Equal(TicketQueryOutcome.Success, (await f.StrictTicketQuery.GetDetailAsync(agent, Agent, second.Ticket.TicketId)).Outcome);
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(agent, Agent, first.Ticket.TicketId)).Outcome);
     }
 
     /// <summary>The audit vocabulary, spelled once for the assertions above.</summary>

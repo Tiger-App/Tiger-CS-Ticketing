@@ -602,6 +602,7 @@ public class GenesysMultipleTicketsPerConversationTests
         var viewer = Guid.NewGuid();
         foreach (var ticket in new[] { documents, leasing })
         {
+            ticket.AssignTo(viewer); // a CS Agent sees only a ticket assigned to them
             var view = await w.F.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], ticket.TicketId);
 
             Assert.Equal(TicketQueryOutcome.Success, view.Outcome);
@@ -625,7 +626,9 @@ public class GenesysMultipleTicketsPerConversationTests
         await w.F.TicketUpdate.UpdateAsync(ServiceAccount, documents.TicketId, new GenesysTicketUpdateDto(Conversation, Transcript: [message, noId]));
         await w.F.TicketUpdate.UpdateAsync(ServiceAccount, leasing.TicketId, new GenesysTicketUpdateDto(Conversation, Transcript: [message, noId]));
 
-        var view = await w.F.InteractionQuery.GetForTicketAsync(Guid.NewGuid(), [Roles.CsAgent], leasing.TicketId);
+        var viewer = Guid.NewGuid();
+        leasing.AssignTo(viewer); // a CS Agent sees only a ticket assigned to them
+        var view = await w.F.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], leasing.TicketId);
 
         Assert.Equal(["Same line, sent twice", "A line without an id"], Assert.Single(view.Response!.Interactions).Messages.Select(m => m.Body));
     }
@@ -679,6 +682,8 @@ public class GenesysMultipleTicketsPerConversationTests
                 Conversation, Transcript: [new GenesysTranscriptMessageDto("HumanAgent", T0, "I can help", SenderName: "Layla", ExternalMessageId: "h-1")]));
 
         var viewer = Guid.NewGuid();
+        documents.AssignTo(viewer); // a CS Agent sees only a ticket assigned to them
+        leasing.AssignTo(viewer);
         var documentsView = await w.F.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], documents.TicketId);
         var leasingView = await w.F.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], leasing.TicketId);
 

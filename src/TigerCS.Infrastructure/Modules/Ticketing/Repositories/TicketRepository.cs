@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.Services;
 using Microsoft.EntityFrameworkCore;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Domain.Modules.Ticketing;
@@ -5,7 +6,7 @@ using TigerCS.Infrastructure.Persistence;
 
 namespace TigerCS.Infrastructure.Modules.Ticketing.Repositories;
 
-public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketRepository
+public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? reopenPolicy = null, TimeProvider? clock = null) : ITicketRepository
 {
     public Task<Ticket?> GetByIdAsync(long ticketId, CancellationToken cancellationToken = default) =>
         dbContext.Tickets.FirstOrDefaultAsync(t => t.TicketId == ticketId, cancellationToken);
@@ -22,7 +23,8 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
 
         filtered = filtered.VisibleTo(
             dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope,
-            ownerEmployeeId: query.OwnerVisibilityEmployeeId, includeClaimable: query.IncludeClaimable);
+            ownerEmployeeId: query.OwnerVisibilityEmployeeId, includeClaimable: query.IncludeClaimable,
+            inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
 
         if (query.DepartmentId is { } departmentId)
         {
@@ -246,7 +248,9 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
             return new CustomerHistoryQueryResult([], 0, 0, 0);
         }
 
-        filtered = filtered.VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId);
+        filtered = filtered.VisibleTo(
+            dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId,
+            inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
 
         if (query.ExcludeTicketId is { } excludeTicketId)
         {
@@ -287,7 +291,8 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
     public async Task<DashboardSnapshot> GetDashboardSnapshotAsync(
         DashboardSnapshotQuery query, CancellationToken cancellationToken = default)
     {
-        var visible = dbContext.Tickets.AsQueryable().VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.CallerEmployeeId);
+        var visible = dbContext.Tickets.AsQueryable().VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.CallerEmployeeId,
+            inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
 
         // Same "active" set as TicketQueryFilters.Active, legacy
         // PendingThirdParty included — see its remark for why.

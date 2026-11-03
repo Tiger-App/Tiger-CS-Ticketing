@@ -208,8 +208,9 @@ public class AwaitingHumanAgentClaimTests
         await f.Handoffs.AddAsync(handoff);
 
         Assert.Equal(creator, f.Tickets.All.Single(t => t.TicketId == ticketId).CreatedByEmployeeId);
-        Assert.Equal(TicketQueryOutcome.Success, (await f.StrictTicketQuery.GetDetailAsync(creator, Agent, ticketId)).Outcome); // can read it
-        Assert.Empty(await ListedAsync(f, creator, Roles.CsAgent));                                                           // but it is not work they can take
+        // Creating a ticket grants a CS Agent nothing (it used to leave them read-only access): not the ticket, and not its work.
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(creator, Agent, ticketId)).Outcome);
+        Assert.Empty(await ListedAsync(f, creator, Roles.CsAgent));
         Assert.Equal(AgentHandoffOutcome.Forbidden, (await f.StrictPendingWork.AcceptAsync(creator, Agent, handoff.TicketAgentHandoffId)).Outcome);
         Assert.Equal(AgentHandoffOutcome.Forbidden, (await f.StrictPendingWork.CompleteAsync(
             creator, Agent, handoff.TicketAgentHandoffId, new CompleteAgentHandoffRequestDto("done"))).Outcome);

@@ -76,8 +76,8 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
             .Content.ReadFromJsonAsync<TicketResponseDto>();
 
         var ticketId = created!.TicketId;
-        await _factory.RecordHandlerAsync(ticketId, csClient);
-        var detail = await (await csClient.GetAsync($"/api/tickets/{ticketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        // The creating CS Agent is the ticket's responsible CS Agent (nobody else was ever assigned), so once the department employee
+        // holds it they can close it. An unassigned ticket is not visible to them, so the RowVersion comes from the create response.
 
         var workerClient = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
         var headClient = await ClientForAsync(Roles.DepartmentHead, departmentId);
@@ -86,7 +86,7 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
 
         var afterAssign = await (await headClient.PostAsJsonAsync(
                 $"/api/tickets/{ticketId}/assignment",
-                new AssignTicketRequestDto(workerId, Convert.FromBase64String(detail!.RowVersion))))
+                new AssignTicketRequestDto(workerId, Convert.FromBase64String(created.RowVersion))))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
 
         // The assigned worker drives it; a second Department Employee client
@@ -181,7 +181,9 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
         Assert.Equal(departmentId, reopened.CurrentDepartmentId);
 
         // The approval and the reopen stay two separate events in history.
-        var view = await (await agentClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
+        // (Read as a CS Supervisor: the reopen released the owner, and a CS Agent sees an unassigned ticket only through Take Ownership.)
+        var supervisorClient = await ClientForAsync(Roles.CsSupervisor);
+        var view = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
             .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
         Assert.Contains(view!.Events, e => e.EventType == "ApprovalRequested" && e.Note == "Customer called back — still not cooling.");
         Assert.Contains(view.Events, e => e.EventType == "ApprovalReceived");

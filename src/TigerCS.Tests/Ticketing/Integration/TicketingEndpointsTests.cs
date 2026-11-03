@@ -128,7 +128,8 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
             new CreateTicketRequestDto(intake.IntakeRecordId, null, null, categoryId, (byte)PriorityLevel.Low, "Walk-in question"));
         Assert.Equal(HttpStatusCode.Created, ticketResponse.StatusCode);
         var ticket = await ticketResponse.Content.ReadFromJsonAsync<TicketResponseDto>();
-        await _factory.RecordHandlerAsync(ticket!.TicketId, agent);
+        // The agent takes the ticket (it is assigned to them): a CS Agent sees only tickets currently assigned to them (or that a department employee holds for them).
+        await _factory.AssignOwnerAsync(ticket!.TicketId, TigerCsApiFactory.UserIdOf(agent));
 
         var detail = await (await agent.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.Equal(channel.ChannelId, detail!.OriginatingChannelId);
@@ -388,8 +389,8 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
         Assert.Equal(departmentId, ticket.OriginatingDepartmentId);
         Assert.StartsWith("TG-", ticket.TicketNumber);
 
-        // The agent who took the call is a handler of the ticket's interaction, so it stays visible to them.
-        await _factory.RecordHandlerAsync(ticket.TicketId, client);
+        // The agent who took the call owns the ticket (assigned to them), which is what makes it visible to them.
+        await _factory.AssignOwnerAsync(ticket.TicketId, TigerCsApiFactory.UserIdOf(client));
         var detailResponse = await client.GetAsync($"/api/tickets/{ticket.TicketId}");
         Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
     }
@@ -436,10 +437,9 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
                 intake.IntakeRecordId, crmUnit.UnitReferenceId, crmUnit.ContactReferenceId, categoryId, (byte)PriorityLevel.High, "AC unit not cooling"));
         var ticket = await ticketResponse.Content.ReadFromJsonAsync<TicketResponseDto>();
 
-        // The creating agent took the call: they handled the ticket's interaction, which is what keeps it visible to them.
-        await _factory.RecordHandlerAsync(ticket!.TicketId, creatorClient);
-
-        return (ticket.TicketId, departmentId, Convert.FromBase64String(ticket.RowVersion));
+        // The creating CS Agent is the ticket's responsible CS Agent (nobody else was ever assigned), so once a department employee holds
+        // it they can follow up and close it. No history row is added: a superseded assignment would make them a "previous owner", who cannot close.
+        return (ticket!.TicketId, departmentId, Convert.FromBase64String(ticket.RowVersion));
     }
 
     [Fact]
@@ -616,9 +616,13 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
         Assert.Equal(ticketId, reopened.TicketId);
         Assert.Equal(detail.TicketNumber, reopened.TicketNumber);
 
+        // The reopen released the owner, and a CS Agent sees an unassigned ticket only through Take Ownership, so the reads after it
+        // are made as a CS Supervisor (who sees every department) - the assertions are unchanged.
+        var supervisorClient = await CreateAuthenticatedClientAsync(Roles.CsSupervisor);
+
         // The reason is now readable: the lifecycle history endpoint serves the
         // row the reopen wrote, which is what Ticket Details renders.
-        var history = await (await agentClient.GetAsync($"/api/tickets/{ticketId}/history"))
+        var history = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/history"))
             .Content.ReadFromJsonAsync<TicketLifecycleHistoryDto>();
         var reopenEntry = Assert.Single(
             history!.Entries,
@@ -627,7 +631,7 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
         Assert.False(reopenEntry.ActorIsSystem);
 
         // ...and the typed event carries the routing/SLA facts beside it.
-        var approvals = await (await agentClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
+        var approvals = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
             .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
         var reopenEvent = Assert.Single(approvals!.Events, e => e.EventType == "Reopened");
         Assert.True(ReopenActivityFacts.TryParse(reopenEvent.Note, out var facts));
@@ -635,7 +639,7 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
         Assert.Equal(1, facts.ReopenCount);
 
         // An actively-worked ticket has nothing to reopen.
-        var secondReopen = await agentClient.PostAsJsonAsync(
+        var secondReopen = await supervisorClient.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/reopen",
             new ReopenTicketRequestDto("Already reopened.", departmentId, Convert.FromBase64String(reopened.RowVersion)));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, secondReopen.StatusCode);
@@ -677,6 +681,10 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
 
         Assert.Contains(await QueueTicketIdsAsync(agentClient, "Closed"), id => id == ticketId);
 
+        // Once reopened the ticket has no owner, and a CS Agent sees an unassigned ticket only through Take Ownership - so the
+        // post-reopen queue/detail reads below are made as a CS Supervisor, who sees every department's tickets.
+        var supervisorClient = await CreateAuthenticatedClientAsync(Roles.CsSupervisor);
+
         var reopened = await (await agentClient.PostAsJsonAsync(
                 $"/api/tickets/{ticketId}/reopen",
                 new ReopenTicketRequestDto("Customer called back.", departmentId, Convert.FromBase64String(afterClose!.RowVersion))))
@@ -685,28 +693,28 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
 
         // Gone from Closed, present among the active work — both are live
         // queries over the same row, so nothing had to be "refreshed".
-        Assert.DoesNotContain(await QueueTicketIdsAsync(agentClient, "Closed"), id => id == ticketId);
-        Assert.Contains(await QueueTicketIdsAsync(agentClient, "InProgress"), id => id == ticketId);
+        Assert.DoesNotContain(await QueueTicketIdsAsync(supervisorClient, "Closed"), id => id == ticketId);
+        Assert.Contains(await QueueTicketIdsAsync(supervisorClient, "InProgress"), id => id == ticketId);
 
         // No owner, so it waits in the department queue rather than in anyone's
         // My Tickets — including the employee who worked it before.
         Assert.Null(reopened.CurrentOwnerEmployeeId);
-        Assert.DoesNotContain(await QueueTicketIdsAsync(agentClient, ticketStatus: null, ownerEmployeeId: workerId), id => id == ticketId);
+        Assert.DoesNotContain(await QueueTicketIdsAsync(supervisorClient, ticketStatus: null, ownerEmployeeId: workerId), id => id == ticketId);
 
         // A reopen is not a new ticket: the queue holds exactly one row for it,
         // at its current state, and the customer's history gained no sibling
         // copy of it (the anchor ticket is excluded from its own history).
-        var active = await QueueTicketIdsAsync(agentClient, "InProgress");
+        var active = await QueueTicketIdsAsync(supervisorClient, "InProgress");
         Assert.Single(active, id => id == ticketId);
 
-        var history = await (await agentClient.GetAsync($"/api/tickets/{ticketId}/customer-history?limit=10"))
+        var history = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/customer-history?limit=10"))
             .Content.ReadFromJsonAsync<CustomerHistoryDto>();
         // (Other tests in this shared fixture contribute their own tickets to
         // this customer's history — what matters is that the reopened one is
         // not among them a second time.)
         Assert.DoesNotContain(history!.Tickets, t => t.TicketId == ticketId);
 
-        var detail = await (await agentClient.GetAsync($"/api/tickets/{ticketId}"))
+        var detail = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.Equal("InProgress", detail!.TicketStatus);
         Assert.False(detail.IsReopenEligible);

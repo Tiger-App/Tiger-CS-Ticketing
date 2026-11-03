@@ -90,7 +90,8 @@ public class ReadOnlyRolesAndServiceIdentityEndpointTests : IClassFixture<ReadOn
                 new CreateTicketRequestDto(
                     intake.IntakeRecordId, crmUnit.UnitReferenceId, crmUnit.ContactReferenceId, categoryId, (byte)PriorityLevel.High, "AC unit not cooling")))
             .Content.ReadFromJsonAsync<TicketResponseDto>();
-        await _factory.RecordHandlerAsync(created!.TicketId, client);
+        // The creating CS Agent takes the ticket (assigned to them): a CS Agent sees only tickets currently assigned to them.
+        await _factory.AssignOwnerAsync(created!.TicketId, TigerCsApiFactory.UserIdOf(client));
 
         return (await (await client.GetAsync($"/api/tickets/{created.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>())!;
     }
@@ -143,7 +144,8 @@ public class ReadOnlyRolesAndServiceIdentityEndpointTests : IClassFixture<ReadOn
         // Nothing changed.
         var after = await _factory.GetTicketAsync(ticket.TicketId);
         Assert.Equal(ticket.TicketStatus, after!.TicketStatus.ToString());
-        Assert.Null(after.CurrentOwnerEmployeeId);
+        // (The ticket's owner is whoever the helper assigned it to - the creating agent - and stays so: no refused call reassigned it.)
+        Assert.Equal(ticket.CurrentOwnerEmployeeId, after.CurrentOwnerEmployeeId);
     }
 
     [Theory]

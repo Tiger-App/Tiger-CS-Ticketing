@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.Services;
 using Microsoft.EntityFrameworkCore;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Domain.Modules.Ticketing;
@@ -13,7 +14,7 @@ namespace TigerCS.Infrastructure.Modules.Ticketing.Repositories;
 /// The predicates are the shared <see cref="TicketQueryFilters"/>, the
 /// same ones the ticket queue's drill-down filters use.
 /// </summary>
-public sealed class DashboardQueryRepository(TigerCsDbContext dbContext) : IDashboardQueryRepository
+public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenPolicy? reopenPolicy = null, TimeProvider? clock = null) : IDashboardQueryRepository
 {
     private const string NotRecordedChannelLabel = "No channel recorded";
     private const string NoRequestTypeLabel = "No request type";
@@ -24,7 +25,8 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext) : IDash
     {
         // The dimension filters apply to everything; the date range only to
         // the volume breakdowns; "active" only to the backlog side.
-        var scoped = dbContext.Tickets.AsNoTracking().VisibleTo(dbContext, query.ScopeDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.OwnerVisibilityEmployeeId);
+        var scoped = dbContext.Tickets.AsNoTracking().VisibleTo(dbContext, query.ScopeDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.OwnerVisibilityEmployeeId,
+            inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
 
         if (query.DepartmentId is { } departmentFilterId)
         {

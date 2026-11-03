@@ -277,7 +277,9 @@ public class GenesysContractsTests
                         new GenesysTranscriptMessageDto("HumanAgent", sentAt.AddSeconds(90), "I can help with that.", "Layla", "ga-7", "m-4")
                     ])));
 
-        var history = await f.InteractionQuery.GetForTicketAsync(Guid.NewGuid(), [Roles.CsAgent], ticketId);
+        var viewer = Guid.NewGuid();
+        f.Tickets.All.Single(t => t.TicketId == ticketId).AssignTo(viewer); // a CS Agent sees only a ticket assigned to them
+        var history = await f.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], ticketId);
         var interaction = Assert.Single(history.Response!.Interactions);
 
         // All four sender types survive, in the order they were delivered.

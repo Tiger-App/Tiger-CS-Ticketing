@@ -50,7 +50,7 @@ public class TicketApprovalAppServiceTests
         var approvals = new FakeTicketApprovalRepository();
         var events = new FakeTicketWorkflowEventRepository();
         var requirements = new FakeRequestTypeApprovalRequirementRepository();
-        var departmentAssignments = new FakeUserDepartmentAssignmentRepository();
+        var departmentAssignments = new FakeUserDepartmentAssignmentRepository { EveryUserIsResponsible = true };
         var departments = new FakeDepartmentRepository();
         var audit = new FakeAuditEntryWriter();
         var unitOfWork = new FakeTicketingUnitOfWork();

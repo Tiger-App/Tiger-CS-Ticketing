@@ -67,6 +67,9 @@ public sealed class ReopenEligibilityService(
     IWorkflowTemplateRepository workflowTemplateRepository,
     ReopenPolicy reopenPolicy)
 {
+    /// <summary>The start of the reopen window at <paramref name="nowUtc"/>: a ticket closed before it can no longer be reopened.</summary>
+    public DateTime WindowStartUtc(DateTime nowUtc) => nowUtc - reopenPolicy.Window;
+
     /// <summary>
     /// Evaluates the lifecycle rule against <paramref name="nowUtc"/>, which
     /// the caller passes in rather than this service reading the clock — the

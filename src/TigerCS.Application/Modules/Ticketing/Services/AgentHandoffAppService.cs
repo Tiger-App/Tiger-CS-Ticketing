@@ -193,7 +193,11 @@ public sealed class AgentHandoffAppService(
         // AuthorizationGate — because this is the assignee's membership of the
         // ticket's department, a domain invariant, rather than a question about
         // what the caller is permitted to do.
-        if (!await userDepartmentAssignmentRepository.ExistsAsync(
+        // The one exception is the CS Agent who ALREADY owns the ticket: a department change keeps the responsible CS Agent on it, so they
+        // are not a member of the receiving department and must not have to take ownership again. Nothing is assigned to them here
+        // (they already own it), so the invariant this guards - never assigning a non-member - is not at risk.
+        if (ticket.CurrentOwnerEmployeeId != callerEmployeeId
+            && !await userDepartmentAssignmentRepository.ExistsAsync(
                 callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
         {
             return AgentHandoffResult.Failure(AgentHandoffOutcome.AgentNotInTicketDepartment);

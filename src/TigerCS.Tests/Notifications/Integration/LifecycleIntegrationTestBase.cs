@@ -87,7 +87,9 @@ public abstract class LifecycleIntegrationTestBase
         var afterResolve = (await resolveResponse.Content.ReadFromJsonAsync<TicketDetailDto>())!;
         Assert.Equal("Resolved", afterResolve.TicketStatus);
 
-        return (ticket, worker, agent, afterResolve);
+        // The third element is the client that closes/reopens afterwards. It is the CS Manager, not the agent who created the ticket:
+        // that agent is the ticket's responsible agent but - having assigned it onwards - a previous owner, who may no longer Close it.
+        return (ticket, worker, manager, afterResolve);
     }
 
     protected async Task<OutboxMessage> OutboxMessageFor(long ticketId, string eventType) =>

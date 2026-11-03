@@ -223,6 +223,7 @@ public class PriorityDowngradeAppServiceTests
     {
         var h = await CreateAsync();
         var unclassified = Ticket.CreateUnclassified("TG-CS-20261005-0002", TicketDepartmentId, "Inquiry", CreatedAt);
+        unclassified.AssignTo(h.OwnerId);
         await h.Sla.Tickets.AddAsync(unclassified);
 
         var result = await h.Service.RequestAsync(
@@ -511,6 +512,7 @@ public class PriorityDowngradeAppServiceTests
     {
         var h = await CreateAsync();
         var provisional = Ticket.CreateUnverified("TG-CS-20261005-0003", TicketDepartmentId, 5, (byte)PriorityLevel.High, "x", CreatedAt);
+        provisional.AssignTo(h.OwnerId);
         await h.Sla.Tickets.AddAsync(provisional);
         var request = await h.Service.RequestAsync(
             h.OwnerId, [Roles.CsAgent], provisional.TicketId, new CreateDowngradeRequestRequestDto((byte)PriorityLevel.Low, "reason"));

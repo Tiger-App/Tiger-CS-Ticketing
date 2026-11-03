@@ -470,17 +470,19 @@ public class GenesysRequestTypeRoutingTests
         var ticket = await IngestAsync(w, "conv-agent");
         var original = Assert.Single(w.F.Sla.SlaInstances.All);
         var roles = new[] { Roles.CsAgent };
+        var agent = Guid.NewGuid();
+        ticket.AssignTo(agent); // a CS Agent works only a ticket assigned to them
 
         // Less urgent than the default: still a downgrade, still needs approval.
         var low = await w.F.Classification.ClassifyAsync(
-            Guid.NewGuid(), roles, ticket.TicketId,
+            agent, roles, ticket.TicketId,
             new ClassifyTicketRequestDto(category.CategoryId, (byte)PriorityLevel.Low, null, ticket.RowVersion));
         Assert.Equal(TicketMutationOutcome.DowngradeRequiresApproval, low.Outcome);
         Assert.False(ticket.IsClassified);
 
         // The same priority: the category is added to the running period; nothing restarts.
         var same = await w.F.Classification.ClassifyAsync(
-            Guid.NewGuid(), roles, ticket.TicketId,
+            agent, roles, ticket.TicketId,
             new ClassifyTicketRequestDto(category.CategoryId, (byte)PriorityLevel.Medium, null, ticket.RowVersion));
         Assert.Equal(TicketMutationOutcome.Success, same.Outcome);
         Assert.True(ticket.IsClassified);
@@ -497,9 +499,11 @@ public class GenesysRequestTypeRoutingTests
         var ticket = await IngestAsync(w, "conv-urgent");
         var original = Assert.Single(w.F.Sla.SlaInstances.All);
         var originalResolutionDue = original.ResolutionDueAtUtc;
+        var agent = Guid.NewGuid();
+        ticket.AssignTo(agent); // a CS Agent works only a ticket assigned to them
 
         var result = await w.F.Classification.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
+            agent, [Roles.CsAgent], ticket.TicketId,
             new ClassifyTicketRequestDto(category.CategoryId, (byte)PriorityLevel.Critical, null, ticket.RowVersion));
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);

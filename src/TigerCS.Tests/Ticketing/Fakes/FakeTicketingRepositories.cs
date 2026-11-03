@@ -185,16 +185,31 @@ public sealed class FakeTicketRepository : ITicketRepository
     public bool IsVisibleTo(long ticketId, IReadOnlyCollection<int>? departmentIds, Guid? agentEmployeeId) =>
         _tickets.TryGetValue(ticketId, out var ticket) && IsVisible(ticket, departmentIds, agentEmployeeId, includeCreated: false);
 
-    /// <summary>Mirrors <c>TicketQueryFilters.VisibleTo</c>: department scope for everyone; for a restricted CS Agent, assigned-to-me OR handled-by-me OR a department their other role grants.</summary>
+    /// <summary>
+    /// The Identity data the agent rule reads (which owners are CS Agents, who is the responsible CS Agent of a ticket). Share the instance given to
+    /// the <c>TicketQueryAppService</c> under test; without it no owner counts as a CS Agent and nobody follows a department employee's work.
+    /// </summary>
+    public IdentityAndAccess.Fakes.FakeUserDepartmentAssignmentRepository? Directory { get; set; }
+
+    /// <summary>
+    /// Mirrors <c>TicketQueryFilters.VisibleTo</c>: department scope for everyone; for a restricted CS Agent, assigned-to-me OR a department
+    /// employee holds it and I am its responsible CS Agent OR a department their other role grants. Creating or handling grants nothing.
+    /// </summary>
     private bool IsVisible(Ticket t, IReadOnlyCollection<int>? departmentIds, Guid? agentEmployeeId, bool includeCreated = true, bool createdOnly = false) =>
         agentEmployeeId is not { } agentId
             ? departmentIds is null || departmentIds.Contains(t.CurrentDepartmentId)
             : createdOnly
             ? t.CreatedByEmployeeId == agentId
             : t.CurrentOwnerEmployeeId == agentId
-                || (includeCreated && t.CreatedByEmployeeId == agentId)
-                || Handlers.HasHandledSync(t.TicketId, agentId)
+                || FollowsDepartmentWork(t, agentId)
                 || (departmentIds?.Contains(t.CurrentDepartmentId) ?? false);
+
+    private bool FollowsDepartmentWork(Ticket t, Guid agentId) =>
+        Directory is { } directory
+        && t.CurrentOwnerEmployeeId is { } owner
+        && owner != agentId
+        && !(directory.RolesByEmployee.TryGetValue(owner, out var ownerRoles) && ownerRoles.Contains(TigerCS.Domain.Modules.IdentityAndAccess.Roles.CsAgent))
+        && directory.IsResponsibleCsAgentAsync(t.TicketId, t.CreatedByEmployeeId, agentId).GetAwaiter().GetResult();
 
     public Task<Ticket?> GetByIdAsync(long ticketId, CancellationToken cancellationToken = default) =>
         Task.FromResult(_tickets.GetValueOrDefault(ticketId));

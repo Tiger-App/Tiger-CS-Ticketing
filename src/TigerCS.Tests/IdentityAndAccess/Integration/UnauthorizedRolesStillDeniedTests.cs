@@ -73,7 +73,8 @@ public class UnauthorizedRolesStillDeniedTests : IClassFixture<TigerCsApiFactory
                 new CreateTicketRequestDto(
                     intake.IntakeRecordId, crmUnit.UnitReferenceId, crmUnit.ContactReferenceId, categoryId, (byte)PriorityLevel.High, "AC unit not cooling")))
             .Content.ReadFromJsonAsync<TicketResponseDto>();
-        await _factory.RecordHandlerAsync(created!.TicketId, client);
+        // The creating CS Agent takes the ticket (assigned to them): a CS Agent sees only tickets currently assigned to them.
+        await _factory.AssignOwnerAsync(created!.TicketId, TigerCsApiFactory.UserIdOf(client));
 
         var detail = await (await client.GetAsync($"/api/tickets/{created.TicketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
