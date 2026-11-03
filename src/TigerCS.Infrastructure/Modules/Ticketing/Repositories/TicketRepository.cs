@@ -194,11 +194,13 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
         filtered = query.SortBy switch
         {
             TicketSortBy.Priority => query.SortDescending
-                ? filtered.OrderBy(t => t.PriorityId == null).ThenByDescending(t => t.PriorityId).ThenByDescending(t => t.CreatedAtUtc)
-                : filtered.OrderBy(t => t.PriorityId == null).ThenBy(t => t.PriorityId).ThenByDescending(t => t.CreatedAtUtc),
+                ? filtered.OrderBy(t => t.PriorityId == null).ThenByDescending(t => t.PriorityId).ThenByDescending(t => t.CreatedAtUtc).ThenByDescending(t => t.TicketId)
+                : filtered.OrderBy(t => t.PriorityId == null).ThenBy(t => t.PriorityId).ThenByDescending(t => t.CreatedAtUtc).ThenByDescending(t => t.TicketId),
+            // TicketId is the unique tiebreaker: tickets created in the same instant (a bulk import, the backlog distribution) would
+            // otherwise sort in an undefined order, so consecutive pages could repeat or skip rows.
             _ => query.SortDescending
-                ? filtered.OrderByDescending(t => t.CreatedAtUtc)
-                : filtered.OrderBy(t => t.CreatedAtUtc)
+                ? filtered.OrderByDescending(t => t.CreatedAtUtc).ThenByDescending(t => t.TicketId)
+                : filtered.OrderBy(t => t.CreatedAtUtc).ThenBy(t => t.TicketId)
         };
 
         var items = await filtered

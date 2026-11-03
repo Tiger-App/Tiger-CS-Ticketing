@@ -358,7 +358,12 @@ public sealed class TicketAutoAssignmentService(
 
         var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(
             ticket.CurrentDepartmentId, activeEmployeesOnly: true, cancellationToken);
-        var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), cancellationToken);
+
+        // The Call Center rotation is CS Agents only: Department Employee / Department Head members of the Call Center are never dealt
+        // tickets (they cannot Transfer as owner). Every other department keeps the wider operational-role pool. When the department
+        // repository is not wired (bare unit-test construction) the department cannot be identified and the wider pool applies.
+        var csAgentsOnly = await IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
+        var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), csAgentsOnly, cancellationToken);
         if (eligible.Count == 0)
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
@@ -396,7 +401,7 @@ public sealed class TicketAutoAssignmentService(
     /// read-only users, supervisors/managers and administrators are skipped. A lookup that cannot answer excludes the person: rotation
     /// never guesses. (The three readers are optional only so unit tests can build the service bare; the composition root supplies all.)
     /// </summary>
-    private async Task<List<Guid>> FilterEligibleAsync(IEnumerable<Guid> candidateIds, CancellationToken cancellationToken)
+    private async Task<List<Guid>> FilterEligibleAsync(IEnumerable<Guid> candidateIds, bool csAgentsOnly, CancellationToken cancellationToken)
     {
         var eligible = new List<Guid>();
         foreach (var id in candidateIds)
@@ -415,7 +420,9 @@ public sealed class TicketAutoAssignmentService(
             if (roleReader is not null)
             {
                 var roles = await roleReader.GetRolesAsync(id, cancellationToken);
-                if (Roles.IsReadOnlyCaller(roles) || !roles.Any(TicketRoleSets.RoundRobinEligible.Contains))
+                if (Roles.IsReadOnlyCaller(roles)
+                    || !roles.Any(TicketRoleSets.RoundRobinEligible.Contains)
+                    || (csAgentsOnly && !roles.Contains(Roles.CsAgent, StringComparer.Ordinal)))
                 {
                     continue;
                 }
