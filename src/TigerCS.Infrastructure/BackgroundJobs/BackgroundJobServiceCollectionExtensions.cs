@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using TigerCS.Application.Modules.Collections;
 using TigerCS.Application.Modules.Collections.Review;
 using TigerCS.Application.Modules.SlaAndEscalation.Abstractions;
+using TigerCS.Application.Modules.Ticketing.Services;
 
 namespace TigerCS.Infrastructure.BackgroundJobs;
 
@@ -30,6 +31,7 @@ public static class BackgroundJobServiceCollectionExtensions
             ?? new BackgroundJobOptions();
 
         services.Configure<OutboxDispatchOptions>(configuration.GetSection(OutboxDispatchOptions.SectionName));
+        services.Configure<CallCenterReconciliationOptions>(configuration.GetSection(CallCenterReconciliationOptions.SectionName));
 
         // Tells the Collections pages whether the scheduled snapshot refresh really exists in this process (informational; registered whether or not Hangfire runs).
         services.AddSingleton<TigerCS.Application.Modules.Collections.Abstractions.ISnapshotSchedule>(sp =>
@@ -49,6 +51,7 @@ public static class BackgroundJobServiceCollectionExtensions
         services.AddScoped<CollectionsSuppressionJob>();
         // Holds only the scope factory; it opens one scope per candidate itself.
         services.AddScoped<ChatbotInactivityCloseJob>();
+        services.AddScoped<CallCenterUnassignedWorkJob>();
 
         if (!options.Enabled)
         {
@@ -148,6 +151,37 @@ public static class BackgroundJobServiceCollectionExtensions
             ChatbotInactivityCloseJob.RecurringJobId,
             job => job.RunAsync(CancellationToken.None),
             "* * * * *");
+    }
+
+    /// <summary>
+    /// Registers (or removes) the recurring Call Center unassigned-work reconciliation. Registered only when BOTH
+    /// <c>BackgroundJobs:Enabled</c> and <c>CallCenterReconciliation:Enabled</c> are true; otherwise a previously registered schedule is
+    /// removed, so switching it off takes effect at the next start. <c>DryRun</c> (default true) is read by the job on every run.
+    /// </summary>
+    public static void UseTigerCsRecurringCallCenterReconciliation(
+        this IServiceProvider services, BackgroundJobOptions backgroundJobOptions, CallCenterReconciliationOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(backgroundJobOptions);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (!backgroundJobOptions.Enabled)
+        {
+            return;
+        }
+
+        var manager = services.GetRequiredService<IRecurringJobManager>();
+        if (!options.Enabled)
+        {
+            manager.RemoveIfExists(CallCenterUnassignedWorkJob.RecurringJobId);
+            return;
+        }
+
+        var minutes = Math.Clamp(options.IntervalMinutes, 1, 60);
+        manager.AddOrUpdate<CallCenterUnassignedWorkJob>(
+            CallCenterUnassignedWorkJob.RecurringJobId,
+            job => job.RunAsync(CancellationToken.None),
+            $"*/{minutes} * * * *");
     }
 
     /// <summary>

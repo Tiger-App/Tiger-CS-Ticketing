@@ -310,6 +310,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ITicketInteractionHandlerRepository, TicketInteractionHandlerRepository>();
         services.AddScoped<ITicketAgentHandoffRepository, TicketAgentHandoffRepository>();
         services.AddScoped<TicketAutoAssignmentService>();
+        services.AddScoped<ITicketUnassignedWorkRepository, TicketUnassignedWorkRepository>();
+        services.AddScoped<CallCenterUnassignedWorkReconciler>();
         services.AddScoped<TicketRequestTypeRoutingService>();
 
         // Workflow/Automation (phase 3) — approvals, approval requirements,
