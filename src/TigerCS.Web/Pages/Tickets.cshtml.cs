@@ -453,10 +453,13 @@ public sealed class TicketsModel(
     /// <summary>Best-effort names for the channel/request-type drill-down chips; a failed directory call only degrades the chip's wording.</summary>
     private async Task LoadDrilldownNamesAsync(CancellationToken cancellationToken)
     {
-        if (ChannelId is { } channelId && channelsApiClient is not null)
+        // The channel catalogue feeds both the Channel filter's options and the drill-down badge. Inactive (retired) channels are included so a
+        // ticket that entered on one stays findable. If it cannot be loaded the filter is simply not offered (a drill-down id is still kept).
+        if (channelsApiClient is not null)
         {
             var channels = await channelsApiClient.GetChannelsAsync(activeOnly: false, cancellationToken);
-            ChannelName = channels.IsSuccess ? channels.Value?.FirstOrDefault(c => c.ChannelId == channelId)?.Name : null;
+            Channels = channels.IsSuccess ? channels.Value ?? [] : [];
+            ChannelName = ChannelId is { } channelId ? Channels.FirstOrDefault(c => c.ChannelId == channelId)?.Name : null;
         }
 
         if (RequestTypeId is { } requestTypeId && requestTypesApiClient is not null)
