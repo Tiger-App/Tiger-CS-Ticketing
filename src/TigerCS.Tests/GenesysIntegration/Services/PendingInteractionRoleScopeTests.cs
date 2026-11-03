@@ -66,9 +66,15 @@ public class PendingInteractionRoleScopeTests
         var customerServiceAgent = Guid.NewGuid();
         Member(f, customerServiceAgent, departmentId + 100);
 
+        // The outsider is the ticket's current owner (so the visibility rule lets them act on it at all), yet still not a member of its
+        // department - and CS Agent alone gives no cross-department right to accept.
+        var ticket = Assert.Single(f.Tickets.All);
+        ticket.AssignTo(customerServiceAgent);
         Assert.Equal(
             AgentHandoffOutcome.AgentNotInTicketDepartment,
             (await f.PendingWork.AcceptAsync(customerServiceAgent, [Roles.CsAgent], handoffId)).Outcome);
+
+        ticket.ReleaseOwner();
         Assert.Equal(
             AgentHandoffOutcome.Success,
             (await f.PendingWork.AcceptAsync(callCenterAgent, [Roles.CsAgent], handoffId)).Outcome);

@@ -507,14 +507,15 @@ public class AiHumanHandoffFlowTests
     [Fact]
     public async Task ANonMemberWhoCanSeeTheWork_IsRefused_AndNothingChanges()
     {
-        // The case the approved rule exists for: a CS Agent is cross-department
+        // The case the approved rule exists for: a CS Supervisor is cross-department
         // for VISIBILITY, so they pass the authorization gate — and still
         // cannot become the owner of a ticket in a department they do not
-        // belong to.
+        // belong to. (A restricted CS Agent outside the department no longer gets
+        // this far: an unassigned ticket is not visible to them at all.)
         var (f, ticketId, handoffId, _) = await WaitingForHumanAsync();
         var outsideAgent = Guid.NewGuid();
 
-        var result = await f.PendingWork.AcceptAsync(outsideAgent, CsAgent, handoffId);
+        var result = await f.PendingWork.AcceptAsync(outsideAgent, [Roles.CsSupervisor], handoffId);
 
         Assert.Equal(AgentHandoffOutcome.AgentNotInTicketDepartment, result.Outcome);
 
@@ -539,7 +540,7 @@ public class AiHumanHandoffFlowTests
 
         Assert.Equal(
             AgentHandoffOutcome.AgentNotInTicketDepartment,
-            (await f.PendingWork.AcceptAsync(outsideAgent, CsAgent, handoffId)).Outcome);
+            (await f.PendingWork.AcceptAsync(outsideAgent, [Roles.CsSupervisor], handoffId)).Outcome);
 
         // The refusal must not have poisoned the work item.
         var result = await f.PendingWork.AcceptAsync(eligible, CsAgent, handoffId);
@@ -601,17 +602,22 @@ public class AiHumanHandoffFlowTests
             new UserDepartmentAssignment(
                 otherDepartmentAgent, newDepartment.DepartmentId, isPrimary: true, DateTime.UtcNow, null));
 
-        // Before the transfer they cannot accept.
+        // Before the transfer they cannot accept: a restricted CS Agent cannot even see an unassigned ticket of another department, and
+        // someone who can see it (a supervisor) is still not a member of its department.
+        Assert.Equal(
+            AgentHandoffOutcome.Forbidden,
+            (await f.PendingWork.AcceptAsync(otherDepartmentAgent, CsAgent, handoffId)).Outcome);
         Assert.Equal(
             AgentHandoffOutcome.AgentNotInTicketDepartment,
-            (await f.PendingWork.AcceptAsync(otherDepartmentAgent, CsAgent, handoffId)).Outcome);
+            (await f.PendingWork.AcceptAsync(otherDepartmentAgent, [Roles.CsSupervisor], handoffId)).Outcome);
 
         // The existing Department Transfer moves the ticket.
         var ticket = await f.Tickets.GetByIdAsync(ticketId);
         ticket!.TransferToDepartment(newDepartment.DepartmentId);
 
-        // ...and now the same agent is eligible.
-        var result = await f.PendingWork.AcceptAsync(otherDepartmentAgent, CsAgent, handoffId);
+        // ...and now the same agent is eligible. (As a member of the new department holding its Department Employee role: that role is what
+        // covers the department, CS Agent alone grants no department scope.)
+        var result = await f.PendingWork.AcceptAsync(otherDepartmentAgent, [Roles.CsAgent, Roles.DepartmentEmployee], handoffId);
 
         Assert.Equal(AgentHandoffOutcome.Success, result.Outcome);
         Assert.Equal(AgentHandoffStatus.InProgress, Assert.Single(f.Handoffs.All).Status);

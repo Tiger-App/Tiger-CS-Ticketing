@@ -319,6 +319,7 @@ public class GenesysConversationEndAppServiceTests
                     Message("Customer", 2, "1204", "Ahmed Ali")
                 ]));
 
+        f.Tickets.All.Single(t => t.TicketId == ticketId).AssignTo(viewer); // a CS Agent sees only a ticket assigned to them
         var view = await f.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], ticketId);
 
         Assert.Equal(TicketQueryOutcome.Success, view.Outcome);
@@ -348,6 +349,7 @@ public class GenesysConversationEndAppServiceTests
             genesysAgentId: null, genesysAgentName: "Layla",
             interactionStartedAtUtc: ChatStart.AddDays(1), direction: "Inbound", ChatStart.AddDays(1)));
 
+        f.Tickets.All.Single(t => t.TicketId == ticketId).AssignTo(viewer); // a CS Agent sees only a ticket assigned to them
         var view = await f.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], ticketId);
 
         Assert.Equal(TicketQueryOutcome.Success, view.Outcome);
