@@ -27,7 +27,7 @@ The rotation itself (`DepartmentAssignmentRotation`, row-locked cursor) was soun
 **Lifecycle**
 - Transfer / request-type routing / category routing: `TransferToDepartment(…, preserveOwner: true)` — the agent is preserved unless the transfer names an assignee (`AssignToEmployeeId`). Call-Center-first system routing keeps the old release behaviour (it must clear a stale automatic pre-assignment). The transfer event's `ToEmployeeId` is set only when someone actually took the ticket.
 - Reopen: previous agent if eligible → department rule → shared rotation → recorded failure. The reopen itself never fails because no agent exists.
-- Retry: `POST /api/tickets/{id}/assignment/retry` (`Tickets.Assign` + CS Manager / administrator). Idempotent; 409 `no-eligible-cs-agent` when still nobody is available. The existing 5-minute reconciler continues to retry Open unowned tickets.
+- Retry: `POST /api/tickets/{id}/assignment/retry` (`Tickets.Assign` + CS Manager / administrator). Idempotent; 409 `no-eligible-cs-agent` when still nobody is available. The Call Center reconciler is **not** a retry mechanism for these tickets: it is disabled by default (`CallCenterReconciliation:Enabled=false`, `DryRun=true`), considers only Open tickets, and deliberately skips tickets already transferred out of the Call Center. Existing Unassigned tickets are handled by the backfill below.
 - UI: the label for a ticket with no agent is `Unassigned — awaiting CS Agent`; it is never presented as a department queue.
 
 **Deliberate interpretations (please confirm)**
@@ -37,18 +37,42 @@ The rotation itself (`DepartmentAssignmentRotation`, row-locked cursor) was soun
 
 ## Files changed
 
-Domain: `Ticket.cs`. Application: `TicketAutoAssignmentService.cs`, `TicketAssignmentAppService.cs`, `TicketLifecycleAppService.cs`, `TicketCreationAppService.cs`, `TicketRequestTypeRoutingService.cs`, `TicketClassificationAppService.cs`, `TicketOperationsDto.cs`. Api: `TicketsController.cs`. Web: `TicketDisplay.cs`. Scripts/docs: `Diagnose_TigerCS_ActiveTicketsMissingCsAgent_ReadOnly.sql`, this file. Tests: new `SharedCsAgentRotationTests`, additions to `TicketLifecycleAppServiceTests`, `CallCenterAllChannelsRegressionTests`; existing tests that encoded "transfer clears the owner" / department-scoped rotation / the old label were updated to the new rules. Collections, Campaigns and unrelated modules are untouched.
+Backfill: `CsAgentBackfill.cs` (options, classifier, service), `CsAgentBackfillRunner.cs`, `AdminCsAgentBackfillController.cs`, `ITicketUnassignedWorkRepository.ListActiveUnownedAsync`, `IAssignmentRotationRepository.PeekLastAssignedAsync`, `Verify_TigerCS_CsAgentBackfill_Batch_ReadOnly.sql`. Domain: `Ticket.cs`. Application: `TicketAutoAssignmentService.cs`, `TicketAssignmentAppService.cs`, `TicketLifecycleAppService.cs`, `TicketCreationAppService.cs`, `TicketRequestTypeRoutingService.cs`, `TicketClassificationAppService.cs`, `TicketOperationsDto.cs`. Api: `TicketsController.cs`. Web: `TicketDisplay.cs`. Scripts/docs: `Diagnose_TigerCS_ActiveTicketsMissingCsAgent_ReadOnly.sql`, this file. Tests: new `SharedCsAgentRotationTests`, additions to `TicketLifecycleAppServiceTests`, `CallCenterAllChannelsRegressionTests`; existing tests that encoded "transfer clears the owner" / department-scoped rotation / the old label were updated to the new rules. Collections, Campaigns and unrelated modules are untouched.
 
 ## Database migration
 
 **None.** No schema, index or seed change. (`ManualAssignmentRequired` and the cursor table already exist.)
 
-## Backfill of existing tickets — proposal (nothing has been modified)
+## Backfill of existing tickets — implemented, NOT executed
 
-1. Run `Diagnose_TigerCS_ActiveTicketsMissingCsAgent_ReadOnly.sql` on a read-only login. It separates `AI_IN_PROGRESS` and `PENDING_APPROVAL` (excluded) from `BACKFILL_CANDIDATE`, and shows the cursor and Call Center membership.
-2. Review the candidate list with the business (especially tickets in `InProgress`/`Pending*`, which already had a working history without an agent).
-3. Back up, then deal the candidates **oldest first** through the application, not raw SQL: `POST /api/tickets/{id}/assignment/retry` per ticket (or a throttled script calling it). That uses the same shared cursor, writes the assignment row + audit under the caller, and is idempotent, so a re-run or an interrupted run is safe. A direct SQL update is *not* recommended: it would bypass the cursor lock and the audit trail.
-4. Re-run the diagnostic: `BACKFILL_CANDIDATE` must be 0 and section 5 must return no rows.
+**Not automatic.** The fix above does not touch tickets that are already Unassigned, and nothing schedules the backfill. It runs only when a System Administrator calls the admin endpoint, and a live run additionally needs `CsAgentBackfill:Enabled=true` (default `false`, also pinned `false` in `appsettings.Production.json`). The reconciler stays off. The existing `Execute_TigerCS_PROD_CallCenterBacklogDistribution.sql` is **not** used: it moves tickets into the Call Center department and covers Open tickets only.
+
+**What it does.** For every *active* (Open / In Progress / Pending) ticket with no CS Agent it runs the same engine as new tickets (`EnsureCsAgentAsync`): the shared Call Center CS Agent pool, the same eligibility rules (including lock-out and service identities, which SQL cannot evaluate) and the same persisted, row-locked cursor — so it *continues* the rotation. Oldest ticket id first. It writes only the owner, one assignment row (`Trigger=Backfill`, system actor) and a `BackfillAssign` audit entry carrying the `BatchId`. Department, request type, priority, status, SLA and history are unchanged (there is a test asserting it).
+
+| Excluded (never assigned) | Why |
+|---|---|
+| Closed, Resolved | not active |
+| Already has an owner | never redistributed; re-checked under the transaction |
+| Pending approval | the approval decides first |
+| Live AI conversation (no human requested) | stays AI-owned until a handoff |
+| A person already handled the interaction | business rule: that person owns it → manual review |
+| AI ended, no human need, never closed | business decision; opt in with `IncludeAiEndedWithoutHuman` |
+| Younger than `MinTicketAgeMinutes` (3) | its own creation flow may still be assigning it |
+
+**Endpoints** (System Administrator; `Administration.Configuration.View` / `Edit`)
+- `GET /api/admin/cs-agent-backfill/preview?afterTicketId=0&limit=50` — read-only. Returns the pool size, the current cursor, eligible count, exclusion counts and reasons, eligible-per-department, and per ticket: number, status, current department, class and the **proposed CS Agent in the real rotation order**. Locks nothing, writes nothing, does not advance the cursor.
+- `POST /api/admin/cs-agent-backfill/run` `{ "dryRun": true, "batchSize": 25, "afterTicketId": 0, "batchId": "bf-2026-11-xx" }` — **`dryRun` defaults to true.** One throttled batch (`batchSize` is clamped to `MaxBatchSize`=200; `DelayBetweenTicketsMs`=250 after each live assignment). The result gives `resumeAfterTicketId`, `backlogExhausted`, counts and per-ticket outcomes.
+
+**Safety.** One transaction and one DbContext per ticket; a failure or lost race affects only that ticket. Concurrent writers: the cursor row lock + ticket row version + unique current-assignment index (a lost race is reported as `LostRace`, never double-assigned). A single-flight SQL application lock (shared with the reconciler) prevents overlapping runs (`409 busy`). A live run with an empty agent pool is refused before touching anything (`409 no-eligible-cs-agent`); if the pool empties mid-run it stops at that ticket (failure recorded once), and the resume point stays *before* it.
+
+**Recovery.** Idempotent and resumable: pass the returned `resumeAfterTicketId` to continue after an interruption, or simply re-run from 0 — assigned tickets are no longer candidates. There is no automatic rollback; every change is traceable by `BatchId` (`Verify_TigerCS_CsAgentBackfill_Batch_ReadOnly.sql`) and a wrong assignment is corrected with the normal Assign action.
+
+**Execution instructions (for review — do not run before approval)**
+1. Run `Diagnose_TigerCS_ActiveTicketsMissingCsAgent_ReadOnly.sql` (read-only) and note the counts.
+2. `GET …/preview` repeatedly (`afterTicketId` = last ticket id of the previous page) and review the proposals and exclusions with the business.
+3. `POST …/run` with `dryRun:true` for a few batches to confirm the numbers match the preview.
+4. After written approval: set `CsAgentBackfill:Enabled=true`, then `POST …/run` with `{"dryRun":false,"batchSize":25,"batchId":"<id>"}` for ONE batch; run `Verify_TigerCS_CsAgentBackfill_Batch_ReadOnly.sql` with that `BatchId`; continue batch by batch using `resumeAfterTicketId` until `backlogExhausted`.
+5. Set `CsAgentBackfill:Enabled=false` again and re-run the diagnostic: `BACKFILL_CANDIDATE` must be 0 and section 5 must return no rows. Remaining `HUMAN_HANDLED` / `AI_*` / `PENDING_APPROVAL` tickets are the intentional exclusions.
 
 ## Deployment and verification
 

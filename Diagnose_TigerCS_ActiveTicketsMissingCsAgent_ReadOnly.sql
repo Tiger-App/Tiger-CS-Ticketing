@@ -9,9 +9,14 @@
  Ticket status values: 1 Open, 2 InProgress, 3 PendingCustomer, 4 PendingThirdParty, 5 Resolved, 6 Closed.  "Active" = 1..4.
 
  Class
-   AI_IN_PROGRESS     a live Genesys conversation with no human requested: protected by design, gets a CS Agent only at handoff. NOT part of the backfill.
    PENDING_APPROVAL   an approval is pending; the approval process decides first. NOT part of the backfill until it is decided.
-   BACKFILL_CANDIDATE active, unowned, not AI-in-progress: should have a CS Agent (this is the population the proposed backfill would assign).
+   HUMAN_HANDLED      a person demonstrably handled the interaction (handler row / handled-by user). That person owns it by business rule, so Round Robin must
+                      not give it to somebody else: manual review. NOT part of the backfill.
+   AI_IN_PROGRESS     a live Genesys conversation with no human requested: protected by design, gets a CS Agent only at handoff. NOT part of the backfill.
+   AI_ENDED_NO_HUMAN  the AI conversation ended with no human need but the ticket was never closed: business decision (CsAgentBackfill:IncludeAiEndedWithoutHuman).
+   BACKFILL_CANDIDATE active, unowned, none of the above: gets the next CS Agent of the shared rotation. This is the population the application
+                      backfill (GET/POST /api/admin/cs-agent-backfill) deals to, oldest first, WITHOUT moving the ticket. The application preview additionally
+                      shows the proposed agent and applies the checks only the application can make (agent lock-out, service identities, tickets younger than 3 minutes).
 ================================================================================
 */
 SET NOCOUNT ON;
@@ -20,16 +25,22 @@ SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 DECLARE @CcId int = (SELECT TOP (1) DepartmentId FROM dbo.Departments WHERE Code = N'CC' AND IsActive = 1);
 
 CREATE TABLE #R (TicketId bigint PRIMARY KEY, TicketNumber nvarchar(40), TicketStatus tinyint, CurrentDepartmentId int, CreatedAtUtc datetime2,
-                 Class varchar(20), FailureRecorded bit);
+                 Class varchar(24), FailureRecorded bit);
 
 INSERT #R
 SELECT t.TicketId, t.TicketNumber, t.TicketStatus, t.CurrentDepartmentId, t.CreatedAtUtc,
        CASE
            WHEN EXISTS (SELECT 1 FROM dbo.TicketApprovals a WHERE a.TicketId = t.TicketId AND a.Status = 1) THEN 'PENDING_APPROVAL'
+           WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = t.TicketId)
+             OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.HandledByUserId IS NOT NULL) THEN 'HUMAN_HANDLED'
            WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2)
             AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.RequiresHumanFollowUp = 1)
+            AND t.FirstHumanResponseAtUtc IS NULL
             AND EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.EndedAtUtc IS NULL AND i.InactivityClosedAtUtc IS NULL)
                                                                                                   THEN 'AI_IN_PROGRESS'
+           WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2)
+            AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.RequiresHumanFollowUp = 1)
+            AND t.FirstHumanResponseAtUtc IS NULL                                                 THEN 'AI_ENDED_NO_HUMAN'
            ELSE 'BACKFILL_CANDIDATE'
        END,
        -- EventType 20 = ManualAssignmentRequired; the application writes one with the CsAgentAssignmentFailed marker per failed ticket.

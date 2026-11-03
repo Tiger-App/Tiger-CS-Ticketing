@@ -72,7 +72,10 @@ public enum AutoAssignmentTrigger
     CallCenterIntake,
 
     /// <summary>Authorized staff retried a failed CS Agent assignment.</summary>
-    ManualRetry
+    ManualRetry,
+
+    /// <summary>The one-time batch backfill gave an existing active ticket its CS Agent.</summary>
+    Backfill
 }
 
 /// <summary>The outcome plus what was assigned, for the caller's response/logging. <paramref name="TeamMemberEmployeeIds"/> carries the configured team members (excluding the primary) for a team rule.</summary>
@@ -326,6 +329,24 @@ public sealed class TicketAutoAssignmentService(
         configured.Outcome is AutoAssignmentOutcome.AssignedToPrimary or AutoAssignmentOutcome.AssignedRoundRobin
             ? Task.FromResult(configured)
             : EnsureCsAgentAsync(ticket, preferredOwnerEmployeeId: null, trigger, nowUtc, correlationId, cancellationToken);
+
+    /// <summary>
+    /// The shared rotation's current pool for read-only previews: the Call Center (null when none is configured), the eligible CS Agents in
+    /// rotation order, and the persisted cursor (last agent dealt). Nothing is locked or written.
+    /// </summary>
+    public async Task<(Domain.Modules.IdentityAndAccess.Department? CallCenter, IReadOnlyList<Guid> Pool, Guid? Cursor)> GetSharedPoolAsync(
+        CancellationToken cancellationToken = default)
+    {
+        if (await ResolveCallCenterAsync(cancellationToken) is not { } callCenter)
+        {
+            return (null, [], null);
+        }
+
+        var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(callCenter.DepartmentId, activeEmployeesOnly: true, cancellationToken);
+        var pool = (await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), callCenterOnly: true, cancellationToken)).Order().ToList();
+        var cursor = rotationRepository is null ? null : await rotationRepository.PeekLastAssignedAsync(callCenter.DepartmentId, cancellationToken);
+        return (callCenter, pool, cursor);
+    }
 
     /// <summary>
     /// Re-assigns <paramref name="previousOwnerEmployeeId"/> (the CS Agent a reopened ticket had) when that person is still an eligible

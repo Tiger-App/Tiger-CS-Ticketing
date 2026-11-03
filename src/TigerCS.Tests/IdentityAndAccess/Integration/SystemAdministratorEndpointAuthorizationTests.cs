@@ -1058,6 +1058,23 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
+    public async Task CsAgentBackfill_PreviewAndDryRun_Return200_AndWriteNothing()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+        var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
+
+        var preview = await client.GetAsync("/api/admin/cs-agent-backfill/preview?limit=5");
+        var dry = await client.PostAsJsonAsync("/api/admin/cs-agent-backfill/run", new { dryRun = true, batchSize = 5 });
+        var live = await client.PostAsJsonAsync("/api/admin/cs-agent-backfill/run", new { dryRun = false });   // CsAgentBackfill:Enabled defaults to false
+
+        Assert.True(preview.StatusCode == HttpStatusCode.OK, await preview.Content.ReadAsStringAsync());
+        Assert.True(dry.StatusCode == HttpStatusCode.OK, await dry.Content.ReadAsStringAsync());
+        Assert.True(live.StatusCode == HttpStatusCode.Conflict, await live.Content.ReadAsStringAsync());   // a live run is refused unless explicitly enabled
+        var after = await client.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{ticket.TicketId}");
+        Assert.Equal(ticket.CurrentOwnerEmployeeId, after!.CurrentOwnerEmployeeId);   // nothing was written
+    }
+
+    [Fact]
     public async Task RetryCsAgentAssignment_Returns200_AndIsIdempotentForAnAlreadyAssignedTicket()
     {
         var (client, _) = await CreateAdministratorAsync();
