@@ -400,7 +400,7 @@ public sealed class TakeOwnershipEndpointsTests(TigerCsApiFactory factory) : ICl
     }
 
     [Fact]
-    public async Task AfterTakingOwnership_TheAgentCanTransferTheTicketOnToAnotherDepartment()
+    public async Task AfterTakingOwnership_TheAgentCanTransferTheTicketOnToAnotherDepartment_AndStaysItsCsAgent()
     {
         await CallCenterAsync();
         var (agent, agentId) = await AgentAsync();
@@ -415,7 +415,7 @@ public sealed class TakeOwnershipEndpointsTests(TigerCsApiFactory factory) : ICl
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var after = (await _factory.GetTicketAsync(id))!;
         Assert.Equal(_leasingId, after.CurrentDepartmentId);
-        Assert.NotEqual(agentId, after.CurrentOwnerEmployeeId);   // handed on: the previous owner holds no right on it any more
+        Assert.Equal(agentId, after.CurrentOwnerEmployeeId);      // department and CS Agent are independent: the agent stays on the ticket
     }
 
     // =====================================================================

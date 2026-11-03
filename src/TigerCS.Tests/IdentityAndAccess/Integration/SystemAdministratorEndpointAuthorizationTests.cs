@@ -1057,6 +1057,41 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
         Assert.Equal(workerId, updated!.CurrentOwnerEmployeeId);
     }
 
+    [Fact]
+    public async Task CsAgentBackfill_PreviewAndDryRun_Return200_AndWriteNothing()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+        var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
+
+        var preview = await client.GetAsync("/api/admin/cs-agent-backfill/preview?limit=5");
+        var dry = await client.PostAsJsonAsync("/api/admin/cs-agent-backfill/run", new { dryRun = true, batchSize = 5 });
+        var live = await client.PostAsJsonAsync("/api/admin/cs-agent-backfill/run", new { dryRun = false });   // CsAgentBackfill:Enabled defaults to false
+
+        Assert.True(preview.StatusCode == HttpStatusCode.OK, await preview.Content.ReadAsStringAsync());
+        Assert.True(dry.StatusCode == HttpStatusCode.OK, await dry.Content.ReadAsStringAsync());
+        Assert.True(live.StatusCode == HttpStatusCode.Conflict, await live.Content.ReadAsStringAsync());   // a live run is refused unless explicitly enabled
+        var after = await client.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{ticket.TicketId}");
+        Assert.Equal(ticket.CurrentOwnerEmployeeId, after!.CurrentOwnerEmployeeId);   // nothing was written
+    }
+
+    [Fact]
+    public async Task RetryCsAgentAssignment_Returns200_AndIsIdempotentForAnAlreadyAssignedTicket()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+        var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
+
+        var (_, _, workerId) = await _factory.SeedEmployeeAsync(Roles.DepartmentEmployee);
+        await _factory.AssignPrimaryDepartmentAsync(workerId, ticket.CurrentDepartmentId);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/assignment", new AssignTicketRequestDto(workerId, RowVersionOf(ticket)))).StatusCode);
+
+        var response = await client.PostAsync($"/api/tickets/{ticket.TicketId}/assignment/retry", content: null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var updated = await response.Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal(workerId, updated!.CurrentOwnerEmployeeId);   // already assigned: nothing is redone
+    }
+
     /// <summary>
     /// Take Ownership is the one ticket action the ADR-0024 override does NOT open: it moves a ticket into the Call Center and assigns it to
     /// the CALLER, so the caller must themselves be an active Call Center agent. A System Administrator is not one, and gets 403 with the ticket

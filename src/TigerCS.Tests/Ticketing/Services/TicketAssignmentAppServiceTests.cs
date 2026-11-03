@@ -305,7 +305,8 @@ public class TicketAssignmentAppServiceTests
     {
         var f = CreateService();
         var ticket = await SeedTicketAsync(f.Tickets, departmentId: 2);
-        ticket.AssignTo(Guid.NewGuid());
+        var csAgent = Guid.NewGuid();
+        ticket.AssignTo(csAgent);
         var targetDepartment = f.Departments.AddDepartment("Facility Management " + role, "FM-" + role[..Math.Min(3, role.Length)]);
         var caller = Guid.NewGuid();
         // Even Department Head/Supervisor are department-scoped to the
@@ -320,7 +321,7 @@ public class TicketAssignmentAppServiceTests
         if (expectSuccess)
         {
             Assert.Equal(targetDepartment.DepartmentId, ticket.CurrentDepartmentId);
-            Assert.Null(ticket.CurrentOwnerEmployeeId);
+            Assert.Equal(csAgent, ticket.CurrentOwnerEmployeeId);   // department and CS Agent are independent
         }
         else
         {
@@ -353,7 +354,7 @@ public class TicketAssignmentAppServiceTests
     }
 
     [Fact]
-    public async Task TransferAsync_ByCsAgent_RoundRobinsToAnEligibleOperationalUserOfTheTargetDepartment()
+    public async Task TransferAsync_ByCsAgent_KeepsTheAgent_AndDoesNotRotateInTheTargetDepartment()
     {
         var f = CreateService();
         var agent = Guid.NewGuid();
@@ -361,10 +362,8 @@ public class TicketAssignmentAppServiceTests
         ticket.AssignTo(agent);
         var target = f.Departments.AddDepartment("Collections", "COL");
         var eligible = Guid.NewGuid();
-        var supervisor = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(eligible, target.DepartmentId, true, DateTime.UtcNow, null));
-        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(supervisor, target.DepartmentId, true, DateTime.UtcNow, null));
-        var roles = new FakeUserRoleReader().Add(eligible, Roles.DepartmentEmployee).Add(supervisor, Roles.CsSupervisor);
+        var roles = new FakeUserRoleReader().Add(eligible, Roles.DepartmentEmployee);
         var rotation = new Dictionary<int, DepartmentAssignmentRotation>();
         var autoAssignment = new TicketAutoAssignmentService(
             f.Rules, f.WorkflowSettings, f.DepartmentAssignments, f.Assignments, f.Audit,
@@ -378,8 +377,9 @@ public class TicketAssignmentAppServiceTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(target.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(eligible, ticket.CurrentOwnerEmployeeId);
-        Assert.Contains(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Trigger=DepartmentTransfer") && e.AfterValue.Contains("RoundRobin"));
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Empty(rotation);   // the destination department's own rotation is not consulted
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign");
     }
 
     private sealed class RotationStub(Dictionary<int, DepartmentAssignmentRotation> rows) : IAssignmentRotationRepository
@@ -396,11 +396,12 @@ public class TicketAssignmentAppServiceTests
     }
 
     [Fact]
-    public async Task TransferAsync_ByCsManager_MovesDepartmentAndClearsOwner()
+    public async Task TransferAsync_ByCsManager_MovesDepartmentAndKeepsTheCsAgent()
     {
         var f = CreateService();
         var ticket = await SeedTicketAsync(f.Tickets, departmentId: 2);
-        ticket.AssignTo(Guid.NewGuid());
+        var csAgent = Guid.NewGuid();
+        ticket.AssignTo(csAgent);
         var targetDepartment = f.Departments.AddDepartment("Facility Management", "FM");
 
         var result = await f.Service.TransferAsync(
@@ -409,8 +410,10 @@ public class TicketAssignmentAppServiceTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(targetDepartment.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Contains(f.Audit.Written, w => w.Action == "Transfer");
+        Assert.Equal(csAgent, ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(f.Audit.Entries, w => w.Action == "Transfer" && w.AfterValue!.Contains("CsAgentPreserved=true"));
+        Assert.DoesNotContain(f.Audit.Entries, w => w.Action == "AutoAssign");   // no duplicate assignment event
+        Assert.Empty(f.Assignments.Added);
     }
 
     // ---- Transfer re-runs the assignment automation for the NEW department ----
@@ -419,12 +422,12 @@ public class TicketAssignmentAppServiceTests
     // employee is never chosen.
 
     [Fact]
-    public async Task TransferAsync_ReEvaluatesAssignment_AndAssignsTheNewDepartmentsConfiguredEmployee()
+    public async Task TransferAsync_OfATicketWithNoCsAgent_ReEvaluatesAssignment_AndAssignsTheNewDepartmentsConfiguredEmployee()
     {
+        // A ticket that already has a CS Agent keeps it (see ...KeepsTheCsAgent); only an ownerless ticket reaches the rules.
         var f = CreateService();
         var ticket = await SeedTicketAsync(f.Tickets, departmentId: 2);
         ticket.ClassifyRequestType(requestTypeId: 10);
-        ticket.AssignTo(Guid.NewGuid());
         var departmentC = f.Departments.AddDepartment("Facility Management", "FM");
 
         // The rule's primary is a member of department C — the department the

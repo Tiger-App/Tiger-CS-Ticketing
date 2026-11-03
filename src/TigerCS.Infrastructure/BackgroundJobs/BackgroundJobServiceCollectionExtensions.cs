@@ -36,6 +36,9 @@ public static class BackgroundJobServiceCollectionExtensions
         services.Configure<CallCenterReconciliationOptions>(configuration.GetSection(CallCenterReconciliationOptions.SectionName));
         services.AddSingleton<TigerCS.Application.Modules.Ticketing.Abstractions.ICallCenterReconciliationRunLock, CallCenterReconciliationRunLock>();
         services.AddScoped<CallCenterUnassignedWorkJob>();
+        // One-time CS Agent backfill: manual only (System Administrator endpoint), never scheduled; live runs need CsAgentBackfill:Enabled (default false).
+        services.Configure<CsAgentBackfillOptions>(configuration.GetSection(CsAgentBackfillOptions.SectionName));
+        services.AddSingleton<CsAgentBackfillRunner>();
         services.AddHostedService<CallCenterUnassignedWorkHostedService>();
 
         // Tells the Collections pages whether the scheduled snapshot refresh really exists in this process (informational; registered whether or not Hangfire runs).

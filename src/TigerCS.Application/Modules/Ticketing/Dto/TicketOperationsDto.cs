@@ -314,6 +314,9 @@ public enum TicketMutationOutcome
     /// <summary>Workflow/Automation phase 2: the department's workflow settings disable this operation (assignment, internal reassignment, or transfer out) for the ticket's current department.</summary>
     DisabledByDepartmentSettings,
 
+    /// <summary>Shared CS Agent rotation: no eligible CS Agent exists right now. The failure is recorded on the ticket (audit + Manual Assignment Required event) and can be retried.</summary>
+    NoEligibleCsAgent,
+
     /// <summary>Call Center first: a Call Center agent transfers a classified ticket to the department that owns its request type, not to any other.</summary>
     TransferTargetMustMatchRequestType,
 

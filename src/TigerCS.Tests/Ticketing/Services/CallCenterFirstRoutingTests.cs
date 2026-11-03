@@ -242,7 +242,7 @@ public class CallCenterFirstRoutingTests
         var ticket = Stored(env, result);
         Assert.Equal(env.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Contains(env.Audit.Entries, w => w.Action == "AutoAssign" && w.AfterValue!.Contains("no eligible active employee"));
+        Assert.Contains(env.Audit.Entries, w => w.Action == "AutoAssign" && w.AfterValue!.Contains("no eligible active CS Agent"));
     }
 
     [Fact]
@@ -270,12 +270,11 @@ public class CallCenterFirstRoutingTests
     }
 
     [Fact]
-    public async Task CallCenterOwner_CanTransfer_AndTheDestinationRoundRobinAssignsOneEmployee_PreviousOwnerLosesOwnership()
+    public async Task CallCenterOwner_CanTransfer_AndTheCsAgentIsPreserved_NoDestinationRotation_NoDuplicateAssignment()
     {
         var env = new Env();
         var agent = env.AddMember(env.CallCenter!);
-        var employees = env.AddMembers(env.Cs, 2);
-        var (e1, e2) = (employees[0], employees[1]);
+        env.AddMembers(env.Cs, 2);
         var ticket = await OwnedByCallCenterAgentAsync(env, agent);
         var previousAssignment = Assert.Single(env.Assignments.Added);
 
@@ -284,25 +283,18 @@ public class CallCenterFirstRoutingTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(env.Cs.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(e1, ticket.CurrentOwnerEmployeeId);
-        Assert.NotEqual(agent, ticket.CurrentOwnerEmployeeId);
-        Assert.False(previousAssignment.IsCurrent);
-        Assert.Single(env.Assignments.Added, a => a.IsCurrent);
-
-        // The previous owner can no longer transfer (ownership is gone).
-        var again = await env.Assignment.TransferAsync(
-            agent, [Roles.CsAgent], ticket.TicketId, new TransferTicketRequestDto(env.CallCenter!.DepartmentId, "Back", []));
-        Assert.Equal(TicketMutationOutcome.Forbidden, again.Outcome);
-        Assert.NotEqual(e2, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);          // department and CS Agent are independent
+        Assert.True(previousAssignment.IsCurrent);                   // the assignment is untouched...
+        Assert.Single(env.Assignments.Added);                        // ...and no duplicate row was written
+        Assert.DoesNotContain(env.Audit.Entries, e => e.Action == "AutoAssign");
     }
 
     [Fact]
-    public async Task SecondTransferToTheSameDepartment_PicksTheNextEmployee()
+    public async Task TransfersToTheSameDepartment_KeepEachTicketsOwnCsAgent()
     {
         var env = new Env();
         var agent = env.AddMember(env.CallCenter!);
-        var employees = env.AddMembers(env.Cs, 2);
-        var (e1, e2) = (employees[0], employees[1]);
+        env.AddMembers(env.Cs, 2);
         var t1 = await OwnedByCallCenterAgentAsync(env, agent);
         await env.Assignment.TransferAsync(agent, [Roles.CsAgent], t1.TicketId, new TransferTicketRequestDto(env.Cs.DepartmentId, "x", []));
 
@@ -313,12 +305,12 @@ public class CallCenterFirstRoutingTests
         await env.Assignments.AddAsync(new TicketAssignment(t2.TicketId, agent, env.CallCenter.DepartmentId, Now, null));
         await env.Assignment.TransferAsync(agent, [Roles.CsAgent], t2.TicketId, new TransferTicketRequestDto(env.Cs.DepartmentId, "x", []));
 
-        Assert.Equal(e1, t1.CurrentOwnerEmployeeId);
-        Assert.Equal(e2, t2.CurrentOwnerEmployeeId);
+        Assert.Equal(agent, t1.CurrentOwnerEmployeeId);
+        Assert.Equal(agent, t2.CurrentOwnerEmployeeId);
     }
 
     [Fact]
-    public async Task AnExplicitDepartmentQueueRule_WinsOverTheDestinationRoundRobin()
+    public async Task ADepartmentQueueRule_CannotStripTheCsAgentOnTransfer()
     {
         var env = new Env();
         var agent = env.AddMember(env.CallCenter!);
@@ -331,7 +323,7 @@ public class CallCenterFirstRoutingTests
             agent, [Roles.CsAgent], ticket.TicketId, new TransferTicketRequestDto(env.Cs.DepartmentId, "x", []));
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]

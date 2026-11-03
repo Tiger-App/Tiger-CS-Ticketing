@@ -7,6 +7,10 @@ namespace TigerCS.Infrastructure.Modules.Ticketing.Repositories;
 
 public sealed class AssignmentRotationRepository(TigerCsDbContext dbContext) : IAssignmentRotationRepository
 {
+    public async Task<Guid?> PeekLastAssignedAsync(int departmentId, CancellationToken cancellationToken = default) =>
+        await dbContext.DepartmentAssignmentRotations.AsNoTracking()
+            .Where(r => r.DepartmentId == departmentId).Select(r => r.LastAssignedEmployeeId).FirstOrDefaultAsync(cancellationToken);
+
     public async Task<DepartmentAssignmentRotation> GetForUpdateAsync(
         int departmentId, DateTime nowUtc, CancellationToken cancellationToken = default)
     {

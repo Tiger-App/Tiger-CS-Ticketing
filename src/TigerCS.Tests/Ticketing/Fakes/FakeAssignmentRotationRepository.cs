@@ -8,6 +8,9 @@ public sealed class FakeAssignmentRotationRepository : IAssignmentRotationReposi
 {
     public Dictionary<int, DepartmentAssignmentRotation> Rows { get; } = [];
 
+    public Task<Guid?> PeekLastAssignedAsync(int departmentId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Rows.TryGetValue(departmentId, out var row) ? row.LastAssignedEmployeeId : null);
+
     public Task<DepartmentAssignmentRotation> GetForUpdateAsync(int departmentId, DateTime nowUtc, CancellationToken cancellationToken = default)
     {
         if (!Rows.TryGetValue(departmentId, out var row))

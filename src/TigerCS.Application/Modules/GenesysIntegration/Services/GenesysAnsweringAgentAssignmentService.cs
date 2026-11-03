@@ -45,6 +45,8 @@ public sealed class GenesysAnsweringAgentAssignmentService(
             {
                 GenesysAgentResolutionOutcome.Inactive => AnsweringAgentIssue.Inactive,
                 GenesysAgentResolutionOutcome.Invalid => AnsweringAgentIssue.InvalidId,
+                GenesysAgentResolutionOutcome.Ambiguous => AnsweringAgentIssue.AmbiguousMapping,
+                GenesysAgentResolutionOutcome.ServiceAccount => AnsweringAgentIssue.ServiceAccount,
                 _ => AnsweringAgentIssue.NotMapped
             });
     }

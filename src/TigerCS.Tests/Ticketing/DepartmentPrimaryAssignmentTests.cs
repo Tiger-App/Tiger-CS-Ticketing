@@ -33,7 +33,7 @@ public class DepartmentPrimaryAssignmentTests
     // ---- A ticket with a department but no employee is queued, not ownerless ----
 
     [Fact]
-    public void TicketWithDepartmentAndNoEmployee_IsShownAsTheDepartmentQueue()
+    public void TicketWithDepartmentAndNoCsAgent_IsNeverShownAsADepartmentQueue()
     {
         var ticket = NewTicket();
 
@@ -43,7 +43,7 @@ public class DepartmentPrimaryAssignmentTests
         Assert.Null(ticket.CurrentOwnerEmployeeId);
 
         Assert.Equal(
-            "Facility Management Queue (Unassigned)",
+            TicketDisplay.UnassignedCsAgentLabel,
             TicketDisplay.AssignedToLabel(
                 ticket.CurrentOwnerEmployeeId, ownerName: null,
                 ticket.CurrentDepartmentId, "Facility Management"));
@@ -54,17 +54,16 @@ public class DepartmentPrimaryAssignmentTests
     }
 
     [Fact]
-    public void AssignedToLabel_NeverProducesUnassigned_EvenWithoutAResolvedDepartmentName()
+    public void AssignedToLabel_NeverPresentsAMissingCsAgentAsADepartmentQueue_EvenWithoutAResolvedDepartmentName()
     {
-        // Worst case: the department name could not be resolved. The label
-        // still names a queue — degraded to neutral wording, never "Unassigned"
-        // and never a raw department id.
+        // Worst case: the department name could not be resolved. The label is still the neutral assignment-failure wording —
+        // never a "<Department> Queue (Unassigned)" and never a raw department id.
         var label = TicketDisplay.AssignedToLabel(
             currentOwnerEmployeeId: null, ownerName: null,
             currentDepartmentId: FacilityManagementId, departmentName: null);
 
-        Assert.Equal("Department queue", label);
-        Assert.DoesNotContain("Unassigned", label, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(TicketDisplay.UnassignedCsAgentLabel, label);
+        Assert.DoesNotContain("Queue", label, StringComparison.OrdinalIgnoreCase);
     }
 
     // ---- Employee assignment is secondary: it never moves the department ----
@@ -97,15 +96,22 @@ public class DepartmentPrimaryAssignmentTests
         var ticket = NewTicket();
         ticket.AssignTo(Guid.NewGuid());
 
-        ticket.TransferToDepartment(DepartmentC);
+        var csAgent = ticket.CurrentOwnerEmployeeId;
 
-        // The department moves first and the previous department's employee
-        // cannot stay accountable — the ticket lands in department C's queue.
+        ticket.TransferToDepartment(DepartmentC, preserveOwner: true);
+
+        // The department and the CS Agent are independent fields: the department moves, the agent stays.
         Assert.Equal(DepartmentC, ticket.CurrentDepartmentId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(csAgent, ticket.CurrentOwnerEmployeeId);
+
+        // System routing that deliberately releases an automatic pre-assignment still clears it (the default).
+        var released = NewTicket();
+        released.AssignTo(Guid.NewGuid());
+        released.TransferToDepartment(DepartmentC);
+        Assert.Null(released.CurrentOwnerEmployeeId);
         Assert.Equal(
-            "Collections Queue (Unassigned)",
-            TicketDisplay.AssignedToLabel(ticket.CurrentOwnerEmployeeId, ownerName: null, ticket.CurrentDepartmentId, "Collections"));
+            TicketDisplay.UnassignedCsAgentLabel,
+            TicketDisplay.AssignedToLabel(released.CurrentOwnerEmployeeId, ownerName: null, released.CurrentDepartmentId, "Collections"));
 
         // OriginatingDepartmentId stays write-once — transfer moves only the
         // current responsible department.

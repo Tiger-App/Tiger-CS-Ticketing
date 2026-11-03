@@ -13,13 +13,15 @@ namespace TigerCS.Application.Modules.GenesysIntegration.Dto;
 /// <param name="UserName">The Ticketing account's user name.</param>
 /// <param name="DisplayName">The employee's display name, where an Employee row exists.</param>
 /// <param name="IsActive">True when the user has an Employee row that is not deactivated.</param>
+/// <param name="IsAmbiguous">True when more than one Ticketing user carries this Genesys User ID (only possible without the unique index); such a mapping is never resolved.</param>
 public sealed record GenesysMappedAgent(
     Guid UserId,
     string GenesysUserId,
     string? GenesysEmail,
     string? UserName,
     string? DisplayName,
-    bool IsActive);
+    bool IsActive,
+    bool IsAmbiguous = false);
 
 /// <summary>How resolving a Genesys User ID to a Ticketing user landed.</summary>
 public enum GenesysAgentResolutionOutcome
@@ -34,7 +36,16 @@ public enum GenesysAgentResolutionOutcome
     NotMapped,
 
     /// <summary>A Ticketing user is mapped, but is deactivated (or has no Employee row) and so cannot act.</summary>
-    Inactive
+    Inactive,
+
+    /// <summary>
+    /// More than one Ticketing user carries this Genesys User ID. The unique index makes that impossible in a correctly migrated database; if it ever happens
+    /// the id is never resolved to either user (no guess), the event is flagged, and the data must be fixed.
+    /// </summary>
+    Ambiguous,
+
+    /// <summary>The Genesys User ID is mapped to a service / integration identity (e.g. the Genesys integration account). It is never a handling agent.</summary>
+    ServiceAccount
 }
 
 /// <summary>

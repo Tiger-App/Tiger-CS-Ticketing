@@ -44,18 +44,25 @@ public class RoundRobinAndOwnerPermissionTests
         FakeUserDepartmentAssignmentRepository Members,
         FakeTicketAssignmentRepository Assignments,
         FakeAuditEntryWriter Audit,
-        FakeRotationRepository Rotation);
+        FakeRotationRepository Rotation,
+        FakeDepartmentRepository Departments,
+        int CallCenterId);
 
-    private static RrFixture CreateRr(FakeRotationRepository? rotation = null, FakeUserDepartmentAssignmentRepository? members = null)
+    /// <summary>The ONE shared rotation draws from the Call Center's CS Agents whatever the ticket's department, so the fixture has a Call Center.</summary>
+    private static RrFixture CreateRr(
+        FakeRotationRepository? rotation = null, FakeUserDepartmentAssignmentRepository? members = null, FakeDepartmentRepository? departments = null)
     {
         rotation ??= new FakeRotationRepository();
         members ??= new FakeUserDepartmentAssignmentRepository();
         var assignments = new FakeTicketAssignmentRepository();
         var audit = new FakeAuditEntryWriter();
+        departments ??= new FakeDepartmentRepository();
+        var callCenterId = departments.ListAsync(activeOnly: true).GetAwaiter().GetResult().FirstOrDefault(d => d.Code == "CC")?.DepartmentId
+            ?? departments.AddDepartment("Call Center", "CC").DepartmentId;
         var service = new TicketAutoAssignmentService(
             new FakeRequestTypeAssignmentRuleRepository(), new FakeDepartmentWorkflowSettingsRepository(),
-            members, assignments, audit, rotation);
-        return new RrFixture(service, members, assignments, audit, rotation);
+            members, assignments, audit, rotation, departments);
+        return new RrFixture(service, members, assignments, audit, rotation, departments, callCenterId);
     }
 
     private static Guid AddMember(FakeUserDepartmentAssignmentRepository members, int departmentId = DepartmentId)
@@ -76,9 +83,9 @@ public class RoundRobinAndOwnerPermissionTests
     public async Task RoundRobin_RotatesFairlyThroughEligibleEmployees()
     {
         var f = CreateRr();
-        var a = AddMember(f.Members);
-        var b = AddMember(f.Members);
-        var c = AddMember(f.Members);
+        var a = AddMember(f.Members, f.CallCenterId);
+        var b = AddMember(f.Members, f.CallCenterId);
+        var c = AddMember(f.Members, f.CallCenterId);
 
         var owners = new List<Guid>();
         for (var i = 1; i <= 6; i++)
@@ -103,15 +110,15 @@ public class RoundRobinAndOwnerPermissionTests
     {
         var rotation = new FakeRotationRepository();
         var members = new FakeUserDepartmentAssignmentRepository();
-        AddMember(members);
-        AddMember(members);
-
         var first = CreateRr(rotation, members);
+        AddMember(members, first.CallCenterId);
+        AddMember(members, first.CallCenterId);
+
         var t1 = NewTicket(1);
         await RoundRobinAsync(first, t1);
 
         // "Application restart": a new service over the same persisted cursor.
-        var second = CreateRr(rotation, members);
+        var second = CreateRr(rotation, members, first.Departments);
         var t2 = NewTicket(2);
         await RoundRobinAsync(second, t2);
 
@@ -141,10 +148,10 @@ public class RoundRobinAndOwnerPermissionTests
     }
 
     [Fact]
-    public async Task RoundRobin_SkipsLockedReadOnlyServiceAndNonOperationalUsers_AndPicksOnlyOperationalOnes()
+    public async Task RoundRobin_SkipsLockedReadOnlyServiceAndNonCsAgentUsers_AndPicksOnlyCsAgents()
     {
         var departments = new FakeDepartmentRepository();
-        var department = departments.AddDepartment("Collection", "COLL");
+        var department = departments.AddDepartment("Call Center", "CC");
         var members = new FakeUserDepartmentAssignmentRepository();
         var accounts = new FakeUserAccountManager();
         var (employee, head, agent, locked, readOnly, reporting, supervisor, service) =
@@ -176,7 +183,8 @@ public class RoundRobinAndOwnerPermissionTests
             picked.Add(ticket.CurrentOwnerEmployeeId!.Value);
         }
 
-        Assert.Equivalent(new[] { employee, head, agent }, picked.Distinct());
+        // The shared rotation hands work to CS Agents only (the Call Center rule): never an employee, head, supervisor, read-only, locked or service identity.
+        Assert.Equivalent(new[] { agent }, picked.Distinct());
     }
 
     [Fact]
@@ -213,17 +221,34 @@ public class RoundRobinAndOwnerPermissionTests
     }
 
     [Fact]
-    public async Task RoundRobin_ADecidedRuleOutcomeIsNotOverridden()
+    public async Task RoundRobin_ADepartmentQueueRuleNoLongerLeavesAnActiveTicketUnassigned()
     {
         var f = CreateRr();
-        AddMember(f.Members);
+        var agent = AddMember(f.Members, f.CallCenterId);
         var ticket = NewTicket(1);
 
         var decided = new AutoAssignmentResult(AutoAssignmentOutcome.DepartmentQueueByRule);
         var result = await f.Service.ApplyCategoryRoutingAsync(ticket, decided, Now, Guid.NewGuid());
 
-        Assert.Equal(AutoAssignmentOutcome.DepartmentQueueByRule, result.Outcome);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(AutoAssignmentOutcome.AssignedRoundRobin, result.Outcome);
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task RoundRobin_ASpecificAssigneeDecidedByARuleIsNotOverridden()
+    {
+        var f = CreateRr();
+        AddMember(f.Members, f.CallCenterId);
+        var ticket = NewTicket(1);
+        var ruleAssignee = Guid.NewGuid();
+        ticket.AssignTo(ruleAssignee);
+
+        var result = await f.Service.ApplyCategoryRoutingAsync(
+            ticket, new AutoAssignmentResult(AutoAssignmentOutcome.AssignedToPrimary, ruleAssignee), Now, Guid.NewGuid());
+
+        Assert.Equal(AutoAssignmentOutcome.AssignedToPrimary, result.Outcome);
+        Assert.Equal(ruleAssignee, ticket.CurrentOwnerEmployeeId);
+        Assert.Empty(f.Rotation.Rows);
     }
 
     [Fact]
@@ -258,7 +283,7 @@ public class RoundRobinAndOwnerPermissionTests
     // ---- Scenario 3: Call Center selects Collection -> Department Collection -> next employee in rotation ----
 
     [Fact]
-    public async Task CallCenterSelectsCollectionCategory_RoutesToCollection_AndAssignsNextInRotation()
+    public async Task CallCenterSelectsCollectionCategory_RoutesToCollection_AndAssignsNextCsAgentInTheSharedRotation()
     {
         var tickets = new FakeTicketRepository();
         var categories = new FakeCategoryRepository();
@@ -272,13 +297,14 @@ public class RoundRobinAndOwnerPermissionTests
 
         var callCenter = departments.AddDepartment("Call Center", "CC");
         var collections = departments.AddDepartment("Collections", "COL");
-        var first = AddMember(members, collections.DepartmentId);
-        var second = AddMember(members, collections.DepartmentId);
+        // The CS Agents who receive work are the Call Center's, whatever department the category routes the ticket to.
+        var first = AddMember(members, callCenter.DepartmentId);
+        var second = AddMember(members, callCenter.DepartmentId);
         var category = categories.Seed(collections.DepartmentId, "Collection");
 
         var auto = new TicketAutoAssignmentService(
             new FakeRequestTypeAssignmentRuleRepository(), new FakeDepartmentWorkflowSettingsRepository(),
-            members, new FakeTicketAssignmentRepository(), audit, new FakeRotationRepository());
+            members, new FakeTicketAssignmentRepository(), audit, new FakeRotationRepository(), departments);
         var service = new TicketClassificationAppService(
             tickets, categories, new FakePriorityRepository(), new FakeRequestTypeRepository(), new FakeWorkflowTemplateRepository(),
             members, statusHistory, unitOfWork, audit, sla.DueDates, new FakeTimeProvider(Now),

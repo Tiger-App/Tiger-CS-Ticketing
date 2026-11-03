@@ -30,6 +30,9 @@ public enum AnsweringAgentIssue
     /// <summary>The mapped user is a Call Center member with an operational role but not the CS Agent role; the Call Center gives tickets to CS Agents only.</summary>
     NotCsAgent,
 
+    /// <summary>More than one Ticketing user carries this Genesys User ID (the unique index is missing). Never resolved to either user; flagged for a data fix.</summary>
+    AmbiguousMapping,
+
     /// <summary>The id Genesys sent is blank or malformed.</summary>
     InvalidId
 }

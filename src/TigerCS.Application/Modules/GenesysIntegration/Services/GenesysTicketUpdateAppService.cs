@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
@@ -411,7 +412,16 @@ public sealed class GenesysTicketUpdateAppService(
         {
             await using var ownershipTransaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
             await handlingHistory.RecordFirstHandlerAsync(ticketId, conversationId, agent.Agent!, cancellationToken);
-            await unitOfWork.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
+            {
+                // A concurrent delivery recorded the same first handler: the fact is stored, the winner stands, and this update is safe to redeliver.
+                return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, "The interaction changed at the same moment; resend the update.");
+            }
+
             await ownershipTransaction.CommitAsync(cancellationToken);
         }
 
@@ -443,6 +453,24 @@ public sealed class GenesysTicketUpdateAppService(
         var routingAgentIsHuman = routingAgentId is not null
             && (await agentResolution.ResolveByGenesysUserIdAsync(routingAgentId, cancellationToken)).IsResolved;
         var humanSignal = GenesysHumanHandlingEvidence.ForUpdate(request, routingAgentIsHuman);
+
+        // The AI conversation ended and nobody finished the ticket: it is NOT left sitting unassigned in its department - it is routed for human
+        // handling (Call Center first, shared round robin as the provisional owner until an agent actually accepts). Never when the AI closes it in this
+        // same update, when the customer confirmed, while the AI is still waiting for the customer's reply (the inactivity close handles that), or when
+        // a person already owns / handled it. Redelivery heals a ticket whose routing never ran; routing itself is idempotent.
+        if (humanSignal == GenesysHumanSignal.None
+            && request.Ended is not null
+            && request.ClosedByAi != true
+            && request.CustomerConfirmation is null
+            && request.AwaitingCustomerReply != true
+            && interaction.AwaitingCustomerReplySinceUtc is null
+            && interaction.HandledByUserId is null
+            && ticket.CurrentOwnerEmployeeId is null
+            && ticket.TicketStatus is TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer)
+        {
+            humanSignal = GenesysHumanSignal.AiEndedUnresolved;
+        }
+
         if (humanSignal != GenesysHumanSignal.None)
         {
             await MarkHumanFollowUpAsync(callerEmployeeId, ticket, interaction, humanSignal, cancellationToken);

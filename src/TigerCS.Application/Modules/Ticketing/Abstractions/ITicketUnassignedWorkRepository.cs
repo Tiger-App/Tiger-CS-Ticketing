@@ -8,6 +8,12 @@ public interface ITicketUnassignedWorkRepository
     /// <summary>The next page of Open, unowned tickets with TicketId greater than <paramref name="afterTicketId"/>, oldest id first, with their evidence. Never returns an owned ticket.</summary>
     Task<IReadOnlyList<UnassignedTicketEvidence>> ListOpenUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The next page of ACTIVE (Open, In Progress, Pending Customer, Pending Third Party) tickets with no employee owner and TicketId greater than
+    /// <paramref name="afterTicketId"/>, oldest id first (ids are assigned in creation order), with their evidence. Closed and Resolved tickets and owned tickets are never returned.
+    /// </summary>
+    Task<IReadOnlyList<UnassignedTicketEvidence>> ListActiveUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default);
+
     /// <summary>The evidence for one ticket (null when it does not exist), whatever its state — used to re-check under the transaction before acting.</summary>
     Task<UnassignedTicketEvidence?> GetEvidenceAsync(long ticketId, CancellationToken cancellationToken = default);
 }

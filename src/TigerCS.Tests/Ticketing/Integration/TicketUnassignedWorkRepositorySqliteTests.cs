@@ -1,3 +1,4 @@
+using Microsoft.EntityFrameworkCore;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
@@ -26,6 +27,40 @@ public sealed class TicketUnassignedWorkRepositorySqliteTests : IDisposable
         var cc = context.Departments.Single(d => d.Code == "CC").DepartmentId;
         var rows = await new TicketUnassignedWorkRepository(context).ListOpenUnownedAsync(0, 500);
         return rows.ToDictionary(r => r.TicketId, r => (r, UnassignedTicketClassifier.Classify(r, cc, Now, stale)));
+    }
+
+    [Fact]
+    public async Task ListActiveUnowned_ReturnsOpenInProgressAndPending_OldestFirst_NeverClosedResolvedOrOwned()
+    {
+        long open, inProgress, pending, thirdParty;
+        using (var context = _db.CreateContext())
+        {
+            open = _db.AddTicket(context, _db.CustomerServiceId).TicketId;
+            inProgress = _db.AddTicket(context, _db.CollectionsId, status: TicketStatus.InProgress).TicketId;
+            pending = _db.AddTicket(context, _db.CustomerServiceId, status: TicketStatus.PendingCustomer).TicketId;
+            thirdParty = _db.AddTicket(context, _db.CollectionsId, status: TicketStatus.PendingThirdParty).TicketId;
+            _db.AddTicket(context, _db.CustomerServiceId, status: TicketStatus.Resolved);
+            _db.AddTicket(context, _db.CustomerServiceId, status: TicketStatus.Closed);
+            var ownedId = _db.AddTicket(context, _db.CustomerServiceId, owner: Guid.NewGuid()).TicketId;
+            context.SaveChanges();
+
+            // The fixture (like the real lifecycle) gives every non-Open ticket an owner; legacy data has such tickets WITHOUT one, so clear it in the store.
+            context.Database.ExecuteSqlInterpolated($"UPDATE Tickets SET CurrentOwnerEmployeeId = NULL WHERE TicketStatus <> 1 AND TicketId <> {ownedId}");
+        }
+
+        using var read = _db.CreateContext();
+        var repo = new TicketUnassignedWorkRepository(read);
+        var all = await repo.ListActiveUnownedAsync(0, 500);
+
+        Assert.Equal(7, read.Tickets.Count());                                                                  // 4 active + Resolved + Closed (both unowned) + 1 owned
+        Assert.Equal(new[] { open, inProgress, pending, thirdParty }.Order(), all.Select(r => r.TicketId));      // oldest id first
+        Assert.All(all, r => Assert.Null(r.OwnerEmployeeId));
+        Assert.Contains(all, r => r.Status == TicketStatus.InProgress && r.CurrentDepartmentId == _db.CollectionsId);
+
+        // Paging by the returned id visits each ticket exactly once.
+        var first = await repo.ListActiveUnownedAsync(0, 2);
+        var second = await repo.ListActiveUnownedAsync(first[^1].TicketId, 2);
+        Assert.Equal(all.Select(r => r.TicketId), first.Concat(second).Select(r => r.TicketId));
     }
 
     [Fact]

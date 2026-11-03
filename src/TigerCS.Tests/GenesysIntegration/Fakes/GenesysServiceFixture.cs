@@ -245,7 +245,7 @@ public sealed class GenesysServiceFixture
         CustomerLookup = new GenesysCustomerLookupAppService(
             Options, customerSearch, IntakeRecords, Tickets);
 
-        AgentResolution = new GenesysAgentResolutionAppService(AgentMappings, UserRoles, DepartmentAssignments);
+        AgentResolution = new GenesysAgentResolutionAppService(AgentMappings, UserRoles, DepartmentAssignments, ServiceIdentities);
 
         HandlingHistory = new GenesysAgentHandlingHistory(WorkflowEvents, AgentResolution, Clock);
 

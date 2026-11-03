@@ -57,6 +57,37 @@ public class CallCenterAllChannelsRegressionTests
         s.F.TicketUpdate.UpdateAsync(
             ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto(conversationId, HumanFollowUpRequired: humanFollowUp));
 
+    [Fact]
+    public async Task EveryChannel_ShareOneRotation_InFixedOrder_WhateverTheDepartment_AndAiHandledTicketsNeedNoAgent()
+    {
+        var s = Build(agentCount: 3);
+        var channels = new[]
+        {
+            GenesysChannel.Phone, GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp, GenesysChannel.SocialMedia,
+            GenesysChannel.Instagram, GenesysChannel.Facebook, GenesysChannel.Phone
+        };
+
+        var owners = new List<Guid?>();
+        for (var i = 0; i < channels.Length; i++)
+        {
+            var ticket = await IngestAsync(s, $"c-seq-{i}", channels[i], humanFollowUp: true);
+            Assert.NotNull(ticket.CurrentOwnerEmployeeId);                       // every human-handled ticket has a CS Agent
+            owners.Add(ticket.CurrentOwnerEmployeeId);
+        }
+
+        // One rotation across ALL channels: agents 1,2,3,1,2,3,1 in the stable order.
+        Assert.Equal(
+            [s.Agents[0], s.Agents[1], s.Agents[2], s.Agents[0], s.Agents[1], s.Agents[2], s.Agents[0]],
+            owners);
+
+        // An AI-only conversation (no human requested) is not dealt an agent and is not an assignment failure; it does not advance the rotation.
+        var ai = await IngestAsync(s, "c-ai", GenesysChannel.WebsiteChat, humanFollowUp: false);
+        Assert.Null(ai.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(s.F.WorkflowEvents.All, e => e.TicketId == ai.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
+        var next = await IngestAsync(s, "c-seq-next", GenesysChannel.Phone, humanFollowUp: true);
+        Assert.Equal(s.Agents[1], next.CurrentOwnerEmployeeId);
+    }
+
     [Theory]
     [MemberData(nameof(Channels))]
     public async Task HumanFollowUpKnownAtCreation_EntersCallCenter_WithOneRoundRobinAgent(GenesysChannel channel)

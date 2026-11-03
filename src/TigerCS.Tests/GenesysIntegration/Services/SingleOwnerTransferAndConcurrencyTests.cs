@@ -43,7 +43,7 @@ public class SingleOwnerTransferAndConcurrencyTests
     }
 
     [Fact]
-    public async Task TransferWithNoEligibleEmployee_QueuesTheTicketUnassigned_AndEndsThePreviousAssignmentKeepingHistory()
+    public async Task Transfer_KeepsTheCsAgentAsTheSingleCurrentOwner_NoUnassignedQueue()
     {
         var s = await NewAsync();
         var previous = await OwnAsync(s);
@@ -54,18 +54,20 @@ public class SingleOwnerTransferAndConcurrencyTests
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         var ticket = (await s.F.Tickets.GetByIdAsync(s.TicketId))!;
         Assert.Equal(s.ToDepartmentId, ticket.CurrentDepartmentId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);                                           // department queue, unassigned
-        Assert.DoesNotContain(s.F.TicketAssignments.Added, a => a.IsCurrent);                  // exactly zero current owners
-        Assert.Contains(s.F.TicketAssignments.Added, a => a.AssignedEmployeeId == previous);   // history kept, only superseded
+        Assert.Equal(previous, ticket.CurrentOwnerEmployeeId);                                 // the CS Agent is independent of the department
+        Assert.Single(s.F.TicketAssignments.Added, a => a.IsCurrent);                          // exactly one current owner, no duplicate row
+        Assert.Contains(s.F.TicketAssignments.Added, a => a.AssignedEmployeeId == previous);
         Assert.Contains(s.F.Audit.Entries, e => e.Action == "Transfer");
     }
 
     [Fact]
-    public async Task AfterATransfer_ThePreviousOwnerCanNoLongerResolveCloseOrTransfer()
+    public async Task AfterAnExplicitReassignmentOnTransfer_ThePreviousOwnerCanNoLongerResolveCloseOrTransfer()
     {
         var s = await NewAsync();
         var previous = await OwnAsync(s);
-        await s.Assign.TransferAsync(Guid.NewGuid(), [Roles.CsManager], s.TicketId, new TransferTicketRequestDto(s.ToDepartmentId, "Collections issue", []));
+        var receiver = Guid.NewGuid();
+        s.F.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(receiver, s.ToDepartmentId, true, DateTime.UtcNow, null));
+        await s.Assign.TransferAsync(Guid.NewGuid(), [Roles.CsManager], s.TicketId, new TransferTicketRequestDto(s.ToDepartmentId, "Collections issue", [], receiver));
         var ticket = (await s.F.Tickets.GetByIdAsync(s.TicketId))!;
 
         var resolve = await s.F.Lifecycle.ResolveAsync(
