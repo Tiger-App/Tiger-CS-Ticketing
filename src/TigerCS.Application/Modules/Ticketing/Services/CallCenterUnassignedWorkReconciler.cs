@@ -30,7 +30,10 @@ public sealed class CallCenterReconciliationOptions
     /// <summary>Treat stale AI tickets as human work. Default false: nobody asked a person for them.</summary>
     public bool AssignStaleAi { get; set; }
 
-    /// <summary>Round Robin deals only to holders of the CS Agent role (the role that can Transfer as owner). Default true; the answering-agent path is unaffected.</summary>
+    /// <summary>
+    /// Kept for compatibility. The Call Center now hands out automatic work to CS Agents ONLY (business decision, applied in <see cref="TicketAutoAssignmentService"/>
+    /// for every Call Center assignment), so setting this to false no longer widens the pool.
+    /// </summary>
     public bool CsAgentRoleOnly { get; set; } = true;
 
     /// <summary>A just-created ticket is given time to be routed by its own request before the reconciler looks at it.</summary>
@@ -47,6 +50,12 @@ public enum ReconcileOutcome
     Skipped,
     /// <summary>Human work, but no eligible Call Center agent (or no Call Center) - stays queued, reported, retried next run.</summary>
     NoEligibleAgent,
+    /// <summary>
+    /// The person who actually received the interaction cannot be given the ticket (unmapped, not a CS Agent / Call Center member, deactivated ...): it waits in the
+    /// Call Center queue flagged for manual assignment. It is NEVER dealt to somebody else by Round Robin.
+    /// </summary>
+    FlaggedForManualAssignment,
+
     /// <summary>A concurrent writer got there first; the winner stands.</summary>
     LostRace,
     /// <summary>The ticket changed (owner/status) between listing and acting.</summary>
@@ -141,15 +150,35 @@ public sealed class CallCenterUnassignedWorkReconciler(
             Guid? assigned = null;
             var outcome = ReconcileOutcome.NoEligibleAgent;
 
+            // BUSINESS RULE: the human who actually received the interaction owns the ticket. When that person is known they get it; when they cannot
+            // take it the ticket is flagged in the Call Center queue - never silently dealt to somebody else.
+            AnsweringAgent? actual = null;
             if (classification.Action == UnassignedTicketAction.AssignToAnsweringAgent && evidence.AnsweringEmployeeId is { } answeringId)
             {
+                actual = new AnsweringAgent(evidence.AnsweringGenesysUserId ?? string.Empty, answeringId);
+            }
+            else if (classification.Class == UnassignedTicketClass.HumanAnsweredAgentNotMapped && !string.IsNullOrWhiteSpace(evidence.UnmappedGenesysAgentId))
+            {
+                // A call a person picked up whose agent id maps to nobody: same as live ingestion - queued and flagged, not Round Robin.
+                actual = new AnsweringAgent(evidence.UnmappedGenesysAgentId!, null, AnsweringAgentIssue.NotMapped);
+            }
+
+            if (actual is not null)
+            {
                 var answer = await autoAssignment.ApplyAnsweringAgentAsync(
-                    ticket, new AnsweringAgent(evidence.AnsweringGenesysUserId ?? string.Empty, answeringId), "Reconciler", now, correlationId,
+                    ticket, actual, "Reconciler", now, correlationId,
                     reportedByEmployeeId: null, routeToCallCenterIfAgentUnavailable: true, cancellationToken);
                 if (answer.Outcome == AnswerAssignmentOutcome.AssignedToAnsweringAgent)
                 {
                     assigned = answer.AssignedEmployeeId;
                     outcome = ReconcileOutcome.AssignedToAnsweringAgent;
+                }
+                else
+                {
+                    // Not assigned to the actual agent: keep the ticket where ApplyAnsweringAgentAsync left it (flagged). No Round Robin fallback.
+                    await unitOfWork.SaveChangesAsync(cancellationToken);
+                    await transaction.CommitAsync(cancellationToken);
+                    return new ReconcileResult(ticketId, classification.Class, ReconcileOutcome.FlaggedForManualAssignment);
                 }
             }
 

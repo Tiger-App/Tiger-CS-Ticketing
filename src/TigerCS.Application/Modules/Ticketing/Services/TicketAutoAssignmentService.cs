@@ -403,8 +403,7 @@ public sealed class TicketAutoAssignmentService(
     /// read-only users, supervisors/managers and administrators are skipped. A lookup that cannot answer excludes the person: rotation
     /// never guesses. (The three readers are optional only so unit tests can build the service bare; the composition root supplies all.)
     /// </summary>
-    private async Task<List<Guid>> FilterEligibleAsync(
-        IEnumerable<Guid> candidateIds, bool callCenterOnly, CancellationToken cancellationToken, string? requiredRole = null)
+    private async Task<List<Guid>> FilterEligibleAsync(IEnumerable<Guid> candidateIds, bool callCenterOnly, CancellationToken cancellationToken, string? requiredRole = null)
     {
         var eligible = new List<Guid>();
         foreach (var id in candidateIds)

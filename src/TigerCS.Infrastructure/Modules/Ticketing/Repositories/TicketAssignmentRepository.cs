@@ -13,6 +13,12 @@ public sealed class TicketAssignmentRepository(TigerCsDbContext dbContext) : ITi
     public Task<bool> HasSupersededAssignmentAsync(long ticketId, Guid employeeId, CancellationToken cancellationToken = default) =>
         dbContext.TicketAssignments.AnyAsync(a => a.TicketId == ticketId && a.AssignedEmployeeId == employeeId && !a.IsCurrent, cancellationToken);
 
+    public async Task<IReadOnlyList<TicketAssignment>> ListByTicketIdAsync(long ticketId, CancellationToken cancellationToken = default) =>
+        await dbContext.TicketAssignments.AsNoTracking()
+            .Where(a => a.TicketId == ticketId)
+            .OrderBy(a => a.AssignedAtUtc).ThenBy(a => a.TicketAssignmentId)
+            .ToListAsync(cancellationToken);
+
     public async Task AddAsync(TicketAssignment assignment, CancellationToken cancellationToken = default) =>
         await dbContext.TicketAssignments.AddAsync(assignment, cancellationToken);
 }

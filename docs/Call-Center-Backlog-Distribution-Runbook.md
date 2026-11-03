@@ -1,3 +1,10 @@
+> **UPDATE (PR #154) — recorded human handlers are never re-dealt.** Business rule: *the actual human agent who accepted or handled the customer interaction owns the ticket.*
+> The Preview / Execute / Rollback scripts now respect it: an Open ticket with a **recorded human handler** (a `TicketInteractionHandlers` row, `TicketInteractions.HandledByUserId`, or a `HumanAgent`
+> transcript line) is **held back** (not moved, not assigned; no switch lifts it) and listed by the Preview as `RECORDED HUMAN HANDLER` with the recorded handler ids. Its count is a **seventh commit gate**
+> (`@ApprovedHeldBackHumanHandledCount`, wherever this document says "six approved counts" read "seven"). Precedence of holds: pending approval → recorded human handler → active AI. **Rollback** never takes a
+> ticket from its current owner when that owner is a recorded handler of it (not even with `@IncludeWorked = 1`). Validated by the harness (`tests/backlog-distribution`, T01–T20, 242+ checks).
+> The batch that was **already executed on Production (84 tickets)** pre-dates this rule: audit it with `Verify_TigerCS_PROD_BacklogBatch_OwnershipAudit_ReadOnly.sql` — see §13. Nothing is corrected automatically.
+
 # Call Center first — Production diagnosis and one-time redistribution of ALL Open tickets (owned or not) to the Call Center
 
 **Database:** `TigerCS_Ticketing_Prod` · **Status: NOT EXECUTED on Production, and nothing has been deployed.** The Preview / Execute / Rollback scripts **were validated on a real SQL Server 2022 container** (§11) — not on your Production server.
@@ -270,3 +277,28 @@ Result sets: (1) headline (flagged, also pending approval, owned, eligible); **(
 3. Approve the six numbers **and** the two switch values; use the identical values in Execute.
 
 **Production figures are not available to this session**, so the projected counts for the 146 cannot be stated here: they come from set 5 and the re-run Preview. What *is* proven (SQL Server 2022, scenarios: 5-minute-old chat, 12 h silent, 3-day stale chat, 2-day stale phone call, old conversation with a message 30 min ago, HumanAgent line, handler row, stale + pending approval, stale + later ended conversation, ticket with no interaction row): the diagnostic counts equal an independent oracle, switches off = unchanged counts, each switch combination = oracle, interactions/messages/handlers/approvals byte-identical after commit, rollback restores the tickets.
+
+---
+
+## 13. Ownership audit of the batch already executed on Production (84 tickets) — SELECT-only
+
+**Script:** `Verify_TigerCS_PROD_BacklogBatch_OwnershipAudit_ReadOnly.sql` (repo root). **Read-only** (SELECTs and session temp tables only; runs under a `db_datareader` login; tested). It **never corrects or reassigns** anything.
+
+**How to run:** connect with a read-only login to `TigerCS_Ticketing_Prod` (or a restored copy), open the file, leave `@BatchId = NULL` (it finds the single `BacklogDistributionBatch` audit row; it refuses to guess if there are several or none) and `@ExpectedBatchTicketCount = 84`, run the whole file in one batch.
+
+**What it compares.** For each ticket of the batch (identified by the batch's own `AutoAssign` audit rows) the **current owner** against recorded evidence of who actually handled it:
+
+| Evidence | Source | Strength |
+|---|---|---|
+| Interaction handlers | `TicketInteractionHandlers` rows | STRONG |
+| Genesys answering agent resolved by the app | `TicketInteractions.HandledByUserId` / `GenesysAgentUserId` | STRONG |
+| Human transcript senders | `TicketInteractionMessages` with `Sender = 2` (HumanAgent), `SenderId` resolved through `AspNetUsers.GenesysUserId` | STRONG |
+| Recorded Genesys routing agent id | `TicketInteractions.GenesysAgentId` resolved the same way | WEAK (on digital channels it may be an *offered* agent) |
+
+**Result sets** (review in this order): RS1 summary (batch id/time, found vs expected 84 — a different count is *reported*, not hidden — and the count per classification) · RS2/RS3 **mismatches** (strong / weak) · RS4 **missing evidence**, reported separately (*unresolved*: evidence exists but its Genesys id maps to no Ticketing user; *none*: nothing recorded) · RS5 matches · RS6 evidence detail · RS7 whether each recorded handler could receive a Call Center ticket today.
+
+**Classifications:** `MISMATCH` (strong evidence names someone, the owner is none of them) · `MATCH` · `WEAK_MISMATCH` · `MISSING_EVIDENCE_UNRESOLVED` · `MISSING_EVIDENCE_NONE`.
+
+**Preserve human work.** Each row shows what happened **after** the batch (`OwnerChangedSinceBatch`, `NotesSinceBatch`, `PersonTransferSinceBatch`, `AssignmentsSinceBatch`, `StatusChangesSinceBatch`, `FirstHumanResponseSinceBatch`) and `HumanWorkSinceBatch`. A `YES` ticket must not be changed automatically. Notes, transfers, SLA and audit history are only read.
+
+**Decision step (outside this script).** For each `MISMATCH`: a person (with the handler's manager) decides whether the recorded handler takes the ticket (the app's own *Assign* keeps history and audit) — using RS7 to see whether that person can receive Call Center tickets — or whether the current owner stays. `MISSING_EVIDENCE_*` tickets need a human decision on other grounds (the rule cannot be checked from data).

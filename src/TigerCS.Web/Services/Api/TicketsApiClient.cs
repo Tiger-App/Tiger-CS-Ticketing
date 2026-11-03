@@ -120,6 +120,10 @@ public sealed class TicketsApiClient(HttpClient httpClient, ILogger<TicketsApiCl
     public Task<ApiResult<TicketInteractionHistoryDto>> GetInteractionsAsync(long ticketId, CancellationToken cancellationToken) =>
         GetAsync<TicketInteractionHistoryDto>($"api/tickets/{ticketId}/interactions", cancellationToken);
 
+    /// <summary>The ticket's full Activity timeline (creation, AI/Genesys/human milestones, handoffs, ownership, lifecycle, closures) — read-only, built by the Api from stored evidence.</summary>
+    public Task<ApiResult<TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineDto>> GetActivityTimelineAsync(long ticketId, CancellationToken cancellationToken) =>
+        GetAsync<TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineDto>($"api/tickets/{ticketId}/activity-timeline", cancellationToken);
+
     /// <summary>The ticket's customer satisfaction review cycles — read from the persisted review store; never contains a review token.</summary>
     public Task<ApiResult<TigerCS.Application.Modules.CustomerReviews.Dto.TicketReviewsDto>> GetReviewsAsync(long ticketId, CancellationToken cancellationToken) =>
         GetAsync<TigerCS.Application.Modules.CustomerReviews.Dto.TicketReviewsDto>($"api/tickets/{ticketId}/reviews", cancellationToken);

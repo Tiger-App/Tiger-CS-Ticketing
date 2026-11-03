@@ -18,6 +18,9 @@
    * NO pending approval  (TicketApprovals.Status = 1)                                      -> HELD BACK until its approval process completes, listed separately
    * NO active AI conversation: a Genesys interaction that is not ended, not inactivity-closed, needs no human follow-up and was not taken by a person,
      on a ticket with no interaction flagged RequiresHumanFollowUp and no open human handoff (AgentHandoff Waiting/Assigned/InProgress)  -> HELD BACK, listed separately
+   * NO recorded human handler: the person who actually received / accepted / answered the interaction is on record (dbo.TicketInteractionHandlers row,
+     TicketInteractions.HandledByUserId, or a HumanAgent transcript line). BUSINESS RULE: that person owns the ticket, so Round Robin never re-deals it -> HELD BACK,
+     listed separately with the recorded handler ids (no switch lifts this). Precedence: pending approval, then recorded human handler, then active AI.
    * any CurrentDepartmentId (active OR inactive department)
    * (only when @ReassignTicketsAlreadyOwnedByEligibleCcAgent = 0) not already in CC and owned by an agent of the pool - default 1 follows the
      approved text literally ("regardless of ... including tickets currently assigned to another employee"): such a ticket is dealt again.
@@ -49,6 +52,7 @@ BEGIN
 END;
 
 IF COL_LENGTH(N'dbo.TicketInteractions', N'RequiresHumanFollowUp') IS NULL OR OBJECT_ID(N'dbo.TicketAgentHandoffs', N'U') IS NULL OR OBJECT_ID(N'dbo.TicketApprovals', N'U') IS NULL
+   OR OBJECT_ID(N'dbo.TicketInteractionHandlers', N'U') IS NULL OR OBJECT_ID(N'dbo.TicketInteractionMessages', N'U') IS NULL
     THROW 50201, N'ABORTED: dbo.TicketInteractions.RequiresHumanFollowUp / dbo.TicketAgentHandoffs / dbo.TicketApprovals not found - the hold-back rules cannot be evaluated; wrong database or a missing migration.', 1;
 
 -- Service accounts are configured in appsettings, not in SQL. Paste every id from BOTH settings (one INSERT per id):
@@ -145,9 +149,9 @@ IF @StaleAiAfterHours IS NOT NULL OR @TreatHumanTouchedAiAsHistorical = 1
 -- every Open ticket with its current owner / current assignment row and the two hold-back flags
 CREATE TABLE #Base (TicketId bigint NOT NULL PRIMARY KEY, TicketNumber nvarchar(80) NULL, CreatedAtUtc datetime2 NOT NULL,
     FromDepartmentId int NOT NULL, OriginatingDepartmentId int NOT NULL, PrevOwnerId uniqueidentifier NULL, PrevAssignmentId bigint NULL,
-    PendingApproval bit NOT NULL, ActiveAi bit NOT NULL, KeptInPlace bit NOT NULL);
+    PendingApproval bit NOT NULL, ActiveAi bit NOT NULL, KeptInPlace bit NOT NULL, HumanHandled bit NOT NULL);
 
-INSERT #Base (TicketId, TicketNumber, CreatedAtUtc, FromDepartmentId, OriginatingDepartmentId, PrevOwnerId, PrevAssignmentId, PendingApproval, ActiveAi, KeptInPlace)
+INSERT #Base (TicketId, TicketNumber, CreatedAtUtc, FromDepartmentId, OriginatingDepartmentId, PrevOwnerId, PrevAssignmentId, PendingApproval, ActiveAi, KeptInPlace, HumanHandled)
 SELECT t.TicketId, t.TicketNumber, t.CreatedAtUtc, t.CurrentDepartmentId, t.OriginatingDepartmentId, t.CurrentOwnerEmployeeId,
        (SELECT TOP (1) a.TicketAssignmentId FROM dbo.TicketAssignments a WHERE a.TicketId = t.TicketId AND a.IsCurrent = 1),
        CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = t.TicketId AND ap.Status = 1) THEN 1 ELSE 0 END,
@@ -156,7 +160,14 @@ SELECT t.TicketId, t.TicketNumber, t.CreatedAtUtc, t.CurrentDepartmentId, t.Orig
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i2 WHERE i2.TicketId = t.TicketId AND i2.RequiresHumanFollowUp = 1)
        AND NOT EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = t.TicketId AND h.Status IN (2, 3, 4)) AND NOT EXISTS (SELECT 1 FROM #StaleAi sa WHERE sa.TicketId = t.TicketId)) THEN 1 ELSE 0 END,
        CASE WHEN @ReassignTicketsAlreadyOwnedByEligibleCcAgent = 0 AND t.CurrentDepartmentId = @CcId
-                 AND EXISTS (SELECT 1 FROM #Agents ag WHERE ag.EmployeeId = t.CurrentOwnerEmployeeId) THEN 1 ELSE 0 END
+                 AND EXISTS (SELECT 1 FROM #Agents ag WHERE ag.EmployeeId = t.CurrentOwnerEmployeeId) THEN 1 ELSE 0 END,
+       -- RECORDED HUMAN HANDLER: the person who actually received / accepted / answered the interaction is on record
+       -- (TicketInteractionHandlers row, TicketInteractions.HandledByUserId, or a HumanAgent transcript line). That person owns the ticket:
+       -- Round Robin must never hand it to somebody else, so it is held back.
+       CASE WHEN (EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers hh WHERE hh.TicketId = t.TicketId)
+            OR EXISTS (SELECT 1 FROM dbo.TicketInteractions hi WHERE hi.TicketId = t.TicketId AND hi.HandledByUserId IS NOT NULL)
+            OR EXISTS (SELECT 1 FROM dbo.TicketInteractions hj JOIN dbo.TicketInteractionMessages hm ON hm.TicketInteractionId = hj.TicketInteractionId
+                       WHERE hj.TicketId = t.TicketId AND hm.Sender = 2)) THEN 1 ELSE 0 END
 FROM dbo.Tickets AS t
 WHERE @CcId IS NOT NULL
   AND t.TicketStatus = 1;                                              -- OPEN only
@@ -169,7 +180,7 @@ INSERT #Cand (Seq, TicketId, TicketNumber, CreatedAtUtc, FromDepartmentId, Origi
 SELECT ROW_NUMBER() OVER (ORDER BY b.CreatedAtUtc, b.TicketId), b.TicketId, b.TicketNumber, b.CreatedAtUtc,
        b.FromDepartmentId, b.OriginatingDepartmentId, CASE WHEN b.FromDepartmentId <> @CcId THEN 1 ELSE 0 END, b.PrevOwnerId, b.PrevAssignmentId
 FROM #Base AS b
-WHERE b.PendingApproval = 0 AND (b.ActiveAi = 0 OR @IncludeLiveAiConversations = 1) AND b.KeptInPlace = 0;   -- held-back tickets never enter the plan
+WHERE b.PendingApproval = 0 AND b.HumanHandled = 0 AND (b.ActiveAi = 0 OR @IncludeLiveAiConversations = 1) AND b.KeptInPlace = 0;   -- held-back tickets never enter the plan
 
 DECLARE @Open int = (SELECT COUNT(*) FROM #Base);
 DECLARE @OpenOwned int = (SELECT COUNT(*) FROM #Base WHERE PrevOwnerId IS NOT NULL);
@@ -177,10 +188,11 @@ DECLARE @Cand int = (SELECT COUNT(*) FROM #Cand);
 DECLARE @Moved int = (SELECT COUNT(*) FROM #Cand WHERE IsMove = 1);
 DECLARE @Reassigned int = (SELECT COUNT(*) FROM #Cand WHERE PrevOwnerId IS NOT NULL);                  -- eligible tickets that currently HAVE an owner (the owner is replaced)
 DECLARE @HeldApproval int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 1);                    -- pending approval (whether or not an AI conversation is also active)
-DECLARE @HeldAiOnly   int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND ActiveAi = 1 AND @IncludeLiveAiConversations = 0);  -- active AI conversation, no pending approval
+DECLARE @HeldHuman    int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND HumanHandled = 1);          -- a recorded human handler, no pending approval
+DECLARE @HeldAiOnly   int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND HumanHandled = 0 AND ActiveAi = 1 AND @IncludeLiveAiConversations = 0);  -- active AI conversation, no approval, no recorded human  -- active AI conversation, no pending approval
 DECLARE @StaleAiReclassified int = (SELECT COUNT(*) FROM #StaleAi sa JOIN #Base b ON b.TicketId = sa.TicketId WHERE sa.Reason = 'STALE');
 DECLARE @HumanAiReclassified int = (SELECT COUNT(*) FROM #StaleAi sa JOIN #Base b ON b.TicketId = sa.TicketId WHERE sa.Reason = 'HUMAN_TOUCHED');
-DECLARE @KeptInPlace  int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND (ActiveAi = 0 OR @IncludeLiveAiConversations = 1) AND KeptInPlace = 1);
+DECLARE @KeptInPlace  int = (SELECT COUNT(*) FROM #Base WHERE PendingApproval = 0 AND HumanHandled = 0 AND (ActiveAi = 0 OR @IncludeLiveAiConversations = 1) AND KeptInPlace = 1);
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- 3. The Round Robin deal
@@ -202,7 +214,7 @@ SELECT @@SERVERNAME AS [Server], DB_NAME() AS [Database], SYSUTCDATETIME() AS Pr
        @Open AS TotalOpenTickets, @OpenOwned AS OpenCurrentlyOwned, @Open - @OpenOwned AS OpenCurrentlyUnowned,
        @Cand AS EligibleTickets_Total, @Moved AS TicketsMovedIntoCC, @Cand - @Moved AS TicketsAlreadyInCC,
        @Reassigned AS EligibleCurrentlyOwned_OwnerReplaced, @Cand - @Reassigned AS EligibleCurrentlyUnowned,
-       @HeldApproval AS HeldBack_PendingApproval, @HeldAiOnly AS HeldBack_ActiveAiConversation, @KeptInPlace AS KeptInPlace_OwnedByEligibleCcAgent,
+       @HeldApproval AS HeldBack_PendingApproval, @HeldAiOnly AS HeldBack_ActiveAiConversation, @HeldHuman AS HeldBack_RecordedHumanHandler, @KeptInPlace AS KeptInPlace_OwnedByEligibleCcAgent,
        @Cursor AS RotationCursor_LastAssignedEmployeeId,
        CASE
            WHEN @CcCount <> 1                                    THEN 'BLOCKER: expected exactly one active department with Code=CC, found ' + CONVERT(varchar(10), @CcCount)
@@ -253,21 +265,25 @@ ORDER BY Eligible DESC;
 -- ===========================================================================================================================
 SELECT d.Code AS DepartmentCode, d.Name AS DepartmentName,
        SUM(CASE WHEN b.PendingApproval = 1 THEN 1 ELSE 0 END) AS HeldBack_PendingApproval,
-       SUM(CASE WHEN b.PendingApproval = 0 AND b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0 THEN 1 ELSE 0 END) AS HeldBack_ActiveAiOnly,
+       SUM(CASE WHEN b.PendingApproval = 0 AND b.HumanHandled = 1 THEN 1 ELSE 0 END) AS HeldBack_RecordedHumanHandler,
+       SUM(CASE WHEN b.PendingApproval = 0 AND b.HumanHandled = 0 AND b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0 THEN 1 ELSE 0 END) AS HeldBack_ActiveAiOnly,
        COUNT(*) AS HeldBackTotal,
        SUM(CASE WHEN b.PrevOwnerId IS NOT NULL THEN 1 ELSE 0 END) AS OfWhich_CurrentlyOwned
 FROM #Base AS b JOIN dbo.Departments AS d ON d.DepartmentId = b.FromDepartmentId
-WHERE b.PendingApproval = 1 OR (b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0)
+WHERE b.PendingApproval = 1 OR b.HumanHandled = 1 OR (b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0)
 GROUP BY d.Code, d.Name
 UNION ALL
-SELECT N'** TOTAL **', NULL, @HeldApproval, @HeldAiOnly, @HeldApproval + @HeldAiOnly,
-       (SELECT COUNT(*) FROM #Base WHERE (PendingApproval = 1 OR (ActiveAi = 1 AND @IncludeLiveAiConversations = 0)) AND PrevOwnerId IS NOT NULL)
+SELECT N'** TOTAL **', NULL, @HeldApproval, @HeldHuman, @HeldAiOnly, @HeldApproval + @HeldHuman + @HeldAiOnly,
+       (SELECT COUNT(*) FROM #Base WHERE (PendingApproval = 1 OR HumanHandled = 1 OR (ActiveAi = 1 AND @IncludeLiveAiConversations = 0)) AND PrevOwnerId IS NOT NULL)
 ORDER BY HeldBackTotal DESC;
 
 -- Each held-back ticket, with the reason (a ticket with BOTH a pending approval and an AI conversation is listed once, under the approval)
 SELECT b.TicketId, b.TicketNumber, d.Code AS CurrentDepartment,
-       CASE WHEN b.PendingApproval = 1 THEN 'PENDING APPROVAL' ELSE 'ACTIVE AI CONVERSATION' END AS HeldBackBecause,
-       CASE WHEN b.ActiveAi = 1 AND b.PendingApproval = 1 THEN 'also has an active AI conversation' ELSE '' END AS Also,
+       CASE WHEN b.PendingApproval = 1 THEN 'PENDING APPROVAL' WHEN b.HumanHandled = 1 THEN 'RECORDED HUMAN HANDLER' ELSE 'ACTIVE AI CONVERSATION' END AS HeldBackBecause,
+       CASE WHEN b.ActiveAi = 1 AND b.PendingApproval = 1 THEN 'also has an active AI conversation' WHEN b.PendingApproval = 1 AND b.HumanHandled = 1 THEN 'also has a recorded human handler' ELSE '' END AS Also,
+       (SELECT STRING_AGG(CONVERT(nvarchar(36), x.UserId), N', ') FROM (SELECT h.HandledByUserId AS UserId FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = b.TicketId
+            UNION SELECT i.HandledByUserId FROM dbo.TicketInteractions i WHERE i.TicketId = b.TicketId AND i.HandledByUserId IS NOT NULL) x) AS RecordedHandlerEmployeeIds,
+       (SELECT COUNT(*) FROM dbo.TicketInteractions i JOIN dbo.TicketInteractionMessages m ON m.TicketInteractionId = i.TicketInteractionId WHERE i.TicketId = b.TicketId AND m.Sender = 2) AS HumanTranscriptLines,
        ISNULL(o.DisplayName, CASE WHEN b.PrevOwnerId IS NULL THEN N'(unowned)' ELSE N'(unknown employee)' END) AS CurrentOwner_StaysUnchanged,
        (SELECT STRING_AGG(CASE ap.ApprovalType WHEN 1 THEN 'Accounting' WHEN 2 THEN 'CustomerService' ELSE 'Type' + CONVERT(varchar(5), ap.ApprovalType) END
                           + ' (since ' + CONVERT(varchar(16), ap.RequestedAtUtc, 120) + ')', '; ')
@@ -275,8 +291,8 @@ SELECT b.TicketId, b.TicketNumber, d.Code AS CurrentDepartment,
        b.CreatedAtUtc
 FROM #Base AS b JOIN dbo.Departments AS d ON d.DepartmentId = b.FromDepartmentId
 LEFT JOIN dbo.Employees o ON o.EmployeeId = b.PrevOwnerId
-WHERE b.PendingApproval = 1 OR (b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0)
-ORDER BY CASE WHEN b.PendingApproval = 1 THEN 0 ELSE 1 END, d.Code, b.CreatedAtUtc, b.TicketId;
+WHERE b.PendingApproval = 1 OR b.HumanHandled = 1 OR (b.ActiveAi = 1 AND @IncludeLiveAiConversations = 0)
+ORDER BY CASE WHEN b.PendingApproval = 1 THEN 0 WHEN b.HumanHandled = 1 THEN 1 ELSE 2 END, d.Code, b.CreatedAtUtc, b.TicketId;
 
 -- ===========================================================================================================================
 -- RESULT SET 3 - What is EXCLUDED / never touched (for the sign-off)
@@ -399,10 +415,10 @@ GROUP BY d.Code, a.Rn, a.DisplayName
 ORDER BY d.Code, a.Rn;
 
 -- ===========================================================================================================================
--- RESULT SET 6 - APPROVAL VALUES: copy these SIX numbers into the execution script's commit gates
+-- RESULT SET 6 - APPROVAL VALUES: copy these SEVEN numbers into the execution script's commit gates
 -- ===========================================================================================================================
 SELECT @Cand AS ApprovedTicketCount, @Moved AS ApprovedTransferCount, @Reassigned AS ApprovedReassignedCount, @N AS ApprovedAgentCount,
-       @HeldApproval AS ApprovedHeldBackPendingApprovalCount, @HeldAiOnly AS ApprovedHeldBackActiveAiCount;
+       @HeldApproval AS ApprovedHeldBackPendingApprovalCount, @HeldAiOnly AS ApprovedHeldBackActiveAiCount, @HeldHuman AS ApprovedHeldBackHumanHandledCount;
 
 -- ===========================================================================================================================
 -- RESULT SET 7 - Exact plan: ticket -> original department / previous owner -> receiving agent (ticket numbers only; no customer data)

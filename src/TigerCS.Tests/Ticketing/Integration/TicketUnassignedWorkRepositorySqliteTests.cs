@@ -90,6 +90,48 @@ public sealed class TicketUnassignedWorkRepositorySqliteTests : IDisposable
     }
 
     [Fact]
+    public async Task AHumanAgentTranscriptLine_ResolvesItsSenderToTheTicketingUser_AsTheActualAnsweringAgent()
+    {
+        long resolved, unresolved, botOnly;
+        var writer = Guid.NewGuid();
+        using (var context = _db.CreateContext())
+        {
+            context.Departments.Add(new Department("Call Center", "CC"));
+            context.Users.Add(new TigerCS.Infrastructure.Identity.ApplicationUser
+            {
+                Id = writer, UserName = "writer@example.test", NormalizedUserName = "WRITER@EXAMPLE.TEST", Email = "writer@example.test",
+                SecurityStamp = Guid.NewGuid().ToString(), GenesysUserId = "g-writer"
+            });
+            context.SaveChanges();
+
+            long Chat(string senderKind, string? senderId)
+            {
+                var t = _db.AddTicket(context, _db.CustomerServiceId);
+                var i = Genesys(t);
+                context.TicketInteractions.Add(i);
+                context.SaveChanges();
+                context.TicketInteractionMessages.Add(new TicketInteractionMessage(
+                    i.TicketInteractionId, 1, senderKind == "human" ? InteractionMessageSender.HumanAgent : InteractionMessageSender.VirtualAgent,
+                    "Someone", senderId, Now.AddMinutes(-20), "hello"));
+                context.SaveChanges();
+                return t.TicketId;
+            }
+
+            resolved = Chat("human", "g-writer");               // a mapped person wrote to the customer
+            unresolved = Chat("human", "participant-unmapped"); // a person wrote, but the id maps to nobody
+            botOnly = Chat("bot", "g-writer");                  // a VirtualAgent line is never evidence of a person
+        }
+
+        var result = await ClassifyAsync();
+
+        Assert.Equal(writer, result[resolved].Evidence.AnsweringEmployeeId);
+        Assert.Equal("g-writer", result[resolved].Evidence.AnsweringGenesysUserId);
+        Assert.Equal(UnassignedTicketClass.HumanAnsweredNotAssigned, result[resolved].Class.Class);
+        Assert.Null(result[unresolved].Evidence.AnsweringEmployeeId);                 // not guessed
+        Assert.Null(result[botOnly].Evidence.AnsweringEmployeeId);
+    }
+
+    [Fact]
     public async Task GetEvidence_ReturnsOneTicket_OwnedOrNot_ForTheInTransactionRecheck()
     {
         long id;

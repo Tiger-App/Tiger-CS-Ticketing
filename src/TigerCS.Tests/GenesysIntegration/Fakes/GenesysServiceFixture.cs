@@ -321,7 +321,7 @@ public sealed class GenesysServiceFixture
             answeringAgentAssignment: AnsweringAgents);
 
         InactivityClose = new ChatbotInactivityCloseAppService(
-            Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock);
+            Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock, Audit);
 
         AgentContext = new GenesysAgentContextAppService(
             Options, AgentResolution, Conversations, Tickets, UnitOfWork, Audit, HandlingHistory);
