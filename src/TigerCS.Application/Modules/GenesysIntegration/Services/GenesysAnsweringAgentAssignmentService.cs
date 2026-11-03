@@ -47,6 +47,8 @@ public sealed class GenesysAnsweringAgentAssignmentService(
                 GenesysAgentResolutionOutcome.Invalid => AnsweringAgentIssue.InvalidId,
                 GenesysAgentResolutionOutcome.Ambiguous => AnsweringAgentIssue.AmbiguousMapping,
                 GenesysAgentResolutionOutcome.ServiceAccount => AnsweringAgentIssue.ServiceAccount,
+                GenesysAgentResolutionOutcome.LockedOut => AnsweringAgentIssue.LockedOut,
+                GenesysAgentResolutionOutcome.NotCsAgent => AnsweringAgentIssue.NotCsAgent,
                 _ => AnsweringAgentIssue.NotMapped
             });
     }
@@ -56,12 +58,20 @@ public sealed class GenesysAnsweringAgentAssignmentService(
         ToAnsweringAgent(genesysUserId, await agentResolution.ResolveByGenesysUserIdAsync(genesysUserId, cancellationToken));
 
     /// <summary>
+    /// Resolves the <c>senderId</c> of a <c>HumanAgent</c> transcript line: the Genesys User ID (GUID) first, then - only when it is an e-mail
+    /// address and <c>Genesys:AllowEmailSenderIdFallback</c> is on - a unique, active, unlocked CS Agent account with exactly that e-mail.
+    /// </summary>
+    public async Task<AnsweringAgent> ResolveSenderAsync(string senderId, CancellationToken cancellationToken = default) =>
+        ToAnsweringAgent(senderId, await agentResolution.ResolveSenderIdAsync(senderId, cancellationToken));
+
+    /// <summary>
     /// A Genesys update reported <paramref name="genesysAgentId"/> as connected to the interaction. Applies the answering-agent rule to the
     /// ticket and saves it in one transaction.
     /// </summary>
     public async Task<AnswerAssignmentResult> ApplyConnectedAgentAsync(
         Guid callerEmployeeId, Ticket ticket, TicketInteraction interaction, string genesysAgentId, string source,
-        CancellationToken cancellationToken = default, bool firstResponseIsFromTheAnsweringAgent = false)
+        CancellationToken cancellationToken = default, bool firstResponseIsFromTheAnsweringAgent = false,
+        bool identityIsTranscriptSenderId = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         ArgumentNullException.ThrowIfNull(interaction);
@@ -71,7 +81,10 @@ public sealed class GenesysAnsweringAgentAssignmentService(
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "No connected agent.");
         }
 
-        var agent = await ResolveAsync(genesysAgentId, cancellationToken);
+        // A transcript senderId may be the GUID or (fallback) an e-mail; a routing/inquiry agentId is the GUID only.
+        var agent = identityIsTranscriptSenderId
+            ? await ResolveSenderAsync(genesysAgentId, cancellationToken)
+            : await ResolveAsync(genesysAgentId, cancellationToken);
 
         // An unusable agent flags/queues the ticket only when a person is evidently handling it already: it sits in the Call Center, the
         // conversation needs human follow-up, human work is open, or it is a VOICE call (a call connected to an agent is answered by a

@@ -203,7 +203,21 @@ public sealed class FakeGenesysAgentMappingRepository : IGenesysAgentMappingRepo
 {
     private readonly List<GenesysMappedAgent> _mappings = [];
 
+    private readonly List<(Guid UserId, string Email)> _accountEmails = [];
+
     public IReadOnlyList<GenesysMappedAgent> All => _mappings;
+
+    /// <summary>Sets a Ticketing account e-mail (<c>AspNetUsers.Email</c>) - several users may share one, as Identity does not forbid it here.</summary>
+    public void SetAccountEmail(Guid userId, string email) => _accountEmails.Add((userId, email));
+
+    /// <summary>A Ticketing user with an account e-mail but NO Genesys User ID yet (an admin mapping gap).</summary>
+    public GenesysMappedAgent MapWithoutGenesysId(Guid userId, string email, string displayName = "Unmapped Agent", bool isActive = true)
+    {
+        var mapped = new GenesysMappedAgent(userId, string.Empty, null, $"user-{userId:N}", displayName, isActive);
+        _mappings.Add(mapped);
+        _accountEmails.Add((userId, email));
+        return mapped;
+    }
 
     public GenesysMappedAgent Map(Guid userId, string genesysUserId, string? genesysEmail = null, string displayName = "Mapped Agent", bool isActive = true)
     {
@@ -237,4 +251,13 @@ public sealed class FakeGenesysAgentMappingRepository : IGenesysAgentMappingRepo
     public Task<GenesysMappedAgent?> FindByGenesysUserIdAsync(string genesysUserId, CancellationToken cancellationToken = default) =>
         Task.FromResult(_mappings.FirstOrDefault(m =>
             string.Equals(m.GenesysUserId, genesysUserId.Trim(), StringComparison.OrdinalIgnoreCase)));
+
+    public Task<IReadOnlyList<GenesysMappedAgent>> FindByEmailAsync(string email, CancellationToken cancellationToken = default)
+    {
+        var wanted = email.Trim();
+        var ids = _accountEmails.Where(a => string.Equals(a.Email, wanted, StringComparison.OrdinalIgnoreCase)).Select(a => a.UserId)
+            .Concat(_mappings.Where(m => string.Equals(m.GenesysEmail, wanted, StringComparison.OrdinalIgnoreCase)).Select(m => m.UserId))
+            .Distinct().OrderBy(id => id).Take(2).ToList();
+        return Task.FromResult<IReadOnlyList<GenesysMappedAgent>>(_mappings.Where(m => ids.Contains(m.UserId)).OrderBy(m => m.UserId).ToList());
+    }
 }

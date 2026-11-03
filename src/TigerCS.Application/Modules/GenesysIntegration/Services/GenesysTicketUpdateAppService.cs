@@ -330,12 +330,13 @@ public sealed class GenesysTicketUpdateAppService(
         if (options.AssignOnAnswer && answeringAgentAssignment is not null
             && NullIfBlank(request.Routing?.AgentId) is null
             && GenesysHumanHandlingEvidence.FirstHumanSenderId(request) is { } humanSenderId
-            && (await answeringAgentAssignment.ResolveAsync(humanSenderId, cancellationToken)).Issue
+            && (await answeringAgentAssignment.ResolveSenderAsync(humanSenderId, cancellationToken)).Issue
                 is not (AnsweringAgentIssue.NotMapped or AnsweringAgentIssue.InvalidId))
         {
             var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
                 callerEmployeeId, ticket, interaction, humanSenderId, source: "Transcript", cancellationToken,
-                firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, humanSenderId));
+                firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, humanSenderId),
+                identityIsTranscriptSenderId: true);
             if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
             {
                 return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);
@@ -438,6 +439,16 @@ public sealed class GenesysTicketUpdateAppService(
                 callerEmployeeId, interaction, NullIfBlank(request.AgentId),
                 request.Ended is not null ? InteractionHandlerSource.ConversationEnd : InteractionHandlerSource.Update,
                 connectedAtUtc: null, cancellationToken);
+
+            // Handler evidence from the transcript: every person who WROTE to the customer (a HumanAgent line whose senderId is their Genesys
+            // User ID, or - strict fallback - the e-mail of exactly one active CS Agent) handled the interaction, whether or not routing.agentId
+            // ever arrived. This records the handler only; it never changes the owner (an explicit Take Ownership / supervisor assignment stands).
+            foreach (var (senderId, firstSentAtUtc) in GenesysHumanHandlingEvidence.HumanSenderIds(request))
+            {
+                await handlerRecorder.RecordAsync(
+                    callerEmployeeId, interaction, senderId,
+                    InteractionHandlerSource.Transcript, firstSentAtUtc, cancellationToken, identityIsTranscriptSenderId: true);
+            }
         }
 
         if (request.CustomerConfirmation is { } confirmation)

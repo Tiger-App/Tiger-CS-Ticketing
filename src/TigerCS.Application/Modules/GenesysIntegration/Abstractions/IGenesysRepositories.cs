@@ -110,6 +110,14 @@ public interface IGenesysAgentMappingRepository
     /// index <c>UX_AspNetUsers_GenesysUserId</c> for there being at most one.
     /// </summary>
     Task<Dto.GenesysMappedAgent?> FindByGenesysUserIdAsync(string genesysUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <b>Fallback only</b>, for a transcript <c>senderId</c> that arrives in e-mail form instead of as the Genesys User ID GUID. Returns
+    /// every DISTINCT Ticketing user whose account e-mail (<c>AspNetUsers.NormalizedEmail</c>) or recorded <c>GenesysEmail</c> equals
+    /// <paramref name="email"/> exactly (case-insensitive, whole address - no partial or display-name matching), at most two (two already
+    /// means "ambiguous"). Inactive users are returned too, flagged, so a duplicate can never silently disappear. Empty = nobody.
+    /// </summary>
+    Task<IReadOnlyList<Dto.GenesysMappedAgent>> FindByEmailAsync(string email, CancellationToken cancellationToken = default);
 }
 
 /// <summary>

@@ -167,6 +167,49 @@ public class GenesysAgentMappingPersistenceTests
     }
 
     [Fact]
+    public async Task FindByEmailAsync_MatchesWholeAddressesOnly_CaseInsensitively_AndReturnsEveryDistinctUser()
+    {
+        using var db = new SqliteDatabase();
+        var esraa = User("6f1d2c3b-0a9e-4b8d-9c7f-1e2d3c4b5a69");
+        esraa.Email = "callcenter5@tigergroup.ae";
+        esraa.NormalizedEmail = "CALLCENTER5@TIGERGROUP.AE";
+        var viaGenesysEmail = User("7a1d2c3b-0a9e-4b8d-9c7f-1e2d3c4b5a70", "Genesys.Only@TigerGroup.ae");
+        var lookalike = User(null);
+        lookalike.Email = "callcenter55@tigergroup.ae";
+        lookalike.NormalizedEmail = "CALLCENTER55@TIGERGROUP.AE";
+        using (var context = db.CreateContext())
+        {
+            context.Users.AddRange(esraa, viaGenesysEmail, lookalike);
+            context.SaveChanges();
+        }
+
+        using var read = db.CreateContext();
+        var repository = new TigerCS.Infrastructure.Modules.GenesysIntegration.Repositories.GenesysAgentMappingRepository(read);
+
+        var byAccountEmail = await repository.FindByEmailAsync("  CallCenter5@TigerGroup.ae ");
+        Assert.Equal(esraa.Id, Assert.Single(byAccountEmail).UserId);                    // not the callcenter55 look-alike
+        Assert.Equal(esraa.GenesysUserId, byAccountEmail[0].GenesysUserId);
+        Assert.False(byAccountEmail[0].IsActive);                                        // no Employee row seeded here = not active
+
+        Assert.Equal(viaGenesysEmail.Id, Assert.Single(await repository.FindByEmailAsync("genesys.only@tigergroup.ae")).UserId);
+        Assert.Empty(await repository.FindByEmailAsync("callcenter"));                  // partial
+        Assert.Empty(await repository.FindByEmailAsync("Esraa Alfadil Alnour Ahmed"));   // a name is never matched
+
+        // Two accounts, one address: BOTH come back, so the resolver can refuse to choose.
+        lookalike.Email = "callcenter5@tigergroup.ae";
+        lookalike.NormalizedEmail = "CALLCENTER5@TIGERGROUP.AE";
+        using (var context = db.CreateContext())
+        {
+            context.Users.Update(lookalike);
+            context.SaveChanges();
+        }
+
+        using var again = db.CreateContext();
+        Assert.Equal(2, (await new TigerCS.Infrastructure.Modules.GenesysIntegration.Repositories.GenesysAgentMappingRepository(again)
+            .FindByEmailAsync("callcenter5@tigergroup.ae")).Count);
+    }
+
+    [Fact]
     public void Database_RejectsASecondUserWithTheSameGenesysUserId_ButAllowsAnyNumberOfUnmappedUsers()
     {
         using var db = new SqliteDatabase();
