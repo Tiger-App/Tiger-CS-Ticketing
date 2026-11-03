@@ -348,16 +348,18 @@ public class CallCenterUnassignedWorkReconcilerTests
     }
 
     [Fact]
-    public async Task CsAgentRoleOnly_Off_RestoresTheOrdinaryRotation()
+    public async Task CsAgentRoleOnly_Off_DoesNotReopenTheCallCenterPool_TheDepartmentRuleIsUnconditional()
     {
+        // The Call Center deals to CS Agents only (business rule), whatever the reconciler's own option says: switching CsAgentRoleOnly off must
+        // never let a Department Employee/Head in the Call Center receive tickets.
         var env = new Env();
-        var nonAgent = env.AddNonCsAgentMember();
+        env.AddNonCsAgentMember();
         var ticket = await env.AddQueuedTicketAsync();
 
         var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, new CallCenterReconciliationOptions { Enabled = true, DryRun = false, CsAgentRoleOnly = false }, false);
 
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, result.Outcome);
-        Assert.Equal(nonAgent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(ReconcileOutcome.NoEligibleAgent, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
