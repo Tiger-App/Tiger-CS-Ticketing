@@ -169,6 +169,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<DepartmentAssignmentService>();
 
         services.AddScoped<IAuditEntryWriter, AuditEntryWriter>();
+        services.AddScoped<IAuditEntryReader, AuditEntryReader>();
 
         services.AddScoped<IUnitReferenceRepository, UnitReferenceRepository>();
         services.AddScoped<IContactReferenceRepository, ContactReferenceRepository>();
@@ -439,6 +440,7 @@ public static class InfrastructureServiceCollectionExtensions
         // the voice bot is dialled by Genesys, not by TigerCS.
         services.AddScoped<IReminderDeliveryProvider, EmailReminderDeliveryProvider>();
         services.AddScoped<TicketInteractionQueryAppService>();
+        services.AddScoped<TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineAppService>();
         services.AddScoped<TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewQueryAppService>();
         services.AddScoped<TicketClassificationAppService>();
         services.AddScoped<AgentHandoffAppService>();

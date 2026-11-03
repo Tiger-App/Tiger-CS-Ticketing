@@ -915,6 +915,28 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
+    public async Task GetTicketActivityTimeline_Returns200()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+        var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
+
+        var response = await client.GetAsync($"/api/tickets/{ticket.TicketId}/activity-timeline");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var timeline = await response.Content.ReadFromJsonAsync<TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineDto>();
+        Assert.Equal(ticket.TicketId, timeline!.TicketId);
+
+        // A manually-created ticket: the timeline opens with its creation, from the originating (locally-entered) interaction, and says
+        // plainly what was not recorded rather than inventing it.
+        var created = Assert.Single(timeline.Events, e => e.EventType == "TicketCreated");
+        Assert.Equal(ticket.TicketNumber, timeline.TicketNumber);
+        Assert.Contains("TigerCS (entered by an employee)", created.Description);
+
+        var missing = await client.GetAsync("/api/tickets/999999999/activity-timeline");
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+    }
+
+    [Fact]
     public async Task GetTicketInteractions_Returns200()
     {
         var (client, _) = await CreateAdministratorAsync();
