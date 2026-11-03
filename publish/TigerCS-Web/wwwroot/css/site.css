@@ -2053,6 +2053,17 @@ a.badge:hover { text-decoration: underline; }
 @media (max-width: 720px) { .pending-help__list { grid-template-columns: 1fr; } .pending-help__list dd { margin-bottom: 6px; } }
 .field-hint--error { color: var(--color-critical); }
 
+/* Live password rules (Admin → Reset password): neutral until typing starts, then green/red per rule. */
+.password-rules { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 3px; font-size: var(--text-xs); line-height: 1.5; color: var(--color-text-secondary); }
+.password-rules li::before { content: "•"; display: inline-block; width: 1.4em; font-weight: var(--weight-strong); }
+.password-rules li.is-met { color: var(--color-success-text); }
+.password-rules li.is-met::before { content: "✓"; color: var(--color-success); }
+.password-rules li.is-unmet { color: var(--color-critical); }
+.password-rules li.is-unmet::before { content: "✗"; color: var(--color-critical); }
+.alert__list { margin: 0; padding-left: 1.2em; }
+.field-hint.is-ok { color: var(--color-success-text); }
+.field-hint.is-bad { color: var(--color-critical); }
+
 /* SLA explanation (Ticket Details) and effective SLA configuration (Admin → Request Types). */
 .sla-explain__reason { margin: 0 0 var(--space-2); font-size: 13px; line-height: 1.5; color: var(--color-text-secondary); padding: 8px 10px; border-left: 3px solid var(--color-warning, #d99a1e); background: var(--color-surface-muted, #faf8f2); border-radius: 0 6px 6px 0; }
 .sla-explain { margin-top: var(--space-2); font-size: 13px; }
@@ -2283,3 +2294,14 @@ a.ticket-header__customer-name:hover { text-decoration: underline; }
   .convo-group__summary { padding: var(--space-2); }
   .convo-group__body { padding: var(--space-2); }
 }
+
+/* ---------- Administration: Manage Permissions ---------- */
+.perm-module { border: 0; padding: 0; margin: 0 0 var(--space-5); min-width: 0; }
+.perm-table td { vertical-align: top; }
+.perm-choice { display: inline-flex; flex-wrap: wrap; gap: var(--space-2); }
+.perm-choice__opt { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 999px; font-size: var(--text-sm); cursor: pointer; background: var(--color-surface, #fff); }
+.perm-choice__opt input { accent-color: var(--color-gold-dark); }
+.perm-choice__opt:has(input:checked) { border-color: var(--color-gold-dark); font-weight: 600; }
+.perm-choice__opt--deny:has(input:checked) { border-color: #b3261e; color: #b3261e; }
+.perm-choice__opt.is-disabled { opacity: .5; cursor: not-allowed; }
+.perm-module:disabled .perm-choice__opt { opacity: .6; cursor: not-allowed; }

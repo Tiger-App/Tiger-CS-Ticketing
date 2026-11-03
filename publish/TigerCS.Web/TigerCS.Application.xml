@@ -171,6 +171,9 @@
         <member name="F:TigerCS.Application.Modules.Administration.Dto.AdminOutcome.PasswordPolicyViolation">
             <summary>A new password failed ASP.NET Core Identity's password validators; <c>Errors</c> lists their descriptions. The API answers 422.</summary>
         </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Dto.AdminOutcome.Forbidden">
+            <summary>The caller is not allowed to make this change (self-service permission edits, granting what they do not hold, administrator-only permissions). The API answers 403.</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Administration.Dto.NamedReferenceDto">
             <summary>A name-resolved reference — the administration UI shows names, never raw ids, but keeps the id for links and forms.</summary>
         </member>
@@ -340,6 +343,74 @@
         </member>
         <member name="M:TigerCS.Application.Modules.Administration.Dto.PasswordPolicyDto.#ctor(System.Int32,System.Boolean,System.Boolean,System.Boolean,System.Boolean,System.Int32)">
             <summary>The password rules ASP.NET Core Identity is currently configured with — what the reset form shows and checks live.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto">
+            <summary>One permission as the Manage Permissions screen shows it for one employee.</summary>
+            <param name="Key">Stable permission key.</param>
+            <param name="Action">View, Create, Edit, ...</param>
+            <param name="Name">Short display name.</param>
+            <param name="Description">One-line explanation.</param>
+            <param name="IsAdministratorOnly">Reserved permission: can be denied, never granted outside the System Administrator role.</param>
+            <param name="FromRole">Whether the employee's roles carry it.</param>
+            <param name="IsEffective">Whether the employee ends up holding it.</param>
+            <param name="Override">"Inherit" (no row), "Grant" or "Deny".</param>
+            <param name="Source">"Role", "Granted", "Denied" or "None" - why <paramref name="IsEffective"/> is what it is.</param>
+            <param name="CanGrant">False when a grant would be refused (administrator-only permission, or the employee is read-only / an integration account).</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.#ctor(System.String,System.String,System.String,System.String,System.Boolean,System.Boolean,System.String,System.Boolean,System.String,System.Boolean)">
+            <summary>One permission as the Manage Permissions screen shows it for one employee.</summary>
+            <param name="Key">Stable permission key.</param>
+            <param name="Action">View, Create, Edit, ...</param>
+            <param name="Name">Short display name.</param>
+            <param name="Description">One-line explanation.</param>
+            <param name="IsAdministratorOnly">Reserved permission: can be denied, never granted outside the System Administrator role.</param>
+            <param name="FromRole">Whether the employee's roles carry it.</param>
+            <param name="IsEffective">Whether the employee ends up holding it.</param>
+            <param name="Override">"Inherit" (no row), "Grant" or "Deny".</param>
+            <param name="Source">"Role", "Granted", "Denied" or "None" - why <paramref name="IsEffective"/> is what it is.</param>
+            <param name="CanGrant">False when a grant would be refused (administrator-only permission, or the employee is read-only / an integration account).</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.Key">
+            <summary>Stable permission key.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.Action">
+            <summary>View, Create, Edit, ...</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.Name">
+            <summary>Short display name.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.Description">
+            <summary>One-line explanation.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.IsAdministratorOnly">
+            <summary>Reserved permission: can be denied, never granted outside the System Administrator role.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.FromRole">
+            <summary>Whether the employee's roles carry it.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.Override">
+            <summary>"Inherit" (no row), "Grant" or "Deny".</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.IsEffective">
+            <summary>Whether the employee ends up holding it.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.Source">
+            <summary>"Role", "Granted", "Denied" or "None" - why <paramref name="IsEffective"/> is what it is.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Dto.PermissionStateDto.CanGrant">
+            <summary>False when a grant would be refused (administrator-only permission, or the employee is read-only / an integration account).</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Administration.Dto.SetUserPermissionsRequestDto">
+            <summary>
+            The complete desired override set for the employee: permission key to
+            "Grant" or "Deny". A permission that is absent inherits from the roles.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Dto.SetUserPermissionsRequestDto.#ctor(System.Collections.Generic.IReadOnlyDictionary{System.String,System.String},System.String)">
+            <summary>
+            The complete desired override set for the employee: permission key to
+            "Grant" or "Deny". A permission that is absent inherits from the roles.
+            </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Administration.Dto.WorkflowDesignerCatalogDto">
             <summary>Everything the designer's forms need to offer only controlled choices.</summary>
@@ -516,6 +587,53 @@
         </member>
         <member name="M:TigerCS.Application.Modules.Administration.Services.AdminUserAppService.GetPasswordPolicy">
             <summary>The live Identity password policy, so the UI never carries its own copy of the rules.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Administration.Services.AdminUserPermissionAppService">
+             <summary>
+             Per-employee permission management (Administration → Users → Manage
+             Permissions). Permissions are the role baseline
+             (<see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.RolePermissionDefaults"/>) plus employee-specific overrides;
+             this service reads and rewrites only the overrides, and the existing
+             authorization pipeline (<c>UserPermissionAuthorizationHandler</c>) enforces
+             them on every endpoint. Roles are still changed through
+             <see cref="M:TigerCS.Application.Modules.Administration.Services.AdminUserAppService.SetRolesAsync(System.Guid,System.Guid,TigerCS.Application.Modules.Administration.Dto.SetUserRolesRequestDto,System.Threading.CancellationToken)"/> - there is one place for each.
+            
+             <para>Safeguards, all enforced here and not in the UI:</para>
+             <list type="bullet">
+               <item><description>nobody edits their own overrides (no self-escalation, no self-lock-out);</description></item>
+               <item><description>a permission can only be granted by someone who effectively holds it;</description></item>
+               <item><description>administrator-only permissions (<see cref="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsReserved"/>) are never granted outside the roles that carry them;</description></item>
+               <item><description>an administrator-only permission cannot be denied to the last active System Administrator who still holds it;</description></item>
+               <item><description>read-only roles (Chairman/CEO, Reporting User) are never granted a mutating permission;</description></item>
+               <item><description>configured integration (Genesys) accounts are never given overrides;</description></item>
+               <item><description>every change is written to the audit trail in the same transaction.</description></item>
+             </list>
+             </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Services.AdminUserPermissionAppService.#ctor(TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserAccountManager,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserRoleReader,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository,TigerCS.Application.Authorization.IServiceIdentityRegistry,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IIdentityUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,System.TimeProvider)">
+             <summary>
+             Per-employee permission management (Administration → Users → Manage
+             Permissions). Permissions are the role baseline
+             (<see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.RolePermissionDefaults"/>) plus employee-specific overrides;
+             this service reads and rewrites only the overrides, and the existing
+             authorization pipeline (<c>UserPermissionAuthorizationHandler</c>) enforces
+             them on every endpoint. Roles are still changed through
+             <see cref="M:TigerCS.Application.Modules.Administration.Services.AdminUserAppService.SetRolesAsync(System.Guid,System.Guid,TigerCS.Application.Modules.Administration.Dto.SetUserRolesRequestDto,System.Threading.CancellationToken)"/> - there is one place for each.
+            
+             <para>Safeguards, all enforced here and not in the UI:</para>
+             <list type="bullet">
+               <item><description>nobody edits their own overrides (no self-escalation, no self-lock-out);</description></item>
+               <item><description>a permission can only be granted by someone who effectively holds it;</description></item>
+               <item><description>administrator-only permissions (<see cref="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsReserved"/>) are never granted outside the roles that carry them;</description></item>
+               <item><description>an administrator-only permission cannot be denied to the last active System Administrator who still holds it;</description></item>
+               <item><description>read-only roles (Chairman/CEO, Reporting User) are never granted a mutating permission;</description></item>
+               <item><description>configured integration (Genesys) accounts are never given overrides;</description></item>
+               <item><description>every change is written to the audit trail in the same transaction.</description></item>
+             </list>
+             </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Services.AdminUserPermissionAppService.Describe(System.String,System.String,System.Collections.Generic.IReadOnlyDictionary{System.String,TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect},System.Collections.Generic.IReadOnlySet{System.String})">
+            <summary>The audit value format: <c>Permission=&lt;key&gt;;Override=&lt;Inherit|Grant|Deny&gt;;Effective=&lt;true|false&gt;</c>.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Administration.Services.AdminWorkflowAppService">
             <summary>
@@ -7995,7 +8113,7 @@
             <summary>The website's live chat (the form that asks the customer to choose Leasing / Customer Service / Maintenance).</summary>
         </member>
         <member name="F:TigerCS.Application.Modules.GenesysIntegration.Dto.GenesysChannel.SocialMedia">
-            <summary>A social-media direct message (Instagram, Facebook, X, …) that Genesys routes as one conversation.</summary>
+            <summary>A social-media direct message (X, …) that Genesys routes as one conversation and that has no channel of its own.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.GenesysIntegration.Dto.GenesysInquiryDto">
              <summary>
@@ -9487,7 +9605,7 @@
              </para>
              </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.GenesysIntegration.Services.GenesysAgentHandoffAppService.#ctor(TigerCS.Application.Modules.GenesysIntegration.GenesysOptions,TigerCS.Application.Modules.GenesysIntegration.Abstractions.IGenesysConversationRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAgentHandoffRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,System.TimeProvider)">
+        <member name="M:TigerCS.Application.Modules.GenesysIntegration.Services.GenesysAgentHandoffAppService.#ctor(TigerCS.Application.Modules.GenesysIntegration.GenesysOptions,TigerCS.Application.Modules.GenesysIntegration.Abstractions.IGenesysConversationRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAgentHandoffRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,System.TimeProvider,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository,TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService)">
              <summary>
              The inbound half of pending human work: Genesys reporting that an
              interaction needs a human agent, and later that one has taken it.
@@ -9527,6 +9645,14 @@
              ticket behind it.
              </para>
              </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.GenesysIntegration.Services.GenesysAgentHandoffAppService.ResolveCallCenterRoutingAsync(TigerCS.Domain.Modules.Ticketing.Ticket,System.Nullable{TigerCS.Domain.Modules.Ticketing.HandoffTrigger},System.Threading.CancellationToken)">
+            <summary>
+            The Call Center department when this handoff must route the ticket there; null when it must not (already there, genuinely owned by
+            a person, closed, an explicit agent transfer, or no Call Center configured). A ticket whose owner was only put there by automation
+            (a Request Type rule or Round Robin — see <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketOwnershipRules.IsAutomaticPreAssignmentAsync(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository,TigerCS.Domain.Modules.Ticketing.Ticket,System.Threading.CancellationToken)"/>) is NOT human-owned: it
+            still goes to Call Center first, and that pre-assignment is released (superseded, audited). Human ownership is never overwritten.
+            </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.GenesysIntegration.Services.GenesysAgentHandoffAppService.UpdateAssignmentAsync(System.Guid,TigerCS.Application.Modules.GenesysIntegration.Dto.GenesysHandoffAssignmentDto,System.Threading.CancellationToken)">
             <summary>
@@ -11029,6 +11155,31 @@
         <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IIdentityUnitOfWork">
             <summary>Commits changes made through the Identity and Access repositories in this request.</summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.PermissionChangeLogEntry">
+            <summary>One audit-trail line of a permission change, resolved for display.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.PermissionChangeLogEntry.#ctor(System.DateTime,System.Nullable{System.Guid},System.String,System.String,System.String,System.String)">
+            <summary>One audit-trail line of a permission change, resolved for display.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository">
+            <summary>Application-layer port over <c>UserPermissionOverrides</c>; implemented in Infrastructure with EF Core.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository.GetForEmployeeAsync(System.Guid,System.Threading.CancellationToken)">
+            <summary>Tracked rows of one employee (the save path edits them in place).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository.GetEffectsAsync(System.Guid,System.Threading.CancellationToken)">
+            <summary>Untracked read of one employee's overrides as key to effect - the authorization hot path.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository.CountActiveInRoleWithoutDenialAsync(System.String,System.String,System.Guid,System.Threading.CancellationToken)">
+            <summary>
+            Active employees holding <paramref name="roleName"/> who are NOT
+            denied <paramref name="permissionKey"/>, other than
+            <paramref name="excludedEmployeeId"/> - the last-administrator guard.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository.GetRecentChangesAsync(System.Guid,System.Int32,System.Threading.CancellationToken)">
+            <summary>Most recent permission changes recorded for an employee, newest first, read from the audit trail.</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserRoleReader">
             <summary>Reads AspNetUserRoles membership without exposing Identity's UserManager to Application.</summary>
         </member>
@@ -11116,17 +11267,22 @@
             <summary>One entry in the Department directory. <c>GET /api/departments</c>.</summary>
             <param name="DepartmentId">The real database id — the only value a Department dropdown may submit as <c>DepartmentId</c>.</param>
             <param name="Name">The Department's display name.</param>
+            <param name="Code">The stable department code (e.g. <c>CC</c> for Call Center) — what callers identify a department by, never its display name.</param>
         </member>
-        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentDto.#ctor(System.Int32,System.String)">
+        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentDto.#ctor(System.Int32,System.String,System.String)">
             <summary>One entry in the Department directory. <c>GET /api/departments</c>.</summary>
             <param name="DepartmentId">The real database id — the only value a Department dropdown may submit as <c>DepartmentId</c>.</param>
             <param name="Name">The Department's display name.</param>
+            <param name="Code">The stable department code (e.g. <c>CC</c> for Call Center) — what callers identify a department by, never its display name.</param>
         </member>
         <member name="P:TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentDto.DepartmentId">
             <summary>The real database id — the only value a Department dropdown may submit as <c>DepartmentId</c>.</summary>
         </member>
         <member name="P:TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentDto.Name">
             <summary>The Department's display name.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentDto.Code">
+            <summary>The stable department code (e.g. <c>CC</c> for Call Center) — what callers identify a department by, never its display name.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentMembershipDto">
             <summary>One of the caller's department assignments (MVP-API-Contracts.md §1.3).</summary>
@@ -11156,14 +11312,20 @@
             <param name="Roles">Every role the caller holds, by name.</param>
             <param name="Departments">Every department the caller is assigned to.</param>
             <param name="IsGeynessStaff">Whether the caller is customer-service (Geyness) staff.</param>
+            <param name="EffectivePermissions">Role baseline combined with the caller's own overrides (display only; the Api enforces).</param>
+            <param name="GrantedPermissions">Permissions the caller holds through an explicit grant.</param>
+            <param name="DeniedPermissions">Permissions explicitly denied to the caller - a UI must never offer these actions.</param>
         </member>
-        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Dto.CurrentUserResponseDto.#ctor(System.Guid,System.String,System.Collections.Generic.IReadOnlyCollection{System.String},System.Collections.Generic.IReadOnlyCollection{TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentMembershipDto},System.Boolean)">
+        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Dto.CurrentUserResponseDto.#ctor(System.Guid,System.String,System.Collections.Generic.IReadOnlyCollection{System.String},System.Collections.Generic.IReadOnlyCollection{TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentMembershipDto},System.Boolean,System.Collections.Generic.IReadOnlyCollection{System.String},System.Collections.Generic.IReadOnlyCollection{System.String},System.Collections.Generic.IReadOnlyCollection{System.String})">
             <summary>The signed-in user's own profile (MVP-API-Contracts.md §1.3).</summary>
             <param name="EmployeeId">The caller, resolved from the access token — never from a client-supplied id.</param>
             <param name="DisplayName">The caller's display name.</param>
             <param name="Roles">Every role the caller holds, by name.</param>
             <param name="Departments">Every department the caller is assigned to.</param>
             <param name="IsGeynessStaff">Whether the caller is customer-service (Geyness) staff.</param>
+            <param name="EffectivePermissions">Role baseline combined with the caller's own overrides (display only; the Api enforces).</param>
+            <param name="GrantedPermissions">Permissions the caller holds through an explicit grant.</param>
+            <param name="DeniedPermissions">Permissions explicitly denied to the caller - a UI must never offer these actions.</param>
         </member>
         <member name="P:TigerCS.Application.Modules.IdentityAndAccess.Dto.CurrentUserResponseDto.EmployeeId">
             <summary>The caller, resolved from the access token — never from a client-supplied id.</summary>
@@ -11179,6 +11341,15 @@
         </member>
         <member name="P:TigerCS.Application.Modules.IdentityAndAccess.Dto.CurrentUserResponseDto.IsGeynessStaff">
             <summary>Whether the caller is customer-service (Geyness) staff.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.IdentityAndAccess.Dto.CurrentUserResponseDto.EffectivePermissions">
+            <summary>Role baseline combined with the caller's own overrides (display only; the Api enforces).</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.IdentityAndAccess.Dto.CurrentUserResponseDto.GrantedPermissions">
+            <summary>Permissions the caller holds through an explicit grant.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.IdentityAndAccess.Dto.CurrentUserResponseDto.DeniedPermissions">
+            <summary>Permissions explicitly denied to the caller - a UI must never offer these actions.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Dto.DepartmentUserDto">
             <summary>One member of a department (MVP-API-Contracts.md §1.4).</summary>
@@ -11405,6 +11576,17 @@
             Audited as <c>ChangeOwnPassword</c> without any secret.
             </summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Services.CallerPermissionOverrides">
+            <summary>
+            How the application services consult a caller's employee-specific
+            permission override for the one permission they are about to exercise.
+            <b>Deny</b> always refuses (checked before ownership, role or the System
+            Administrator override). <b>Grant</b> only stands in for the <i>role</i>
+            half of the service's own rule - ownership, department scope, ticket
+            visibility, status and workflow rules are evaluated afterwards, unchanged.
+            A null repository (tests, tools) means "no overrides".
+            </summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Services.DepartmentAssignmentService">
             <summary>
             Enforces the UserDepartmentAssignments invariants (MVP-ERD.md §0.1,
@@ -11467,7 +11649,7 @@
         <member name="T:TigerCS.Application.Modules.IdentityAndAccess.Services.UserProfileAppService">
             <summary>MVP-API-Contracts.md §1.3 GET /api/users/me.</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Services.UserProfileAppService.#ctor(TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserRoleReader,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository)">
+        <member name="M:TigerCS.Application.Modules.IdentityAndAccess.Services.UserProfileAppService.#ctor(TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserRoleReader,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository)">
             <summary>MVP-API-Contracts.md §1.3 GET /api/users/me.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Notifications.Abstractions.ICustomerEmailSender">
@@ -15122,6 +15304,12 @@
         <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.BacklogAgeBoundaries.BucketOf(System.DateTime,System.DateTime)">
             <summary>The bucket a ticket created at <paramref name="createdAtUtc"/> falls in at <paramref name="nowUtc"/> — the in-memory twin of <see cref="M:TigerCS.Application.Modules.Ticketing.Abstractions.BacklogAgeBoundaries.CreatedAtWindow(TigerCS.Application.Modules.Ticketing.Abstractions.BacklogAgeBucket,System.DateTime)"/>, for fakes and tests.</summary>
         </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.IAssignmentRotationRepository.GetForUpdateAsync(System.Int32,System.DateTime,System.Threading.CancellationToken)">
+            <summary>
+            The department's rotation cursor, created on first use and locked for the rest of the caller's transaction so two
+            concurrent assignments serialize on it and can never pick the same slot. Must be called inside a transaction.
+            </summary>
+        </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.ICategoryRepository.ListAsync(System.Boolean,System.Nullable{System.Int32},System.Threading.CancellationToken)">
             <summary>Active Categories, optionally narrowed to one Department. A Department with none configured returns an empty collection.</summary>
         </member>
@@ -15207,8 +15395,10 @@
              <param name="AgentScopeEmployeeId">Set only for a restricted CS Agent: every count and list is then limited to tickets assigned to, or handled on Genesys by, that employee (plus <paramref name="ScopeDepartmentIds"/>, empty for a CS Agent). See <c>TicketQuery</c>.</param>
              <param name="DepartmentId">Department filter applied on top of the scope (the current department). Used when the scope is not itself a department set, i.e. for a restricted CS Agent; for everyone else the requested department is already folded into <paramref name="ScopeDepartmentIds"/>.</param>
              <param name="ReviewsAreTest">Which reviews count as customer feedback for the Reviewed / Not Reviewed KPIs: Test-mode reviews while customer notifications run in test mode (UAT), real reviews otherwise. Production satisfaction statistics are unaffected.</param>
+             <param name="CreatedOnlyScope">The Genesys integration account: with <paramref name="AgentScopeEmployeeId"/>, only tickets that employee created.</param>
+             <param name="OwnerVisibilityEmployeeId">The caller: a department-scoped viewer additionally sees every ticket currently assigned to them, whatever department it is in now. Never client-supplied.</param>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardOverviewQuery.#ctor(System.Collections.Generic.IReadOnlyCollection{System.Int32},System.Guid,TigerCS.Application.Modules.Ticketing.Abstractions.ApprovalApproverScope,System.Nullable{System.Guid},System.Nullable{System.Byte},System.Nullable{System.Int32},System.Nullable{TigerCS.Domain.Modules.Ticketing.TicketStatus},System.Nullable{System.Byte},System.DateTime,System.DateTime,System.DateTime,System.DateTime,System.TimeSpan,System.Int32,System.Boolean,System.Nullable{System.Guid},System.Nullable{System.Int32})">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardOverviewQuery.#ctor(System.Collections.Generic.IReadOnlyCollection{System.Int32},System.Guid,TigerCS.Application.Modules.Ticketing.Abstractions.ApprovalApproverScope,System.Nullable{System.Guid},System.Nullable{System.Byte},System.Nullable{System.Int32},System.Nullable{TigerCS.Domain.Modules.Ticketing.TicketStatus},System.Nullable{System.Byte},System.DateTime,System.DateTime,System.DateTime,System.DateTime,System.TimeSpan,System.Int32,System.Boolean,System.Nullable{System.Guid},System.Nullable{System.Int32},System.Boolean,System.Nullable{System.Guid})">
              <summary>
              The Operational Dashboard's one read (Dashboard Phase 1). Follows the
              exact scoping discipline of <see cref="T:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery"/>:
@@ -15258,6 +15448,8 @@
              <param name="AgentScopeEmployeeId">Set only for a restricted CS Agent: every count and list is then limited to tickets assigned to, or handled on Genesys by, that employee (plus <paramref name="ScopeDepartmentIds"/>, empty for a CS Agent). See <c>TicketQuery</c>.</param>
              <param name="DepartmentId">Department filter applied on top of the scope (the current department). Used when the scope is not itself a department set, i.e. for a restricted CS Agent; for everyone else the requested department is already folded into <paramref name="ScopeDepartmentIds"/>.</param>
              <param name="ReviewsAreTest">Which reviews count as customer feedback for the Reviewed / Not Reviewed KPIs: Test-mode reviews while customer notifications run in test mode (UAT), real reviews otherwise. Production satisfaction statistics are unaffected.</param>
+             <param name="CreatedOnlyScope">The Genesys integration account: with <paramref name="AgentScopeEmployeeId"/>, only tickets that employee created.</param>
+             <param name="OwnerVisibilityEmployeeId">The caller: a department-scoped viewer additionally sees every ticket currently assigned to them, whatever department it is in now. Never client-supplied.</param>
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardOverviewQuery.ScopeDepartmentIds">
             <summary>Null = no restriction; otherwise the departments the counts may cover.</summary>
@@ -15309,6 +15501,12 @@
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardOverviewQuery.DepartmentId">
             <summary>Department filter applied on top of the scope (the current department). Used when the scope is not itself a department set, i.e. for a restricted CS Agent; for everyone else the requested department is already folded into <paramref name="ScopeDepartmentIds"/>.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardOverviewQuery.CreatedOnlyScope">
+            <summary>The Genesys integration account: with <paramref name="AgentScopeEmployeeId"/>, only tickets that employee created.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardOverviewQuery.OwnerVisibilityEmployeeId">
+            <summary>The caller: a department-scoped viewer additionally sees every ticket currently assigned to them, whatever department it is in now. Never client-supplied.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardCountRow`1">
             <summary>One aggregated row: a dimension value (null key = the value is not recorded on the ticket, e.g. no originating channel, no request type, Unclassified priority) with its display label and count.</summary>
@@ -15560,6 +15758,9 @@
         <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository.GetLatestAsync(System.Int64,System.Collections.Generic.IReadOnlyCollection{TigerCS.Domain.Modules.Ticketing.WorkflowEventType},System.Threading.CancellationToken)">
             <summary>The LATEST event among the given types — how the UI derives dependency state (e.g. maintenance Required vs NotRequired vs Completed).</summary>
         </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository.HasSupersededAssignmentAsync(System.Int64,System.Guid,System.Threading.CancellationToken)">
+            <summary>True when the employee held this ticket before (a superseded assignment) — used to deny a previous owner any right that rests on having handled the ticket once the ticket has moved on.</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork">
             <summary>Commits everything added/changed through this module's repositories in one transaction. Mirrors ICustomerVerificationUnitOfWork's shape.</summary>
         </member>
@@ -15598,6 +15799,13 @@
         </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository.HasHandledAsync(System.Int64,System.Guid,System.Threading.CancellationToken)">
             <summary>True when <paramref name="userId"/> handled at least one Genesys interaction on <paramref name="ticketId"/>.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository.HasActiveHandlerGrantAsync(System.Int64,System.Guid,System.Threading.CancellationToken)">
+            <summary>
+            True when the user handled an interaction on the ticket AFTER its latest manual transfer (a Transfer that is not system routing).
+            A handler whose handling predates a transfer keeps read access (<see cref="M:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository.HasHandledAsync(System.Int64,System.Guid,System.Threading.CancellationToken)"/>) but no longer modifies the ticket:
+            ordinary Resolve, Close and Transfer move with it. Handling recorded after the transfer counts again.
+            </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository.ListByTicketIdAsync(System.Int64,System.Threading.CancellationToken)">
             <summary>Every handler recorded for a ticket, oldest first.</summary>
@@ -15658,10 +15866,11 @@
              <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.AgentScopeEmployeeId"/> is set only for a restricted CS Agent (<c>TicketVisibilityRule.IsRestrictedCsAgent</c>): the ticket
              must then be assigned to that employee, or one they handled on Genesys, <i>or</i> in <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.VisibleDepartmentIds"/> (empty for a CS
              Agent). Like the department scope it is resolved by the application service from the caller, never client-supplied.
+             <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.CreatedOnlyScope"/> (the Genesys integration account) narrows that scope to tickets <i>created by</i> <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.AgentScopeEmployeeId"/> only — not owned or handled ones.
              </para>
              </remarks>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.#ctor(System.Collections.Generic.IReadOnlyCollection{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Byte},System.Nullable{TigerCS.Domain.Modules.Ticketing.TicketStatus},System.Nullable{TigerCS.Domain.Modules.Ticketing.CrmVerificationStatus},System.Nullable{System.Guid},System.String,TigerCS.Application.Modules.Ticketing.Abstractions.TicketSortBy,System.Boolean,System.Int32,System.Int32,System.Nullable{System.Byte},System.Nullable{System.Int32},System.Boolean,System.Boolean,System.Boolean,System.Boolean,System.Nullable{TigerCS.Application.Modules.Ticketing.Abstractions.BacklogAgeBucket},TigerCS.Application.Modules.Ticketing.Abstractions.ApprovalApproverScope,System.Nullable{System.DateTime},System.Nullable{System.DateTime},System.Nullable{System.DateTime},System.Boolean,System.Nullable{TigerCS.Application.Modules.Ticketing.Abstractions.TicketClosureCategory},System.Nullable{System.DateTime},System.Nullable{System.DateTime},System.Boolean,System.Nullable{System.Guid},System.Nullable{System.Guid},System.Boolean)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.#ctor(System.Collections.Generic.IReadOnlyCollection{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Byte},System.Nullable{TigerCS.Domain.Modules.Ticketing.TicketStatus},System.Nullable{TigerCS.Domain.Modules.Ticketing.CrmVerificationStatus},System.Nullable{System.Guid},System.String,TigerCS.Application.Modules.Ticketing.Abstractions.TicketSortBy,System.Boolean,System.Int32,System.Int32,System.Nullable{System.Byte},System.Nullable{System.Int32},System.Boolean,System.Boolean,System.Boolean,System.Boolean,System.Nullable{TigerCS.Application.Modules.Ticketing.Abstractions.BacklogAgeBucket},TigerCS.Application.Modules.Ticketing.Abstractions.ApprovalApproverScope,System.Nullable{System.DateTime},System.Nullable{System.DateTime},System.Nullable{System.DateTime},System.Boolean,System.Nullable{TigerCS.Application.Modules.Ticketing.Abstractions.TicketClosureCategory},System.Nullable{System.DateTime},System.Nullable{System.DateTime},System.Boolean,System.Nullable{System.Guid},System.Nullable{System.Guid},System.Boolean,System.Boolean,System.Nullable{System.Guid})">
              <summary>
              Server-computed query for the ticket queue (MVP-API-Contracts.md §3.2).
              <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.VisibleDepartmentIds"/> is never client-supplied — the
@@ -15694,6 +15903,7 @@
              <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.AgentScopeEmployeeId"/> is set only for a restricted CS Agent (<c>TicketVisibilityRule.IsRestrictedCsAgent</c>): the ticket
              must then be assigned to that employee, or one they handled on Genesys, <i>or</i> in <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.VisibleDepartmentIds"/> (empty for a CS
              Agent). Like the department scope it is resolved by the application service from the caller, never client-supplied.
+             <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.CreatedOnlyScope"/> (the Genesys integration account) narrows that scope to tickets <i>created by</i> <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery.AgentScopeEmployeeId"/> only — not owned or handled ones.
              </para>
              </remarks>
         </member>
@@ -15808,8 +16018,9 @@
             <param name="AtRiskWindow">How far ahead of a pending SLA deadline counts as "at risk".</param>
             <param name="AttentionLimit">Maximum attention rows to return.</param>
             <param name="AgentScopeEmployeeId">Set only for a restricted CS Agent: every count and attention row is limited to tickets assigned to, or handled on Genesys by, that employee (plus <paramref name="VisibleDepartmentIds"/>, empty for a CS Agent).</param>
+            <param name="CreatedOnlyScope">The Genesys integration account: with <paramref name="AgentScopeEmployeeId"/>, only tickets that employee created.</param>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardSnapshotQuery.#ctor(System.Collections.Generic.IReadOnlyCollection{System.Int32},System.Guid,System.DateTime,System.DateTime,System.TimeSpan,System.Int32,System.Nullable{System.Guid})">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardSnapshotQuery.#ctor(System.Collections.Generic.IReadOnlyCollection{System.Int32},System.Guid,System.DateTime,System.DateTime,System.TimeSpan,System.Int32,System.Nullable{System.Guid},System.Boolean)">
             <summary>
             The Dashboard's one aggregate read (Customer Workspace phase).
             <see cref="P:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardSnapshotQuery.VisibleDepartmentIds"/> follows <see cref="T:TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery"/>'s
@@ -15826,6 +16037,7 @@
             <param name="AtRiskWindow">How far ahead of a pending SLA deadline counts as "at risk".</param>
             <param name="AttentionLimit">Maximum attention rows to return.</param>
             <param name="AgentScopeEmployeeId">Set only for a restricted CS Agent: every count and attention row is limited to tickets assigned to, or handled on Genesys by, that employee (plus <paramref name="VisibleDepartmentIds"/>, empty for a CS Agent).</param>
+            <param name="CreatedOnlyScope">The Genesys integration account: with <paramref name="AgentScopeEmployeeId"/>, only tickets that employee created.</param>
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardSnapshotQuery.VisibleDepartmentIds">
             <summary>Null = no restriction (cross-department view role); otherwise the caller's own departments.</summary>
@@ -15847,6 +16059,9 @@
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardSnapshotQuery.AgentScopeEmployeeId">
             <summary>Set only for a restricted CS Agent: every count and attention row is limited to tickets assigned to, or handled on Genesys by, that employee (plus <paramref name="VisibleDepartmentIds"/>, empty for a CS Agent).</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardSnapshotQuery.CreatedOnlyScope">
+            <summary>The Genesys integration account: with <paramref name="AgentScopeEmployeeId"/>, only tickets that employee created.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardAttentionTicket">
             <summary>One "requiring attention" row: the ticket plus its current SLA period's pending resolution deadline (null when no current period or the resolution clock already breached).</summary>
@@ -16261,6 +16476,12 @@
             The ticket moved between this request's read and its commit (its own
             RowVersion, or the handoff's, no longer matched). Nothing was written;
             the caller re-reads and retries.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Dto.AgentHandoffOutcome.TicketOwnedByAnotherEmployee">
+            <summary>
+            The ticket is already owned by another person (not an automatic pre-assignment). Accepting would silently take it from them, so it is
+            refused: a ticket has one owner, and a supervisor reassigns it deliberately (Assign/Transfer, which is audited).
             </summary>
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Dto.AgentHandoffOutcome.AgentNotInTicketDepartment">
@@ -17001,7 +17222,7 @@
             <param name="PendingCustomer">Tickets currently in PendingCustomer.</param>
             <param name="ResolvedToday">Tickets whose current resolution was recorded today (UTC day).</param>
             <param name="Reopened">Active tickets that have been reopened at least once.</param>
-            <param name="MyTickets">Active tickets currently owned by the caller.</param>
+            <param name="MyTickets">Tickets currently assigned to the caller, in any status.</param>
             <param name="AttentionTickets">The Tickets Requiring Attention rows — breached, due soon, critical/high, or unassigned — most urgent first.</param>
         </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Dto.DashboardSummaryDto.#ctor(System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Ticketing.Dto.DashboardAttentionTicketDto})">
@@ -17022,7 +17243,7 @@
             <param name="PendingCustomer">Tickets currently in PendingCustomer.</param>
             <param name="ResolvedToday">Tickets whose current resolution was recorded today (UTC day).</param>
             <param name="Reopened">Active tickets that have been reopened at least once.</param>
-            <param name="MyTickets">Active tickets currently owned by the caller.</param>
+            <param name="MyTickets">Tickets currently assigned to the caller, in any status.</param>
             <param name="AttentionTickets">The Tickets Requiring Attention rows — breached, due soon, critical/high, or unassigned — most urgent first.</param>
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardSummaryDto.OpenTickets">
@@ -17050,7 +17271,7 @@
             <summary>Active tickets that have been reopened at least once.</summary>
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardSummaryDto.MyTickets">
-            <summary>Active tickets currently owned by the caller.</summary>
+            <summary>Tickets currently assigned to the caller, in any status.</summary>
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardSummaryDto.AttentionTickets">
             <summary>The Tickets Requiring Attention rows — breached, due soon, critical/high, or unassigned — most urgent first.</summary>
@@ -17273,7 +17494,7 @@
         <member name="T:TigerCS.Application.Modules.Ticketing.Dto.DashboardKpisDto">
             <summary>The KPI cards. All are current-state counts over active tickets in scope, except Pending Approval, which counts tickets (any status but the approval must be Pending) the caller may action, and the Awaiting Human Agent trio, which counts pending human work rather than tickets.</summary>
             <param name="OpenTickets">Active tickets: Open, InProgress, PendingCustomer — plus any historical ticket still sitting in the legacy PendingThirdParty status, which is non-terminal and therefore still work in hand.</param>
-            <param name="MyTickets">Active tickets whose CurrentOwnerEmployeeId is the caller.</param>
+            <param name="MyTickets">Tickets (any status) whose CurrentOwnerEmployeeId is the caller.</param>
             <param name="InDepartmentQueue">Active tickets with no current owner — queued to their responsible department.</param>
             <param name="SlaBreached">Active tickets whose SlaState is Breached.</param>
             <param name="DueToday">Active tickets whose current, unbreached SLA resolution deadline falls today (UTC calendar day).</param>
@@ -17305,7 +17526,7 @@
         <member name="M:TigerCS.Application.Modules.Ticketing.Dto.DashboardKpisDto.#ctor(System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Int32,System.Boolean)">
             <summary>The KPI cards. All are current-state counts over active tickets in scope, except Pending Approval, which counts tickets (any status but the approval must be Pending) the caller may action, and the Awaiting Human Agent trio, which counts pending human work rather than tickets.</summary>
             <param name="OpenTickets">Active tickets: Open, InProgress, PendingCustomer — plus any historical ticket still sitting in the legacy PendingThirdParty status, which is non-terminal and therefore still work in hand.</param>
-            <param name="MyTickets">Active tickets whose CurrentOwnerEmployeeId is the caller.</param>
+            <param name="MyTickets">Tickets (any status) whose CurrentOwnerEmployeeId is the caller.</param>
             <param name="InDepartmentQueue">Active tickets with no current owner — queued to their responsible department.</param>
             <param name="SlaBreached">Active tickets whose SlaState is Breached.</param>
             <param name="DueToday">Active tickets whose current, unbreached SLA resolution deadline falls today (UTC calendar day).</param>
@@ -17338,7 +17559,7 @@
             <summary>Active tickets: Open, InProgress, PendingCustomer — plus any historical ticket still sitting in the legacy PendingThirdParty status, which is non-terminal and therefore still work in hand.</summary>
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardKpisDto.MyTickets">
-            <summary>Active tickets whose CurrentOwnerEmployeeId is the caller.</summary>
+            <summary>Tickets (any status) whose CurrentOwnerEmployeeId is the caller.</summary>
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardKpisDto.InDepartmentQueue">
             <summary>Active tickets with no current owner — queued to their responsible department.</summary>
@@ -18960,6 +19181,7 @@
             <param name="WorkflowVersionNumber">The pinned version's number ("V2") — populated on detail reads.</param>
             <param name="OriginatingChannelId">The channel the ticket ENTERED the system on (its originating interaction's channel) — never changed by later interactions on other channels; null for tickets predating the interaction model. Populated on detail reads.</param>
             <param name="OriginatingChannelName">The originating channel's display name, resolved from channel configuration — still shown for a channel that has since been deactivated. Populated on detail reads.</param>
+            <param name="ViewerActsAsInteractionHandler">True when the caller is a CS Agent Genesys reported as handling this ticket's interaction, belongs to its department and nobody else owns it: the server lets them Resolve, Close and Transfer it. Populated on detail reads; the UI uses it to show those actions.</param>
             <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
             <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
             <param name="IsClassified">False while the ticket has no Category yet — an inquiry captured before anyone read the request. The UI shows "Unclassified" and offers the classify action rather than rendering a missing category.</param>
@@ -18981,7 +19203,7 @@
             <param name="IsReopenEligible">Whether FR-RES-04's lifecycle rule currently allows Reopen — Closed, closed as Resolved, and within the ISSUE-011 window measured from closure. Lifecycle only, never a permission statement: the Reopen endpoint separately enforces TicketRoleSets.Reopen AND the caller's access to the ticket. Populated on detail reads; false on write responses.</param>
             <param name="ClosedAtUtc">When the ticket reached Closed, in UTC, read from lifecycle history — the moment the reopen window is measured from. Null while the ticket is not closed. Populated on detail reads.</param>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Dto.TicketDetailDto.#ctor(System.Int64,System.String,System.Int32,System.Int32,System.Nullable{System.Guid},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Byte},System.String,System.String,System.String,System.String,System.Nullable{System.Byte},System.Nullable{System.Int64},System.String,System.Int32,System.DateTime,System.String,System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.DateTime},System.Boolean,System.String,System.Nullable{System.DateTime},System.Nullable{System.DateTime},System.Nullable{System.Int32},System.String,System.Nullable{System.Int32},System.String,System.Nullable{System.Int32},System.Nullable{System.Byte},System.String,System.Boolean,System.Boolean,System.Nullable{System.Guid},System.Nullable{System.Guid},System.Nullable{System.Guid},System.Int32,System.Int32,System.String,System.String)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Dto.TicketDetailDto.#ctor(System.Int64,System.String,System.Int32,System.Int32,System.Nullable{System.Guid},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Byte},System.String,System.String,System.String,System.String,System.Nullable{System.Byte},System.Nullable{System.Int64},System.String,System.Int32,System.DateTime,System.String,System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.String,System.Nullable{System.DateTime},System.Boolean,System.String,System.Nullable{System.DateTime},System.Nullable{System.DateTime},System.Nullable{System.Int32},System.String,System.Nullable{System.Int32},System.String,System.Nullable{System.Int32},System.Nullable{System.Byte},System.String,System.Boolean,System.Boolean,System.Boolean,System.Nullable{System.Guid},System.Nullable{System.Guid},System.Nullable{System.Guid},System.Int32,System.Int32,System.String,System.String)">
             <summary>Full ticket detail (MVP-API-Contracts.md §3.3), and the response of every ticket write.</summary>
             <param name="TicketId">The ticket.</param>
             <param name="TicketNumber">The human-facing ticket number.</param>
@@ -19022,6 +19244,7 @@
             <param name="WorkflowVersionNumber">The pinned version's number ("V2") — populated on detail reads.</param>
             <param name="OriginatingChannelId">The channel the ticket ENTERED the system on (its originating interaction's channel) — never changed by later interactions on other channels; null for tickets predating the interaction model. Populated on detail reads.</param>
             <param name="OriginatingChannelName">The originating channel's display name, resolved from channel configuration — still shown for a channel that has since been deactivated. Populated on detail reads.</param>
+            <param name="ViewerActsAsInteractionHandler">True when the caller is a CS Agent Genesys reported as handling this ticket's interaction, belongs to its department and nobody else owns it: the server lets them Resolve, Close and Transfer it. Populated on detail reads; the UI uses it to show those actions.</param>
             <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
             <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
             <param name="IsClassified">False while the ticket has no Category yet — an inquiry captured before anyone read the request. The UI shows "Unclassified" and offers the classify action rather than rendering a missing category.</param>
@@ -19185,6 +19408,9 @@
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.TicketDetailDto.IsReadOnlyAccess">
             <summary>True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</summary>
         </member>
+        <member name="P:TigerCS.Application.Modules.Ticketing.Dto.TicketDetailDto.ViewerActsAsInteractionHandler">
+            <summary>True when the caller is a CS Agent Genesys reported as handling this ticket's interaction, belongs to its department and nobody else owns it: the server lets them Resolve, Close and Transfer it. Populated on detail reads; the UI uses it to show those actions.</summary>
+        </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.TicketDetailDto.CreatedByEmployeeId">
             <summary>The employee who created the ticket. Populated on detail reads.</summary>
         </member>
@@ -19331,6 +19557,9 @@
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Dto.TicketMutationOutcome.DisabledByDepartmentSettings">
             <summary>Workflow/Automation phase 2: the department's workflow settings disable this operation (assignment, internal reassignment, or transfer out) for the ticket's current department.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Dto.TicketMutationOutcome.TransferTargetMustMatchRequestType">
+            <summary>Call Center first: a Call Center agent transfers a classified ticket to the department that owns its request type, not to any other.</summary>
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Dto.TicketMutationOutcome.AlreadyClassified">
             <summary>Classification: the ticket already carries a category. Re-categorising an existing ticket is a different operation, not built in this phase.</summary>
@@ -20805,7 +21034,7 @@
             domain state change in one real transaction (item 2/3's "atomically").
             </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentAppService.#ctor(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,System.TimeProvider,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IDepartmentWorkflowSettingsRepository,TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentAppService.#ctor(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,System.TimeProvider,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IDepartmentWorkflowSettingsRepository,TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository,TigerCS.Application.Authorization.IServiceIdentityRegistry,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeRepository)">
             <summary>
             Assignment (MVP-API-Contracts.md §3.5) and department transfer (§3.6) —
             this increment's items 2 and 3. Both write their history/audit and the
@@ -20820,7 +21049,13 @@
             </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentAppService.TransferAsync(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String},System.Int64,TigerCS.Application.Modules.Ticketing.Dto.TransferTicketRequestDto,System.Threading.CancellationToken)">
-            <summary>PR correction: transfer authority is CS Manager only — every other role (including Department Head and CS Supervisor, who retain Assign authority) is forbidden.</summary>
+            <summary>
+            Transfer authority is the Call Center layer, scoped per ticket — never global: a CS Manager may transfer any ticket; a CS Agent or
+            CS Supervisor only a ticket currently assigned to them, and a CS Supervisor also a ticket of a department they belong to.
+            Department Head, Department Employee and every other role are forbidden. After the move, the target department's rule or Round Robin
+            picks the assignee (never a random employee). A ticket leaving the Call Center that is classified can only go to its request type's
+            department (except for the CS Manager's administrative transfer).
+            </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentOutcome">
             <summary>How one automatic-assignment attempt ended. Everything except <see cref="F:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentOutcome.AssignedToPrimary"/> leaves the ticket in the department queue — the universal safe fallback; a random employee is never chosen.</summary>
@@ -20843,6 +21078,12 @@
         <member name="F:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentOutcome.AssignedToPrimary">
             <summary>The ticket was assigned to the rule's primary assignee.</summary>
         </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentOutcome.AssignedRoundRobin">
+            <summary>The ticket was assigned to the next eligible employee in the department's Round Robin rotation.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentOutcome.NoEligibleEmployee">
+            <summary>Round Robin found no eligible active employee — the ticket stays in the department queue, visibly unassigned.</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger">
             <summary>
             Why the automation ran. The department is the primary assignment and the
@@ -20860,6 +21101,12 @@
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger.RequestTypeClassified">
             <summary>A request type was classified onto an existing ticket that was already in the responsible department (so no transfer happened); the rule for that request type is evaluated.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger.CategoryRouted">
+            <summary>A Call Center user selected a category that belongs to another department; the ticket was routed there.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger.CallCenterIntake">
+            <summary>A new ticket that needs a person entered the Call Center, the first human-handling department for every channel.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentResult">
             <summary>The outcome plus what was assigned, for the caller's response/logging. <paramref name="TeamMemberEmployeeIds"/> carries the configured team members (excluding the primary) for a team rule.</summary>
@@ -20895,7 +21142,7 @@
              </para>
              </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.#ctor(TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeAssignmentRuleRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IDepartmentWorkflowSettingsRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository,TigerCS.Application.Abstractions.IAuditEntryWriter)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.#ctor(TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeAssignmentRuleRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IDepartmentWorkflowSettingsRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Modules.Ticketing.Abstractions.IAssignmentRotationRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserRoleReader,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserAccountManager,TigerCS.Application.Authorization.IServiceIdentityRegistry)">
              <summary>
              Workflow/Automation phase 2 — executes the configured assignment rule
              when a ticket is created with its department and request type known, so
@@ -20928,6 +21175,51 @@
             Runs inside the caller's creation transaction, after the ticket row
             exists (its real TicketId is needed for the assignment/audit rows) —
             the caller commits or rolls everything back together.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.IsCallCenterMemberAsync(System.Guid,System.Threading.CancellationToken)">
+            <summary>True when the employee is an active member of the Call Center department.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.IsCallCenterRoutingAsync(System.Guid,System.Int32,System.Threading.CancellationToken)">
+            <summary>A Call Center user handing a ticket to a department they do not themselves belong to — the case round-robin routing serves (a member of that department self-assigns instead).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.ResolveCallCenterAsync(System.Threading.CancellationToken)">
+            <summary>The active Call Center department, or null when none is configured (callers then keep the pre-Call-Center-first behaviour and the gap is reported, never guessed).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.IsCallCenterDepartmentAsync(System.Int32,System.Threading.CancellationToken)">
+            <summary>True when the department is the Call Center.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.AssignCallCenterIntakeAsync(TigerCS.Domain.Modules.Ticketing.Ticket,System.DateTime,System.Guid,System.Threading.CancellationToken)">
+            <summary>
+            Call Center intake: the ticket (already sitting in the Call Center) is given to the next eligible Call Center agent in the
+            persisted Round Robin rotation. Request-type rules are deliberately NOT consulted — they name employees of the destination
+            department, and the Call Center agent's Transfer is what reaches them. A department whose settings disable assignment, or one
+            with no eligible agent, leaves the ticket visibly unassigned in the Call Center queue (audited), never a guess.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.ApplyRoundRobinFallbackAsync(TigerCS.Domain.Modules.Ticketing.Ticket,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentResult,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger,System.DateTime,System.Guid,System.Threading.CancellationToken)">
+            <summary>
+            Round Robin as the default when no explicit rule decided (Transfer, Call Center category routing): runs only when the ticket
+            has no owner and <paramref name="configured"/> (the result of <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.ApplyAsync(TigerCS.Domain.Modules.Ticketing.Ticket,System.DateTime,System.Guid,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger,System.Threading.CancellationToken)"/>) was "nothing configured" — a specific
+            assignee, an explicit department-queue rule or disabled assignment always wins. Same single engine, same audit trail.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.ApplyCategoryRoutingAsync(TigerCS.Domain.Modules.Ticketing.Ticket,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentResult,System.DateTime,System.Guid,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger,System.Threading.CancellationToken)">
+            <summary>Call Center category routing (kept for existing callers): <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.ApplyRoundRobinFallbackAsync(TigerCS.Domain.Modules.Ticketing.Ticket,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentResult,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger,System.DateTime,System.Guid,System.Threading.CancellationToken)"/> with the category trigger.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.AssignRoundRobinAsync(TigerCS.Domain.Modules.Ticketing.Ticket,System.DateTime,System.Guid,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentTrigger,System.Nullable{System.Int32},System.Threading.CancellationToken)">
+            <summary>
+            Assigns to the next eligible active member of the ticket's CURRENT department. The persisted cursor is row-locked for the
+            caller's transaction, so concurrent assignments serialize and never pick the same slot; no eligible member (or no rotation
+            store) leaves the ticket in the department queue with the reason audited — never a guess.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.FilterEligibleAsync(System.Collections.Generic.IEnumerable{System.Guid},System.Threading.CancellationToken)">
+            <summary>
+            Narrows a department's active members to who may be handed work by rotation: not a service identity (the Genesys integration
+            account), not locked out, and holding at least one operational role (<see cref="F:TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.RoundRobinEligible"/>) — so
+            read-only users, supervisors/managers and administrators are skipped. A lookup that cannot answer excludes the person: rotation
+            never guesses. (The three readers are optional only so unit tests can build the service bare; the composition root supplies all.)
             </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService.TrySelfAssignAsync(TigerCS.Domain.Modules.Ticketing.Ticket,System.Guid,TigerCS.Application.Modules.Ticketing.Services.AutoAssignmentOutcome,System.DateTime,System.Guid,System.Threading.CancellationToken)">
@@ -20991,7 +21283,7 @@
              </para>
              </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketClassificationAppService.#ctor(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ICategoryRepository,TigerCS.Application.Modules.Ticketing.Abstractions.IPriorityRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IWorkflowTemplateRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketStatusHistoryRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaDueDateService,System.TimeProvider,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository,TigerCS.Application.Authorization.IServiceIdentityRegistry)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketClassificationAppService.#ctor(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ICategoryRepository,TigerCS.Application.Modules.Ticketing.Abstractions.IPriorityRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IWorkflowTemplateRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketStatusHistoryRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaDueDateService,System.TimeProvider,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository,TigerCS.Application.Authorization.IServiceIdentityRegistry,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository)">
              <summary>
              The Unclassified → Classified transition: an agent has read the inquiry
              and records what the customer actually wants.
@@ -21067,7 +21359,7 @@
              </para>
              </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketCreationAppService.#ctor(TigerCS.Application.Modules.Ticketing.Abstractions.IIntakeRecordRepository,TigerCS.Application.Modules.CustomerVerification.Abstractions.IUnitReferenceRepository,TigerCS.Application.Modules.CustomerVerification.Abstractions.IContactReferenceRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ICategoryRepository,TigerCS.Application.Modules.Ticketing.Abstractions.IPriorityRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRequesterSnapshotRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketStatusHistoryRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Abstractions.IOutboxWriter,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaDueDateService,System.TimeProvider,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionRepository,TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IWorkflowTemplateRepository,TigerCS.Application.Authorization.IServiceIdentityRegistry)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketCreationAppService.#ctor(TigerCS.Application.Modules.Ticketing.Abstractions.IIntakeRecordRepository,TigerCS.Application.Modules.CustomerVerification.Abstractions.IUnitReferenceRepository,TigerCS.Application.Modules.CustomerVerification.Abstractions.IContactReferenceRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ICategoryRepository,TigerCS.Application.Modules.Ticketing.Abstractions.IPriorityRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRequesterSnapshotRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketStatusHistoryRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Abstractions.IOutboxWriter,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaDueDateService,System.TimeProvider,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionRepository,TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IWorkflowTemplateRepository,TigerCS.Application.Authorization.IServiceIdentityRegistry,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository)">
              <summary>
              Business-rule change: a single ticket-creation path for every IntakeRecord
              — unit-related or not. Customer information from CRM, PACT, or Tasleeh is
@@ -21245,7 +21537,7 @@
             deleting — the prior resolution.
             </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.#ctor(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketResolutionRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketStatusHistoryRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaBreachProcessor,System.TimeProvider,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketPendingRecordRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IWorkflowTemplateRepository,TigerCS.Application.Abstractions.IOutboxWriter,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IDepartmentWorkflowSettingsRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository,TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaDueDateService,TigerCS.Application.Modules.Ticketing.Services.ReopenEligibilityService,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaPauseService,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository,TigerCS.Application.Authorization.IServiceIdentityRegistry)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.#ctor(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketResolutionRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketStatusHistoryRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketingUnitOfWork,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaBreachProcessor,System.TimeProvider,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketPendingRecordRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IRequestTypeRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IWorkflowTemplateRepository,TigerCS.Application.Abstractions.IOutboxWriter,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.WorkflowConfiguration.Abstractions.IDepartmentWorkflowSettingsRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketWorkflowEventRepository,TigerCS.Application.Modules.Ticketing.Services.TicketAutoAssignmentService,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaDueDateService,TigerCS.Application.Modules.Ticketing.Services.ReopenEligibilityService,TigerCS.Application.Modules.SlaAndEscalation.Services.SlaPauseService,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository,TigerCS.Application.Authorization.IServiceIdentityRegistry,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserPermissionOverrideRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository)">
             <summary>
             Core ticket lifecycle: status change (§3.7), resolve (§3.9), close
             (§3.10) — three deliberately distinct operations, per ISSUE-022's
@@ -21381,8 +21673,11 @@
             failure can never fail this operation.
             </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.IsResolveAuthorizedAsync(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String},TigerCS.Domain.Modules.Ticketing.Ticket,System.Threading.CancellationToken)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.IsResolveAuthorizedAsync(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String},TigerCS.Domain.Modules.Ticketing.Ticket,System.Boolean,System.Threading.CancellationToken)">
             <summary>ISSUE-022: Resolve is Department Employee/Head only. A Department Employee must be the ticket's current owner (the one who actually worked it); a Department Head may resolve any ticket in a department they belong to. Both are permission rules, so both run under the ADR-0024 override — the ticket's own eligibility for resolution (<see cref="M:TigerCS.Domain.Modules.Ticketing.Ticket.Resolve(TigerCS.Domain.Modules.Ticketing.ResolutionOutcome,System.Nullable{System.Int64})"/>) is separate, and is not.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.IsCurrentOwner(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String},TigerCS.Domain.Modules.Ticketing.Ticket)">
+            <summary>The user the ticket is currently assigned to — the rule behind owner-based Resolve/Close. Read-only roles never qualify.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Services.TicketNoteAppService">
             <summary>
@@ -21400,6 +21695,34 @@
             Visibility/authorization mirrors ticket detail's own department-scoped
             view rule (<see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService"/>) — a note is only ever
             meaningful in the context of a ticket the caller may already view.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Ticketing.Services.TicketOwnershipRules">
+            <summary>
+            Two ownership questions the Genesys → Call Center workflow turns on, kept in one place so routing, authorization and the UI flag agree.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketOwnershipRules.IsAutomaticPreAssignmentAsync(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository,TigerCS.Domain.Modules.Ticketing.Ticket,System.Threading.CancellationToken)">
+            <summary>
+            True only when the ticket's current owner was put there by AUTOMATION and no person has touched it since: the current assignment row
+            names that owner with a null assigning actor (the system — rule/Round Robin), the ticket is still Open, and no human response has been
+            recorded. Anything else — a manual assignment, a self-assignment, an accepted handoff, work started, a reply sent, or a missing
+            assignment row (legacy data) — is treated as genuine human ownership. When in doubt the answer is false, so ownership is never
+            overwritten on a guess.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketOwnershipRules.IsActingInteractionHandlerAsync(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String},TigerCS.Domain.Modules.Ticketing.Ticket,System.Threading.CancellationToken,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository)">
+            <summary>
+            Interaction-based authority for ONE ticket: a CS Agent whom Genesys reported as actually handling this ticket's interaction
+            (a recorded <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler"/>), who belongs to the ticket's current department, may Resolve, Close or Transfer
+            it while nobody else owns it (unowned, or already theirs). It never reaches a ticket another person owns, a ticket outside their
+            department, a closed ticket, or any ticket they did not handle — so it is not a global CS Agent permission.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketOwnershipRules.WasPreviousOwnerAsync(TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAssignmentRepository,TigerCS.Domain.Modules.Ticketing.Ticket,System.Guid,System.Threading.CancellationToken)">
+            <summary>
+            True when the caller once owned the ticket but no longer does: ownership ended (transfer / reassignment), and with it every right that
+            rested on it. Interaction handling then no longer stands in for ownership either, so a previous owner cannot Resolve, Close or Transfer.
             </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Services.TicketProjection">
@@ -21473,6 +21796,28 @@
             The employee whose assigned/handled tickets a restricted CS Agent may see, or null when the caller is not one (their visibility is
             then entirely <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveVisibleDepartmentIdsAsync(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String},System.Threading.CancellationToken)"/>). Always the caller themselves — never client-supplied.
             </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveTicketViewDepartmentIdsAsync(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String},System.Threading.CancellationToken)">
+            <summary>
+            <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveVisibleDepartmentIdsAsync(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String},System.Threading.CancellationToken)"/> for the surfaces that <b>show tickets</b> (queue, search, dashboard): additionally scopes the
+            Genesys integration account to its Genesys-created tickets (empty department set; pair with <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveTicketViewAgentScope(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String})"/>).
+            The customer directory/history lookups keep the plain resolver — the integration account resolves customers across all of their tickets
+            there, which is a lookup, not a ticket view.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveTicketViewAgentScope(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String})">
+            <summary>The ticket-view counterpart of <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveAgentScope(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String})"/>: the caller themselves for a restricted CS Agent and for the Genesys integration account.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveTicketListAgentScope(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String})">
+            <summary>
+            The scope the ticket LIST (Queue / My Tickets / Closed) uses: <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveTicketViewAgentScope(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String})"/>, plus - for a
+            department-scoped caller (Department Employee / Head) - the caller themselves, so every ticket currently assigned to them is
+            listed whatever department it now sits in (My Tickets after a Call Center transfer). Ownership only adds the caller's own
+            tickets; their department scope is unchanged. The dashboard keeps <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.ResolveTicketViewAgentScope(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String})"/>.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.IsGenesysIntegration(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String})">
+            <summary>True when the caller is the Genesys integration account: it sees the Genesys-created tickets of every department (see <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule.IsGenesysIntegration(System.Collections.Generic.IReadOnlyCollection{System.String},System.Guid,TigerCS.Application.Authorization.IServiceIdentityRegistry)"/>).</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService.IsRestrictedAgent(System.Guid,System.Collections.Generic.IReadOnlyCollection{System.String})">
             <summary>True when the caller is a human CS Agent whose ticket visibility is the narrow per-ticket rule (never a service identity, never Admin/Supervisor/Manager).</summary>
@@ -21763,13 +22108,23 @@
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.Transfer">
             <summary>
-            Transfer (PR correction): CS Manager only. Every other role —
-            including Department Head and CS Supervisor, who retain Assign
-            authority above — is forbidden and must receive 403.
+            Transfer to another department: the Call Center layer (CS Agent, CS Supervisor, CS Manager). Role membership is only the first
+            half — <see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentAppService"/> additionally scopes it: a CS Manager may transfer any ticket
+            (<see cref="F:TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.TransferAnyTicket"/>); a CS Agent or CS Supervisor only a ticket they currently own, and a CS Supervisor also a ticket
+            of a department they belong to. Department Head and Department Employee remain refused.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.TransferAnyTicket">
+            <summary>Transfer without a per-ticket scope: CS Manager only (and the ADR-0024 override). No other CS role gets cross-department transfer reach.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.RoundRobinEligible">
+            <summary>
+            Roles that count as operational handlers for automatic Round Robin: they actually work tickets. Supervisors, managers, read-only
+            roles and administrators oversee or only read, so they are never handed work by rotation.
             </summary>
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.Resolve">
-            <summary>Resolve: Department Employee/Head only (ISSUE-022, Management-Decisions.md — ticket task's explicit instruction). Never CS-layer, never cross-department — the resolving actor must also be department-scoped to the ticket's current department.</summary>
+            <summary>Resolve by role: Department Employee/Head (a Head must belong to the ticket's department). Independently of this set, whoever the ticket is currently assigned to may Resolve and Close it, whatever their role or department (<c>TicketLifecycleAppService</c>); the CS layer has no role-based Resolve beyond that.</summary>
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Services.TicketRoleSets.Close">
             <summary>Close: CS Agent/CS Supervisor/CS Manager only (ISSUE-022, Management-Decisions.md — task's explicit instruction). Cross-department — CS is inherently cross-department (Security-Architecture.md §3).</summary>
@@ -21861,6 +22216,16 @@
             integration account, which Identity models as a "CS Agent" employee) is never restricted. It is not a person who handled anything;
             it is confined to the integration surface by <c>ServiceIdentityRestrictionHandler</c> and must keep working across tickets there
             (customer lookups, reconciliation), exactly as before.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule.IsGenesysIntegration(System.Collections.Generic.IReadOnlyCollection{System.String},System.Guid,TigerCS.Application.Authorization.IServiceIdentityRegistry)">
+            <summary>
+            True for the Genesys integration account (a configured service identity) acting without System Administrator or any other
+            cross-department role. Its ticket <b>visibility</b> is the Genesys-created tickets only — those it created (<c>CreatedByEmployeeId</c> is
+            write-once, so a transfer or reassignment never takes the ticket away) — across every department. Owning or handling an interaction on a
+            manually created ticket does not expose it. The set-based form is <c>TicketQueryFilters.VisibleTo(createdOnly: true)</c>. This is visibility only: it
+            grants no modification right, and the integration account stays confined to the integration surface by
+            <c>ServiceIdentityRestrictionHandler</c>.
             </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule.HoldsDepartmentRole(System.Collections.Generic.IReadOnlyCollection{System.String})">

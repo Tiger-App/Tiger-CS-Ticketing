@@ -1935,6 +1935,159 @@
             depending on Infrastructure/EF Core directly.
             </summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource">
+            <summary>Why a permission is (not) effective for a user - what the Manage Permissions screen shows.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource.None">
+            <summary>Not carried by any role and not granted.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource.Role">
+            <summary>Carried by a role, no override.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource.Granted">
+            <summary>Not carried by a role, allowed by an explicit grant.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource.Denied">
+            <summary>Refused by an explicit denial (whether or not a role carries it).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.EffectivePermissions">
+            <summary>
+            The pure combination rule. Effective = not denied AND (granted OR carried
+            by a role). A denial therefore beats both a grant and any role, and a
+            grant of a <see cref="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsReserved"/> permission is
+            ignored unless a role already carries it (defence in depth: such a row can
+            never be written through the API, but a row inserted by hand must not
+            escalate anyone).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.EffectivePermissions.Compute(System.Collections.Generic.IEnumerable{System.String},System.Collections.Generic.IReadOnlyDictionary{System.String,TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect})">
+            <summary>The set of effective permission keys for the given roles and overrides.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction">
+            <summary>The kind of operation a permission controls. Only the actions that exist for a module are defined for it.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition">
+            <summary>
+            One grantable permission: a module (the grouping shown in the UI), the
+            action, and the stable key persisted in <c>UserPermissionOverrides</c> and
+            named on endpoints (<c>[RequirePermission]</c>). Keys are
+            <c>"&lt;Area&gt;.&lt;Action&gt;"</c> and never change once released: they are
+            stored in the database and in audit history.
+            </summary>
+            <param name="Key">Stable persisted key.</param>
+            <param name="Module">Grouping shown in the UI (<see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionModules"/>).</param>
+            <param name="Action">What the permission controls.</param>
+            <param name="Name">Short display name.</param>
+            <param name="Description">One-line explanation shown beside the toggle.</param>
+            <param name="IsReserved">
+            A reserved ("administrator-only") permission can never be <i>granted</i>
+            to a user whose roles do not already carry it. These are the permissions
+            that would let the holder reset an administrator's password, create an
+            administrator, change roles or change permissions - i.e. escalate. They
+            can still be <i>denied</i>.
+            </param>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.#ctor(System.String,System.String,TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction,System.String,System.String,System.Boolean)">
+            <summary>
+            One grantable permission: a module (the grouping shown in the UI), the
+            action, and the stable key persisted in <c>UserPermissionOverrides</c> and
+            named on endpoints (<c>[RequirePermission]</c>). Keys are
+            <c>"&lt;Area&gt;.&lt;Action&gt;"</c> and never change once released: they are
+            stored in the database and in audit history.
+            </summary>
+            <param name="Key">Stable persisted key.</param>
+            <param name="Module">Grouping shown in the UI (<see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionModules"/>).</param>
+            <param name="Action">What the permission controls.</param>
+            <param name="Name">Short display name.</param>
+            <param name="Description">One-line explanation shown beside the toggle.</param>
+            <param name="IsReserved">
+            A reserved ("administrator-only") permission can never be <i>granted</i>
+            to a user whose roles do not already carry it. These are the permissions
+            that would let the holder reset an administrator's password, create an
+            administrator, change roles or change permissions - i.e. escalate. They
+            can still be <i>denied</i>.
+            </param>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Key">
+            <summary>Stable persisted key.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Module">
+            <summary>Grouping shown in the UI (<see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionModules"/>).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Action">
+            <summary>What the permission controls.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Name">
+            <summary>Short display name.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Description">
+            <summary>One-line explanation shown beside the toggle.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsReserved">
+            <summary>
+            A reserved ("administrator-only") permission can never be <i>granted</i>
+            to a user whose roles do not already carry it. These are the permissions
+            that would let the holder reset an administrator's password, create an
+            administrator, change roles or change permissions - i.e. escalate. They
+            can still be <i>denied</i>.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsMutating">
+            <summary>True for permissions that change data (everything except <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction.View"/>); a read-only caller is never granted these.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionModules">
+            <summary>Module names, in display order.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions">
+            <summary>
+            The permission keys, as constants so endpoints, tests and the role
+            baseline refer to them without string literals. The catalog is a fixed,
+            code-defined list (like <see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Roles"/>): adding a permission is a
+            code change and needs no migration, because only the <i>overrides</i> are
+            stored.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionCatalog">
+            <summary>The complete, ordered permission catalog.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.RolePermissionDefaults">
+             <summary>
+             The permissions each fixed role carries <i>before</i> any per-user
+             override - the baseline "Effective permissions" starts from. It restates
+             what the existing role policies and the permission matrix
+             (Solution-Analysis.md section 4.1, <c>PolicyNames</c>) already allow; it
+             does not widen any role. System Administrator holds every permission
+             (ADR-0024). The read-only roles (<see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Roles.ReadOnly"/>) hold view
+             permissions only.
+            
+             <para>
+             A user holding several roles gets the union of their baselines. The
+             baseline is a description of entitlement; the existing role policies and
+             the application services' business rules (department scope, status
+             rules, ownership) keep deciding what a request may do on top of it.
+             </para>
+             </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.RolePermissionDefaults.ForRole(System.String)">
+            <summary>The baseline of one role; empty for an unknown role name.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.RolePermissionDefaults.ForRoles(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>The union of the baselines of the given roles.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Grant">
+            <summary>Allows the permission even though no role carries it.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Deny">
+            <summary>Refuses the permission even though a role carries it. A denial always wins over a grant and over roles.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.UserPermissionOverride">
+            <summary>
+            One employee-specific exception to the role baseline. Absence of a row
+            means "inherit from roles". At most one row exists per (employee,
+            permission); it is changed in place, so the table always describes the
+            current state and the audit trail (<c>AuditEntries</c>) carries the history.
+            </summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Roles">
             <summary>
             The fixed MVP role set (Solution-Analysis.md §4). Role names below use the
@@ -3213,6 +3366,25 @@
             the rest of the string is passed through as typed. Applied to the
             PACT request path only; CRM and persistence keep the number exactly
             as entered.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation">
+            <summary>
+            The persisted Round Robin cursor of one department: the employee who most
+            recently received an automatically rotated ticket. One row per department,
+            so the rotation survives application restarts and is shared by every
+            instance. The next assignee is always derived from this cursor against the
+            department's current eligible employees, so members joining or leaving never
+            corrupt the rotation.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation.RowVersion">
+            <summary>Optimistic-concurrency token; the repository additionally row-locks the cursor on relational stores so concurrent assignments serialize instead of failing.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation.PickNext(System.Nullable{System.Guid},System.Collections.Generic.IReadOnlyCollection{System.Guid})">
+            <summary>
+            The next employee after the cursor in a stable (id-ordered) cycle. A cursor that is unset or no longer eligible
+            restarts at the first eligible employee; null only when nobody is eligible.
             </summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.DepartmentCustomerLookupSource">
@@ -5741,6 +5913,12 @@
             members as configured participants.
             </summary>
         </member>
+        <member name="F:TigerCS.Domain.Modules.WorkflowConfiguration.AssignmentMode.RoundRobin">
+            <summary>
+            Fair automatic distribution: tickets rotate through the department's eligible (active) employees using a persisted
+            per-department cursor. Needs no configured employee. No eligible employee → department queue, visibly unassigned.
+            </summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.WorkflowConfiguration.DepartmentWorkflowSettings">
              <summary>
              Per-department workflow configuration (Workflow/SLA Configuration
@@ -5979,6 +6157,9 @@
         </member>
         <member name="M:TigerCS.Domain.Modules.WorkflowConfiguration.RequestTypeAssignmentRule.ForDepartmentQueue(System.Int32,System.Boolean)">
             <summary>An explicit department-queue rule — equivalent to having no rule at all, but recordable so the choice is visible configuration rather than an absence.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.WorkflowConfiguration.RequestTypeAssignmentRule.ForRoundRobin(System.Int32,System.Boolean)">
+            <summary>Round Robin across the ticket's department's eligible employees; no employee is configured.</summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.WorkflowConfiguration.RequestTypeAssignmentRule.ForTeam(System.Int32,System.Guid,System.Collections.Generic.IReadOnlyCollection{System.Guid},System.String,System.Boolean)">
             <summary>A team rule: one primary (accountable owner) plus at least one further member.</summary>

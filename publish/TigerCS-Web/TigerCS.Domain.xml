@@ -1935,6 +1935,159 @@
             depending on Infrastructure/EF Core directly.
             </summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource">
+            <summary>Why a permission is (not) effective for a user - what the Manage Permissions screen shows.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource.None">
+            <summary>Not carried by any role and not granted.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource.Role">
+            <summary>Carried by a role, no override.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource.Granted">
+            <summary>Not carried by a role, allowed by an explicit grant.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource.Denied">
+            <summary>Refused by an explicit denial (whether or not a role carries it).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.EffectivePermissions">
+            <summary>
+            The pure combination rule. Effective = not denied AND (granted OR carried
+            by a role). A denial therefore beats both a grant and any role, and a
+            grant of a <see cref="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsReserved"/> permission is
+            ignored unless a role already carries it (defence in depth: such a row can
+            never be written through the API, but a row inserted by hand must not
+            escalate anyone).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.EffectivePermissions.Compute(System.Collections.Generic.IEnumerable{System.String},System.Collections.Generic.IReadOnlyDictionary{System.String,TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect})">
+            <summary>The set of effective permission keys for the given roles and overrides.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction">
+            <summary>The kind of operation a permission controls. Only the actions that exist for a module are defined for it.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition">
+            <summary>
+            One grantable permission: a module (the grouping shown in the UI), the
+            action, and the stable key persisted in <c>UserPermissionOverrides</c> and
+            named on endpoints (<c>[RequirePermission]</c>). Keys are
+            <c>"&lt;Area&gt;.&lt;Action&gt;"</c> and never change once released: they are
+            stored in the database and in audit history.
+            </summary>
+            <param name="Key">Stable persisted key.</param>
+            <param name="Module">Grouping shown in the UI (<see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionModules"/>).</param>
+            <param name="Action">What the permission controls.</param>
+            <param name="Name">Short display name.</param>
+            <param name="Description">One-line explanation shown beside the toggle.</param>
+            <param name="IsReserved">
+            A reserved ("administrator-only") permission can never be <i>granted</i>
+            to a user whose roles do not already carry it. These are the permissions
+            that would let the holder reset an administrator's password, create an
+            administrator, change roles or change permissions - i.e. escalate. They
+            can still be <i>denied</i>.
+            </param>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.#ctor(System.String,System.String,TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction,System.String,System.String,System.Boolean)">
+            <summary>
+            One grantable permission: a module (the grouping shown in the UI), the
+            action, and the stable key persisted in <c>UserPermissionOverrides</c> and
+            named on endpoints (<c>[RequirePermission]</c>). Keys are
+            <c>"&lt;Area&gt;.&lt;Action&gt;"</c> and never change once released: they are
+            stored in the database and in audit history.
+            </summary>
+            <param name="Key">Stable persisted key.</param>
+            <param name="Module">Grouping shown in the UI (<see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionModules"/>).</param>
+            <param name="Action">What the permission controls.</param>
+            <param name="Name">Short display name.</param>
+            <param name="Description">One-line explanation shown beside the toggle.</param>
+            <param name="IsReserved">
+            A reserved ("administrator-only") permission can never be <i>granted</i>
+            to a user whose roles do not already carry it. These are the permissions
+            that would let the holder reset an administrator's password, create an
+            administrator, change roles or change permissions - i.e. escalate. They
+            can still be <i>denied</i>.
+            </param>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Key">
+            <summary>Stable persisted key.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Module">
+            <summary>Grouping shown in the UI (<see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionModules"/>).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Action">
+            <summary>What the permission controls.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Name">
+            <summary>Short display name.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.Description">
+            <summary>One-line explanation shown beside the toggle.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsReserved">
+            <summary>
+            A reserved ("administrator-only") permission can never be <i>granted</i>
+            to a user whose roles do not already carry it. These are the permissions
+            that would let the holder reset an administrator's password, create an
+            administrator, change roles or change permissions - i.e. escalate. They
+            can still be <i>denied</i>.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsMutating">
+            <summary>True for permissions that change data (everything except <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction.View"/>); a read-only caller is never granted these.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionModules">
+            <summary>Module names, in display order.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions">
+            <summary>
+            The permission keys, as constants so endpoints, tests and the role
+            baseline refer to them without string literals. The catalog is a fixed,
+            code-defined list (like <see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Roles"/>): adding a permission is a
+            code change and needs no migration, because only the <i>overrides</i> are
+            stored.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionCatalog">
+            <summary>The complete, ordered permission catalog.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.RolePermissionDefaults">
+             <summary>
+             The permissions each fixed role carries <i>before</i> any per-user
+             override - the baseline "Effective permissions" starts from. It restates
+             what the existing role policies and the permission matrix
+             (Solution-Analysis.md section 4.1, <c>PolicyNames</c>) already allow; it
+             does not widen any role. System Administrator holds every permission
+             (ADR-0024). The read-only roles (<see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Roles.ReadOnly"/>) hold view
+             permissions only.
+            
+             <para>
+             A user holding several roles gets the union of their baselines. The
+             baseline is a description of entitlement; the existing role policies and
+             the application services' business rules (department scope, status
+             rules, ownership) keep deciding what a request may do on top of it.
+             </para>
+             </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.RolePermissionDefaults.ForRole(System.String)">
+            <summary>The baseline of one role; empty for an unknown role name.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.RolePermissionDefaults.ForRoles(System.Collections.Generic.IEnumerable{System.String})">
+            <summary>The union of the baselines of the given roles.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Grant">
+            <summary>Allows the permission even though no role carries it.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Deny">
+            <summary>Refuses the permission even though a role carries it. A denial always wins over a grant and over roles.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.UserPermissionOverride">
+            <summary>
+            One employee-specific exception to the role baseline. Absence of a row
+            means "inherit from roles". At most one row exists per (employee,
+            permission); it is changed in place, so the table always describes the
+            current state and the audit trail (<c>AuditEntries</c>) carries the history.
+            </summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Roles">
             <summary>
             The fixed MVP role set (Solution-Analysis.md §4). Role names below use the
@@ -3215,6 +3368,25 @@
             as entered.
             </summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation">
+            <summary>
+            The persisted Round Robin cursor of one department: the employee who most
+            recently received an automatically rotated ticket. One row per department,
+            so the rotation survives application restarts and is shared by every
+            instance. The next assignee is always derived from this cursor against the
+            department's current eligible employees, so members joining or leaving never
+            corrupt the rotation.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation.RowVersion">
+            <summary>Optimistic-concurrency token; the repository additionally row-locks the cursor on relational stores so concurrent assignments serialize instead of failing.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation.PickNext(System.Nullable{System.Guid},System.Collections.Generic.IReadOnlyCollection{System.Guid})">
+            <summary>
+            The next employee after the cursor in a stable (id-ordered) cycle. A cursor that is unset or no longer eligible
+            restarts at the first eligible employee; null only when nobody is eligible.
+            </summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.DepartmentCustomerLookupSource">
             <summary>
             The Department → customer-lookup-source mapping: which of CRM/PACT/
@@ -3456,6 +3628,16 @@
              via <see cref="M:TigerCS.Domain.Modules.Ticketing.Ticket.ReconcileVerification(System.Int32,System.Int32)"/>.
              </para>
              </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.CreatedByEmployeeId">
+            <summary>
+            The employee who created the ticket (the account that called ticket creation — for a Genesys inquiry that is the integration
+            account). Write-once and never moved by assignment or department transfer, which is what lets a creator keep following their ticket
+            <b>read-only</b> after it has been handed to another department. Null on tickets that predate the column and have no creation audit.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.RecordCreator(System.Guid)">
+            <summary>Records who created the ticket. Write-once: a second, different creator is ignored (returns false).</summary>
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.CategoryId">
              <summary>
@@ -3872,6 +4054,13 @@
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.AssignTo(System.Guid)">
             <summary>MVP-API-Contracts.md §3.5 / §2.12 — sets the current owner and appends a superseding <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketAssignment"/> row is the caller's job (this method only updates the ticket's own denormalized pointer).</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.ReleaseOwner">
+            <summary>
+            Clears the current owner without moving the ticket: it returns to its department's queue. Used only to release an AUTOMATIC
+            pre-assignment (Round Robin / rule) when the person who actually answered the interaction cannot take the ticket, so it is never left
+            with somebody who did not. The caller supersedes the assignment row and audits it. A no-op when nobody owns the ticket.
+            </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.TransferToDepartment(System.Int32)">
             <summary>MVP-API-Contracts.md §3.6 — moves CurrentDepartmentId, leaves OriginatingDepartmentId untouched (write-once, MVP-ERD.md §2.3), and clears the current owner: the receiving department must explicitly claim/assign it.</summary>
@@ -5048,6 +5237,63 @@
             processed" and answers idempotently rather than as a failure.
             </summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource">
+            <summary>
+            Which Genesys event named the agent that a <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler"/> row records. Stored for audit and so that evidence
+            of different strength is never confused: every value here is a statement by Genesys that the agent <b>is connected to / handling</b>
+            the interaction. A ringing/alerting event, a queue membership, or a handoff <i>assignment</i> is never one of these (see
+            <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler"/>).
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.Inquiry">
+            <summary>The ticket-creating event named the handling agent (a call answered / chat accepted before the ticket was made).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.Routing">
+            <summary>A routing update named the agent now <b>connected</b> to the interaction — the event that records a transfer.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.Update">
+            <summary>A ticket update named the handling agent.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.ConversationEnd">
+            <summary>The conversation-end event named the handling agent.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource.Legacy">
+            <summary>Copied from <c>TicketInteractions.HandledByUserId</c> when this table was introduced — the single handler the integration recorded before per-agent history existed.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler">
+             <summary>
+             One Ticketing user who <b>actually handled</b> a Genesys interaction. An interaction can have several (a call transferred from one
+             agent to another is handled by both), which <c>TicketInteractions.HandledByUserId</c> — first handler only, apply-if-absent — cannot
+             express. This table is the source of truth for "did this user handle a Genesys interaction on this ticket", and therefore for the
+             CS Agent's right to see the ticket.
+            
+             <para>
+             <b>What is, and is not, proof of handling.</b> A row is written only when Genesys reports that an agent is <i>connected</i> to or
+             handling the interaction (<see cref="T:TigerCS.Domain.Modules.Ticketing.InteractionHandlerSource"/>) and that agent's Genesys User ID resolves, server-side, through
+             <c>AspNetUsers.GenesysUserId</c> to an active Ticketing user. It is never written for: a ringing/alerting event (those never reach
+             TigerCS), a queue or department membership, a handoff work-item assignment, the Genesys agent-screen-pop launch (which may fire while
+             the interaction is still alerting), or an agent id that does not map to a user (a bot or an unmapped agent). Rows are append-only
+             and unique per (interaction, user), so a redelivered event writes nothing.
+             </para>
+            
+             <para>
+             <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.TicketId"/> is denormalized from the interaction on purpose: the visibility predicate runs on every ticket query and
+             should be a single index seek on (<see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.HandledByUserId"/>, <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.TicketId"/>), not a join through the interaction.
+             </para>
+             </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.HandledByUserId">
+            <summary>The Ticketing user (<c>AspNetUsers.Id</c>) that handled the interaction — resolved on the server, never client-supplied.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.GenesysAgentUserId">
+            <summary>The Genesys User ID exactly as Genesys sent it, kept next to the user it resolved to so the row stays auditable if the mapping later changes.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.ConnectedAtUtc">
+            <summary>When Genesys says the agent connected, where it supplied a time. Null when it did not — <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.RecordedAtUtc"/> is then the only clock.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketInteractionHandler.RecordedAtUtc">
+            <summary>When Ticketing recorded the row (its own clock).</summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.InteractionMessageSender">
             <summary>Who authored one transcript message of an interaction.</summary>
         </member>
@@ -5407,6 +5653,71 @@
             same reason as the handoff events, so it needs no schema change.
             </summary>
         </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred">
+            <summary>
+            The ticket changed hands: a department transfer, a reassignment from one
+            employee to another, or an escalation. The structured facts (reason,
+            from/to department, receiving employee) live in the typed columns of
+            the event; the acting employee is <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ActorEmployeeId"/>
+            (null = the system, e.g. automatic request-type routing). A Genesys
+            call transfer never writes this event — that is queue/agent routing of
+            the call, recorded on the interaction and the audit trail, and says
+            nothing about whether the agent could resolve the issue.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.GenesysAgentConnected">
+            <summary>
+            A mapped Genesys agent first took the customer's interaction (the first handler). Recorded with the agent in
+            <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ToEmployeeId"/> and no transfer reason: this is who answered, not a hand-over.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.GenesysCallTransferred">
+            <summary>
+            Genesys moved a live conversation from one agent to another. History only: it carries no transfer reason, is
+            never an escalation and is not counted as a ticket transfer — whether the first agent could resolve the issue is
+            a judgement only an explicit TigerCS transfer or escalation records. The previous agent, when mapped, is the
+            actor; the receiving agent, when mapped, is <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ToEmployeeId"/>; unmapped agents
+            are preserved verbatim in the note.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.ManualAssignmentRequired">
+            <summary>
+            Genesys reported a Call Center call as answered by an agent TigerCS cannot hand the ticket to — not mapped to a Ticketing user,
+            deactivated, locked out, a service account, or not an operational Call Center member. The ticket is deliberately left in the Call
+            Center queue, unowned, and this event is the flag that a supervisor must assign it manually: it is never given to a different person
+            by Round Robin. History only; the note names the Genesys agent and the reason. No schema change (the column is a tinyint).
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.TicketTransferReason">
+            <summary>
+            Why a ticket changed hands. Only <see cref="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.UnableToResolve"/> and
+            <see cref="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.NeedsEscalation"/> count as escalations; every other reason is a
+            plain transfer, and <see cref="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.SystemRouting"/> is the system moving a
+            ticket to the department its request type is configured for — never an
+            agent's judgement.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.Unspecified">
+            <summary>The caller gave no structured reason (older clients, pre-tracking data).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.UnableToResolve">
+            <summary>The handling agent could not resolve the customer's issue.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.NeedsEscalation">
+            <summary>The issue needs a more senior or specialist owner.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.WrongDepartment">
+            <summary>The ticket was in the wrong department.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.CustomerRequest">
+            <summary>The customer asked for a different person or department.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.SystemRouting">
+            <summary>Automatic request-type routing moved the ticket.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketTransferReason.Other">
+            <summary>Any other reason; the free-text note says which.</summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent">
             <summary>
             One typed, append-only workflow event of a ticket — the trustworthy
@@ -5430,6 +5741,31 @@
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.Note">
             <summary>Short human context (e.g. the recorded reason) — display only; consumers key on <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.EventType"/> and <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.OccurredAtUtc"/>, never on this text.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.TransferReasonCode">
+            <summary><see cref="T:TigerCS.Domain.Modules.Ticketing.TicketTransferReason"/> as a byte, for <see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> only; null for every other event type.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.FromDepartmentId">
+            <summary>The department the ticket left (<see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> only).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ToDepartmentId">
+            <summary>The department that holds the ticket after the transfer (<see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> only).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ToEmployeeId">
+            <summary>The employee who received the ticket, when one did; null when it went to a department queue (<see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> only).</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.ForTransfer(System.Int64,System.DateTime,System.Nullable{System.Guid},TigerCS.Domain.Modules.Ticketing.TicketTransferReason,System.Int32,System.Int32,System.Nullable{System.Guid},System.String,System.Guid)">
+            <summary>The one way a <see cref="F:TigerCS.Domain.Modules.Ticketing.WorkflowEventType.TicketTransferred"/> event is built, so its structured columns can never be half-filled.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.WithOwnership(System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Guid})">
+            <summary>
+            Records where ownership landed for an event whose TYPE already says why it happened (a reopen, a handoff accept,
+            a Genesys agent change). Deliberately leaves <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.TransferReasonCode"/> null, so such an event can never be
+            read as an escalation or counted as a transfer.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketWorkflowEvent.IsEscalation">
+            <summary>True for the two reasons that mean the handling agent passed the ticket up rather than simply moving it.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.WellKnownChannels">
             <summary>
@@ -5590,6 +5926,12 @@
             assignee — who becomes the ticket's single current owner, preserving
             the existing one-owner accountability model — plus the further team
             members as configured participants.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.WorkflowConfiguration.AssignmentMode.RoundRobin">
+            <summary>
+            Fair automatic distribution: tickets rotate through the department's eligible (active) employees using a persisted
+            per-department cursor. Needs no configured employee. No eligible employee → department queue, visibly unassigned.
             </summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.WorkflowConfiguration.DepartmentWorkflowSettings">
@@ -5830,6 +6172,9 @@
         </member>
         <member name="M:TigerCS.Domain.Modules.WorkflowConfiguration.RequestTypeAssignmentRule.ForDepartmentQueue(System.Int32,System.Boolean)">
             <summary>An explicit department-queue rule — equivalent to having no rule at all, but recordable so the choice is visible configuration rather than an absence.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.WorkflowConfiguration.RequestTypeAssignmentRule.ForRoundRobin(System.Int32,System.Boolean)">
+            <summary>Round Robin across the ticket's department's eligible employees; no employee is configured.</summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.WorkflowConfiguration.RequestTypeAssignmentRule.ForTeam(System.Int32,System.Guid,System.Collections.Generic.IReadOnlyCollection{System.Guid},System.String,System.Boolean)">
             <summary>A team rule: one primary (accountable owner) plus at least one further member.</summary>

@@ -162,11 +162,14 @@
         <member name="T:TigerCS.Api.Controllers.AdminUsersController">
             <summary>User administration — System Administrator only. Users are deactivated, never deleted.</summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.AdminUsersController.#ctor(TigerCS.Application.Modules.Administration.Services.AdminUserAppService)">
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.#ctor(TigerCS.Application.Modules.Administration.Services.AdminUserAppService,TigerCS.Application.Modules.Administration.Services.AdminUserPermissionAppService)">
             <summary>User administration — System Administrator only. Users are deactivated, never deleted.</summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.AdminUsersController.List(System.String,System.Boolean,System.Int32,System.Int32,System.Threading.CancellationToken)">
             <summary>Lists users with optional search (display name, user name, e-mail) and inactive users included on request.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.GetPasswordPolicy">
+            <summary>The password rules ASP.NET Core Identity is configured with.</summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.AdminUsersController.Get(System.Guid,System.Threading.CancellationToken)">
             <summary>One user with roles, department memberships and whether ticket history references them.</summary>
@@ -199,8 +202,22 @@
             <response code="404">No such employee.</response>
             <response code="422">The new password violates the password policy; <c>errors</c> lists each reason.</response>
         </member>
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.Unlock(System.Guid,System.Threading.CancellationToken)">
+            <summary>Unlocks a locked-out account (clears the lockout end date and failed-attempt count) and audits it.</summary>
+        </member>
         <member name="M:TigerCS.Api.Controllers.AdminUsersController.RemoveDepartment(System.Guid,System.Int32,System.Threading.CancellationToken)">
             <summary>Ends a department membership; the primary membership cannot be removed while others remain.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.GetPermissions(System.Guid,System.Threading.CancellationToken)">
+            <summary>The employee's roles, role baseline, per-permission overrides, effective permissions and recent changes.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.SetPermissions(System.Guid,TigerCS.Application.Modules.Administration.Dto.SetUserPermissionsRequestDto,System.Threading.CancellationToken)">
+            <summary>Replaces the employee's permission overrides (Grant / Deny; absent = inherit from roles). Audited per changed permission.</summary>
+            <remarks>
+            403 when the caller edits their own permissions, grants something they do not hold, or grants an administrator-only
+            permission; 409 when the change would remove an administrator-only permission from the last active System Administrator
+            or targets an integration account; 400 for unknown permissions or mutating grants to read-only roles.
+            </remarks>
         </member>
         <member name="T:TigerCS.Api.Controllers.AdminWorkflowsController">
             <summary>
@@ -1133,7 +1150,7 @@
              </para>
              </summary>
              <param name="ConversationId">Required. Genesys' conversation id — the idempotency key: the same value always resolves to the same ticket.</param>
-             <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "SocialMedia" (case-insensitive). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</param>
+             <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; "Twitter" and "X" are accepted as SocialMedia). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</param>
              <param name="InteractionId">Genesys' interaction id, where it differs from the conversation id.</param>
              <param name="ParticipantId">Genesys' customer-participant id, where available.</param>
              <param name="CommunicationId">Genesys' communication id, where available.</param>
@@ -1177,7 +1194,7 @@
              </para>
              </summary>
              <param name="ConversationId">Required. Genesys' conversation id — the idempotency key: the same value always resolves to the same ticket.</param>
-             <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "SocialMedia" (case-insensitive). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</param>
+             <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; "Twitter" and "X" are accepted as SocialMedia). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</param>
              <param name="InteractionId">Genesys' interaction id, where it differs from the conversation id.</param>
              <param name="ParticipantId">Genesys' customer-participant id, where available.</param>
              <param name="CommunicationId">Genesys' communication id, where available.</param>
@@ -1204,7 +1221,7 @@
             <summary>Required. Genesys' conversation id — the idempotency key: the same value always resolves to the same ticket.</summary>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysInquiryRequest.Channel">
-            <summary>Required. One of "Phone", "LiveChat", "WhatsApp", "SocialMedia" (case-insensitive). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</summary>
+            <summary>Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; "Twitter" and "X" are accepted as SocialMedia). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</summary>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysInquiryRequest.InteractionId">
             <summary>Genesys' interaction id, where it differs from the conversation id.</summary>
@@ -1703,10 +1720,11 @@
             </summary>
             <param name="QueueId">The Genesys queue id the conversation is now in.</param>
             <param name="QueueName">That queue's name.</param>
-            <param name="AgentId">The Genesys User ID of the agent now connected.</param>
+            <param name="AgentId">The Genesys User ID of the agent now <b>connected</b> — send it when the agent answers/accepts, never while the interaction is only ringing or being offered to them. Every agent named here is recorded as having handled the interaction (which is what gives a CS Agent access to its ticket), so a transfer must send the receiving agent when they connect.</param>
             <param name="AgentName">That agent's display name. Display only.</param>
+            <param name="ConnectedAtUtc">When that agent connected (Genesys' connected time, UTC). Optional.</param>
         </member>
-        <member name="M:TigerCS.Api.Controllers.GenesysRoutingPart.#ctor(System.String,System.String,System.String,System.String)">
+        <member name="M:TigerCS.Api.Controllers.GenesysRoutingPart.#ctor(System.String,System.String,System.String,System.String,System.Nullable{System.DateTime})">
             <summary>
             Where the conversation is now: its current queue and connected agent. Send
             it when the conversation enters a queue, when an agent connects, and on
@@ -1716,8 +1734,9 @@
             </summary>
             <param name="QueueId">The Genesys queue id the conversation is now in.</param>
             <param name="QueueName">That queue's name.</param>
-            <param name="AgentId">The Genesys User ID of the agent now connected.</param>
+            <param name="AgentId">The Genesys User ID of the agent now <b>connected</b> — send it when the agent answers/accepts, never while the interaction is only ringing or being offered to them. Every agent named here is recorded as having handled the interaction (which is what gives a CS Agent access to its ticket), so a transfer must send the receiving agent when they connect.</param>
             <param name="AgentName">That agent's display name. Display only.</param>
+            <param name="ConnectedAtUtc">When that agent connected (Genesys' connected time, UTC). Optional.</param>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysRoutingPart.QueueId">
             <summary>The Genesys queue id the conversation is now in.</summary>
@@ -1726,10 +1745,13 @@
             <summary>That queue's name.</summary>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysRoutingPart.AgentId">
-            <summary>The Genesys User ID of the agent now connected.</summary>
+            <summary>The Genesys User ID of the agent now <b>connected</b> — send it when the agent answers/accepts, never while the interaction is only ringing or being offered to them. Every agent named here is recorded as having handled the interaction (which is what gives a CS Agent access to its ticket), so a transfer must send the receiving agent when they connect.</summary>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysRoutingPart.AgentName">
             <summary>That agent's display name. Display only.</summary>
+        </member>
+        <member name="P:TigerCS.Api.Controllers.GenesysRoutingPart.ConnectedAtUtc">
+            <summary>When that agent connected (Genesys' connected time, UTC). Optional.</summary>
         </member>
         <member name="T:TigerCS.Api.Controllers.GenesysConversationEndPart">
             <summary>The conversation has finished — for any reason: the agent ended it, the customer closed the browser, the connection dropped, Genesys timed it out.</summary>
@@ -2250,12 +2272,12 @@
              The department comes from the customer's explicit website-chat choice
              (Leasing / Customer Service / Maintenance) when there is one, and
              otherwise from the configured Genesys queue → department mapping.
-             Category and Request Type are never inferred from it: the ticket is
+             Category and Request Type are never inferred from the subject or the queue: the ticket is
              created <b>Unclassified</b> (no category at all — never a placeholder
              one), on the configured default priority (<c>Genesys:DefaultTicketPriority</c>,
              "Normal"), and its SLA clock starts at creation like any other ticket.
              When the bot supplies a valid <c>requestType</c> it is applied
-             immediately — the request type's department becomes responsible (the
+             immediately, together with the Category paired with it (active, same department, same name; none is created or guessed) — the request type's department becomes responsible (the
              originating department is never rewritten), the configured automatic
              assignment runs (no eligible employee leaves it in the department
              queue) and its SLA policy replaces the Normal-priority targets
@@ -3696,6 +3718,42 @@
             <response code="200">The session. status is one of InProgress, Confirmed, Consumed, Expired, Abandoned.</response>
             <response code="403">The session belongs to another agent.</response>
             <response code="404">No such session.</response>
+        </member>
+        <member name="T:TigerCS.Api.Filters.RequireTicketAccessAttribute">
+             <summary>
+             Refuses a request that addresses a ticket (<c>{ticketId}</c> in the route) the caller may not see — the server-side half of CS Agent
+             ticket visibility for direct URLs and API calls. A CS Agent sees only tickets assigned to them or on which they handled a Genesys
+             interaction (<see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule"/>); without this, every endpoint under <c>api/tickets/{ticketId}</c> would have to
+             remember that, and the CS Agent's cross-department action rights (close, classify, reopen, escalate, …) would reach tickets they cannot
+             even open.
+            
+             <para>
+             It is a <i>resource</i> filter, so it runs before model binding and validation: a restricted agent is refused (403) before the request
+             body is even read, and a malformed body cannot turn the answer into a 400 that reveals the ticket exists. It only ever acts for a
+             restricted CS Agent: every other caller passes straight through without a database
+             read, so Admin/Supervisor/Manager/department behaviour is exactly what each endpoint's own checks already make it. A ticket that does
+             not exist is left to the action (404, as before); one that exists but is not visible is <b>403</b> — the same answer the ticket detail
+             has always given for an out-of-scope ticket. The services keep their own checks; this is the net underneath them.
+             </para>
+             </summary>
+        </member>
+        <member name="M:TigerCS.Api.Filters.RequireTicketAccessAttribute.#ctor">
+             <summary>
+             Refuses a request that addresses a ticket (<c>{ticketId}</c> in the route) the caller may not see — the server-side half of CS Agent
+             ticket visibility for direct URLs and API calls. A CS Agent sees only tickets assigned to them or on which they handled a Genesys
+             interaction (<see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule"/>); without this, every endpoint under <c>api/tickets/{ticketId}</c> would have to
+             remember that, and the CS Agent's cross-department action rights (close, classify, reopen, escalate, …) would reach tickets they cannot
+             even open.
+            
+             <para>
+             It is a <i>resource</i> filter, so it runs before model binding and validation: a restricted agent is refused (403) before the request
+             body is even read, and a malformed body cannot turn the answer into a 400 that reveals the ticket exists. It only ever acts for a
+             restricted CS Agent: every other caller passes straight through without a database
+             read, so Admin/Supervisor/Manager/department behaviour is exactly what each endpoint's own checks already make it. A ticket that does
+             not exist is left to the action (404, as before); one that exists but is not visible is <b>403</b> — the same answer the ticket detail
+             has always given for an out-of-scope ticket. The services keep their own checks; this is the net underneath them.
+             </para>
+             </summary>
         </member>
         <member name="T:TigerCS.Api.OpenApi.OpenApiDocumentation">
              <summary>

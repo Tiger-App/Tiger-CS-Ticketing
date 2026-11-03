@@ -61,6 +61,86 @@
     });
   });
 
+  // Unlock a locked-out user in place (Admin > Users): post with fetch, then
+  // drop the "Sign-in locked" note and the button and show the outcome. The
+  // data-confirm prompt below still runs first. Without JS the form posts and
+  // redirects back with a status message.
+  document.querySelectorAll("form[data-unlock-form]").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      if (event.defaultPrevented) return;
+      event.preventDefault();
+      var flash = document.getElementById("users-flash");
+      var show = function (ok, message) {
+        if (!flash) return;
+        flash.className = "alert " + (ok ? "alert-success" : "alert-error");
+        flash.textContent = message;
+        flash.hidden = false;
+      };
+      var button = form.querySelector("button");
+      if (button) button.disabled = true;
+      fetch(form.action, {
+        method: "POST", body: new FormData(form), credentials: "same-origin",
+        headers: { "X-Requested-With": "fetch", "Accept": "application/json" }
+      }).then(function (r) { return r.json(); }).then(function (data) {
+        show(data.success, data.message);
+        if (data.success) {
+          var row = form.closest("tr");
+          var note = row && row.querySelector("[data-lock-note]");
+          if (note) note.remove();
+          form.remove();
+        } else if (button) {
+          button.disabled = false;
+        }
+      }).catch(function () {
+        show(false, "The user could not be unlocked.");
+        if (button) button.disabled = false;
+      });
+    });
+  });
+
+  // Live password-rule feedback (Admin > Reset password). The rules listed come
+  // from Identity's configured policy (rendered server-side); this only shows
+  // which are met as the admin types. It never blocks the submit — the Api
+  // still validates and its Identity errors are shown after the post.
+  document.querySelectorAll("form[data-password-form]").forEach(function (form) {
+    var input = form.querySelector("[data-password-new]");
+    var confirm = form.querySelector("[data-password-confirm]");
+    var rules = form.querySelectorAll("[data-password-rules] [data-rule]");
+    var match = form.querySelector("[data-password-match]");
+    if (!input) return;
+    var tests = {
+      length: function (v, el) { return Array.from(v).length >= +el.dataset.min; },
+      upper: function (v) { return /\p{Lu}/u.test(v); },
+      lower: function (v) { return /\p{Ll}/u.test(v); },
+      digit: function (v) { return /\p{Nd}/u.test(v); },
+      symbol: function (v) { return /[^\p{L}\p{N}]/u.test(v); },
+      unique: function (v, el) { return new Set(Array.from(v)).size >= +el.dataset.min; }
+    };
+    function update() {
+      var v = input.value;
+      rules.forEach(function (el) {
+        var test = tests[el.dataset.rule];
+        el.classList.remove("is-met", "is-unmet");
+        if (!test || v === "") return;
+        el.classList.add(test(v, el) ? "is-met" : "is-unmet");
+      });
+      if (match && confirm) {
+        match.classList.remove("is-ok", "is-bad");
+        if (confirm.value === "") {
+          match.textContent = "Both entries must match.";
+        } else if (confirm.value === v) {
+          match.textContent = "Passwords match.";
+          match.classList.add("is-ok");
+        } else {
+          match.textContent = "Passwords do not match.";
+          match.classList.add("is-bad");
+        }
+      }
+    }
+    input.addEventListener("input", update);
+    if (confirm) confirm.addEventListener("input", update);
+  });
+
   // Confirmation before a deactivation/archive/delete/publish action:
   // forms marked data-confirm ask first. Without JS the form submits
   // directly — the Api still enforces every rule server-side.
