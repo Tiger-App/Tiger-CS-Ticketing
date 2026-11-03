@@ -203,18 +203,18 @@ public sealed class TakeOwnershipSqlServerTests : IDisposable
             Assert.True(expected == await pool.GetStatusAsync(id), $"{name}: expected {expected}");
         }
 
-        // 2. the list (one SQL query) holds exactly the Available ones - the same tickets the single-ticket decision calls Available
+        // 2. the pool is a separate, explicit view: the personal list never holds it, "available to take" holds exactly the Available ones
         var expectedIds = shapes.Values.Where(s => s.Expected == TicketClaimStatus.Available).Select(s => s.Id).Order().ToArray();
         var listed = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 200));
-        Assert.Equal(expectedIds, listed.Items.Select(i => i.TicketId).Order());
-        Assert.Equal(expectedIds.Length, listed.TotalCount);
+        Assert.Empty(listed.Items.Select(i => i.TicketId).Intersect(expectedIds));
+        Assert.Equal(listed.Items.Count, listed.TotalCount);
 
         var available = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 200, AvailableToTake: true));
         Assert.Equal(expectedIds, available.Items.Select(i => i.TicketId).Order());
 
-        // 3. the Call Center filter lists the pool; another department's filter lists only that department's share of it
+        // 3. department filters narrow the personal list; they do not bring the pool back
         var ccFilter = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(seed.CallCenterId, null, null, null, null, null, null, null, null, 1, 200));
-        Assert.Equal(expectedIds, ccFilter.Items.Select(i => i.TicketId).Order());
+        Assert.Empty(ccFilter.Items.Select(i => i.TicketId).Intersect(expectedIds));
         var accountingFilter = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(seed.AccountingId, null, null, null, null, null, null, null, null, 1, 200));
         Assert.All(accountingFilter.Items, i => Assert.Equal(seed.AccountingId, i.CurrentDepartmentId));
         Assert.DoesNotContain(accountingFilter.Items, i => shapes["already in the call center queue"].Id == i.TicketId);

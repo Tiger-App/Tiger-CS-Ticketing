@@ -84,12 +84,13 @@ public sealed class CsAgentTicketVisibilitySqlServerTests : IDisposable
     }
 
     [VisibilitySqlServerFact]
-    public async Task AccessLevels_AndListFilters_HoldOnARealSqlServer_IncludingAfterATransfer()
+    public async Task AccessLevels_AndListFilters_HoldOnARealSqlServer_AssignedAndDepartmentWorkOnly()
     {
         CreateDatabase();
         var me = Guid.NewGuid();
         var other = Guid.NewGuid();
-        long assigned, handled, createdOnly, others, createdThenTransferred;
+        var departmentEmployee = Guid.NewGuid();
+        long assigned, handled, createdOnly, others, createdThenTransferred, departmentWork, anotherAgents;
         using (var context = CreateContext())
         {
             context.Database.Migrate();
@@ -98,6 +99,20 @@ public sealed class CsAgentTicketVisibilitySqlServerTests : IDisposable
             context.Departments.AddRange(cs, facilities);
             AddPerson(context, me, "Me");
             AddPerson(context, other, "Other");
+            AddPerson(context, departmentEmployee, "Department Employee");
+            context.SaveChanges();
+            // Me and Other are CS Agents (the rule asks who holds the CS Agent role); the department employee is not.
+            var csAgentRole = context.Roles.FirstOrDefault(r => r.Name == Roles.CsAgent);
+            if (csAgentRole is null)
+            {
+                csAgentRole = new ApplicationRole(Roles.CsAgent, "CS Agent") { Id = Guid.NewGuid(), NormalizedName = Roles.CsAgent.ToUpperInvariant() };
+                context.Roles.Add(csAgentRole);
+                context.SaveChanges();
+            }
+
+            context.UserRoles.AddRange(
+                new Microsoft.AspNetCore.Identity.IdentityUserRole<Guid> { UserId = me, RoleId = csAgentRole.Id },
+                new Microsoft.AspNetCore.Identity.IdentityUserRole<Guid> { UserId = other, RoleId = csAgentRole.Id });
             context.SaveChanges();
             context.UserDepartmentAssignments.Add(new UserDepartmentAssignment(me, cs.DepartmentId, true, Now.AddDays(-50), null));
             context.SaveChanges();
@@ -139,6 +154,27 @@ public sealed class CsAgentTicketVisibilitySqlServerTests : IDisposable
             createdThenTransferred = Add(5, cs.DepartmentId, creator: me).TicketId;
             context.Tickets.Find(createdThenTransferred)!.TransferToDepartment(facilities.DepartmentId);
             context.SaveChanges();
+
+            // Department work: a department employee holds it; I held it before and am the latest CS Agent on its history.
+            departmentWork = Add(6, facilities.DepartmentId, owner: departmentEmployee, creator: me).TicketId;
+            var history = new TicketAssignment(departmentWork, me, cs.DepartmentId, Now.AddHours(-3), assigningActorEmployeeId: null);
+            history.MarkSuperseded();
+            context.TicketAssignments.Add(history);
+            context.SaveChanges();
+
+            // Another CS Agent's ticket that I created AND handled: not mine.
+            var theirs = Add(7, cs.DepartmentId, owner: other, creator: me);
+            anotherAgents = theirs.TicketId;
+            var theirInteraction = TicketInteraction.CreateFromGenesys(
+                theirs.TicketId, WellKnownChannels.Phone, "+971500000001", "conv-" + Guid.NewGuid().ToString("N")[..12],
+                calledNumber: null, genesysQueueId: null, genesysQueueName: null, genesysAgentId: null, genesysAgentName: null,
+                interactionStartedAtUtc: Now.AddHours(-2), direction: "Inbound", createdAtUtc: Now.AddHours(-2),
+                isOriginatingInteraction: true, genesysServiceRequestId: Guid.NewGuid().ToString("N")[..8]);
+            context.TicketInteractions.Add(theirInteraction);
+            context.SaveChanges();
+            context.TicketInteractionHandlers.Add(TicketInteractionHandler.Create(
+                theirInteraction.TicketInteractionId, theirs.TicketId, me, "genesys-me", InteractionHandlerSource.Routing, null, Now.AddHours(-2)));
+            context.SaveChanges();
         }
 
         using var read = CreateContext();
@@ -149,20 +185,22 @@ public sealed class CsAgentTicketVisibilitySqlServerTests : IDisposable
             assignments, handlers, me, Agent, (await read.Tickets.FindAsync(id))!);
 
         Assert.Equal(TicketAccessLevel.Full, await AccessAsync(assigned));
-        Assert.Equal(TicketAccessLevel.Full, await AccessAsync(handled));
-        Assert.Equal(TicketAccessLevel.ReadOnly, await AccessAsync(createdOnly));
-        Assert.Equal(TicketAccessLevel.ReadOnly, await AccessAsync(createdThenTransferred)); // created in my department, then transferred away
+        Assert.Equal(TicketAccessLevel.Full, await AccessAsync(departmentWork));      // a department employee works it; I am responsible
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(handled));             // handled on Genesys, but unassigned
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(createdOnly));         // created by me, unassigned
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(createdThenTransferred));
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(anotherAgents));       // another CS Agent's, though I created and handled it
         Assert.Equal(TicketAccessLevel.None, await AccessAsync(others));
 
         var query = new TicketQueryAppService(
             new TicketRepository(read), assignments, new FakeTicketResolutionRepository(), new FakeTicketStatusHistoryRepository(),
             ReopenPolicy.Default, TimeProvider.System, handlerRepository: handlers);
         var all = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 100));
-        Assert.Equal(new[] { assigned, handled, createdOnly, createdThenTransferred }.Order(), all.Items.Select(i => i.TicketId).Order());
+        Assert.Equal(new[] { assigned, departmentWork }.Order(), all.Items.Select(i => i.TicketId).Order());
         Assert.Equal(all.Items.Count, all.TotalCount);
 
         var mine = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 100, CreatedByMe: true));
-        Assert.Equal(new[] { createdOnly, createdThenTransferred }.Order(), mine.Items.Select(i => i.TicketId).Order());
+        Assert.Equal(new[] { departmentWork }.Order(), mine.Items.Select(i => i.TicketId).Order());
     }
 
     [VisibilitySqlServerFact]
