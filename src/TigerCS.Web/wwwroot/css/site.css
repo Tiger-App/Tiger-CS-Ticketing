@@ -591,13 +591,15 @@ textarea.form-control { min-height: 96px; resize: vertical; padding: var(--space
 /* ---------- Ticket details ---------- */
 
 .ticket-header { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: var(--space-5); margin-bottom: var(--space-4); box-shadow: var(--shadow-sm); }
-.ticket-header__top { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
+.ticket-header__top { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: flex-start; gap: var(--space-4); }
+.ticket-header__main { min-width: 0; }
+.ticket-header__title { overflow-wrap: anywhere; }
 .ticket-header__id { font-size: var(--text-xs); font-weight: 700; color: var(--color-text-secondary); letter-spacing: 0.04em; margin-bottom: 5px; }
 .ticket-header__title { font-size: var(--text-xl); font-weight: var(--weight-title); line-height: 1.2; letter-spacing: -0.022em; margin-bottom: var(--space-2); }
 .ticket-header__meta { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-4); font-size: 14px; color: var(--color-text-secondary); }
 .ticket-header__meta strong { color: var(--color-text); font-weight: 600; }
 .ticket-header__badges { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; margin-top: var(--space-3); }
-.ticket-header__actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; flex: none; }
+.ticket-header__actions { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2); flex-wrap: wrap; min-width: 0; }
 
 .status-banner { display: flex; align-items: center; gap: 8px; margin-top: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); font-size: 14px; font-weight: 600; border: 1px solid transparent; }
 .status-banner svg { width: 15px; height: 15px; flex: none; }
@@ -1318,7 +1320,8 @@ a.customer-card__name:hover { text-decoration: underline; }
   .tickets-workspace .filter-bar .field-group { flex: 1 1 45%; }
   .tickets-workspace .filter-bar .field-select, .tickets-workspace .filter-bar .field-input { width: 100%; min-width: 0; }
   .tickets-workspace .filter-bar__submit { width: 100%; margin-left: 0; justify-content: flex-end; }
-  .ticket-header__top { flex-direction: column; }
+  .ticket-header__top { grid-template-columns: minmax(0, 1fr); }
+  .ticket-header__actions { justify-content: flex-start; }
   /* iOS ignores a fixed attachment and jumps; the photograph still covers. */
   .login-shell { background-attachment: scroll; padding: var(--space-5) var(--space-4); gap: var(--space-5); }
   .login-aside { padding: 0; gap: var(--space-4); text-align: center; align-items: center; }
