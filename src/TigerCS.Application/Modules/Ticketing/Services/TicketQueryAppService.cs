@@ -428,7 +428,7 @@ public sealed class TicketQueryAppService(
     internal Task<TicketAccessLevel> GetTicketAccessAsync(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
         TicketVisibilityRule.GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy, ticketRepository);
 
     /// <summary>May the caller MODIFY this ticket (add a note, claim, close…): Full access only — a creator's read-only access does not qualify.</summary>
     internal Task<bool> CanModifyTicketAsync(
@@ -440,7 +440,7 @@ public sealed class TicketQueryAppService(
     internal Task<bool> CanViewTicketAsync(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
         TicketVisibilityRule.CanViewTicketAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy, ticketRepository);
 
     /// <summary>
     /// The server-side gate for an id-addressed request (a direct URL or API call): is this ticket visible to the caller? Used by the API's

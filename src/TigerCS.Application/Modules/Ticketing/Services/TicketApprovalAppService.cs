@@ -521,7 +521,7 @@ public sealed class TicketApprovalAppService(
         // Nothing broader: it grants this view only, only while a cycle
         // addressed to the caller is pending.
         var access = await TicketVisibilityRule.GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy);
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy, ticketRepository);
         var canView = access != TicketAccessLevel.None;
 
         // A creator who may only READ the ticket (it is in another department) is offered no approval action: every flag below is false

@@ -315,11 +315,11 @@
                                         <th>Ticket</th>
                                         <th class="col-subject">Summary</th>
                                         <th>Status</th>
-                                        <th>Priority</th>
                                         <th>Department</th>
                                         <th>Created</th>
+                                        <th>Resolved / Closed</th>
+                                        <th>Assigned agent</th>
                                         <th>Unit</th>
-                                        <th>Last activity</th>
                                         <th></th>
                                     </tr>
                                 </thead>
@@ -331,11 +331,11 @@
                                             <td><a class="ticket-id-link" href="/Tickets/@row.TicketId">@row.TicketNumber</a></td>
                                             <td class="col-subject"><span class="cell-truncate">@row.RequestSummary</span></td>
                                             <td><span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(row.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(row.TicketStatus)</span></td>
-                                            <td><span class="badge badge-priority-@TicketDisplay.PriorityCssKey(row.PriorityId)">@TicketDisplay.PriorityLabel(row.PriorityId)</span></td>
                                             <td>@TicketDisplay.AssignedDepartmentLabel(row.CurrentDepartmentId, Model.NameResolver.TryGetDepartmentName(row.CurrentDepartmentId))</td>
                                             <td class="text-secondary text-mono">@row.CreatedAtUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                            <td class="text-secondary text-mono">@((row.ClosedAtUtc ?? row.ResolvedAtUtc)?.ToLocalTime().ToString("MMM d, yyyy") ?? "—")</td>
+                                            <td>@(row.AssignedAgentName ?? "—")</td>
                                             <td>@(row.UnitNumber ?? "—")@(row.ProjectName is null ? "" : $" · {row.ProjectName}")</td>
-                                            <td class="text-secondary" title="@row.LastActivityAtUtc.ToLocalTime().ToString("MMM d, yyyy HH:mm")">@TicketDisplay.AgoLabel(row.LastActivityAtUtc, nowUtc)</td>
                                             <td class="col-actions"><a class="btn btn-sm" href="/Tickets/@row.TicketId">@(isFinished ? "View" : "Open")</a></td>
                                         </tr>
                                     }

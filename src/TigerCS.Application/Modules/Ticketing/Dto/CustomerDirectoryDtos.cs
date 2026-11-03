@@ -188,7 +188,10 @@ public sealed record CustomerDirectoryTicketDto(
     string RequestSummary,
     DateTime LastActivityAtUtc,
     DateTime? ResolvedAtUtc,
-    string VerificationStatus);
+    string VerificationStatus,
+    DateTime? ClosedAtUtc = null,
+    Guid? AssignedAgentEmployeeId = null,
+    string? AssignedAgentName = null);
 
 /// <summary>One recorded call/chat across the customer's tickets (Genesys or local), newest first.</summary>
 public sealed record CustomerDirectoryInteractionDto(

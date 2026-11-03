@@ -91,7 +91,7 @@ else
         else if (Model.IsReadOnlyAccess)
         {
             <div class="alert alert-info" role="status" id="read-only-notice">
-                <span>You created this ticket and can follow its progress, but it belongs to another department, so it is read-only for you.</span>
+                <span>This is a previous ticket of a customer you are currently handling, so it is read-only for you: you can review it and its history, but not change it.</span>
             </div>
         }
 
@@ -1117,12 +1117,12 @@ else
                                     <thead>
                                         <tr>
                                             <th>Ticket</th>
-                                            <th>Category</th>
+                                            <th>Subject / Request type</th>
                                             <th>Department</th>
                                             <th>Status</th>
-                                            <th>Priority</th>
                                             <th>Created</th>
-                                            <th>Closed</th>
+                                            <th>Resolved / Closed</th>
+                                            <th>Assigned agent</th>
                                             <th></th>
                                         </tr>
                                     </thead>
@@ -1131,12 +1131,18 @@ else
                                         {
                                             <tr>
                                                 <td><a class="ticket-id-link" href="/Tickets/@row.TicketId">@row.TicketNumber</a></td>
-                                                <td><span class="id-fallback">@(row.CategoryId is int rowCat ? $"Category #{rowCat}" : "Unclassified")</span></td>
+                                                <td>
+                                                    @if (!string.IsNullOrWhiteSpace(row.RequestSummary))
+                                                    {
+                                                        <div>@row.RequestSummary</div>
+                                                    }
+                                                    <div class="text-secondary">@(row.RequestTypeName ?? (row.CategoryId is int rowCat ? $"Category #{rowCat}" : "Unclassified"))</div>
+                                                </td>
                                                 <td>@TicketDisplay.AssignedDepartmentLabel(row.CurrentDepartmentId, Model.NameResolver.TryGetDepartmentName(row.CurrentDepartmentId))</td>
                                                 <td><span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(row.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(row.TicketStatus)</span></td>
-                                                <td><span class="badge badge-priority-@TicketDisplay.PriorityCssKey(row.PriorityId)">@TicketDisplay.PriorityLabel(row.PriorityId)</span></td>
                                                 <td class="text-secondary text-mono">@row.CreatedAtUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
-                                                <td class="text-secondary text-mono">—</td>
+                                                <td class="text-secondary text-mono">@((row.ClosedAtUtc ?? row.ResolvedAtUtc)?.ToLocalTime().ToString("MMM d, yyyy") ?? "—")</td>
+                                                <td>@(row.AssignedAgentName ?? "—")</td>
                                                 <td><a class="btn btn-sm" href="/Tickets/@row.TicketId">Open</a></td>
                                             </tr>
                                         }

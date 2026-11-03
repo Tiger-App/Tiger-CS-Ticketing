@@ -198,7 +198,7 @@ public sealed class PriorityDowngradeAppService(
         }
 
         if (!await TicketVisibilityRule.CanViewTicketAsync(
-                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy))
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy, ticketRepository))
         {
             return Fail<IReadOnlyList<PriorityDowngradeRequestResponseDto>>(DowngradeOutcome.Forbidden);
         }

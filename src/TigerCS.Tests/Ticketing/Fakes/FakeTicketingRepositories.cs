@@ -315,6 +315,17 @@ public sealed class FakeTicketRepository : ITicketRepository
     public static void SetStoredRowVersion(Ticket ticket, byte[] rowVersion) =>
         typeof(Ticket).GetProperty(nameof(Ticket.RowVersion))!.SetValue(ticket, rowVersion);
 
+    private static bool IsActive(Ticket t) => t.TicketStatus is not (TicketStatus.Resolved or TicketStatus.Closed);
+
+    public Task<bool> HasActiveTicketForCustomerAsync(
+        Guid employeeId, int? crmBuyerCustomerId, string? externalSource, string? externalCustomerId,
+        CancellationToken cancellationToken = default) =>
+        Task.FromResult(_tickets.Values.Any(t => t.CurrentOwnerEmployeeId == employeeId && IsActive(t)
+            && (crmBuyerCustomerId is { } crm
+                ? t.CrmBuyerCustomerId == crm
+                : externalSource is not null && externalCustomerId is not null
+                    && t.CustomerVerificationSource == externalSource && t.ExternalCustomerId == externalCustomerId)));
+
     /// <summary>How many times <see cref="SearchCustomerHistoryAsync"/> ran — the no-N+1 assertion for related-ticket/history reads (one scoped query per request, never one per row).</summary>
     public int SearchCustomerHistoryCallCount { get; private set; }
 
@@ -348,7 +359,13 @@ public sealed class FakeTicketRepository : ITicketRepository
             return Task.FromResult(new CustomerHistoryQueryResult([], 0, 0, 0));
         }
 
-        filtered = filtered.Where(t => IsVisible(t, query.VisibleDepartmentIds, query.AgentScopeEmployeeId));
+        // Customer Ticket History grant (twin of TicketRepository): an agent owning an ACTIVE ticket of the same verified identity reads it all.
+        var identityTickets = filtered.ToList();
+        var granted = query.AgentScopeEmployeeId is { } grantee && query.TicketIds is null
+            && identityTickets.Any(t => t.CurrentOwnerEmployeeId == grantee && IsActive(t));
+        filtered = granted
+            ? identityTickets
+            : identityTickets.Where(t => IsVisible(t, query.VisibleDepartmentIds, query.AgentScopeEmployeeId));
 
         if (query.ExcludeTicketId is { } excludeTicketId)
         {

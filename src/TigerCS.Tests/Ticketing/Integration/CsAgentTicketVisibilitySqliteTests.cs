@@ -401,7 +401,7 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
     // =====================================================================
 
     [Fact]
-    public async Task CustomerHistory_ListsOnlyTheCustomersTicketsTheAgentCanSee()
+    public async Task CustomerHistory_ForACustomerTheAgentIsHandling_IncludesTheirOtherTickets_ButTheQueueDoesNot()
     {
         long mine;
         using (var context = _db.CreateContext())
@@ -427,9 +427,12 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
         var asAgent = await history.GetByCrmCustomerIdAsync(_agentA, Agent, crmId);
         var asSupervisor = await history.GetByCrmCustomerIdAsync(Guid.NewGuid(), Supervisor, crmId);
 
-        Assert.Equal(mine, Assert.Single(asAgent.Tickets).TicketId);
-        Assert.Equal(1, asAgent.TotalTickets);
+        // The agent owns an ACTIVE ticket of this verified customer, so the customer's history is readable (read-only) whoever handled it
+        // (Customer Ticket History - see CustomerTicketHistorySqliteTests); the Queue itself still holds only their own ticket.
+        Assert.Equal(2, asAgent.TotalTickets);
+        Assert.Contains(mine, asAgent.Tickets.Select(t => t.TicketId));
         Assert.Equal(2, asSupervisor.TotalTickets);
+        Assert.Equal([mine], await QueueAsync(_agentA, Agent));
     }
 
     [Fact]
@@ -444,7 +447,7 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
 
         using var read = _db.CreateContext();
         var directory = new CustomerDirectoryAppService(
-            new CustomerDirectoryRepository(read), _db.CreateQueryService(read));
+            new CustomerDirectoryRepository(read), _db.CreateQueryService(read), new TicketRepository(read));
 
         var asAgent = await directory.ListAsync(_agentA, Agent, new CustomerDirectoryListRequestDto(PageSize: 50));
         var asSupervisor = await directory.ListAsync(Guid.NewGuid(), Supervisor, new CustomerDirectoryListRequestDto(PageSize: 50));

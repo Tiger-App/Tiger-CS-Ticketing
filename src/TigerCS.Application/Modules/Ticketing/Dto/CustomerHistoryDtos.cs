@@ -51,6 +51,11 @@ public sealed record CustomerHistoryDto(
 /// <param name="RequestSummary">The ticket's request summary — a one-line subject for list scanning; full detail stays on Ticket Details.</param>
 /// <param name="ResolvedAtUtc">When the current resolution was recorded, in UTC — null while the ticket has no current resolution.</param>
 /// <param name="IsReopenEligible">Whether FR-RES-04's lifecycle rule currently allows Reopen (Resolved/Closed, within the ISSUE-011 window). Lifecycle only — permissions are enforced at the Reopen endpoint.</param>
+/// <param name="ClosedAtUtc">When the ticket was closed, in UTC - null unless it is Closed.</param>
+/// <param name="AssignedAgentEmployeeId">The employee the ticket is currently assigned to, or null when unassigned.</param>
+/// <param name="AssignedAgentName">That employee's display name, resolved server-side so a viewer who cannot list users still sees who handled the ticket.</param>
+/// <param name="RequestTypeId">The ticket's request type, or null while unclassified.</param>
+/// <param name="RequestTypeName">The request type's name, or null when unclassified.</param>
 public sealed record CustomerHistoryTicketDto(
     long TicketId,
     string TicketNumber,
@@ -64,7 +69,12 @@ public sealed record CustomerHistoryTicketDto(
     string VerificationStatus,
     string? RequestSummary = null,
     DateTime? ResolvedAtUtc = null,
-    bool IsReopenEligible = false);
+    bool IsReopenEligible = false,
+    DateTime? ClosedAtUtc = null,
+    Guid? AssignedAgentEmployeeId = null,
+    string? AssignedAgentName = null,
+    int? RequestTypeId = null,
+    string? RequestTypeName = null);
 
 public enum CustomerHistoryOutcome
 {

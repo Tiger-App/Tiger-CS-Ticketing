@@ -246,7 +246,16 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
             return new CustomerHistoryQueryResult([], 0, 0, 0);
         }
 
-        filtered = filtered.VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId);
+        // Customer Ticket History grant: a restricted CS Agent who currently owns an ACTIVE ticket of this same verified customer may READ the
+        // customer's other tickets whoever handled them. The grant is identity-scoped (CRM id / external pair - never the phone fallback,
+        // which is the TicketIds branch) and read-only; it is the only widening of the agent's own-tickets scope here.
+        var grantedByActiveTicket = query.AgentScopeEmployeeId is { } grantee
+            && query.TicketIds is null
+            && await filtered.Active().AnyAsync(t => t.CurrentOwnerEmployeeId == grantee, cancellationToken);
+        if (!grantedByActiveTicket)
+        {
+            filtered = filtered.VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId);
+        }
 
         if (query.ExcludeTicketId is { } excludeTicketId)
         {
@@ -282,6 +291,27 @@ public sealed class TicketRepository(TigerCsDbContext dbContext) : ITicketReposi
             .ToListAsync(cancellationToken);
 
         return new CustomerHistoryQueryResult(items, totalCount, totalCount - closedCount, closedCount);
+    }
+
+    public Task<bool> HasActiveTicketForCustomerAsync(
+        Guid employeeId, int? crmBuyerCustomerId, string? externalSource, string? externalCustomerId,
+        CancellationToken cancellationToken = default)
+    {
+        IQueryable<Ticket> identity;
+        if (crmBuyerCustomerId is { } crmId)
+        {
+            identity = dbContext.Tickets.Where(t => t.CrmBuyerCustomerId == crmId);
+        }
+        else if (externalSource is not null && externalCustomerId is not null)
+        {
+            identity = dbContext.Tickets.Where(t => t.CustomerVerificationSource == externalSource && t.ExternalCustomerId == externalCustomerId);
+        }
+        else
+        {
+            return Task.FromResult(false);
+        }
+
+        return identity.Active().AnyAsync(t => t.CurrentOwnerEmployeeId == employeeId, cancellationToken);
     }
 
     public async Task<DashboardSnapshot> GetDashboardSnapshotAsync(

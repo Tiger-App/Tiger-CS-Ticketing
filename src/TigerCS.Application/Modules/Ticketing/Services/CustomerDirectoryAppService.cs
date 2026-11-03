@@ -14,7 +14,8 @@ namespace TigerCS.Application.Modules.Ticketing.Services;
 /// </summary>
 public sealed class CustomerDirectoryAppService(
     ICustomerDirectoryRepository repository,
-    TicketQueryAppService ticketQueryAppService)
+    TicketQueryAppService ticketQueryAppService,
+    ITicketRepository ticketRepository)
 {
     public const int DefaultPageSize = 25;
     public const int MaxPageSize = 100;
@@ -57,8 +58,21 @@ public sealed class CustomerDirectoryAppService(
         }
 
         var visibleDepartmentIds = await ticketQueryAppService.ResolveVisibleDepartmentIdsAsync(callerEmployeeId, callerRoles, cancellationToken);
-        var profile = await repository.GetProfileAsync(
-            identity, visibleDepartmentIds, cancellationToken, ticketQueryAppService.ResolveAgentScope(callerEmployeeId, callerRoles));
+        var agentScope = ticketQueryAppService.ResolveAgentScope(callerEmployeeId, callerRoles);
+
+        // Customer Ticket History: a restricted CS Agent who currently owns an ACTIVE ticket of this VERIFIED customer (CRM id or external
+        // pair - never the phone fallback) sees the customer's whole profile and ticket history, read-only. Everyone else, and any other
+        // customer, keeps the unchanged own-tickets scope; the grant ends with the agent's last active ticket for the customer.
+        if (agentScope is { } agentId
+            && identity.Kind != CustomerIdentityKind.Phone
+            && await ticketRepository.HasActiveTicketForCustomerAsync(
+                agentId, identity.CrmBuyerCustomerId, identity.ExternalSource, identity.ExternalCustomerId, cancellationToken))
+        {
+            visibleDepartmentIds = null;
+            agentScope = null;
+        }
+
+        var profile = await repository.GetProfileAsync(identity, visibleDepartmentIds, cancellationToken, agentScope);
 
         return profile is null
             ? CustomerDirectoryProfileResult.Failure(CustomerDirectoryProfileOutcome.NotFound)

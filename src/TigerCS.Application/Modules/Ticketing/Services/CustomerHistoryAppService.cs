@@ -1,4 +1,6 @@
+using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
+using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.Ticketing;
 
@@ -43,7 +45,9 @@ public sealed class CustomerHistoryAppService(
     ITicketStatusHistoryRepository statusHistoryRepository,
     TicketQueryAppService ticketQueryAppService,
     ReopenPolicy reopenPolicy,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IEmployeeRepository? employeeRepository = null,
+    IRequestTypeRepository? requestTypeRepository = null)
 {
     /// <summary>The New Ticket preview's default page size — a "reasonable latest-ticket limit", never the customer's unbounded history.</summary>
     public const int DefaultLimit = 5;
@@ -258,6 +262,25 @@ public sealed class CustomerHistoryAppService(
 
         var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
 
+        // Display names for the Assigned Agent and Request Type columns, resolved here (one batched employee lookup, one lookup per
+        // distinct request type) so the viewer needs no directory access of their own - a CS Agent cannot list users.
+        var agentIds = result.Tickets.Where(t => t.CurrentOwnerEmployeeId is not null).Select(t => t.CurrentOwnerEmployeeId!.Value).Distinct().ToList();
+        var agentNames = employeeRepository is not null && agentIds.Count > 0
+            ? (await employeeRepository.ListAsync(includeInactive: true, agentIds, cancellationToken))
+                .ToDictionary(e => e.EmployeeId, e => e.DisplayName)
+            : new Dictionary<Guid, string>();
+        var requestTypeNames = new Dictionary<int, string>();
+        if (requestTypeRepository is not null)
+        {
+            foreach (var requestTypeId in result.Tickets.Where(t => t.RequestTypeId is not null).Select(t => t.RequestTypeId!.Value).Distinct())
+            {
+                if (await requestTypeRepository.GetByIdAsync(requestTypeId, cancellationToken) is { } requestType)
+                {
+                    requestTypeNames[requestTypeId] = requestType.Name;
+                }
+            }
+        }
+
         return new(
             verificationType,
             crmBuyerCustomerId,
@@ -266,7 +289,7 @@ public sealed class CustomerHistoryAppService(
             result.TotalCount,
             result.OpenCount,
             result.ClosedCount,
-            result.Tickets.Select(t => ToTicketDto(t, currentResolutions, closedMoments, nowUtc)).ToList(),
+            result.Tickets.Select(t => ToTicketDto(t, currentResolutions, closedMoments, nowUtc, agentNames, requestTypeNames)).ToList(),
             externalSource,
             externalCustomerId,
             // The Customers directory key this history belongs to (CRM id,
@@ -280,7 +303,9 @@ public sealed class CustomerHistoryAppService(
         Ticket ticket,
         IReadOnlyDictionary<long, TicketResolution> currentResolutions,
         IReadOnlyDictionary<long, DateTime> closedMoments,
-        DateTime nowUtc)
+        DateTime nowUtc,
+        IReadOnlyDictionary<Guid, string> agentNames,
+        IReadOnlyDictionary<int, string> requestTypeNames)
     {
         var resolvedAtUtc = currentResolutions.TryGetValue(ticket.TicketId, out var resolution)
             ? resolution.ResolvedAtUtc
@@ -305,6 +330,11 @@ public sealed class CustomerHistoryAppService(
             resolvedAtUtc,
             reopenPolicy.IsReopenEligible(
                 ticket.TicketStatus, ticket.ResolutionOutcome, closedAtUtc, nowUtc,
-                resolution?.ClosedForCustomerInactivity == true));
+                resolution?.ClosedForCustomerInactivity == true),
+            closedAtUtc,
+            ticket.CurrentOwnerEmployeeId,
+            ticket.CurrentOwnerEmployeeId is { } owner && agentNames.TryGetValue(owner, out var agentName) ? agentName : null,
+            ticket.RequestTypeId,
+            ticket.RequestTypeId is { } requestTypeId && requestTypeNames.TryGetValue(requestTypeId, out var requestTypeName) ? requestTypeName : null);
     }
 }

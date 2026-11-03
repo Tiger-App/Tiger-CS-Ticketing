@@ -656,6 +656,65 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
         await db.SaveChangesAsync();
     }
 
+    /// <summary>
+    /// Seeds a ticket of one VERIFIED CRM customer (<paramref name="crmCustomerId"/>), the way the New Ticket wizard stores it, optionally owned
+    /// and moved on to <paramref name="status"/>. Two calls with the same id are two tickets of the same customer; the Customer Ticket
+    /// History tests build their scenarios from this.
+    /// </summary>
+    public async Task<long> SeedVerifiedCustomerTicketAsync(
+        int crmCustomerId, int departmentId, int categoryId, Guid? owner = null, TicketStatus status = TicketStatus.Open, string customerName = "History Customer")
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        var ticket = Ticket.CreateVerifiedFromCrmBuyer(
+            "TG-HIST-" + Guid.NewGuid().ToString("N")[..10], departmentId,
+            crmBuyerCustomerId: crmCustomerId, crmBuyerLeadId: crmCustomerId, crmBuyerUnitId: crmCustomerId, crmBuyerProjectId: crmCustomerId,
+            crmBuyerCustomerName: customerName, crmBuyerProjectName: "Tiger Tower", crmBuyerUnitNumber: "U-" + crmCustomerId,
+            categoryId: categoryId, priorityId: 3, requestSummary: "Seeded history ticket", createdAtUtc: DateTime.UtcNow.AddHours(-3));
+        if (owner is { } ownerId)
+        {
+            ticket.AssignTo(ownerId);
+        }
+        else if (status != TicketStatus.Open)
+        {
+            ticket.AssignTo(Guid.NewGuid());
+        }
+
+        if (status is TicketStatus.InProgress or TicketStatus.Resolved or TicketStatus.Closed)
+        {
+            ticket.ChangeStatus(TicketStatus.InProgress);
+        }
+
+        if (status is TicketStatus.Resolved or TicketStatus.Closed)
+        {
+            ticket.Resolve(ResolutionOutcome.Resolved, null);
+        }
+
+        if (status == TicketStatus.Closed)
+        {
+            ticket.Close();
+        }
+
+        db.Tickets.Add(ticket);
+        await db.SaveChangesAsync();
+        if (status == TicketStatus.Closed)
+        {
+            // Every real closure path appends this row; it is what dates the closure.
+            db.TicketStatusHistoryEntries.Add(new TicketStatusHistory(
+                ticket.TicketId, TicketStatusDimension.TicketStatus, (byte)TicketStatus.Resolved, (byte)TicketStatus.Closed,
+                actorEmployeeId: null, actorIsSystem: true, note: null, Guid.NewGuid(), DateTime.UtcNow.AddMinutes(-30)));
+            await db.SaveChangesAsync();
+        }
+
+        if (ticket.CurrentOwnerEmployeeId is { } currentOwner)
+        {
+            db.TicketAssignments.Add(new TicketAssignment(ticket.TicketId, currentOwner, departmentId, DateTime.UtcNow, assigningActorEmployeeId: null));
+            await db.SaveChangesAsync();
+        }
+
+        return ticket.TicketId;
+    }
+
     /// <summary>Same, for the user a logged-in test client authenticates as (read from its bearer token).</summary>
     public Task RecordHandlerAsync(long ticketId, HttpClient authenticatedClient) =>
         RecordHandlerAsync(ticketId, UserIdOf(authenticatedClient));

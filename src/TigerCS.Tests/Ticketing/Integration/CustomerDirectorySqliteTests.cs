@@ -34,7 +34,7 @@ public sealed class CustomerDirectorySqliteTests : IDisposable
         var queries = new TicketQueryAppService(
             new TicketRepository(context), assignments, new FakeTicketResolutionRepository(), new FakeTicketStatusHistoryRepository(), ReopenPolicy.Default,
             new DashboardSqliteFixture.FixedTimeProvider(Now));
-        return new CustomerDirectoryAppService(new CustomerDirectoryRepository(context), queries);
+        return new CustomerDirectoryAppService(new CustomerDirectoryRepository(context), queries, new TicketRepository(context));
     }
 
     private async Task<CustomerDirectoryListResultDto> ListAsync(CustomerDirectoryListRequestDto? request = null, string[]? roles = null, Guid? caller = null)

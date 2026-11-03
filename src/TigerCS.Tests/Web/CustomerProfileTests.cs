@@ -160,18 +160,19 @@ public sealed class CustomerProfileTests
     }
 
     [Fact]
-    public void TicketsTab_ListsEveryTicket_WithStatusPriorityDepartmentCreatedUnitAndLastActivity_EachOpeningTicketDetails()
+    public void TicketsTab_ListsEveryTicket_WithStatusDepartmentCreatedClosedAssignedAgentAndUnit_EachOpeningTicketDetails()
     {
         var panel = Panel(ViewHtml(), "panel-history");
 
-        foreach (var column in new[] { "<th>Ticket</th>", "<th>Status</th>", "<th>Priority</th>", "<th>Department</th>", "<th>Created</th>", "<th>Unit</th>", "<th>Last activity</th>" })
+        foreach (var column in new[] { "<th>Ticket</th>", "<th>Status</th>", "<th>Department</th>", "<th>Created</th>", "<th>Resolved / Closed</th>", "<th>Assigned agent</th>", "<th>Unit</th>" })
         {
             Assert.Contains(column, panel);
         }
 
         Assert.Contains("href=\"/Tickets/@row.TicketId\"", panel);
         Assert.Contains("data-href=\"/Tickets/@row.TicketId\"", panel);
-        Assert.Contains("row.LastActivityAtUtc", panel);
+        Assert.Contains("row.ClosedAtUtc", panel);
+        Assert.Contains("row.AssignedAgentName", panel);
         Assert.Contains("cell-truncate", panel);
     }
 

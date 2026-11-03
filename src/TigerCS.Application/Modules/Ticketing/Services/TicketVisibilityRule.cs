@@ -138,7 +138,8 @@ public static class TicketVisibilityRule
     /// <para>
     /// For a restricted CS Agent: Full when the ticket is currently assigned to them, when a department employee holds it and they are the
     /// responsible CS Agent, or when a department role of theirs covers its department; otherwise None (an eligible Call Center agent may
-    /// additionally OPEN an unassigned claimable ticket read-only). Having created or handled a ticket grants nothing by itself.
+    /// additionally OPEN an unassigned claimable ticket read-only, and any CS Agent may OPEN read-only a previous ticket of a verified
+    /// customer whose active ticket they currently own - <see cref="HoldsCustomerHistoryGrantAsync"/>). Having created or handled a ticket grants nothing by itself.
     /// Everyone else keeps exactly their department-based answer (Full or None).
     /// </para>
     /// </summary>
@@ -150,7 +151,8 @@ public static class TicketVisibilityRule
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
         CancellationToken cancellationToken = default,
-        TicketClaimPolicy? claimPolicy = null)
+        TicketClaimPolicy? claimPolicy = null,
+        ITicketRepository? customerHistoryGrant = null)
     {
         ArgumentNullException.ThrowIfNull(userDepartmentAssignmentRepository);
         ArgumentNullException.ThrowIfNull(ticket);
@@ -211,8 +213,33 @@ public static class TicketVisibilityRule
                 return TicketAccessLevel.ReadOnly;
             }
 
+            // Customer Ticket History: a previous ticket of a customer the agent is CURRENTLY handling (they own an active ticket of the same
+            // verified customer) opens READ-ONLY, whoever handled it. Read paths pass the grant source; modification checks never do, and
+            // ReadOnly is refused by every modifying check, so this can never be used to change the ticket.
+            if (customerHistoryGrant is not null
+                && await HoldsCustomerHistoryGrantAsync(customerHistoryGrant, callerEmployeeId, ticket, cancellationToken))
+            {
+                return TicketAccessLevel.ReadOnly;
+            }
+
             return TicketAccessLevel.None;
         }
+    }
+
+    /// <summary>
+    /// The per-ticket form of the Customer Ticket History grant: the ticket carries a verified customer identity (CRM id, else the
+    /// external source + id pair) and the caller currently owns an active ticket of that same customer. A ticket with no verified identity
+    /// never qualifies - a phone number or display name is not an identity. The set-based twin is the grant in
+    /// <c>TicketRepository.SearchCustomerHistoryAsync</c>; keep them in step.
+    /// </summary>
+    public static Task<bool> HoldsCustomerHistoryGrantAsync(
+        ITicketRepository ticketRepository, Guid callerEmployeeId, Ticket ticket, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticketRepository);
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        return ticketRepository.HasActiveTicketForCustomerAsync(
+            callerEmployeeId, ticket.CrmBuyerCustomerId, ticket.CustomerVerificationSource, ticket.ExternalCustomerId, cancellationToken);
     }
 
     /// <summary>
@@ -237,9 +264,11 @@ public static class TicketVisibilityRule
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
         CancellationToken cancellationToken = default,
-        TicketClaimPolicy? claimPolicy = null) =>
+        TicketClaimPolicy? claimPolicy = null,
+        ITicketRepository? customerHistoryGrant = null) =>
         await GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy)
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy,
+            customerHistoryGrant)
         != TicketAccessLevel.None;
 
     /// <summary>
@@ -266,7 +295,7 @@ public enum TicketAccessLevel
     /// <summary>No access: the ticket is not visible to the caller.</summary>
     None,
 
-    /// <summary>The ticket creator outside the ticket's department with no other grant: may open and read it, may change nothing.</summary>
+    /// <summary>The ticket creator outside the ticket's department with no other grant, or a CS Agent reading a previous ticket of a customer they currently handle (Customer Ticket History): may open and read it, may change nothing.</summary>
     ReadOnly,
 
     /// <summary>Everything the caller's roles allow on the ticket.</summary>

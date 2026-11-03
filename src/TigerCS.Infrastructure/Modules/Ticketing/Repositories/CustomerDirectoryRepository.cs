@@ -314,6 +314,17 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext) : IC
             .Select(r => new { r.TicketId, r.ResolvedAtUtc })
             .ToDictionaryAsync(x => x.TicketId, x => x.ResolvedAtUtc, cancellationToken);
 
+        var closedAt = await dbContext.TicketStatusHistoryEntries.AsNoTracking()
+            .Where(h => ticketIds.Contains(h.TicketId) && h.Dimension == TicketStatusDimension.TicketStatus && h.NewValue == (byte)TicketStatus.Closed)
+            .GroupBy(h => h.TicketId)
+            .Select(g => new { TicketId = g.Key, At = g.Max(h => h.OccurredAtUtc) })
+            .ToDictionaryAsync(x => x.TicketId, x => x.At, cancellationToken);
+        var agentIds = tickets.Where(x => x.Ticket.CurrentOwnerEmployeeId != null).Select(x => x.Ticket.CurrentOwnerEmployeeId!.Value).Distinct().ToList();
+        var agentNames = await dbContext.Employees.AsNoTracking()
+            .Where(e => agentIds.Contains(e.EmployeeId))
+            .Select(e => new { e.EmployeeId, e.DisplayName })
+            .ToDictionaryAsync(e => e.EmployeeId, e => e.DisplayName, cancellationToken);
+
         var channelNames = await dbContext.Channels.AsNoTracking()
             .Select(c => new { c.ChannelId, c.Name })
             .ToDictionaryAsync(c => c.ChannelId, c => c.Name, cancellationToken);
@@ -343,7 +354,10 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext) : IC
                 t.RequestSummary,
                 lastActivity,
                 resolvedAt.TryGetValue(t.TicketId, out var r) ? r : null,
-                t.VerificationStatus.ToString());
+                t.VerificationStatus.ToString(),
+                t.TicketStatus == TicketStatus.Closed && closedAt.TryGetValue(t.TicketId, out var closed) ? closed : null,
+                t.CurrentOwnerEmployeeId,
+                t.CurrentOwnerEmployeeId is { } ownerId && agentNames.TryGetValue(ownerId, out var agentName) ? agentName : null);
         }).ToList();
 
         var units = tickets

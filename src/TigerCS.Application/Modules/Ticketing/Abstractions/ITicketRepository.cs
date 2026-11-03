@@ -220,6 +220,17 @@ public interface ITicketRepository
     Task<CustomerHistoryQueryResult> SearchCustomerHistoryAsync(CustomerHistoryQuery query, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The Customer Ticket History grant: true when <paramref name="employeeId"/> is the CURRENT owner of at least one <b>active</b>
+    /// (not Resolved/Closed) ticket of the same <b>verified</b> customer - the exact <c>CrmBuyerCustomerId</c>, or (when no CRM id is
+    /// given) the exact external source + customer id pair. Never phone or display name, so an unverified ticket never grants anything and
+    /// two customers sharing a number never share a history. The grant is live: it disappears the moment the agent no longer owns an
+    /// active ticket of that customer (reassigned, resolved, closed). It authorises read-only access to that customer's history only.
+    /// </summary>
+    Task<bool> HasActiveTicketForCustomerAsync(
+        Guid employeeId, int? crmBuyerCustomerId, string? externalSource, string? externalCustomerId,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The Dashboard's operational counts and Tickets Requiring Attention
     /// rows, in one scoped aggregate read — never assembled client-side from
     /// per-status queue pages. Same department-visibility discipline as
