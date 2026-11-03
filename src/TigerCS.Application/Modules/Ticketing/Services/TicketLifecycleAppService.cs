@@ -940,10 +940,23 @@ public sealed class TicketLifecycleAppService(
         string reason,
         string detail,
         Action<DateTime>? beforeCommit = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        bool releaseAutomaticOwner = false) =>
         CloseBySystemAsync(
             integrationEmployeeId, ticketId, ResolutionOutcome.Resolved, reason, detail, "AutoCloseByAi",
-            ticket => ticket.CloseForAiCompletion(), beforeCommit, cancellationToken);
+            ticket =>
+            {
+                // The caller has established that the owner is only an AUTOMATIC pre-assignment nobody has acted on (see
+                // TicketOwnershipRules.IsAutomaticPreAssignmentAsync); it is released in the same write as the closure, so a
+                // closure that fails leaves the ticket exactly as it was.
+                if (releaseAutomaticOwner && ticket.CurrentOwnerEmployeeId is not null)
+                {
+                    ticket.ReleaseOwner();
+                }
+
+                return ticket.CloseForAiCompletion();
+            },
+            beforeCommit, cancellationToken);
 
     private async Task<TicketMutationResult> CloseBySystemAsync(
         Guid integrationEmployeeId,

@@ -15,6 +15,7 @@ public sealed class TicketNoteRepository(TigerCsDbContext dbContext) : ITicketNo
         await dbContext.TicketNotes
             .Where(n => n.TicketId == ticketId)
             .OrderByDescending(n => n.CreatedAtUtc)
+            .ThenByDescending(n => n.TicketNoteId)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);

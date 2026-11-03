@@ -210,7 +210,8 @@ public sealed class TicketsModel(
             if (MineOnly) values["mineOnly"] = "true";
             if (UnassignedOnly) values["unassignedOnly"] = "true";
             if (IncludeResolved) values["includeResolved"] = "true";
-            if (PageNumber > 1) values["page"] = PageNumber.ToString();
+            // Not "page": the reserved Razor Pages route key, which route-data generation drops. The page travels as a "returnPage" form
+            // field instead (see RedirectToPendingView).
             if (PageSize != 20) values["pageSize"] = PageSize.ToString();
             return values;
         }
@@ -370,6 +371,12 @@ public sealed class TicketsModel(
         query.AddRange(Request.Query.Where(pair =>
             !string.Equals(pair.Key, TicketsViews.QueryKey, StringComparison.OrdinalIgnoreCase)
             && !string.Equals(pair.Key, "handler", StringComparison.OrdinalIgnoreCase)));
+
+        if (Request.HasFormContentType
+            && int.TryParse(Request.Form["returnPage"], out var returnPage) && returnPage > 1)
+        {
+            query.Add(new("page", returnPage.ToString()));
+        }
 
         return LocalRedirect($"/Tickets{QueryString.Create(query)}");
     }

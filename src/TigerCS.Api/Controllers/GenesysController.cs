@@ -229,7 +229,7 @@ public class GenesysController(
     /// <response code="200">Everything supplied was applied, or was already in that state.</response>
     /// <response code="400">conversationId was blank, a transcript message had an unrecognized sender or empty body, the handoff mode or trigger is not recognized, a handoff stand-down named no reason, or customerConfirmation was sent without confirmedResolved: true.</response>
     /// <response code="404">No such ticket, or no interaction exists for this conversation.</response>
-    /// <response code="409">The conversation belongs to a different ticket than the one in the route, or the ticket already has a different request type, is closed, or changed while being classified (retry).</response>
+    /// <response code="409">The conversation belongs to a different ticket than the one in the route, or the ticket already has a different request type, is closed (a request type cannot be classified onto it and human follow-up cannot be queued on it — open a new ticket), or changed while being classified (retry).</response>
     /// <response code="422">A handoff assignment was supplied but no outstanding human work exists to apply it to, or the supplied requestType does not exist, is inactive, is ambiguous by name, or cannot route.</response>
     /// <response code="503">The Genesys integration is switched off.</response>
     [HttpPatch("tickets/{ticketId:long}")]
@@ -324,7 +324,7 @@ public class GenesysController(
             GenesysTicketUpdateOutcome.TicketClosed => Problem(
                 type: "https://tigercs.internal/problems/ticket-closed",
                 title: "The ticket is closed",
-                detail: "A request type cannot be classified onto a closed ticket.",
+                detail: result.Detail ?? "A request type cannot be classified onto a closed ticket.",
                 statusCode: StatusCodes.Status409Conflict),
 
             GenesysTicketUpdateOutcome.ConcurrencyConflict => Problem(

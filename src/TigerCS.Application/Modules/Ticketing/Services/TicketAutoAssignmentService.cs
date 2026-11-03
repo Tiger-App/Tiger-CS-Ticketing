@@ -450,7 +450,7 @@ public sealed class TicketAutoAssignmentService(
 
     /// <summary>
     /// Whether the person Genesys reported as having answered can be given a Call Center ticket: not a service identity, account not locked
-    /// out, an operational (non read-only) role, and a member of the Call Center. Mapped-and-active is established earlier by the Genesys
+    /// out, the CS Agent role (and not read-only), and a member of the Call Center. Mapped-and-active is established earlier by the Genesys
     /// resolver (<see cref="AnsweringAgentIssue.NotMapped"/> / <see cref="AnsweringAgentIssue.Inactive"/>). A lookup that cannot answer
     /// counts AGAINST the person — the ticket then waits in the queue for a human to assign; it is never guessed onto somebody.
     /// </summary>

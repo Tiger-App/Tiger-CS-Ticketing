@@ -70,7 +70,9 @@ public sealed class GenesysTicketUpdateAppService(
     GenesysAgentHandlingHistory handlingHistory,
     GenesysInteractionHandlerRecorder? handlerRecorder = null,
     TicketAutoAssignmentService? autoAssignmentService = null,
-    GenesysAnsweringAgentAssignmentService? answeringAgentAssignment = null)
+    GenesysAnsweringAgentAssignmentService? answeringAgentAssignment = null,
+    ITicketAssignmentRepository? ticketAssignmentRepository = null,
+    ITicketNoteRepository? ticketNoteRepository = null)
 {
     /// <summary>The exact closure reason recorded when the AI finishes the conversation.</summary>
     public const string ClosedByAiReason = "Closed by AI";
@@ -145,6 +147,17 @@ public sealed class GenesysTicketUpdateAppService(
                     $"'{handoffToCheck.Trigger}' is not a recognized handoff trigger. Use CustomerRequestedHuman, "
                     + "AiConnectionLost, AiEscalated, RoutingDecision or AgentTransfer, or omit it.");
             }
+        }
+
+        // Human work can only be queued on a ticket that can still be worked. On a Closed ticket the work item would sit WaitingForAgent where
+        // nobody can claim it (claiming is refused on a closed ticket) and the customer's request for a person would be silently lost; it is refused
+        // up front instead - nothing written - so Genesys learns the ticket is closed and can open a new one (a new serviceRequestId) for the new request.
+        if (request.Handoff is { Required: true } && ticket.TicketStatus == TicketStatus.Closed)
+        {
+            return GenesysTicketUpdateResult.Failure(
+                GenesysTicketUpdateOutcome.TicketClosed,
+                "The ticket is closed, so human follow-up cannot be queued on it. Create a new ticket for the new request "
+                + "(POST /api/genesys/tickets with a new serviceRequestId).");
         }
 
         // Transcript messages are validated up front for the same reason: a malformed live message must not leave a classification or a
@@ -513,7 +526,13 @@ public sealed class GenesysTicketUpdateAppService(
             return (false, "Not closed: this ticket needs human follow-up; only the authorized TigerCS workflow may close it.");
         }
 
-        if (ticket.CurrentOwnerEmployeeId is not null)
+        // An owner the SYSTEM put there (a request-type rule or Round Robin at classification) and that no person has touched since is not "a
+        // person owns the ticket": the AI that finished the conversation may still close it, releasing that automatic pre-assignment in the
+        // same write. Anything a person did (a manual assignment, a self-assignment, a reply, a note, work started) is genuine ownership
+        // and keeps the ticket open for them.
+        var preAssignedOwner = ticket.CurrentOwnerEmployeeId;
+        if (preAssignedOwner is not null
+            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken, ticketNoteRepository))
         {
             return (false, "Not closed: a person owns the ticket.");
         }
@@ -533,15 +552,23 @@ public sealed class GenesysTicketUpdateAppService(
             return (false, $"Not closed: the ticket is {ticket.TicketStatus}.");
         }
 
+        var automaticAssignment = preAssignedOwner is not null && ticketAssignmentRepository is not null
+            ? await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken)
+            : null;
+
         var result = await lifecycleAppService.CloseForAiCompletionAsync(
-            callerEmployeeId, ticket.TicketId, ClosedByAiReason, $"ConversationId={interaction.GenesysConversationId}",
+            callerEmployeeId, ticket.TicketId, ClosedByAiReason,
+            $"ConversationId={interaction.GenesysConversationId}"
+                + (preAssignedOwner is null ? string.Empty : $";AutomaticPreAssignmentReleased=true;ReleasedOwnerEmployeeId={preAssignedOwner}"),
             beforeCommit: _ =>
             {
                 // The conversation is over: neither inactivity clock may fire for it.
                 interaction.StopTrackingCustomerInteraction();
                 interaction.CancelAwaitingCustomerReply();
+                automaticAssignment?.MarkSuperseded();
             },
-            cancellationToken);
+            cancellationToken,
+            releaseAutomaticOwner: preAssignedOwner is not null);
 
         return result.Outcome switch
         {
