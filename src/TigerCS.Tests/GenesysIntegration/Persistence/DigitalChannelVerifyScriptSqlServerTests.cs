@@ -91,6 +91,6 @@ public sealed class DigitalChannelVerifyScriptSqlServerTests : IDisposable
         while (await reader.NextResultAsync());
 
         Assert.Equal(["PASS", "PASS"], verdicts);        // Instagram (10) and Facebook (11): active and Genesys-enabled in the migrated seed
-        Assert.Equal(8, resultSets);                      // sections 1, 1b, 2, 2b, 3, 4, 5, 6: every section ran
+        Assert.Equal(10, resultSets);                     // sections 1, 1b, 2, 2b, 3, 4, 5, 6, 7 (summary + list): every section ran
     }
 }

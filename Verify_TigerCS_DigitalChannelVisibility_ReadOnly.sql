@@ -109,3 +109,32 @@ SELECT 'owner differs from the current assignment', COUNT(*)
 FROM dbo.Tickets AS t
 JOIN dbo.TicketAssignments AS a ON a.TicketId = t.TicketId AND a.IsCurrent = 1
 WHERE t.CurrentOwnerEmployeeId IS NULL OR t.CurrentOwnerEmployeeId <> a.AssignedEmployeeId;
+
+-- 7. Ownership vs the agent who ACTUALLY received the interaction (review list - changes nothing) -----------------------------------------
+-- Rule: the human who actually receives/accepts the interaction owns the ticket. TicketInteractionHandlers records who Genesys reported as handling.
+-- 'Unowned' and 'OwnerIsNotAHandler' rows are candidates to review; a row where the owner is not a handler is legitimate after an intentional
+-- Transfer (see HasPersonTransfer). IMPORTANT: the one-time Call Center backlog redistribution (Execute_TigerCS_PROD_CallCenterBacklogDistribution.sql)
+-- would re-deal exactly these tickets to Round Robin owners; do NOT run it as-is while this list is non-empty (see the PR notes).
+SELECT x.Finding, COUNT(*) AS Tickets
+FROM (
+    SELECT CASE WHEN t.CurrentOwnerEmployeeId IS NULL THEN 'Unowned (a handler is recorded)'
+                ELSE 'OwnerIsNotAHandler' END AS Finding
+    FROM dbo.Tickets AS t
+    WHERE t.TicketStatus IN (1, 2, 3, 4)
+      AND EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = t.TicketId)
+      AND (t.CurrentOwnerEmployeeId IS NULL
+           OR NOT EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = t.TicketId AND h.HandledByUserId = t.CurrentOwnerEmployeeId))
+) AS x
+GROUP BY x.Finding;
+
+SELECT TOP (50) t.TicketNumber, t.TicketStatus, t.CurrentOwnerEmployeeId AS OwnerId,
+       (SELECT STRING_AGG(CONVERT(nvarchar(36), h.HandledByUserId), N', ') FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = t.TicketId) AS RecordedHandlers,
+       CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketWorkflowEvents e WHERE e.TicketId = t.TicketId AND e.EventType = 17 AND ISNULL(e.TransferReasonCode, 0) <> 5)
+            THEN 'person transfer on record' ELSE '' END AS HasPersonTransfer
+FROM dbo.Tickets AS t
+WHERE t.TicketStatus IN (1, 2, 3, 4)
+  AND EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = t.TicketId)
+  AND (t.CurrentOwnerEmployeeId IS NULL
+       OR NOT EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = t.TicketId AND h.HandledByUserId = t.CurrentOwnerEmployeeId))
+ORDER BY t.CreatedAtUtc DESC;
+

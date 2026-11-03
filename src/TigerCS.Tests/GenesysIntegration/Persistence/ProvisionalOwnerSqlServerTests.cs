@@ -70,7 +70,7 @@ public sealed class ProvisionalOwnerSqlServerTests : IDisposable
 
     private sealed record Agent(Guid Id, string GenesysId);
 
-    private sealed record Seed(int CallCenterId, int CustomerServiceId, Agent[] Eligible, Agent Deactivated, Agent Supervisor, Agent Locked, Agent NotMember);
+    private sealed record Seed(int CallCenterId, int CustomerServiceId, Agent[] Eligible, Agent Deactivated, Agent Supervisor, Agent Locked, Agent NotMember, Agent DeptEmployee, Agent DeptHead);
 
     private Seed CreateAndSeedDatabase()
     {
@@ -128,7 +128,9 @@ public sealed class ProvisionalOwnerSqlServerTests : IDisposable
             Deactivated: Add("Gone", Roles.CsAgent, deactivated: true),
             Supervisor: Add("Sup", Roles.CsSupervisor),
             Locked: Add("Locked", Roles.CsAgent, locked: true),
-            NotMember: Add("Outsider", Roles.CsAgent, member: false));
+            NotMember: Add("Outsider", Roles.CsAgent, member: false),
+            DeptEmployee: Add("Employee", Roles.DepartmentEmployee),      // Call Center members with an operational role that is NOT CS Agent
+            DeptHead: Add("Head", Roles.DepartmentHead));
     }
 
     /// <summary>A Call Center ticket with its originating Genesys interaction on the given channel, given a PROVISIONAL Round Robin owner.</summary>
@@ -161,7 +163,7 @@ public sealed class ProvisionalOwnerSqlServerTests : IDisposable
         new RequestTypeAssignmentRuleRepository(db), new DepartmentWorkflowSettingsRepository(db), new UserDepartmentAssignmentRepository(db),
         new TicketAssignmentRepository(db), new AuditEntryWriter(db, TimeProvider.System), new AssignmentRotationRepository(db),
         new DepartmentRepository(db), roleReader: _accounts, accountManager: _accounts, serviceIdentities: null,
-        workflowEventRepository: new TicketWorkflowEventRepository(db));
+        workflowEventRepository: new TicketWorkflowEventRepository(db), ticketNoteRepository: new TicketNoteRepository(db));
 
     private GenesysAnsweringAgentAssignmentService Compose(TigerCsDbContext db)
     {
@@ -253,7 +255,7 @@ public sealed class ProvisionalOwnerSqlServerTests : IDisposable
             owners.Add((await AddProvisionallyAssignedTicketAsync(seed, i, WellKnownChannels.WhatsApp)).Provisional);
         }
 
-        Assert.All(owners, o => Assert.Contains(o, seed.Eligible.Select(a => a.Id)));   // not the deactivated, locked, supervisor or non-member
+        Assert.All(owners, o => Assert.Contains(o, seed.Eligible.Select(a => a.Id)));   // not the deactivated, locked, supervisor, non-member, Department Employee or Department Head
         foreach (var agent in seed.Eligible)
         {
             Assert.Equal(4, owners.Count(o => o == agent.Id));                      // 12 tickets over 3 eligible agents: strictly 4 each
@@ -292,5 +294,56 @@ public sealed class ProvisionalOwnerSqlServerTests : IDisposable
             Assert.Equal(owner, current.AssignedEmployeeId);
             Assert.Contains(rows, r => r.AssignedEmployeeId == provisional && !r.IsCurrent);   // provisional history retained
         }
+    }
+
+    [VisibilitySqlServerFact]
+    public async Task AConfirmedAgentWhoIsNotACsAgent_IsNotAssigned_AndTheTicketWaitsFlaggedInTheQueue()
+    {
+        var seed = CreateAndSeedDatabase();
+        var (ticketId, provisional) = await AddProvisionallyAssignedTicketAsync(seed, 1, WellKnownChannels.Facebook);
+
+        AnswerAssignmentResult result;
+        using (var db = CreateContext())
+        {
+            result = await ConnectAsync(Compose(db), db, ticketId, seed.DeptEmployee.GenesysId);
+        }
+
+        Assert.Equal(AnsweringAgentIssue.NotCsAgent, result.Issue);
+        using var after = CreateContext();
+        var ticket = after.Tickets.AsNoTracking().Single(t => t.TicketId == ticketId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                                  // never given to the Department Employee, nor a substitute
+        Assert.Equal(seed.CallCenterId, ticket.CurrentDepartmentId);
+        Assert.DoesNotContain(after.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId), a => a.IsCurrent);
+        Assert.Contains(after.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId), a => a.AssignedEmployeeId == provisional && !a.IsCurrent);   // history kept
+    }
+
+    [VisibilitySqlServerTheory]
+    [MemberData(nameof(DigitalChannelIds))]
+    public async Task AnInternalNote_OnTheProvisionalOwnersTicket_BlocksReplacement(byte channelId)
+    {
+        var seed = CreateAndSeedDatabase();
+        var (noted, notedOwner) = await AddProvisionallyAssignedTicketAsync(seed, 1, channelId);
+        var (plain, plainOwner) = await AddProvisionallyAssignedTicketAsync(seed, 2, channelId);
+        using (var db = CreateContext())
+        {
+            // Exactly what AddNote persists: one note row; no status, response or assignment change.
+            db.TicketNotes.Add(new TicketNote(noted, "Called the customer back.", notedOwner, Now));
+            db.SaveChanges();
+        }
+
+        using (var db = CreateContext())
+        {
+            Assert.Equal(AnswerAssignmentOutcome.HumanOwnerKept, (await ConnectAsync(Compose(db), db, noted, Another(seed, notedOwner).GenesysId)).Outcome);
+        }
+
+        using (var db = CreateContext())
+        {
+            Assert.Equal(AnswerAssignmentOutcome.AssignedToAnsweringAgent, (await ConnectAsync(Compose(db), db, plain, Another(seed, plainOwner).GenesysId)).Outcome);
+        }
+
+        using var after = CreateContext();
+        Assert.Equal(notedOwner, after.Tickets.AsNoTracking().Single(t => t.TicketId == noted).CurrentOwnerEmployeeId);
+        Assert.Single(after.TicketAssignments.AsNoTracking().Where(a => a.TicketId == noted));
+        Assert.NotEqual(plainOwner, after.Tickets.AsNoTracking().Single(t => t.TicketId == plain).CurrentOwnerEmployeeId);
     }
 }

@@ -106,7 +106,8 @@ public sealed class TicketAutoAssignmentService(
     IUserRoleReader? roleReader = null,
     IUserAccountManager? accountManager = null,
     IServiceIdentityRegistry? serviceIdentities = null,
-    ITicketWorkflowEventRepository? workflowEventRepository = null)
+    ITicketWorkflowEventRepository? workflowEventRepository = null,
+    ITicketNoteRepository? ticketNoteRepository = null)
 {
     /// <summary>
     /// Runs inside the caller's creation transaction, after the ticket row
@@ -254,7 +255,7 @@ public sealed class TicketAutoAssignmentService(
         }
 
         if (ticket.CurrentOwnerEmployeeId is not null
-            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken))
+            && !await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken, ticketNoteRepository))
         {
             return false;   // genuine human ownership is never overwritten
         }
@@ -358,12 +359,9 @@ public sealed class TicketAutoAssignmentService(
 
         var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(
             ticket.CurrentDepartmentId, activeEmployeesOnly: true, cancellationToken);
-
-        // The Call Center rotation is CS Agents only: Department Employee / Department Head members of the Call Center are never dealt
-        // tickets (they cannot Transfer as owner). Every other department keeps the wider operational-role pool. When the department
-        // repository is not wired (bare unit-test construction) the department cannot be identified and the wider pool applies.
-        var csAgentsOnly = await IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
-        var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), csAgentsOnly, cancellationToken);
+        // Call Center (department code CC) hands automatic work to CS Agents ONLY; every other department keeps the wider operational set.
+        var callCenterOnly = await IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
+        var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), callCenterOnly, cancellationToken);
         if (eligible.Count == 0)
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
@@ -395,13 +393,16 @@ public sealed class TicketAutoAssignmentService(
         return new AutoAssignmentResult(AutoAssignmentOutcome.AssignedRoundRobin, next);
     }
 
+    /// <summary>The roles that may be handed work automatically: only <see cref="Roles.CsAgent"/> in the Call Center, the operational set elsewhere.</summary>
+    private static IReadOnlyCollection<string> RoleSetFor(bool callCenter) => callCenter ? TicketRoleSets.CallCenterAutoAssignable : TicketRoleSets.RoundRobinEligible;
+
     /// <summary>
     /// Narrows a department's active members to who may be handed work by rotation: not a service identity (the Genesys integration
     /// account), not locked out, and holding at least one operational role (<see cref="TicketRoleSets.RoundRobinEligible"/>) — so
     /// read-only users, supervisors/managers and administrators are skipped. A lookup that cannot answer excludes the person: rotation
     /// never guesses. (The three readers are optional only so unit tests can build the service bare; the composition root supplies all.)
     /// </summary>
-    private async Task<List<Guid>> FilterEligibleAsync(IEnumerable<Guid> candidateIds, bool csAgentsOnly, CancellationToken cancellationToken)
+    private async Task<List<Guid>> FilterEligibleAsync(IEnumerable<Guid> candidateIds, bool callCenterOnly, CancellationToken cancellationToken)
     {
         var eligible = new List<Guid>();
         foreach (var id in candidateIds)
@@ -420,9 +421,7 @@ public sealed class TicketAutoAssignmentService(
             if (roleReader is not null)
             {
                 var roles = await roleReader.GetRolesAsync(id, cancellationToken);
-                if (Roles.IsReadOnlyCaller(roles)
-                    || !roles.Any(TicketRoleSets.RoundRobinEligible.Contains)
-                    || (csAgentsOnly && !roles.Contains(Roles.CsAgent, StringComparer.Ordinal)))
+                if (Roles.IsReadOnlyCaller(roles) || !roles.Any(RoleSetFor(callCenterOnly).Contains))
                 {
                     continue;
                 }
@@ -474,13 +473,13 @@ public sealed class TicketAutoAssignmentService(
         if (roleReader is not null)
         {
             var roles = await roleReader.GetRolesAsync(employeeId, cancellationToken);
-            if (Roles.IsReadOnlyCaller(roles) || !roles.Any(TicketRoleSets.RoundRobinEligible.Contains))
+            if (Roles.IsReadOnlyCaller(roles))
             {
                 return AnsweringAgentIssue.NoOperationalRole;
             }
 
-            // Call Center tickets belong to CS Agents only - the same pool Round Robin deals from.
-            if (!roles.Contains(Roles.CsAgent, StringComparer.Ordinal))
+            // The Call Center gives tickets to CS Agents only - the confirmed answering agent included.
+            if (!roles.Any(TicketRoleSets.CallCenterAutoAssignable.Contains))
             {
                 return AnsweringAgentIssue.NotCsAgent;
             }
@@ -516,7 +515,8 @@ public sealed class TicketAutoAssignmentService(
     /// </summary>
     public async Task<AnswerAssignmentResult> ApplyAnsweringAgentAsync(
         Ticket ticket, AnsweringAgent agent, string source, DateTime nowUtc, Guid correlationId, Guid? reportedByEmployeeId,
-        bool routeToCallCenterIfAgentUnavailable, CancellationToken cancellationToken = default)
+        bool routeToCallCenterIfAgentUnavailable, CancellationToken cancellationToken = default,
+        bool firstResponseIsFromTheAnsweringAgent = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         ArgumentNullException.ThrowIfNull(agent);
@@ -548,7 +548,7 @@ public sealed class TicketAutoAssignmentService(
                 return new AnswerAssignmentResult(AnswerAssignmentOutcome.AlreadyOwnedByAnsweringAgent, previousOwner);
             }
 
-            if (!await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken))
+            if (!await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken, ticketNoteRepository, firstResponseIsFromTheAnsweringAgent))
             {
                 return new AnswerAssignmentResult(AnswerAssignmentOutcome.HumanOwnerKept, previousOwner);
             }
@@ -687,7 +687,7 @@ public sealed class TicketAutoAssignmentService(
         AnsweringAgentIssue.ServiceAccount => "the mapped user is a service account",
         AnsweringAgentIssue.NotCallCenterMember => "the mapped user is not a Call Center member",
         AnsweringAgentIssue.NoOperationalRole => "the mapped user holds no operational role",
-        AnsweringAgentIssue.NotCsAgent => "the mapped user does not hold the CS Agent role",
+        AnsweringAgentIssue.NotCsAgent => "the mapped user does not hold the CS Agent role, which the Call Center requires",
         _ => "the agent id is not usable"
     };
 
