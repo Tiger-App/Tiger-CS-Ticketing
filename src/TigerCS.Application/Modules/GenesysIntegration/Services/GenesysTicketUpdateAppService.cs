@@ -189,6 +189,7 @@ public sealed class GenesysTicketUpdateAppService(
         // Live transcript first among the conversation facts: whoever picks the interaction up next (the handoff below may be what asks for
         // them) finds everything said so far already stored, and a human line in it is what satisfies First Response.
         var transcriptCount = (int?)null;
+        var firstResponseWasOpenBeforeThisUpdate = ticket.FirstHumanResponseAtUtc is null;   // see FirstResponseBelongsTo
         if (request.Transcript is { Count: > 0 })
         {
             var appended = await conversationEndAppService.AppendTranscriptAsync(
@@ -300,7 +301,27 @@ public sealed class GenesysTicketUpdateAppService(
         if (options.AssignOnAnswer && answeringAgentAssignment is not null && NullIfBlank(request.Routing?.AgentId) is { } answeringAgentId)
         {
             var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
-                callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken);
+                callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken,
+                firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, answeringAgentId));
+            if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
+            {
+                return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);
+            }
+        }
+
+        // A person who WROTE to the customer (a HumanAgent transcript line carrying their Genesys id) received the interaction even when no
+        // routing.agentId arrived: that mapped person owns the ticket - never the next name in the rotation. An agent who cannot take it
+        // (not a CS Agent / Call Center member, deactivated, ...) leaves the ticket flagged in the Call Center queue. An id that maps to
+        // nobody is not guessed at: the line still counts as human work and the ticket takes the Round Robin route below.
+        if (options.AssignOnAnswer && answeringAgentAssignment is not null
+            && NullIfBlank(request.Routing?.AgentId) is null
+            && GenesysHumanHandlingEvidence.FirstHumanSenderId(request) is { } humanSenderId
+            && (await answeringAgentAssignment.ResolveAsync(humanSenderId, cancellationToken)).Issue
+                is not (AnsweringAgentIssue.NotMapped or AnsweringAgentIssue.InvalidId))
+        {
+            var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
+                callerEmployeeId, ticket, interaction, humanSenderId, source: "Transcript", cancellationToken,
+                firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, humanSenderId));
             if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
             {
                 return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);
@@ -451,6 +472,15 @@ public sealed class GenesysTicketUpdateAppService(
             ClosedByAi: closedByAi,
             ClosedByAiNote: closedByAiNote);
     }
+
+    /// <summary>
+    /// True when every <c>HumanAgent</c> line of this update was written by <paramref name="genesysAgentId"/> (or carries no id) - i.e. the first
+    /// human response this very update recorded is the answering agent's own reply, not the provisional owner's work.
+    /// </summary>
+    private static bool FirstResponseBelongsTo(GenesysTicketUpdateDto request, string genesysAgentId) =>
+        (request.Transcript ?? []).Concat(request.Ended?.Transcript ?? [])
+            .Where(m => string.Equals(m.Sender?.Trim(), "HumanAgent", StringComparison.OrdinalIgnoreCase))
+            .All(m => string.IsNullOrWhiteSpace(m.SenderId) || string.Equals(m.SenderId.Trim(), genesysAgentId.Trim(), StringComparison.Ordinal));
 
     /// <summary>
     /// <c>closedByAi: true</c> — the Genesys AI finished the conversation. Closes through the lifecycle (Resolved → Closed, audit
