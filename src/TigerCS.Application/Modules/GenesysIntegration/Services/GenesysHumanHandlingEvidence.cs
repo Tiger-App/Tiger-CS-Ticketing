@@ -24,7 +24,10 @@ public enum GenesysHumanSignal
     HandoffAgentAssigned = 4,
 
     /// <summary>The transcript carries a line written by a <c>HumanAgent</c> (never <c>VirtualAgent</c>).</summary>
-    HumanTranscriptLine = 5
+    HumanTranscriptLine = 5,
+
+    /// <summary>The AI conversation ended and the AI neither resolved nor closed the ticket: nobody finished it, so a person must.</summary>
+    AiEndedUnresolved = 6
 }
 
 /// <summary>

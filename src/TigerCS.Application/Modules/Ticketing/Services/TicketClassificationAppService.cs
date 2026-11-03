@@ -223,16 +223,19 @@ public sealed class TicketClassificationAppService(
                 // engine (rule first, rotation otherwise) picks the next eligible employee or leaves the department queue.
                 var fromDepartmentId = ticket.CurrentDepartmentId;
                 var fromOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;
-                ticket.TransferToDepartment(category.DepartmentId);
+                ticket.TransferToDepartment(category.DepartmentId, preserveOwner: true);
                 await auditWriter.WriteAsync(
                     callerEmployeeId, "Transfer", "Ticket", ticket.TicketId.ToString(),
                     beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId={fromOwnerEmployeeId?.ToString() ?? "DepartmentQueue"}",
                     afterValue: $"DepartmentId={category.DepartmentId};Reason=Call Center selected category {category.CategoryId}",
                     correlationId, cancellationToken);
 
-                var configured = await autoAssignmentService!.ApplyAsync(
-                    ticket, now, correlationId, AutoAssignmentTrigger.CategoryRouted, cancellationToken);
-                await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, configured, now, correlationId, cancellationToken: cancellationToken);
+                if (ticket.CurrentOwnerEmployeeId is null)
+                {
+                    var configured = await autoAssignmentService!.ApplyAsync(
+                        ticket, now, correlationId, AutoAssignmentTrigger.CategoryRouted, cancellationToken);
+                    await autoAssignmentService.ApplyCategoryRoutingAsync(ticket, configured, now, correlationId, cancellationToken: cancellationToken);
+                }
 
                 if (workflowEventRepository is not null)
                 {

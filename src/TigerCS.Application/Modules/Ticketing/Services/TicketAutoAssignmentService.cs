@@ -34,8 +34,17 @@ public enum AutoAssignmentOutcome
     /// <summary>The ticket was assigned to the next eligible employee in the department's Round Robin rotation.</summary>
     AssignedRoundRobin,
 
-    /// <summary>Round Robin found no eligible active employee — the ticket stays in the department queue, visibly unassigned.</summary>
-    NoEligibleEmployee
+    /// <summary>Round Robin found no eligible active employee — the ticket stays unassigned, but the failure is recorded (audit + <see cref="WorkflowEventType.ManualAssignmentRequired"/>) and surfaced for a safe retry.</summary>
+    NoEligibleEmployee,
+
+    /// <summary>The ticket already had a CS Agent / owner; nothing was written.</summary>
+    AlreadyAssigned,
+
+    /// <summary>The ticket's previous CS Agent was kept (department transfer / reopen): the agent and the department are independent fields.</summary>
+    PreservedCsAgent,
+
+    /// <summary>The ticket is closed or resolved, so no assignment applies.</summary>
+    NotApplicable
 }
 
 /// <summary>
@@ -60,7 +69,13 @@ public enum AutoAssignmentTrigger
     CategoryRouted,
 
     /// <summary>A new ticket that needs a person entered the Call Center, the first human-handling department for every channel.</summary>
-    CallCenterIntake
+    CallCenterIntake,
+
+    /// <summary>Authorized staff retried a failed CS Agent assignment.</summary>
+    ManualRetry,
+
+    /// <summary>The one-time batch backfill gave an existing active ticket its CS Agent.</summary>
+    Backfill
 }
 
 /// <summary>The outcome plus what was assigned, for the caller's response/logging. <paramref name="TeamMemberEmployeeIds"/> carries the configured team members (excluding the primary) for a team rule.</summary>
@@ -225,7 +240,8 @@ public sealed class TicketAutoAssignmentService(
         if (settings is { AllowAssignment: false })
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.AssignmentDisabledForDepartment,
-                "Call Center workflow settings disable assignment; Status=Unassigned", AutoAssignmentTrigger.CallCenterIntake, correlationId, cancellationToken);
+                "Call Center workflow settings disable assignment; Status=Unassigned", AutoAssignmentTrigger.CallCenterIntake, correlationId, cancellationToken,
+                recordFailure: true, nowUtc);
         }
 
         return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, AutoAssignmentTrigger.CallCenterIntake, ruleId: null, cancellationToken, requiredRole);
@@ -302,29 +318,117 @@ public sealed class TicketAutoAssignmentService(
     }
 
     /// <summary>
-    /// Round Robin as the default when no explicit rule decided (Transfer, Call Center category routing): runs only when the ticket
-    /// has no owner and <paramref name="configured"/> (the result of <see cref="ApplyAsync"/>) was "nothing configured" — a specific
-    /// assignee, an explicit department-queue rule or disabled assignment always wins. Same single engine, same audit trail.
+    /// Business rule: every active ticket has a CS Agent, whatever its department. After the department-specific rule (if any) has had
+    /// its say, a ticket that still has no owner is given the next CS Agent of the ONE shared rotation — see
+    /// <see cref="EnsureCsAgentAsync"/>. The department-queue outcomes (no rule, rule says queue, assignment disabled, stale assignee,
+    /// nobody eligible in the department) no longer leave a ticket "Department Queue (Unassigned)".
     /// </summary>
-    public async Task<AutoAssignmentResult> ApplyRoundRobinFallbackAsync(
+    public Task<AutoAssignmentResult> ApplyRoundRobinFallbackAsync(
         Ticket ticket, AutoAssignmentResult configured, AutoAssignmentTrigger trigger, DateTime nowUtc, Guid correlationId,
+        CancellationToken cancellationToken = default) =>
+        configured.Outcome is AutoAssignmentOutcome.AssignedToPrimary or AutoAssignmentOutcome.AssignedRoundRobin
+            ? Task.FromResult(configured)
+            : EnsureCsAgentAsync(ticket, preferredOwnerEmployeeId: null, trigger, nowUtc, correlationId, cancellationToken);
+
+    /// <summary>
+    /// The shared rotation's current pool for read-only previews: the Call Center (null when none is configured), the eligible CS Agents in
+    /// rotation order, and the persisted cursor (last agent dealt). Nothing is locked or written.
+    /// </summary>
+    public async Task<(Domain.Modules.IdentityAndAccess.Department? CallCenter, IReadOnlyList<Guid> Pool, Guid? Cursor)> GetSharedPoolAsync(
         CancellationToken cancellationToken = default)
     {
-        if (rotationRepository is null
-            || ticket.CurrentOwnerEmployeeId is not null
-            || configured.Outcome is not (AutoAssignmentOutcome.NoRequestType or AutoAssignmentOutcome.NoRuleConfigured
-                or AutoAssignmentOutcome.ConfiguredAssigneeNotInDepartment))
+        if (await ResolveCallCenterAsync(cancellationToken) is not { } callCenter)
         {
-            return configured;
+            return (null, [], null);
         }
 
-        var settings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(ticket.CurrentDepartmentId, cancellationToken);
+        var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(callCenter.DepartmentId, activeEmployeesOnly: true, cancellationToken);
+        var pool = (await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), callCenterOnly: true, cancellationToken)).Order().ToList();
+        var cursor = rotationRepository is null ? null : await rotationRepository.PeekLastAssignedAsync(callCenter.DepartmentId, cancellationToken);
+        return (callCenter, pool, cursor);
+    }
+
+    /// <summary>
+    /// Re-assigns <paramref name="previousOwnerEmployeeId"/> (the CS Agent a reopened ticket had) when that person is still an eligible
+    /// Call Center CS Agent; null when there is nothing to restore, so the caller moves on to the rule / the shared rotation.
+    /// </summary>
+    public async Task<AutoAssignmentResult?> RestorePreviousCsAgentAsync(
+        Ticket ticket, Guid? previousOwnerEmployeeId, AutoAssignmentTrigger trigger, DateTime nowUtc, Guid correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (previousOwnerEmployeeId is not { } preferred
+            || ticket.CurrentOwnerEmployeeId is not null
+            || ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed
+            || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
+            || await CheckAnsweringAgentAsync(preferred, callCenter.DepartmentId, cancellationToken) != AnsweringAgentIssue.None)
+        {
+            return null;
+        }
+
+        ticket.AssignTo(preferred);
+        (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken))?.MarkSuperseded();
+        await ticketAssignmentRepository.AddAsync(
+            new TicketAssignment(ticket.TicketId, preferred, ticket.CurrentDepartmentId, nowUtc, assigningActorEmployeeId: null),
+            cancellationToken);
+        await auditWriter.WriteAsync(
+            actorEmployeeId: null, "AutoAssign", "Ticket", ticket.TicketId.ToString(),
+            beforeValue: "Unassigned",
+            afterValue: $"AssignedEmployeeId={preferred};DepartmentId={ticket.CurrentDepartmentId};Mode=PreservedCsAgent;Trigger={trigger}",
+            correlationId, cancellationToken);
+        return new AutoAssignmentResult(AutoAssignmentOutcome.PreservedCsAgent, preferred);
+    }
+
+    /// <summary>
+    /// <b>The single guarantee:</b> an active, human-handled ticket ends every routing path with a CS Agent.
+    /// <list type="number">
+    /// <item>Closed / Resolved ticket: nothing to do (AI-closed tickets never need an agent).</item>
+    /// <item>Already owned: nothing written (no duplicate assignment rows or audit events).</item>
+    /// <item><paramref name="preferredOwnerEmployeeId"/> (the previous CS Agent of a reopened ticket) is still an eligible CS Agent: kept.</item>
+    /// <item>Otherwise the next eligible CS Agent of the shared rotation (one persisted cursor for all channels and departments).</item>
+    /// <item>Nobody eligible: the failure is recorded and flagged for authorized staff — never silent.</item>
+    /// </list>
+    /// Runs inside the caller's transaction.
+    /// </summary>
+    public async Task<AutoAssignmentResult> EnsureCsAgentAsync(
+        Ticket ticket, Guid? preferredOwnerEmployeeId, AutoAssignmentTrigger trigger, DateTime nowUtc, Guid correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        if (ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed)
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.NotApplicable);
+        }
+
+        if (ticket.CurrentOwnerEmployeeId is { } existing)
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.AlreadyAssigned, existing);
+        }
+
+        if (await RestorePreviousCsAgentAsync(ticket, preferredOwnerEmployeeId, trigger, nowUtc, correlationId, cancellationToken) is { } restored)
+        {
+            return restored;
+        }
+
+        var callCenter = await ResolveCallCenterAsync(cancellationToken);
+
+        if (callCenter is null)
+        {
+            return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
+                "Shared CS Agent rotation: no active Call Center department is configured; Status=Unassigned",
+                trigger, correlationId, cancellationToken, recordFailure: true, nowUtc);
+        }
+
+        var settings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(callCenter.DepartmentId, cancellationToken);
         if (settings is { AllowAssignment: false })
         {
-            return configured;
+            return await QueueAsync(ticket, AutoAssignmentOutcome.AssignmentDisabledForDepartment,
+                "Call Center workflow settings disable assignment; Status=Unassigned",
+                trigger, correlationId, cancellationToken, recordFailure: true, nowUtc);
         }
 
-        return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, trigger, ruleId: null, cancellationToken);
+        return await AssignRoundRobinAsync(
+            ticket, nowUtc, correlationId, trigger, ruleId: null, cancellationToken, poolDepartmentId: callCenter.DepartmentId);
     }
 
     /// <summary>Call Center category routing (kept for existing callers): <see cref="ApplyRoundRobinFallbackAsync"/> with the category trigger.</summary>
@@ -340,37 +444,40 @@ public sealed class TicketAutoAssignmentService(
     /// </summary>
     private async Task<AutoAssignmentResult> AssignRoundRobinAsync(
         Ticket ticket, DateTime nowUtc, Guid correlationId, AutoAssignmentTrigger trigger, int? ruleId, CancellationToken cancellationToken,
-        string? requiredRole = null)
+        string? requiredRole = null, int? poolDepartmentId = null)
     {
-        var ruleText = ruleId is { } id ? $"Rule {id}" : trigger == AutoAssignmentTrigger.CallCenterIntake ? "Call Center intake" : "Round Robin default";
+        // The pool (and its persisted cursor) is the ticket's CURRENT department unless the caller names another: the shared CS Agent
+        // rotation names the Call Center, so the pool no longer depends on the ticket's department.
+        var poolDepartment = poolDepartmentId ?? ticket.CurrentDepartmentId;
+        var ruleText = ruleId is { } id ? $"Rule {id}" : poolDepartmentId is not null ? "Shared CS Agent rotation" : trigger == AutoAssignmentTrigger.CallCenterIntake ? "Call Center intake" : "Round Robin default";
         if (rotationRepository is null)
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
-                $"{ruleText}: Round Robin is not available", trigger, correlationId, cancellationToken);
+                $"{ruleText}: Round Robin is not available", trigger, correlationId, cancellationToken, recordFailure: true, nowUtc);
         }
 
-        // The pool is the ticket's CURRENT department, and that department must exist and be active.
+        // The pool department must exist and be active.
         if (departmentRepository is not null
-            && await departmentRepository.GetByIdAsync(ticket.CurrentDepartmentId, cancellationToken) is not { IsActive: true })
+            && await departmentRepository.GetByIdAsync(poolDepartment, cancellationToken) is not { IsActive: true })
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
-                $"{ruleText}: department {ticket.CurrentDepartmentId} is missing or inactive; Status=Unassigned",
-                trigger, correlationId, cancellationToken);
+                $"{ruleText}: department {poolDepartment} is missing or inactive; Status=Unassigned",
+                trigger, correlationId, cancellationToken, recordFailure: true, nowUtc);
         }
 
         var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(
-            ticket.CurrentDepartmentId, activeEmployeesOnly: true, cancellationToken);
+            poolDepartment, activeEmployeesOnly: true, cancellationToken);
         // Call Center (department code CC) hands automatic work to CS Agents ONLY; every other department keeps the wider operational set.
-        var callCenterOnly = await IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
+        var callCenterOnly = await IsCallCenterDepartmentAsync(poolDepartment, cancellationToken);
         var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), callCenterOnly, cancellationToken, requiredRole);
         if (eligible.Count == 0)
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
-                $"{ruleText}: no eligible active employee in department {ticket.CurrentDepartmentId}; Status=Unassigned",
-                trigger, correlationId, cancellationToken);
+                $"{ruleText}: no eligible active CS Agent in department {poolDepartment}; Status=Unassigned",
+                trigger, correlationId, cancellationToken, recordFailure: true, nowUtc);
         }
 
-        var rotation = await rotationRepository.GetForUpdateAsync(ticket.CurrentDepartmentId, nowUtc, cancellationToken);
+        var rotation = await rotationRepository.GetForUpdateAsync(poolDepartment, nowUtc, cancellationToken);
         var next = DepartmentAssignmentRotation.PickNext(rotation.LastAssignedEmployeeId, eligible)!.Value;
         rotation.Advance(next, nowUtc);
 
@@ -388,7 +495,7 @@ public sealed class TicketAutoAssignmentService(
             "AutoAssign", "Ticket", ticket.TicketId.ToString(),
             beforeValue: previousOwnerEmployeeId?.ToString(),
             afterValue: $"AssignedEmployeeId={next};DepartmentId={ticket.CurrentDepartmentId};Mode={AssignmentMode.RoundRobin};"
-                + $"{(ruleId is { } r ? $"RuleId={r};" : string.Empty)}Trigger={trigger}",
+                + $"{(ruleId is { } r ? $"RuleId={r};" : string.Empty)}{(poolDepartmentId is not null ? $"Pool=SharedCsAgents;PoolDepartmentId={poolDepartment};" : string.Empty)}Trigger={trigger}",
             correlationId, cancellationToken);
 
         return new AutoAssignmentResult(AutoAssignmentOutcome.AssignedRoundRobin, next);
@@ -698,6 +805,7 @@ public sealed class TicketAutoAssignmentService(
         AnsweringAgentIssue.ServiceAccount => "the mapped user is a service account",
         AnsweringAgentIssue.NotCallCenterMember => "the mapped user is not a Call Center member",
         AnsweringAgentIssue.NoOperationalRole => "the mapped user holds no operational role",
+        AnsweringAgentIssue.AmbiguousMapping => "more than one Ticketing user carries that Genesys id (fix AspNetUsers.GenesysUserId)",
         AnsweringAgentIssue.NotCsAgent => "the mapped user does not hold the CS Agent role, which the Call Center requires",
         _ => "the agent id is not usable"
     };
@@ -754,14 +862,23 @@ public sealed class TicketAutoAssignmentService(
         return true;
     }
 
-    /// <summary>The safe fallback — the ticket stays unassigned in its department queue, and the why is audited as a system action so the queue outcome is as traceable as an assignment.</summary>
+    /// <summary>Marker that identifies the one failure event per ticket (the reconciler and retries must not stack duplicates).</summary>
+    public const string AssignmentFailureMarker = "CsAgentAssignmentFailed";
+
+    /// <summary>
+    /// The safe fallback — the ticket stays unassigned, and the why is audited as a system action so the outcome is as traceable as an
+    /// assignment. With <paramref name="recordFailure"/> the failure is ALSO recorded as a <see cref="WorkflowEventType.ManualAssignmentRequired"/>
+    /// workflow event (once per ticket until it is assigned), which is what authorized staff see and what the retry endpoint clears.
+    /// </summary>
     private async Task<AutoAssignmentResult> QueueAsync(
         Ticket ticket,
         AutoAssignmentOutcome outcome,
         string reason,
         AutoAssignmentTrigger trigger,
         Guid correlationId,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool recordFailure = false,
+        DateTime nowUtc = default)
     {
         await auditWriter.WriteAsync(
             actorEmployeeId: null,
@@ -769,6 +886,23 @@ public sealed class TicketAutoAssignmentService(
             beforeValue: ticket.CurrentOwnerEmployeeId?.ToString(),
             afterValue: $"DepartmentQueue;DepartmentId={ticket.CurrentDepartmentId};Trigger={trigger};Reason={reason}",
             correlationId, cancellationToken);
+
+        if (recordFailure && workflowEventRepository is not null)
+        {
+            var alreadyRecorded = (await workflowEventRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Any(e =>
+                e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note is not null
+                && e.Note.Contains(AssignmentFailureMarker, StringComparison.Ordinal));
+            if (!alreadyRecorded)
+            {
+                await workflowEventRepository.AddAsync(
+                    new TicketWorkflowEvent(
+                        ticket.TicketId, WorkflowEventType.ManualAssignmentRequired, nowUtc == default ? DateTime.UtcNow : nowUtc,
+                        actorEmployeeId: null, ticketApprovalId: null,
+                        $"No CS Agent could be assigned automatically. {reason}. Retry or assign manually. [{AssignmentFailureMarker};Trigger={trigger}]",
+                        correlationId),
+                    cancellationToken);
+            }
+        }
 
         return new AutoAssignmentResult(outcome);
     }

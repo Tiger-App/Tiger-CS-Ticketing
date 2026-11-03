@@ -34,6 +34,10 @@ public class CallCenterUnassignedWorkReconcilerTests
         public Dictionary<long, UnassignedTicketEvidence> Rows { get; } = [];
         public Task<IReadOnlyList<UnassignedTicketEvidence>> ListOpenUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<UnassignedTicketEvidence>>([.. Rows.Values.Where(r => r.TicketId > afterTicketId && r.OwnerEmployeeId == null).OrderBy(r => r.TicketId).Take(limit)]);
+        public Task<IReadOnlyList<UnassignedTicketEvidence>> ListActiveUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<UnassignedTicketEvidence>>([.. Rows.Values
+                .Where(r => r.TicketId > afterTicketId && r.OwnerEmployeeId == null && r.Status is not (TicketStatus.Resolved or TicketStatus.Closed))
+                .OrderBy(r => r.TicketId).Take(limit)]);
         public Task<UnassignedTicketEvidence?> GetEvidenceAsync(long ticketId, CancellationToken cancellationToken = default) =>
             Task.FromResult(Rows.GetValueOrDefault(ticketId));
     }

@@ -71,8 +71,8 @@ public class TicketTransferTrackingTests
         Assert.Null(e.ToEmployeeId);
         Assert.Equal("Customer needs a technician", e.Note);
         Assert.True(e.IsEscalation);
-        // The original handler is untouched by the transfer; only the current owner moved.
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        // The department and the CS Agent are independent: the transfer keeps the agent.
+        Assert.Equal(firstAgent, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]

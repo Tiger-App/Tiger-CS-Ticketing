@@ -251,7 +251,7 @@ public sealed class TicketRequestTypeRoutingService(
         var transferred = !inCallCenter && requestType.DepartmentId != ticket.CurrentDepartmentId;
         if (transferred)
         {
-            ticket.TransferToDepartment(requestType.DepartmentId);
+            ticket.TransferToDepartment(requestType.DepartmentId, preserveOwner: true);
 
             await auditWriter.WriteAsync(
                 actorEmployeeId, "Transfer", "Ticket", ticket.TicketId.ToString(),
@@ -265,14 +265,18 @@ public sealed class TicketRequestTypeRoutingService(
         // (and that did not move) keeps its owner.
         var assignmentOutcome = "OwnerKept";
         Guid? assignedEmployeeId = ticket.CurrentOwnerEmployeeId;
-        if (transferred || ticket.CurrentOwnerEmployeeId is null)
+        if (ticket.CurrentOwnerEmployeeId is null)
         {
+            var trigger = transferred ? AutoAssignmentTrigger.DepartmentTransfer : AutoAssignmentTrigger.RequestTypeClassified;
             var assignment = inCallCenter
                 ? await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, nowUtc, correlationId, cancellationToken)
-                : await autoAssignmentService.ApplyAsync(
-                    ticket, nowUtc, correlationId,
-                    transferred ? AutoAssignmentTrigger.DepartmentTransfer : AutoAssignmentTrigger.RequestTypeClassified,
-                    cancellationToken);
+                : await autoAssignmentService.ApplyAsync(ticket, nowUtc, correlationId, trigger, cancellationToken);
+            // The department rule had no say: the shared CS Agent rotation guarantees an agent (failure recorded when nobody is eligible).
+            if (!inCallCenter)
+            {
+                assignment = await autoAssignmentService.ApplyRoundRobinFallbackAsync(ticket, assignment, trigger, nowUtc, correlationId, cancellationToken);
+            }
+
             assignmentOutcome = assignment.Outcome.ToString();
             assignedEmployeeId = assignment.AssignedEmployeeId;
         }

@@ -105,17 +105,19 @@ public class CallCenterCsAgentOnlyRotationAndPagingTests
     }
 
     [Fact]
-    public async Task OtherDepartments_KeepTheWiderOperationalPool()
+    public async Task OtherDepartments_AlsoGetACsAgent_FromTheSharedCallCenterRotation_NeverTheirOwnEmployees()
     {
         var env = new Env();
-        var employee = env.Add(env.Leasing, Roles.DepartmentEmployee);
+        var csAgent = env.Add(env.CallCenter, Roles.CsAgent);
+        env.Add(env.Leasing, Roles.DepartmentEmployee);   // a department employee is no longer the rotation's pool
 
         var t = env.NewTicket(env.Leasing, 1);
         var result = await env.Service.ApplyRoundRobinFallbackAsync(
             t, new AutoAssignmentResult(AutoAssignmentOutcome.NoRequestType), AutoAssignmentTrigger.DepartmentTransfer, Now, Guid.NewGuid());
 
         Assert.Equal(AutoAssignmentOutcome.AssignedRoundRobin, result.Outcome);
-        Assert.Equal(employee, t.CurrentOwnerEmployeeId);
+        Assert.Equal(csAgent, t.CurrentOwnerEmployeeId);
+        Assert.Equal(env.Leasing.DepartmentId, t.CurrentDepartmentId);   // department and CS Agent are independent
     }
 
     private static TigerCsDbContext NewDb() =>

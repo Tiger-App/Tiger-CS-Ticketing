@@ -177,6 +177,11 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
                 services.Remove(descriptor);
             }
 
+            // The production run lock is a SQL Server application lock; this host has no SQL Server (the connection string is a placeholder), so the
+            // admin backfill/reconciliation endpoints would fail to connect. Swap in a lock that keeps only the in-process single-flight gate.
+            services.RemoveAll<TigerCS.Application.Modules.Ticketing.Abstractions.ICallCenterReconciliationRunLock>();
+            services.AddSingleton<TigerCS.Application.Modules.Ticketing.Abstractions.ICallCenterReconciliationRunLock, InProcessRunLock>();
+
             services.AddDbContext<TigerCsDbContext>(options => options
                 .UseInMemoryDatabase(DatabaseName)
                 // The InMemory provider does not support real transactions
@@ -654,5 +659,19 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
         using var scope = Services.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
         return await db.AuditEntries.Where(a => a.Action.StartsWith("Notification")).ToListAsync();
+    }
+}
+
+/// <summary>Test-host run lock: the in-process gate only (no SQL Server application lock).</summary>
+internal sealed class InProcessRunLock : TigerCS.Application.Modules.Ticketing.Abstractions.ICallCenterReconciliationRunLock
+{
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    public async Task<IAsyncDisposable?> TryAcquireAsync(CancellationToken cancellationToken = default) =>
+        await _gate.WaitAsync(0, cancellationToken) ? new Release(_gate) : null;
+
+    private sealed class Release(SemaphoreSlim gate) : IAsyncDisposable
+    {
+        public ValueTask DisposeAsync() { gate.Release(); return ValueTask.CompletedTask; }
     }
 }

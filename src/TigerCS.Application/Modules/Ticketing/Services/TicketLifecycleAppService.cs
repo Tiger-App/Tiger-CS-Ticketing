@@ -682,8 +682,17 @@ public sealed class TicketLifecycleAppService(
         // now owns the work — the same call Transfer makes, for the same
         // reason. Every non-assignable case leaves the ticket in that
         // department's queue, audited.
-        var assignment = await autoAssignmentService.ApplyAsync(
-            ticket, now, correlationId, AutoAssignmentTrigger.DepartmentTransfer, cancellationToken);
+        // A reopened ticket must have an eligible CS Agent: the previous one when still eligible, otherwise the department rule, otherwise
+        // the next agent of the shared rotation (a failure is recorded for staff, never left silent).
+        var assignment = await autoAssignmentService.RestorePreviousCsAgentAsync(
+            ticket, previousOwnerEmployeeId, AutoAssignmentTrigger.DepartmentTransfer, now, correlationId, cancellationToken);
+        if (assignment is null)
+        {
+            var configured = await autoAssignmentService.ApplyAsync(
+                ticket, now, correlationId, AutoAssignmentTrigger.DepartmentTransfer, cancellationToken);
+            assignment = await autoAssignmentService.ApplyRoundRobinFallbackAsync(
+                ticket, configured, AutoAssignmentTrigger.DepartmentTransfer, now, correlationId, cancellationToken);
+        }
 
         // Lifecycle history: the status dimension, carrying the agent's reason
         // as its note — the row Ticket Details now reads back through

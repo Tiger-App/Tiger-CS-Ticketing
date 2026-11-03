@@ -433,6 +433,15 @@ public sealed class TicketCreationAppService(
                 await autoAssignmentService.TrySelfAssignAsync(
                     ticket, callerEmployeeId, automatic.Outcome, now, correlationId, cancellationToken);
             }
+
+            // Every human-handled ticket gets a CS Agent whatever its department: the shared rotation fills what the rule left open.
+            // (An AI-handled Genesys inquiry — needsHuman=false — is protected until a person is actually asked for; the handoff assigns it.
+            // An AI conversation that is closed by the AI never needs an agent.)
+            if (needsHuman)
+            {
+                await autoAssignmentService.ApplyRoundRobinFallbackAsync(
+                    ticket, automatic, AutoAssignmentTrigger.TicketCreated, now, correlationId, cancellationToken);
+            }
         }
 
         // Backlog S-08's corrected acceptance criterion: ticket creation

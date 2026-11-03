@@ -82,24 +82,21 @@ public class CallCenterCsAgentOnlyTests
     }
 
     [Fact]
-    public async Task OtherDepartments_KeepTheWiderRoundRobinSet_DepartmentEmployeeAndHeadStillReceiveWork()
+    public async Task OtherDepartments_GetCsAgentsFromTheSharedRotation_DepartmentEmployeeAndHeadAreNotInThePool()
     {
         var (f, cs) = Build();
+        var agents = new[] { f.AddAgent("g-a1", "Agent 1"), f.AddAgent("g-a2", "Agent 2") };
         var accounting = f.Departments.AddDepartment("Accounting", "ACC");
-        Guid Member(string name, string role)
+        foreach (var (name, role) in new[] { ("acc-emp", Roles.DepartmentEmployee), ("acc-head", Roles.DepartmentHead), ("acc-sup", Roles.CsSupervisor) })
         {
             var id = f.AddAgent($"g-{name}", name, inCallCenter: false, roles: role);
             f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(id, accounting.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
-            return id;
         }
-
-        var wide = new[] { Member("acc-agent", Roles.CsAgent), Member("acc-emp", Roles.DepartmentEmployee), Member("acc-head", Roles.DepartmentHead) };
-        var supervisor = Member("acc-sup", Roles.CsSupervisor);                       // still never dealt work by rotation
 
         var owners = new List<Guid>();
         for (var i = 0; i < 6; i++)
         {
-            // A ticket sitting unowned in Accounting (no human requested), then Accounting's own Round Robin fallback.
+            // A ticket sitting unowned in Accounting (no human requested), then the shared fallback.
             var result = await f.Ingestion.IngestAsync(
                 ServiceAccount, new GenesysInquiryDto($"c-acc-{i}", GenesysChannel.WebsiteChat, CustomerPhone: "+971500000001", DepartmentId: accounting.DepartmentId));
             var ticket = f.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
@@ -107,12 +104,12 @@ public class CallCenterCsAgentOnlyTests
             var assigned = await f.AutoAssignment.ApplyRoundRobinFallbackAsync(
                 ticket, new AutoAssignmentResult(AutoAssignmentOutcome.NoRuleConfigured), AutoAssignmentTrigger.CategoryRouted, DateTime.UtcNow, Guid.NewGuid());
             Assert.Equal(AutoAssignmentOutcome.AssignedRoundRobin, assigned.Outcome);
+            Assert.Equal(accounting.DepartmentId, ticket.CurrentDepartmentId);       // the department is untouched
             owners.Add(ticket.CurrentOwnerEmployeeId!.Value);
         }
 
-        Assert.All(owners, o => Assert.Contains(o, wide));
-        Assert.DoesNotContain(supervisor, owners);
-        Assert.Equal(3, owners.Distinct().Count());                                   // Department Employee and Head are in the rotation
+        Assert.All(owners, o => Assert.Contains(o, agents));
+        Assert.Equal(2, owners.Distinct().Count());
     }
 
     // ---- confirmed Genesys answering agent -----------------------------------------------------------------------------------------

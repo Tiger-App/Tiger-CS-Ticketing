@@ -409,6 +409,29 @@ public class TicketsController(
         return ToActionResult(result);
     }
 
+    /// <summary>Retry the automatic CS Agent assignment of an active ticket that has none (CS Manager / administrator).</summary>
+    /// <remarks>
+    /// Safe to repeat: a ticket that already has a CS Agent is returned unchanged with no new assignment row or audit entry. Uses the same
+    /// shared round-robin rotation as every other path; with nobody eligible the failure stays recorded and 409 is returned.
+    /// </remarks>
+    [ProducesResponseType<TicketDetailDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    [HttpPost("{ticketId:long}/assignment/retry")]
+    [RequirePermission(Permissions.TicketsAssign)]
+    [Tags(OpenApiTags.Assignment)]
+    public async Task<IActionResult> RetryAssignment(long ticketId, CancellationToken cancellationToken)
+    {
+        var employeeId = GetEmployeeId();
+        if (employeeId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await ticketAssignmentAppService.RetryCsAgentAssignmentAsync(employeeId.Value, GetRoles(), ticketId, cancellationToken);
+        return ToActionResult(result);
+    }
+
     /// <summary>Take ownership of an unassigned ticket (Call Center agents).</summary>
     /// <remarks>
     /// A Call Center agent takes an unassigned, human-handling ticket that is still in another department: it moves to the Call Center and is
@@ -1268,6 +1291,12 @@ public class TicketsController(
             title: "Disabled by department workflow settings",
             detail: "The department's workflow settings disable this operation.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.NoEligibleCsAgent => Problem(
+            type: "https://tigercs.internal/problems/no-eligible-cs-agent",
+            title: "No eligible CS Agent",
+            detail: "No active, eligible CS Agent is available. The failure is recorded on the ticket; retry once an agent is available or assign manually.",
+            statusCode: StatusCodes.Status409Conflict),
 
         TicketMutationOutcome.TransferTargetMustMatchRequestType => Problem(
             type: "https://tigercs.internal/problems/transfer-target-must-match-request-type",

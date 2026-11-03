@@ -188,21 +188,24 @@ public sealed class GenesysAgentMappingRepository(TigerCsDbContext dbContext) : 
                     .Select(e => new { e.DisplayName, e.DeactivatedAtUtc })
                     .FirstOrDefault()
             })
-            .FirstOrDefaultAsync(cancellationToken);
+            .Take(2)
+            .ToListAsync(cancellationToken);
 
-        return row is null
+        // Two rows for one Genesys id can only mean the unique index is missing or disabled. Never pick one of them.
+        if (row.Count > 1)
+        {
+            var first = row[0];
+            return new GenesysMappedAgent(first.Id, first.GenesysUserId!, first.GenesysEmail, first.UserName, first.Employee?.DisplayName, IsActive: false, IsAmbiguous: true);
+        }
+
+        return row.Count == 0
             ? null
-            : new GenesysMappedAgent(
-                row.Id,
-                row.GenesysUserId!,
-                row.GenesysEmail,
-                row.UserName,
-                row.Employee?.DisplayName,
-                // The existing rule (ActiveEmployeeRequirement): an Employee
-                // row that is not deactivated. No Employee row is not a
-                // valid, active Ticketing user either.
-                IsActive: row.Employee is not null && row.Employee.DeactivatedAtUtc == null);
+            : ToMapped(row[0].Id, row[0].GenesysUserId!, row[0].GenesysEmail, row[0].UserName, row[0].Employee?.DisplayName, row[0].Employee is not null && row[0].Employee!.DeactivatedAtUtc == null);
     }
+
+    private static GenesysMappedAgent ToMapped(Guid id, string genesysUserId, string? email, string? userName, string? displayName, bool isActive) =>
+        // The existing rule (ActiveEmployeeRequirement): an Employee row that is not deactivated. No Employee row is not a valid, active Ticketing user either.
+        new(id, genesysUserId, email, userName, displayName, isActive);
 }
 
 /// <summary>

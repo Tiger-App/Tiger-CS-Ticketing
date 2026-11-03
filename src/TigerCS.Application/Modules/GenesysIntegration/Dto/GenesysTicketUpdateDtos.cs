@@ -101,8 +101,12 @@ public sealed record GenesysRoutingUpdateDto(
 
 /// <summary>
 /// The conversation has finished. Recording this stores the transcript and
-/// finalizes the interaction — and deliberately leaves the ticket exactly
-/// where the TigerCS workflow has it.
+/// finalizes the interaction. An ending never reassigns a ticket that has an
+/// owner, and never moves one the AI closed or is still waiting on the customer
+/// for. The one thing it does: an AI conversation that ends without the AI
+/// resolving or closing the ticket, and with nobody owning or handling it, is
+/// routed for human handling (Call Center first, shared round robin as the
+/// provisional owner until an agent actually accepts).
 /// </summary>
 /// <param name="EndedAtUtc">When it ended. Defaults to now when omitted.</param>
 /// <param name="EndReason">Why, as reported (e.g. "AgentDisconnect", "CustomerDisconnect", "Timeout"). Free text — no vocabulary is confirmed.</param>

@@ -301,7 +301,8 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
             .Content.ReadFromJsonAsync<TicketDetailDto>();
         var transferred = await manager.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/transfer",
-            new TransferTicketRequestDto(newDepartmentId, "Handled by the receiving team.", Convert.FromBase64String(current!.RowVersion)));
+            // The CS Agent is preserved by a transfer; handing the work to the receiving team's agent is an explicit reassignment.
+            new TransferTicketRequestDto(newDepartmentId, "Handled by the receiving team.", Convert.FromBase64String(current!.RowVersion), AssignToEmployeeId: receivingAgentId));
         Assert.Equal(HttpStatusCode.OK, transferred.StatusCode);
 
         // ...and now the receiving agent is eligible.

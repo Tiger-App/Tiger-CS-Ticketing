@@ -566,10 +566,10 @@ public class GenesysAnsweringAgentRoutingTests
         AssertSingleOwner(w, call.TicketId, w.Answering.Id);
         var statusBefore = w.Ticket(call.TicketId).TicketStatus;
 
-        // The answering agent - the owner - transfers the ticket to Finance, where its own rotation picks Finance's employee.
+        // The answering agent - the owner - transfers the ticket to Finance and explicitly reassigns it to Finance's employee.
         var transfer = await TransferService(w).TransferAsync(
             w.Answering.Id, [Roles.CsAgent], call.TicketId,
-            new TransferTicketRequestDto(finance.DepartmentId, "Finance matter", [], ReasonCode: TicketTransferReason.WrongDepartment));
+            new TransferTicketRequestDto(finance.DepartmentId, "Finance matter", [], AssignToEmployeeId: financeOwner, ReasonCode: TicketTransferReason.WrongDepartment));
         Assert.Equal(TicketMutationOutcome.Success, transfer.Outcome);
         AssertSingleOwner(w, call.TicketId, financeOwner);
         Assert.Equal(finance.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);
@@ -603,23 +603,23 @@ public class GenesysAnsweringAgentRoutingTests
     }
 
     [Fact]
-    public async Task TransferredIntoAnUnstaffedDepartmentQueue_IsNotPulledBackToTheCallCenterByALateGenesysUpdate()
+    public async Task TransferredIntoAnUnstaffedDepartment_KeepsItsCsAgent_AndIsNotPulledBackToTheCallCenterByALateGenesysUpdate()
     {
         var w = NewWorld();
-        var legal = w.F.Departments.AddDepartment("Legal", "LEG");     // nobody eligible: the ticket waits, unowned, in Legal's queue
+        var legal = w.F.Departments.AddDepartment("Legal", "LEG");     // nobody staffs Legal: the CS Agent stays on the ticket regardless
 
         var call = await IngestPhoneCallAsync(w, "conv-transfer-queue", w.Answering.GenesysId);
         var transfer = await TransferService(w).TransferAsync(
             w.Answering.Id, [Roles.CsAgent], call.TicketId,
             new TransferTicketRequestDto(legal.DepartmentId, "Legal matter", [], ReasonCode: TicketTransferReason.WrongDepartment));
         Assert.Equal(TicketMutationOutcome.Success, transfer.Outcome);
-        AssertSingleOwner(w, call.TicketId, expectedOwner: null);
+        AssertSingleOwner(w, call.TicketId, w.Answering.Id);                                 // the CS Agent is preserved, never "Legal Queue (Unassigned)"
 
         await ConnectAsync(w, call, w.Answering.GenesysId);
         await ConnectAsync(w, call, w.Agents[0].GenesysId);
 
         Assert.Equal(legal.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);       // not routed back to CC
-        AssertSingleOwner(w, call.TicketId, expectedOwner: null);                            // not re-assigned to anyone
+        AssertSingleOwner(w, call.TicketId, w.Answering.Id);                                 // not re-assigned to anyone
         Assert.Equal(0, FlagCount(w, call.TicketId));
     }
 
