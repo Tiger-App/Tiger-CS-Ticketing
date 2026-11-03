@@ -136,6 +136,21 @@
         </div>
     }
 
+    @if (Model.Channels.Count > 0)
+    {
+        @* The channel the ticket ENTERED on (its originating interaction): Phone, WhatsApp, Live Chat, Instagram, Facebook, ... *@
+        <div class="field-group">
+            <label class="field-label" for="channelId">Channel</label>
+            <select class="field-select" id="channelId" name="channelId" data-autosubmit>
+                <option value="">All channels</option>
+                @foreach (var channel in Model.Channels.OrderByDescending(c => c.IsActive).ThenBy(c => c.DisplayOrder).ThenBy(c => c.Name))
+                {
+                    <option value="@channel.ChannelId" selected="@(Model.ChannelId == channel.ChannelId)">@channel.Name@(channel.IsActive ? "" : " (inactive)")</option>
+                }
+            </select>
+        </div>
+    }
+
     <div class="field-group">
         <label class="field-label" for="verificationStatus">Verification</label>
         <select class="field-select" id="verificationStatus" name="verificationStatus" data-autosubmit>
@@ -193,7 +208,7 @@
     @if (isClosedView && Model.SlaBreached) { <input type="hidden" name="slaBreached" value="true" /> }
     @if (isClosedView && Model.DueToday) { <input type="hidden" name="dueToday" value="true" /> }
     @if (Model.DepartmentId is { } drilldownDepartmentId && Model.NameResolver.OwnDepartments.Count == 0) { <input type="hidden" name="departmentId" value="@drilldownDepartmentId" /> }
-    @if (Model.ChannelId is { } channelId) { <input type="hidden" name="channelId" value="@channelId" /> }
+    @if (Model.Channels.Count == 0 && Model.ChannelId is { } channelId) { <input type="hidden" name="channelId" value="@channelId" /> }
     @if (Model.RequestTypeId is { } requestTypeId) { <input type="hidden" name="requestTypeId" value="@requestTypeId" /> }
     @if (Model.ActiveOnly) { <input type="hidden" name="activeOnly" value="true" /> }
     @if (Model.BacklogAge is { } backlogAge) { <input type="hidden" name="backlogAge" value="@backlogAge" /> }

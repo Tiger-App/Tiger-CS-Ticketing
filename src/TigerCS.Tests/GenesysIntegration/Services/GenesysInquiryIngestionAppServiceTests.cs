@@ -362,6 +362,8 @@ public class GenesysInquiryIngestionAppServiceTests
     [InlineData(GenesysChannel.WebsiteChat, WellKnownChannels.LiveChat)]
     [InlineData(GenesysChannel.WhatsApp, WellKnownChannels.WhatsApp)]
     [InlineData(GenesysChannel.SocialMedia, WellKnownChannels.SocialMediaDirectMessage)]
+    [InlineData(GenesysChannel.Instagram, WellKnownChannels.Instagram)]
+    [InlineData(GenesysChannel.Facebook, WellKnownChannels.Facebook)]
     public async Task Ingest_EveryChannel_UsesTheSameFlow_AndRecordsItsOwnOriginatingChannel(
         GenesysChannel channel, byte expectedChannelId)
     {

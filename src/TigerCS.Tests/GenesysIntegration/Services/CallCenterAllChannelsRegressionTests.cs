@@ -19,7 +19,8 @@ public class CallCenterAllChannelsRegressionTests
 
     public static TheoryData<GenesysChannel> Channels => new()
     {
-        GenesysChannel.Phone, GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp, GenesysChannel.SocialMedia
+        GenesysChannel.Phone, GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp, GenesysChannel.SocialMedia,
+        GenesysChannel.Instagram, GenesysChannel.Facebook
     };
 
     private sealed record Scenario(GenesysServiceFixture F, Department Leasing, Guid[] Agents);

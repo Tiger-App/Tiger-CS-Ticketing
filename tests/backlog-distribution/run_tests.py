@@ -71,9 +71,11 @@ def patch(script_path, **params):
     return s
 
 def approval_params(a):
-    """a = (tickets, moved, reassigned, agents, held-back approvals, held-back AI) - the six commit gates."""
+    """a = (tickets, moved, reassigned, agents, held-back approvals, held-back AI[, held-back human-handled]) - the seven commit gates
+    (the seventh defaults to the fixture's HELD_HUMAN)."""
+    hh = a[6] if len(a) > 6 else HELD_HUMAN
     return dict(ApprovedTicketCount=a[0], ApprovedTransferCount=a[1], ApprovedReassignedCount=a[2], ApprovedAgentCount=a[3],
-                ApprovedHeldBackPendingApprovalCount=a[4], ApprovedHeldBackActiveAiCount=a[5])
+                ApprovedHeldBackPendingApprovalCount=a[4], ApprovedHeldBackActiveAiCount=a[5], ApprovedHeldBackHumanHandledCount=hh)
 
 def execute(dry=True, batch=None, approved=None, services=(SVC,), **extra):
     p = dict(DryRun=1 if dry else 0, ServiceIdsConfirmed=1, services=list(services))
@@ -151,6 +153,15 @@ def ai_state(recent_min=60, stale_h=24):
         out[t] = (st, human, age)
     return out
 
+def human_handled():
+    """Independent re-implementation of 'a recorded human handler': a TicketInteractionHandlers row, TicketInteractions.HandledByUserId, or a
+    HumanAgent (Sender 2) transcript line - for every Open ticket, from raw rows."""
+    open_ids = {t for t, _, _, _ in open_tickets()}
+    out = {int(r[0]) for r in rows("SELECT DISTINCT TicketId FROM dbo.TicketInteractionHandlers")}
+    out |= {int(r[0]) for r in rows("SELECT DISTINCT TicketId FROM dbo.TicketInteractions WHERE HandledByUserId IS NOT NULL")}
+    out |= {int(r[0]) for r in rows("SELECT DISTINCT i.TicketId FROM dbo.TicketInteractions i JOIN dbo.TicketInteractionMessages m ON m.TicketInteractionId=i.TicketInteractionId WHERE m.Sender=2")}
+    return out & open_ids
+
 def held_sets(include_ai=False, stale_after=None, human=False):
     """Independent re-implementation of the hold-back rules from raw rows: (all Open ids, pending-approval ids, AI-only ids)."""
     base = {t for t, _, _, _ in open_tickets()}
@@ -169,7 +180,7 @@ def held_sets(include_ai=False, stale_after=None, human=False):
     if stale_after is not None or human:
         st = ai_state()
         ai = {t for t in ai if not ((st[t][1] and human) or (not st[t][1] and stale_after is not None and st[t][2] > stale_after))}
-    return base, pend, (set() if include_ai else ai - pend)
+    return base, pend, (set() if include_ai else ai - pend - human_handled())
 
 def oracle(service_ids=(SVC,), cs_only=True, include_ai=False, reassign_owned=True, exclude_denied=True, stale_after=None, human=False):
     """Expected plan {ticketId: agentId} computed in Python from raw table data (Open tickets only, owned or not)."""
@@ -192,11 +203,12 @@ def oracle(service_ids=(SVC,), cs_only=True, include_ai=False, reassign_owned=Tr
     cur = rows("SELECT CONVERT(nvarchar(36),LastAssignedEmployeeId) FROM dbo.DepartmentAssignmentRotations WHERE DepartmentId=%d" % cc)
     cursor = cur[0][0].lower() if cur and cur[0][0] != "NULL" else None
     base, pend, ai_only = held_sets(include_ai, stale_after, human)
+    hum = human_handled() - pend          # recorded human handlers are never re-dealt (precedence: approval, human, AI)
     cur_asg = {int(r[0]): int(r[1]) for r in rows("SELECT TicketId, TicketAssignmentId FROM dbo.TicketAssignments WHERE IsCurrent=1")}
     cands = []
     PREV.clear()
     for t, created, dept, owner in open_tickets():
-        if t in pend or t in ai_only: continue
+        if t in pend or t in ai_only or t in hum: continue
         if not reassign_owned and dept == cc and owner in set(agents): continue
         cands.append((created, t, dept)); PREV[t] = (owner, cur_asg.get(t))
     cands.sort(key=lambda r: (r[0], r[1]))
@@ -220,13 +232,14 @@ def last_batch_id(out):
     m = re.search(r"BatchId=([0-9A-Fa-f-]{36})", out); return m.group(1) if m else None
 
 # the fixture (01_seed.sql, hand-counted in its header): 62 E + 10 F + 3 D + 24 O eligible; 14 held back; default pool = CS Agent role, not denied (A1, A2, A3)
-ELIG, MOVED, REASS, AGENTS, HELD_APPR, HELD_AI = 99, 87, 24, 3, 8, 6
+ELIG, MOVED, REASS, AGENTS, HELD_APPR, HELD_AI = 98, 86, 24, 3, 8, 6
+HELD_HUMAN = 1          # F-AITAKEN-1: a live interaction a person took (HandledByUserId) - a recorded human handler, never re-dealt
 OPEN_TOTAL, OPEN_OWNED = 113, 26
-APPROVED = (ELIG, MOVED, REASS, AGENTS, HELD_APPR, HELD_AI)
+APPROVED = (ELIG, MOVED, REASS, AGENTS, HELD_APPR, HELD_AI, HELD_HUMAN)
 def A(**kw):
-    """The approved tuple with named overrides: t(ickets) m(oved) r(eassigned) a(gents) ha (held approvals) hi (held AI)."""
-    d = dict(t=ELIG, m=MOVED, r=REASS, a=AGENTS, ha=HELD_APPR, hi=HELD_AI); d.update(kw)
-    return (d["t"], d["m"], d["r"], d["a"], d["ha"], d["hi"])
+    """The approved tuple with named overrides: t(ickets) m(oved) r(eassigned) a(gents) ha (held approvals) hi (held AI) hh (held human-handled)."""
+    d = dict(t=ELIG, m=MOVED, r=REASS, a=AGENTS, ha=HELD_APPR, hi=HELD_AI, hh=HELD_HUMAN); d.update(kw)
+    return (d["t"], d["m"], d["r"], d["a"], d["ha"], d["hi"], d["hh"])
 BATCH = "11111111-2222-3333-4444-555555555555"
 A1, A2, A3, A4 = "00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0001-000000000000", "7a000000-0000-0000-0000-000000000001", "7b000000-0000-0000-0000-000000000004"
 FINEMP = "b0000000-0000-0000-0000-000000000001"
@@ -250,9 +263,8 @@ def t01_preview_readonly():
     owned_open = sum(1 for t, _, _, o in open_tickets() if o)
     check("oracle: %d Open tickets, %d currently owned" % (OPEN_TOTAL, OPEN_OWNED), (len(base), owned_open) == (OPEN_TOTAL, OPEN_OWNED), (len(base), owned_open))
     check("preview verdict row: total Open / owned / unowned / eligible / moved / owner replaced / held back",
-          re.search(r"\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|0\|" % (OPEN_TOTAL, OPEN_OWNED, OPEN_TOTAL - OPEN_OWNED, ELIG, MOVED, ELIG - MOVED, REASS, ELIG - REASS, HELD_APPR, HELD_AI, 0), out) is not None
-          or re.search(r"\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|0\|" % (OPEN_TOTAL, OPEN_OWNED, OPEN_TOTAL - OPEN_OWNED, ELIG, MOVED, ELIG - MOVED, REASS, ELIG - REASS, HELD_APPR, HELD_AI), out) is not None, out[:900])
-    check("preview approval values = %s" % (APPROVED,), re.search(r"\n%d\|%d\|%d\|%d\|%d\|%d\s*\n" % APPROVED, out) is not None)
+          re.search(r"\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|0\|" % (OPEN_TOTAL, OPEN_OWNED, OPEN_TOTAL - OPEN_OWNED, ELIG, MOVED, ELIG - MOVED, REASS, ELIG - REASS, HELD_APPR, HELD_AI, HELD_HUMAN), out) is not None, out[:900])
+    check("preview approval values = %s" % (APPROVED,), re.search(r"\n%d\|%d\|%d\|%d\|%d\|%d\|%d\s*\n" % APPROVED, out) is not None)
     # exact plan rows: DealOrder|TicketId|TicketNumber|CreatedAt|FromDept|ToDept|PreviousOwner|agent display name
     got = {}
     for line in out.splitlines():
@@ -731,15 +743,16 @@ def t11_pending_approvals():
     check("InProgress tickets with a pending approval / live AI conversation are out of scope by status and not counted as held back", not (ids(["N-APR-1", "N-AI-1"]) & (appr | ai | set(plan))))
     check("decided approvals (approved / rejected / cancelled) do NOT block", decided <= set(plan))
     rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC]))
-    held_lines = [l for l in out.splitlines() if "PENDING APPROVAL" in l or "ACTIVE AI CONVERSATION" in l]
+    held_lines = [l for l in out.splitlines() if "PENDING APPROVAL" in l or "ACTIVE AI CONVERSATION" in l or "RECORDED HUMAN HANDLER" in l]
     nums = {l.split("|")[1] for l in held_lines}
-    check("preview lists every held-back ticket once with its reason", len(held_lines) == HELD_APPR + HELD_AI and set(HELD_APR_NAMES + HELD_AI_NAMES) <= nums, len(held_lines))
+    check("preview lists every held-back ticket once with its reason", len(held_lines) == HELD_APPR + HELD_AI + HELD_HUMAN and set(HELD_APR_NAMES + HELD_AI_NAMES + ["F-AITAKEN-1"]) <= nums, len(held_lines))
+    check("the human-handled ticket is listed once, as RECORDED HUMAN HANDLER, with its recorded handler id", any("F-AITAKEN-1" in l and "RECORDED HUMAN HANDLER" in l and A1 in l.lower() for l in held_lines))
     check("a ticket with both is listed under the approval and flagged 'also has an active AI conversation'", any("H-BOTH-1" in l and "PENDING APPROVAL" in l and "also has an active AI" in l for l in held_lines))
     check("held-back owned tickets show their current owner (who keeps them)", any("O-APR-1" in l and "FINEMP Person" in l for l in held_lines) and any("O-AI-1" in l and "SUPEMP Person" in l for l in held_lines))
     check("pending approval text shows type and since-date", any("H-APR-1" in l and "Accounting (since " in l for l in held_lines))
     plan_nums = {l.split("|")[2] for l in out.splitlines() if re.match(r"^\d+\|\d+\|[A-Z]-", l)}
     check("no held-back ticket appears in the preview's plan", not any(n.startswith("H-") or n in ("O-APR-1", "O-AI-1") for n in plan_nums))
-    check("verdict row carries the held-back counts", re.search(r"\|%d\|%d\|0\|" % (HELD_APPR, HELD_AI), out) is not None)
+    check("verdict row carries the held-back counts", re.search(r"\|%d\|%d\|%d\|0\|" % (HELD_APPR, HELD_AI, HELD_HUMAN), out) is not None)
     rc, out = execute(dry=False, batch=BATCH, approved=APPROVED)
     check("commit succeeds with the six approved counts", rc == 0 and has(out, "COMMITTED"), out[-300:])
     post = state(); tk = {r[0]: r for r in post["Tickets"]}; pk = {r[0]: r for r in pre["Tickets"]}
@@ -754,7 +767,7 @@ def t11_pending_approvals():
     check("decided-approval tickets WERE moved and assigned", all(tk[str(t)] != pk[str(t)] for t in decided))
     post_x = snapshot_tables(["TicketApprovals", "TicketInteractions", "TicketAgentHandoffs"])
     check("TicketApprovals / TicketInteractions / TicketAgentHandoffs are byte-identical (nothing in approval flows or AI conversations touched)", post_x == pre_x)
-    check("batch audit row records the held-back and reassigned counts", scalar("SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action='BacklogDistributionBatch' AND AfterValue LIKE '%%HeldBackPendingApproval=%d;HeldBackActiveAi=%d;Reassigned=%d'" % (HELD_APPR, HELD_AI, REASS)) == "1")
+    check("batch audit row records the held-back and reassigned counts", scalar("SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action='BacklogDistributionBatch' AND AfterValue LIKE '%%HeldBackPendingApproval=%d;HeldBackActiveAi=%d;HeldBackHumanHandled=%d;Reassigned=%d'" % (HELD_APPR, HELD_AI, HELD_HUMAN, REASS)) == "1")
     rc, out = rollback(BATCH, dry=False)
     check("rollback releases exactly the batch", rc == 0 and has(out, "Released: %d" % ELIG), out[-300:])
     check("after rollback the whole Tickets table equals the pre-batch table (held-back tickets never moved)", state()["Tickets"] == pre["Tickets"])
@@ -780,8 +793,9 @@ def t12_active_ai():
     restore(); pre = state(); pre_x = snapshot_tables(["TicketApprovals", "TicketInteractions", "TicketAgentHandoffs"])
     plan, origin, cc, agents = oracle()
     ai = ids(HELD_AI_NAMES)
-    eligible_ai = ids(["F-AIEND-1", "F-AIEND-2", "F-AIHUM-1", "F-AIHUM-2", "F-AIHAND-1", "F-AITAKEN-1", "F-AIINACT-1"])
-    check("AI tickets that are ended / need a human / have an open handoff / were taken / inactivity-closed ARE eligible", eligible_ai <= set(plan))
+    eligible_ai = ids(["F-AIEND-1", "F-AIEND-2", "F-AIHUM-1", "F-AIHUM-2", "F-AIHAND-1", "F-AIINACT-1"])
+    check("AI tickets that are ended / need a human / have an open handoff / were inactivity-closed ARE eligible", eligible_ai <= set(plan))
+    check("a conversation a person TOOK (recorded human handler) is NOT eligible any more - the person owns it", ids(["F-AITAKEN-1"]).isdisjoint(set(plan)))
     check("live AI-only tickets are NOT in the plan (incl. the owned one)", not (ai & set(plan)) and len(ai) == HELD_AI)
     rc, out = execute(dry=False, batch=BATCH, approved=APPROVED)
     check("commit succeeds", rc == 0 and has(out, "COMMITTED"), out[-300:])
@@ -895,9 +909,9 @@ def t14_switches():
     rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC]))
     check("default: Department Employee is excluded", any("DE Person" in l and "excluded" in l for l in out.splitlines()))
     rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC], CsAgentRoleOnly=0))
-    check("@CsAgentRoleOnly = 0 alone: DE is still excluded by its explicit denial of Tickets.Close (pool stays 3)", re.search(r"\n%d\|%d\|%d\|3\|%d\|%d\s*\n" % (ELIG, MOVED, REASS, HELD_APPR, HELD_AI), out) is not None, out[-300:])
+    check("@CsAgentRoleOnly = 0 alone: DE is still excluded by its explicit denial of Tickets.Close (pool stays 3)", re.search(r"\n%d\|%d\|%d\|3\|%d\|%d\|%d\s*\n" % (ELIG, MOVED, REASS, HELD_APPR, HELD_AI, HELD_HUMAN), out) is not None, out[-300:])
     rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC], CsAgentRoleOnly=0, ExcludeAgentsWithTicketDenials=0))
-    check("@CsAgentRoleOnly = 0 and denials ignored: the engine's full pool (A1, A2, A3, A4, DE = 5 agents)", re.search(r"\n%d\|%d\|%d\|5\|%d\|%d\s*\n" % (ELIG, MOVED, REASS, HELD_APPR, HELD_AI), out) is not None, out[-300:])
+    check("@CsAgentRoleOnly = 0 and denials ignored: the engine's full pool (A1, A2, A3, A4, DE = 5 agents)", re.search(r"\n%d\|%d\|%d\|5\|%d\|%d\|%d\s*\n" % (ELIG, MOVED, REASS, HELD_APPR, HELD_AI, HELD_HUMAN), out) is not None, out[-300:])
     rc, out = execute(dry=False, batch=BATCH, approved=APPROVED, CsAgentRoleOnly=0, ExcludeAgentsWithTicketDenials=0)
     check("...Execute with the DEFAULT approved agent count (3) is refused: pool differs from what was approved", rc != 0 and has(out, "ApprovedAgentCount"), out[-200:])
     plan, origin, cc, agents = oracle(cs_only=False, exclude_denied=False)
@@ -910,7 +924,7 @@ def t14_switches():
     restore()
     rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC], IncludeLiveAiConversations=1))
     check("@IncludeLiveAiConversations = 1: the 6 AI-only tickets become eligible and are no longer listed as held back (approvals still held)",
-          re.search(r"\n%d\|%d\|%d\|%d\|%d\|0\s*\n" % (ELIG + HELD_AI, MOVED + 6, REASS + 1, AGENTS, HELD_APPR), out) is not None and "ACTIVE AI CONVERSATION" not in out, out[-300:])
+          re.search(r"\n%d\|%d\|%d\|%d\|%d\|0\|%d\s*\n" % (ELIG + HELD_AI, MOVED + 6, REASS + 1, AGENTS, HELD_APPR, HELD_HUMAN), out) is not None and "ACTIVE AI CONVERSATION" not in out, out[-300:])
     before = digest(state())
     rc, out = execute(dry=False, approved=APPROVED, IncludeLiveAiConversations=1)
     check("...Execute with the default (hold-back) approved counts is refused", rc != 0 and has(out, "backlog changed since the preview") and digest(state()) == before, out[-200:])
@@ -971,7 +985,7 @@ def t16_denials():
     check("default commit: the denied agent A4 receives no ticket (and no ticket is dealt to anyone who cannot resolve it)", rc == 0 and scalar("SELECT COUNT(*) FROM dbo.Tickets WHERE CurrentOwnerEmployeeId='%s'" % A4) == "0", out[-200:])
     restore()
     rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC], ExcludeAgentsWithTicketDenials=0))
-    check("@ExcludeAgentsWithTicketDenials = 0: A4 joins the pool (4 CS Agents) and the preview still lists its denial", re.search(r"\n%d\|%d\|%d\|4\|%d\|%d\s*\n" % (ELIG, MOVED, REASS, HELD_APPR, HELD_AI), out) is not None
+    check("@ExcludeAgentsWithTicketDenials = 0: A4 joins the pool (4 CS Agents) and the preview still lists its denial", re.search(r"\n%d\|%d\|%d\|4\|%d\|%d\|%d\s*\n" % (ELIG, MOVED, REASS, HELD_APPR, HELD_AI, HELD_HUMAN), out) is not None
           and any(l.startswith("4|A4 Person|") or ("|A4 Person|" in l and "Tickets.Resolve" in l) for l in out.splitlines()), out[-300:])
     before = digest(state())
     rc, out = execute(dry=False, approved=APPROVED, ExcludeAgentsWithTicketDenials=0)
@@ -995,7 +1009,7 @@ def t17_keep_in_place():
     plan, origin, cc, agents = oracle(reassign_owned=False)
     n, mv, rs = counts_of(plan, origin, cc)
     check("preview: 4 tickets kept in place, eligible %d, owner replaced %d" % (ELIG - 4, REASS - 4), (n, mv, rs) == (ELIG - 4, MOVED, REASS - 4) and
-          re.search(r"\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|4\|" % (OPEN_TOTAL, OPEN_OWNED, OPEN_TOTAL - OPEN_OWNED, ELIG - 4, MOVED, ELIG - 4 - MOVED, REASS - 4, ELIG - REASS, HELD_APPR, HELD_AI), out) is not None, out[:800])
+          re.search(r"\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|%d\|4\|" % (OPEN_TOTAL, OPEN_OWNED, OPEN_TOTAL - OPEN_OWNED, ELIG - 4, MOVED, ELIG - 4 - MOVED, REASS - 4, ELIG - REASS, HELD_APPR, HELD_AI, HELD_HUMAN), out) is not None, out[:800])
     before = digest(state())
     rc, out = execute(dry=False, approved=APPROVED, ReassignTicketsAlreadyOwnedByEligibleCcAgent=0)
     check("Execute with the literal-rule counts is refused when the switch differs", rc != 0 and has(out, "backlog changed since the preview") and digest(state()) == before, out[-200:])
@@ -1072,22 +1086,22 @@ def t18_stale_ai_conversations():
         sw = dict(StaleAiAfterHours="NULL" if sa is None else sa, TreatHumanTouchedAiAsHistorical=hu)
         rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC], **sw))
         check("Preview %s: eligible %d (was %d), moved %d, owner replaced %d, still held AI %d, approvals %d" % (label, n, n0, mv, rs, len(ai2), len(pend2)),
-              rc == 0 and re.search(r"\n%d\|%d\|%d\|%d\|%d\|%d\s*\n" % (n, mv, rs, len(agents), len(pend2), len(ai2)), out) is not None, out[-400:])
-        check("...and Execute (dry run, same switches, matching counts) agrees", execute(dry=False if False else True, approved=(n, mv, rs, len(agents), len(pend2), len(ai2)), **sw)[0] == 0)
+              rc == 0 and re.search(r"\n%d\|%d\|%d\|%d\|%d\|%d\|%d\s*\n" % (n, mv, rs, len(agents), len(pend2), len(ai2), len(human_handled() - pend2)), out) is not None, out[-400:])
+        check("...and Execute (dry run, same switches, matching counts) agrees", execute(dry=False if False else True, approved=(n, mv, rs, len(agents), len(pend2), len(ai2), len(human_handled() - pend2)), **sw)[0] == 0)
     # ---- commit with both switches: plan equals oracle, interactions untouched, genuinely active stay protected
     plan, origin, cc, agents = oracle(stale_after=24, human=True)
     n, mv, rs = counts_of(plan, origin, cc); _, pend2, ai2 = held_sets(stale_after=24, human=True)
-    appr = (n, mv, rs, len(agents), len(pend2), len(ai2)); sw = dict(StaleAiAfterHours=24, TreatHumanTouchedAiAsHistorical=1)
+    appr = (n, mv, rs, len(agents), len(pend2), len(ai2), len(human_handled() - pend2)); sw = dict(StaleAiAfterHours=24, TreatHumanTouchedAiAsHistorical=1)
     pre = state(); pre_x = snapshot_tables(["TicketApprovals", "TicketInteractions", "TicketInteractionMessages", "TicketInteractionHandlers", "TicketAgentHandoffs"])
     rc, out = execute(dry=False, approved=APPROVED, **sw)
     check("Execute with the switches but the OLD approved counts is refused (the correction changes the numbers, so it cannot slip in unseen)", rc != 0 and has(out, "backlog changed since the preview"), out[-250:])
     rc_out = execute(dry=False, batch=BATCH, approved=appr, **sw)
     commit_vs_oracle("Execute with the switches and the matching counts commits and equals the oracle (%d tickets)" % n, rc_out, plan)
     ids_ = lambda names: ids(names)
-    moved = ids_(["Z-3D", "Z-PHONE2D", "Z-OLDEND", "Z-HUM", "Z-HAND"]); held = ids_(["Z-REC", "Z-12H", "Z-MSG", "Z-APR"])
+    moved = ids_(["Z-3D", "Z-PHONE2D", "Z-OLDEND"]); held = ids_(["Z-REC", "Z-12H", "Z-MSG", "Z-APR", "Z-HUM", "Z-HAND"])   # Z-HUM / Z-HAND: a recorded human handler (HumanAgent line / handler row) - never re-dealt, switch or not
     post = state(); tk = {r[0]: r for r in post["Tickets"]}; pk = {r[0]: r for r in pre["Tickets"]}
-    check("stale (chat, phone, superseded) and human-touched conversations were moved and assigned", moved <= set(plan) and all(tk[str(t)] != pk[str(t)] for t in moved))
-    check("genuinely active / recently silent / recent-message conversations and the pending-approval ticket stay byte-identical (protection kept)", not (held & set(plan)) and all(tk[str(t)] == pk[str(t)] for t in held))
+    check("stale (chat, phone, superseded) conversations were moved and assigned", moved <= set(plan) and all(tk[str(t)] != pk[str(t)] for t in moved))
+    check("genuinely active / recently silent / recent-message conversations, the pending-approval ticket and the two with a recorded HUMAN HANDLER (HumanAgent line, handler row) stay byte-identical (protection kept)", not (held & set(plan)) and all(tk[str(t)] == pk[str(t)] for t in held))
     check("NO conversation record was modified (TicketInteractions, messages, handlers, handoffs, approvals byte-identical)",
           snapshot_tables(["TicketApprovals", "TicketInteractions", "TicketInteractionMessages", "TicketInteractionHandlers", "TicketAgentHandoffs"]) == pre_x)
     rc, out = rollback(BATCH, dry=False)
@@ -1099,7 +1113,7 @@ def t18_stale_ai_conversations():
          "INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, InteractionStartedAtUtc, RequiresHumanFollowUp) SELECT TicketId,1,2,2,N'05',N'c-z3d',DATEADD(day,-3,SYSUTCDATETIME()),DATEADD(day,-3,SYSUTCDATETIME()),0 FROM dbo.Tickets WHERE TicketNumber=N'Z-3D'")
     plan, origin, cc, agents = oracle(stale_after=24); n, mv, rs = counts_of(plan, origin, cc); _, pend2, ai2 = held_sets(stale_after=24)
     victim = scalar("SELECT TicketId FROM dbo.Tickets WHERE TicketNumber='Z-3D'")
-    slow = patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC], BatchId="'%s'" % BATCH, StaleAiAfterHours=24, **approval_params((n, mv, rs, len(agents), len(pend2), len(ai2))))
+    slow = patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC], BatchId="'%s'" % BATCH, StaleAiAfterHours=24, **approval_params((n, mv, rs, len(agents), len(pend2), len(ai2), len(human_handled() - pend2))))
     marker = "    -- (f) writes"; assert marker in slow            # the window before the update, where only update locks are held
     slow = slow.replace(marker, "    WAITFOR DELAY '00:00:10';\n" + marker, 1)
     res = {}; th = threading.Thread(target=lambda: res.__setitem__("A", run_text(slow))); th.start(); time.sleep(4)
@@ -1108,9 +1122,163 @@ def t18_stale_ai_conversations():
     th.join(); rcA, outA = res["A"]
     check("a brand-new conversation on a 'stale' ticket during the run aborts the whole run (Msg 50341)", rcA != 0 and "Msg 50341" in outA and scalar("SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action='BacklogDistributionBatch'") == "0", (rcN, outA[-250:]))
 
+def t19_recorded_human_handlers():
+    print("T19 recorded human handlers: the person who actually handled the interaction owns the ticket - never re-dealt")
+    restore()
+    plan0, origin0, cc, agents = oracle()
+    owned = [t for t in sorted(plan0) if PREV[t][0]]; unowned = [t for t in sorted(plan0) if not PREV[t][0]]
+    k_handler, k_handledby, k_line, k_ctrl, k_ctrl2 = unowned[0], owned[0], unowned[1], unowned[2], owned[1]
+    def interaction(t, handled="NULL"):
+        return ("INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, RequiresHumanFollowUp, EndedAtUtc, HandledByUserId) "
+                "VALUES (%d, 1, 2, 2, N'0500000009', N'hh-%d', DATEADD(hour,-30,SYSUTCDATETIME()), 1, DATEADD(hour,-29,SYSUTCDATETIME()), %s);" % (t, t, handled))
+    def msg(t, sender):
+        return ("INSERT dbo.TicketInteractionMessages (TicketInteractionId, Sequence, Sender, SenderName, SenderId, SentAtUtc, Body) "
+                "SELECT i.TicketInteractionId, ISNULL((SELECT MAX(m.Sequence) FROM dbo.TicketInteractionMessages m WHERE m.TicketInteractionId = i.TicketInteractionId), 0) + 1, "
+                "%d, N'x', N'g-x', DATEADD(hour,-30,SYSUTCDATETIME()), N'hello' FROM dbo.TicketInteractions i WHERE i.TicketId=%d;" % (sender, t))
+    must("SET QUOTED_IDENTIFIER ON; SET NOCOUNT ON; "
+         + interaction(k_handler) + interaction(k_handledby, "'%s'" % A2) + interaction(k_line) + interaction(k_ctrl) + interaction(k_ctrl2)
+         + "INSERT dbo.TicketInteractionHandlers (TicketInteractionId, TicketId, HandledByUserId, GenesysAgentUserId, Source, RecordedAtUtc) "
+           "SELECT TicketInteractionId, TicketId, '%s', N'g-a1', 1, DATEADD(hour,-29,SYSUTCDATETIME()) FROM dbo.TicketInteractions WHERE TicketId=%d;" % (A1, k_handler)
+         + msg(k_line, 2) + msg(k_ctrl, 1) + msg(k_ctrl, 3) + msg(k_ctrl, 4) + msg(k_ctrl2, 4))
+    held_new = {k_handler, k_handledby, k_line}
+    hh = human_handled()
+    check("independent oracle: handler row, HandledByUserId and a HumanAgent line each count; customer / system / virtual-agent lines do not",
+          held_new <= hh and not ({k_ctrl, k_ctrl2} & hh), (sorted(hh), k_ctrl, k_ctrl2))
+    plan, origin, cc, agents = oracle()
+    check("oracle: the three human-handled tickets leave the plan, the two controls stay", not (held_new & set(plan)) and {k_ctrl, k_ctrl2} <= set(plan) and len(plan) == len(plan0) - 3, (len(plan), len(plan0)))
+    n, mv, rs = counts_of(plan, origin, cc)
+    hh_total = HELD_HUMAN + 3
+    appr = (n, mv, rs, len(agents), HELD_APPR, HELD_AI, hh_total)
+
+    # preview
+    rc, out = run_text(patch(PREVIEW, ServiceIdsConfirmed=1, services=[SVC]))
+    num = {int(r[0]): r[1] for r in rows("SELECT TicketId, TicketNumber FROM dbo.Tickets")}
+    lines = [l for l in out.splitlines() if "RECORDED HUMAN HANDLER" in l]
+    check("preview lists every human-handled ticket (%d) as RECORDED HUMAN HANDLER, with its recorded handler" % hh_total, rc == 0 and len(lines) == hh_total and
+          all(any(num[t] in l for l in lines) for t in held_new) and any(num[k_handledby] in l and A2 in l.lower() for l in lines) and any(num[k_handler] in l and A1 in l.lower() for l in lines), (rc, len(lines)))
+    check("preview approval values carry the seventh gate (%s)" % (appr,), re.search(r"\n%d\|%d\|%d\|%d\|%d\|%d\|%d\s*\n" % appr, out) is not None, out[-500:])
+
+    # gates: the seventh count is mandatory and exact
+    p = approval_params(appr); p.pop("ApprovedHeldBackHumanHandledCount")
+    rc, out = run_text(patch(EXECUTE, DryRun=0, ServiceIdsConfirmed=1, services=[SVC], **p))
+    check("a commit without the human-handled gate is refused", rc != 0 and has(out, "commit gates not satisfied"), out[-250:])
+    rc, out = execute(dry=False, approved=appr[:6] + (hh_total - 1,))
+    check("a wrong human-handled count is refused (the backlog changed since the preview)", rc != 0 and has(out, "backlog changed since the preview"), out[-250:])
+    rc, out = execute(dry=False, approved=appr[:6] + (HELD_HUMAN,))
+    check("the pre-injection gate value (human-handled evidence appeared after the preview) is refused", rc != 0 and has(out, "backlog changed since the preview"), out[-250:])
+
+    # commit: held tickets untouched, everything else equals the oracle
+    pre = state(); pre_x = snapshot_tables(["TicketInteractions", "TicketInteractionMessages", "TicketInteractionHandlers"])
+    rc, out = execute(dry=False, batch=BATCH, approved=appr)
+    check("commit with the seven approved counts succeeds", rc == 0 and has(out, "COMMITTED"), out[-300:])
+    post = state(); tk = {r[0]: r for r in post["Tickets"]}; pk = {r[0]: r for r in pre["Tickets"]}
+    check("human-handled tickets are byte-identical (department, owner, status, SLA, everything)", all(tk[str(t)] == pk[str(t)] for t in held_new | {t for t in hh if t not in plan}))
+    asg = lambda st, ids: sorted(r for r in st["TicketAssignments"] if r[1] in {str(i) for i in ids})
+    check("...and their assignment rows are untouched (nobody was superseded or added)", asg(post, held_new) == asg(pre, held_new))
+    check("...and no audit row or workflow event was written for them", scalar("SELECT COUNT(*) FROM dbo.AuditEntries WHERE EntityType='Ticket' AND EntityId IN (%s) AND OccurredAtUtc > DATEADD(minute,-10,SYSUTCDATETIME()) AND Action IN ('AutoAssign','Transfer')" % ",".join(map(str, held_new))) == "0")
+    check("batch audit row records HeldBackHumanHandled=%d" % hh_total, scalar("SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action='BacklogDistributionBatch' AND AfterValue LIKE '%%HeldBackHumanHandled=%d;%%'" % hh_total) == "1")
+    check("conversation records (interactions, messages, handlers) byte-identical", snapshot_tables(["TicketInteractions", "TicketInteractionMessages", "TicketInteractionHandlers"]) == pre_x)
+    got = {int(r[0]): r[2].lower() for r in rows("SELECT TicketId, TicketId, CONVERT(nvarchar(36),CurrentOwnerEmployeeId) FROM dbo.Tickets WHERE TicketStatus=1")}
+    check("every other ticket was dealt exactly as the oracle says", all(got.get(t) == a for t, a in plan.items()))
+
+    # rollback: a ticket whose NEW owner is itself a recorded handler of it is never taken from that person
+    victim = k_ctrl; new_owner = plan[victim]
+    must("INSERT dbo.TicketInteractionHandlers (TicketInteractionId, TicketId, HandledByUserId, GenesysAgentUserId, Source, RecordedAtUtc) "
+         "SELECT TicketInteractionId, TicketId, '%s', N'g-late', 1, DATEADD(day,-3,SYSUTCDATETIME()) FROM dbo.TicketInteractions WHERE TicketId=%d" % (new_owner, victim))
+    before = state()
+    rc, out = rollback(BATCH, dry=False, IncludeWorked=1)
+    st = state(); tk = {r[0]: r for r in st["Tickets"]}; bk = {r[0]: r for r in before["Tickets"]}
+    check("rollback (even with @IncludeWorked = 1) skips the ticket whose current owner is a recorded handler of it - byte-identical", rc == 0 and tk[str(victim)] == bk[str(victim)] and has(out, "recorded human handler"), out[-400:])
+    check("...while the other untouched batch tickets are rolled back (Released: %d)" % (len(plan) - 1), has(out, "Released: %d" % (len(plan) - 1)), out[-300:])
+
+    # race: a handler appears on a planned ticket between selection and the write -> whole run aborts (Msg 50343)
+    restore()
+    pl, orr, cc, agents = oracle(); victim = [t for t in sorted(pl) if PREV[t][0]][3]
+    ins = ("INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, RequiresHumanFollowUp, EndedAtUtc, HandledByUserId) "
+           "VALUES (%d, 0, 2, 2, N'05', N'mid-run-h', SYSUTCDATETIME(), 1, SYSUTCDATETIME(), '%s')" % (victim, A1))
+    pre = digest(state())
+    (rcA, outA), oth = window_run("    -- (f) writes", {"w": ins})
+    check("a handler recorded mid-run on a planned ticket aborts the WHOLE run (Msg 50343) and nothing else changes",
+          rcA != 0 and "Msg 50343" in outA and oth["w"][0][0] == 0 and all(digest(state())[t] == pre[t] for t in pre if t != "TicketInteractions"), outA[-300:])
+
+AUDIT = os.path.join(ROOT, "Verify_TigerCS_PROD_BacklogBatch_OwnershipAudit_ReadOnly.sql")
+
+def t20_ownership_audit():
+    print("T20 production ownership audit of the executed batch: read-only, independent classification, mismatches and missing evidence reported separately")
+    restore()
+    plan, origin, cc, agents = oracle()          # the plan BEFORE the batch (afterwards the state has moved on)
+    rc, out = execute(dry=False, batch=BATCH, approved=APPROVED)
+    assert rc == 0 and has(out, "COMMITTED"), out[-300:]
+    owner_of = {int(r[0]): r[1].lower() for r in rows("SELECT TicketId, CONVERT(nvarchar(36),CurrentOwnerEmployeeId) FROM dbo.Tickets WHERE TicketStatus=1 AND CurrentOwnerEmployeeId IS NOT NULL")}
+    batch = sorted(t for t in plan if owner_of.get(t) == plan[t])
+    check("setup: the batch is committed (%d tickets)" % len(batch), len(batch) == ELIG, len(batch))
+    gid = lambda emp: "g-" + emp
+    other = lambda emp: next(a for a in agents if a != emp)
+    a_, b_, c_, d_, e_, f_, h_ = batch[:7]
+    must("UPDATE dbo.AspNetUsers SET GenesysUserId = 'g-' + LOWER(CONVERT(nvarchar(36), Id)) WHERE Id IN (%s)" % ",".join("'%s'" % x for x in agents))
+    def inter(t, agent_id="NULL", handled="NULL"):
+        return ("INSERT dbo.TicketInteractions (TicketId, IsOriginatingInteraction, Source, ChannelId, CustomerPhone, GenesysConversationId, CreatedAtUtc, RequiresHumanFollowUp, GenesysAgentId, HandledByUserId) "
+                "VALUES (%d, 1, 2, 2, N'0500000008', N'aud-%d', DATEADD(hour,-30,SYSUTCDATETIME()), 1, %s, %s);" % (t, t, agent_id, handled))
+    def line(t, sender_id):
+        return ("INSERT dbo.TicketInteractionMessages (TicketInteractionId, Sequence, Sender, SenderName, SenderId, SentAtUtc, Body) "
+                "SELECT TicketInteractionId, 1, 2, N'Some Agent', N'%s', DATEADD(hour,-30,SYSUTCDATETIME()), N'hello' FROM dbo.TicketInteractions WHERE TicketId=%d;" % (sender_id, t))
+    def handler(t, emp):
+        return ("INSERT dbo.TicketInteractionHandlers (TicketInteractionId, TicketId, HandledByUserId, GenesysAgentUserId, Source, RecordedAtUtc) "
+                "SELECT TicketInteractionId, TicketId, '%s', N'%s', 1, DATEADD(hour,-29,SYSUTCDATETIME()) FROM dbo.TicketInteractions WHERE TicketId=%d;" % (emp, gid(emp), t))
+    must("SET QUOTED_IDENTIFIER ON; SET NOCOUNT ON; "
+         + "".join(inter(t) for t in (a_, b_, c_, f_, h_)) + inter(d_, "N'%s'" % gid(other(plan[d_]))) + inter(e_, "N'%s'" % gid(plan[e_]))
+         + handler(a_, plan[a_]) + handler(b_, other(plan[b_])) + handler(h_, other(plan[h_]))
+         + line(c_, gid(other(plan[c_]))) + line(f_, "unmapped-xyz")
+         + "INSERT dbo.TicketNotes (TicketId, NoteText, AuthorEmployeeId, CreatedAtUtc) VALUES (%d, N'a person worked it after the batch', '%s', DATEADD(second, 5, SYSUTCDATETIME()));" % (h_, plan[h_]))
+    expected = {"MISMATCH": {b_, c_, h_}, "MATCH": {a_, e_}, "WEAK_MISMATCH": {d_}, "MISSING_EVIDENCE_UNRESOLVED": {f_}}
+    expected["MISSING_EVIDENCE_NONE"] = set(batch) - set().union(*expected.values())
+
+    before = digest(state())
+    rc, out = run_text(patch(AUDIT, ExpectedBatchTicketCount=len(batch)))
+    check("audit exits 0 and changed nothing (every table digest equal)", rc == 0 and digest(state()) == before, out[-400:])
+    nums = {int(r[0]): r[1] for r in rows("SELECT TicketId, TicketNumber FROM dbo.Tickets")}
+    rev = {v: k for k, v in nums.items()}
+    got = {}
+    for l in out.splitlines():
+        f = l.split("|")
+        if len(f) > 2 and f[0] in rev and f[1] in expected: got[rev[f[0]]] = f[1]
+        elif len(f) == 4 and f[0] in rev and f[2] in ("STRONG evidence", "weak evidence only"): got[rev[f[0]]] = "MATCH"
+    check("per-ticket classification equals the independent expectation for all %d tickets" % len(batch),
+          all(got.get(t) == c for c, ts in expected.items() for t in ts) and len(got) == len(batch), {n: (len(v), len([t for t in v if got.get(t) == n])) for n, v in expected.items()})
+    summary = {}
+    for l in out.splitlines():
+        f = l.split("|")
+        if f[0] in expected or f[0] == "** TOTAL **":
+            if len(f) >= 5 and f[1].isdigit(): summary[f[0]] = int(f[1])
+    check("summary counts: %s" % {k: len(v) for k, v in expected.items()}, all(summary.get(k) == len(v) for k, v in expected.items()) and summary.get("** TOTAL **") == len(batch), summary)
+    check("mismatches and missing evidence are reported in DIFFERENT result sets", out.index("MISMATCH") < out.index("MISSING_EVIDENCE_UNRESOLVED") and
+          re.search(r"\n%s\|MISMATCH\|" % re.escape(nums[b_]), out) is not None and re.search(r"\n%s\|MISSING_EVIDENCE_UNRESOLVED\|" % re.escape(nums[f_]), out) is not None)
+    check("a mismatched ticket a person worked after the batch is flagged HumanWorkSinceBatch = YES (do not auto-change); a plain mismatch is not",
+          re.search(r"\n%s\|MISMATCH\|[^\n]*\|YES\|" % re.escape(nums[h_]), out) is not None and re.search(r"\n%s\|MISMATCH\|[^\n]*\|no\|" % re.escape(nums[b_]), out) is not None, out[-300:])
+    check("the expected count (84) differing from the batch size is REPORTED, never hidden",
+          has(run_text(patch(AUDIT, ExpectedBatchTicketCount=84))[1], "COUNT DIFFERS") and has(out, "count matches"))
+    text = re.sub(r"/\*.*?\*/|--[^\n]*", "", open(AUDIT, encoding="utf-8").read(), flags=re.S)
+    stmts = re.findall(r"(?im)^\s*(INSERT|UPDATE|DELETE|MERGE|DROP|ALTER|CREATE|TRUNCATE|EXEC(?:UTE)?)\b([^\n]*)", text)
+    check("script is SELECT-only: the only writes are session temp tables (#...)", all((k.upper() == "INSERT" and r.strip().startswith("#")) or (k.upper() in ("CREATE", "DROP") and "#" in r) for k, r in stmts), stmts)
+    # run as the plain db_datareader login
+    rc2, out2 = run_text("""
+      IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name='ro_preview') CREATE LOGIN ro_preview WITH PASSWORD='Ro#Preview2026x', CHECK_POLICY=OFF;
+      IF NOT EXISTS (SELECT 1 FROM sys.database_principals WHERE name='ro_preview') CREATE USER ro_preview FOR LOGIN ro_preview;
+      ALTER ROLE db_datareader ADD MEMBER ro_preview;""")
+    assert rc2 == 0, out2
+    with tempfile.NamedTemporaryFile("w", suffix=".sql", delete=False, encoding="utf-8") as f:
+        f.write(patch(AUDIT, ExpectedBatchTicketCount=len(batch))); path = f.name
+    os.chmod(path, 0o644); subprocess.run(["docker", "cp", path, "%s:/tmp/ro_audit.sql" % CONTAINER], check=True, capture_output=True); os.unlink(path)
+    base = ["docker", "exec", "-i", CONTAINER, "/opt/mssql-tools18/bin/sqlcmd", "-C", "-I", "-S", "localhost", "-U", "ro_preview", "-P", "Ro#Preview2026x", "-d", DB, "-b"]
+    p = subprocess.run(base + ["-W", "-s", "|", "-i", "/tmp/ro_audit.sql"], capture_output=True, text=True)
+    check("the audit runs to completion under a plain db_datareader login", p.returncode == 0 and "count matches" in p.stdout and "MISMATCH" in p.stdout, (p.stdout + p.stderr)[-300:])
+    rc3, out3 = run_text("DELETE FROM dbo.AuditEntries WHERE Action='BacklogDistributionBatch'")
+    rc4, out4 = run_text(patch(AUDIT))
+    check("with no executed batch the audit refuses instead of guessing", rc4 != 0 and has(out4, "never executed here"), out4[-200:])
+
 TESTS = [t01_preview_readonly, t01b_preview_as_datareader, t02_dry_run, t03_gates, t04_commit, t05_rollback_clean, t06_rollback_touched, t06b_include_worked, t07_concurrency,
          t08_race_between_preview_and_run, t09_cursor_and_pool_edges, t11_pending_approvals, t11b_approval_decided_between_preview_and_run, t12_active_ai, t13_concurrent_safeguards,
-         t14_switches, t15_owned_reassignment, t16_denials, t17_keep_in_place, t18_stale_ai_conversations, t10_scale]
+         t14_switches, t15_owned_reassignment, t16_denials, t17_keep_in_place, t18_stale_ai_conversations, t19_recorded_human_handlers, t20_ownership_audit, t10_scale]
 
 if __name__ == "__main__":
     only = sys.argv[1:]

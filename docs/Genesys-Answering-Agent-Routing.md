@@ -56,3 +56,22 @@ The Genesys flow therefore **must send `routing.agentId` / the inquiry `agentId`
 ## Verification performed
 
 See the PR description: the .NET test suite (including real-SQL-Server concurrency tests and the EF/migration consistency check) and mutation checks of each rule.
+
+---
+
+# Final ownership rule (PR #154) — the human who actually receives/accepts the interaction owns the ticket
+
+All channels (Phone, WhatsApp, Live Chat, Instagram, Facebook, other social):
+
+| Evidence of who received it | Result |
+|---|---|
+| Phone inquiry created at pickup naming a mapped agent; `routing.agentId` (connected) on an update; a `HumanAgent` transcript line whose `senderId` maps to a user | That employee owns the ticket (Call Center first). |
+| Human required, nobody has accepted | Call Center Round Robin = a **provisional** owner. |
+| A provisional owner exists and the real agent connects / writes | The real agent **replaces** it (previous assignment row kept, superseded; both audited). |
+| The agent cannot take it (unmapped-but-known, inactive, locked, not a Call Center member, **not a CS Agent**) | The ticket waits unowned in the Call Center, flagged `ManualAssignmentRequired`. It is **never** handed to someone else instead. |
+
+Never replaced: ownership after a person worked the ticket (first reply, status moved on, manual assignment, **an internal note**), and any intentional transfer. The agent's *own* reply, recorded in the same update, does not count as the provisional owner's work. AI-only conversations (no human evidence; `VirtualAgent`/`Customer` lines never count) are not moved.
+
+**CS Agent restriction.** In the Call Center (department `CC`) automatic assignment — Round Robin *and* the confirmed answering agent — requires the CS Agent role. Other departments keep CS Agent / Department Employee / Department Head.
+
+**One-time backlog redistribution scripts** (`Execute_/Preview_/Rollback_TigerCS_PROD_CallCenterBacklogDistribution*`) deal owned *and* unowned Open tickets to Round Robin owners without regard to a recorded actual handler (`TicketInteractionHandlers`). They have **not** been aligned with this rule (their Docker-based test harness could not be run in this change) and must not be run as-is; see section 7 of `Verify_TigerCS_DigitalChannelVisibility_ReadOnly.sql` for the affected tickets.

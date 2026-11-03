@@ -80,7 +80,16 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
         var messages = (await (from m in db.TicketInteractionMessages.AsNoTracking()
                                join i in db.TicketInteractions.AsNoTracking() on m.TicketInteractionId equals i.TicketInteractionId
                                where ids.Contains(i.TicketId)
-                               select new { i.TicketId, m.Sender, m.SentAtUtc }).ToListAsync(ct)).ToLookup(m => m.TicketId);
+                               select new { i.TicketId, m.Sender, m.SenderId, m.SentAtUtc }).ToListAsync(ct)).ToLookup(m => m.TicketId);
+
+        // A HumanAgent line carries the writer's Genesys user id: resolve it to the Ticketing user, so the person who ACTUALLY wrote to the customer
+        // is known even when no handler row was recorded.
+        var humanSenderIds = messages.SelectMany(g => g).Where(m => m.Sender == InteractionMessageSender.HumanAgent && !string.IsNullOrWhiteSpace(m.SenderId))
+            .Select(m => m.SenderId!.Trim()).Distinct().ToList();
+        var senderUsers = humanSenderIds.Count == 0
+            ? new Dictionary<string, Guid>()
+            : (await db.Users.AsNoTracking().Where(u => u.GenesysUserId != null && humanSenderIds.Contains(u.GenesysUserId)).Select(u => new { u.GenesysUserId, u.Id }).ToListAsync(ct))
+                .ToDictionary(u => u.GenesysUserId!, u => u.Id);
 
         var events = (await db.TicketWorkflowEvents.AsNoTracking()
             .Where(e => ids.Contains(e.TicketId))
@@ -106,6 +115,17 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
                 ?? ti.Where(i => i.HandledByUserId != null).Select(i => i.HandledByUserId).FirstOrDefault();
             var answeringGenesysId = th.FirstOrDefault()?.GenesysAgentUserId
                 ?? ti.Where(i => i.HandledByUserId != null).Select(i => i.GenesysAgentUserId).FirstOrDefault();
+
+            // No handler row: the first mapped person who wrote a HumanAgent line received the conversation.
+            if (answeringId is null
+                && tm.Where(m => m.Sender == InteractionMessageSender.HumanAgent && !string.IsNullOrWhiteSpace(m.SenderId))
+                     .OrderBy(m => m.SentAtUtc)
+                     .Select(m => m.SenderId!.Trim())
+                     .FirstOrDefault(id => senderUsers.ContainsKey(id)) is { } writerGenesysId)
+            {
+                answeringId = senderUsers[writerGenesysId];
+                answeringGenesysId = writerGenesysId;
+            }
 
             var phoneUnmapped = answeringId is null
                 && genesys.Any(i => i.ChannelId == WellKnownChannels.Phone && !string.IsNullOrWhiteSpace(i.GenesysAgentId) && i.HandledByUserId == null);

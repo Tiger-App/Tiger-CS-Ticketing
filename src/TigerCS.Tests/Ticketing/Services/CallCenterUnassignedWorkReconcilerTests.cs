@@ -150,7 +150,7 @@ public class CallCenterUnassignedWorkReconcilerTests
     }
 
     [Fact]
-    public async Task UnusableAnsweringAgent_FallsBackToRoundRobin_NeverLeavesItUnowned()
+    public async Task UnusableAnsweringAgent_IsFlagged_NeverReplacedByRoundRobin()
     {
         var env = new Env();
         var agents = env.AddCallCenterAgents(2);
@@ -159,19 +159,23 @@ public class CallCenterUnassignedWorkReconcilerTests
 
         var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
 
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, result.Outcome);
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
+        // The person who actually answered cannot take it: the ticket waits in the Call Center queue, flagged. It is NOT dealt to somebody else.
+        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(agents, a => a == ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
-    public async Task PhoneCallAnsweredByAnUnmappedAgent_IsRoundRobined()
+    public async Task PhoneCallAnsweredByAnUnmappedAgent_IsFlagged_NeverRoundRobined()
     {
         var env = new Env();
         var agents = env.AddCallCenterAgents(1);
         var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, PhonePickupByUnmappedAgent = true, UnmappedGenesysAgentId = "gen-x" });
 
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, (await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false)).Outcome);
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
+        // Same as live ingestion: a person picked up but cannot be identified, so the ticket is queued in the Call Center and flagged - not dealt to another agent.
+        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, (await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false)).Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.NotEqual(agents[0], ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
@@ -348,7 +352,7 @@ public class CallCenterUnassignedWorkReconcilerTests
     }
 
     [Fact]
-    public async Task CsAgentRoleOnly_Off_RestoresTheOrdinaryRotation()
+    public async Task CsAgentRoleOnly_Off_DoesNotWidenTheCallCenter_WhichIsCsAgentsOnly()
     {
         var env = new Env();
         var nonAgent = env.AddNonCsAgentMember();
@@ -356,8 +360,10 @@ public class CallCenterUnassignedWorkReconcilerTests
 
         var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, new CallCenterReconciliationOptions { Enabled = true, DryRun = false, CsAgentRoleOnly = false }, false);
 
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, result.Outcome);
-        Assert.Equal(nonAgent, ticket.CurrentOwnerEmployeeId);
+        // Business decision: automatic assignment in the Call Center goes to CS Agents only, whatever this option says.
+        Assert.Equal(ReconcileOutcome.NoEligibleAgent, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.NotEqual(nonAgent, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
