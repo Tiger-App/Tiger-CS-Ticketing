@@ -37,6 +37,7 @@ public class TicketsController(
     CustomerProfileAppService customerProfileAppService,
     TicketApprovalAppService ticketApprovalAppService,
     TicketInteractionQueryAppService ticketInteractionQueryAppService,
+    TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineAppService ticketActivityTimelineAppService,
     TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewQueryAppService ticketReviewQueryAppService,
     TicketClassificationAppService ticketClassificationAppService,
     TicketClaimAppService ticketClaimAppService) : ControllerBase
@@ -249,6 +250,37 @@ public class TicketsController(
 
         var result = await ticketInteractionQueryAppService.GetForTicketAsync(
             employeeId.Value, GetRoles(), ticketId, cancellationToken);
+        return result.Outcome switch
+        {
+            TicketQueryOutcome.Success => Ok(result.Response),
+            TicketQueryOutcome.Forbidden => Forbid(),
+            _ => NotFound()
+        };
+    }
+
+    /// <summary>The ticket's full chronological Activity timeline: creation, AI/Genesys/human conversation milestones, handoffs, ownership, transfers, lifecycle, SLA and every closure with its actor and reason.</summary>
+    /// <remarks>
+    /// Read-only. Built from existing stores (interactions, transcript, handoffs, handlers, workflow events, lifecycle history, ownership
+    /// history, audit trail); nothing is written or rewritten. All timestamps are UTC; the UI converts them to Asia/Dubai. Missing evidence is
+    /// reported as "Unknown" / "Not recorded", never invented. Visible to exactly the callers who can see the ticket itself.
+    /// </remarks>
+    /// <param name="ticketId">The ticket.</param>
+    /// <response code="200">The ticket's activity timeline, oldest first.</response>
+    /// <response code="404">No such ticket, or it is not visible to the caller.</response>
+    [HttpGet("{ticketId:long}/activity-timeline")]
+    [RequirePermission(Permissions.TicketsView)]
+    [Tags(OpenApiTags.Tickets)]
+    [ProducesResponseType<TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetActivityTimeline(long ticketId, CancellationToken cancellationToken)
+    {
+        var employeeId = GetEmployeeId();
+        if (employeeId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await ticketActivityTimelineAppService.GetAsync(employeeId.Value, GetRoles(), ticketId, cancellationToken);
         return result.Outcome switch
         {
             TicketQueryOutcome.Success => Ok(result.Response),

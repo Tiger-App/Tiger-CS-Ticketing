@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.ClassificationAndRouting.Dto;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
+using TigerCS.Application.Modules.Ticketing.ActivityTimeline;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.SlaAndEscalation;
@@ -25,8 +26,10 @@ namespace TigerCS.Web.Pages;
 /// here is synthesized.
 /// </summary>
 /// <param name="Detail">A second line of already-resolved context (e.g. a reopen's department move and new SLA deadline). Never parsed by the view.</param>
+/// <param name="Event">The Api timeline event this entry was built from, when it came from the Activity timeline (null for notes, escalations, approvals and the legacy fallback).</param>
 public sealed record ActivityEntry(
-    DateTime TimestampUtc, string Kind, string Actor, string Description, string? Note, bool IsHuman, string? Detail = null);
+    DateTime TimestampUtc, string Kind, string Actor, string Description, string? Note, bool IsHuman, string? Detail = null,
+    TicketActivityEventDto? Event = null);
 
 public sealed class TicketDetailsModel(
     TicketsApiClient ticketsApiClient,
@@ -391,6 +394,12 @@ public sealed class TicketDetailsModel(
     public CurrentUser? Viewer { get; private set; }
     public TicketNameResolver NameResolver => nameResolver;
     public IReadOnlyList<ActivityEntry> ActivityFeed { get; private set; } = [];
+
+    /// <summary>True when the Api's full Activity timeline could not be loaded, so the tab shows the basic feed (creation, status changes, notes, transfers) instead.</summary>
+    public bool ActivityTimelineUnavailable { get; private set; }
+
+    /// <summary>Evidence the timeline could not find (e.g. an unmapped Genesys agent), shown under the timeline so a gap is never mistaken for "nothing happened".</summary>
+    public IReadOnlyList<string> ActivityEvidenceGaps { get; private set; } = [];
 
     public string? ActionError { get; private set; }
     public string? OpenSection { get; private set; }
@@ -1060,12 +1069,13 @@ public sealed class TicketDetailsModel(
         var approvalsTask = ticketsApiClient.GetApprovalsAsync(TicketId, cancellationToken);
         var interactionsTask = ticketsApiClient.GetInteractionsAsync(TicketId, cancellationToken);
         var historyTask = ticketsApiClient.GetLifecycleHistoryAsync(TicketId, cancellationToken);
+        var timelineTask = ticketsApiClient.GetActivityTimelineAsync(TicketId, cancellationToken);
         var reviewsTask = ticketsApiClient.GetReviewsAsync(TicketId, cancellationToken);
         var downgradesTask = slaApiClient.GetPriorityDowngradeRequestsAsync(TicketId, cancellationToken);
 
         await Task.WhenAll(
             slaTask, notesTask, escalationsTask, assignableTask, assignableUsersTask, customerHistoryTask, approvalsTask, interactionsTask,
-            historyTask, downgradesTask, reviewsTask);
+            historyTask, downgradesTask, reviewsTask, timelineTask);
 
         Reviews = reviewsTask.Result.IsSuccess && reviewsTask.Result.Value is not null ? reviewsTask.Result.Value.Cycles : [];
         ReviewsUnavailable = !reviewsTask.Result.IsSuccess;
@@ -1119,8 +1129,11 @@ public sealed class TicketDetailsModel(
             ? historyTask.Result.Value.Entries
             : [];
 
+        var timeline = timelineTask.Result.IsSuccess ? timelineTask.Result.Value : null;
+        ActivityTimelineUnavailable = timeline is null;
+        ActivityEvidenceGaps = timeline?.EvidenceGaps ?? [];
         ActivityFeed = BuildActivityFeed(
-            Ticket, Notes, Escalations, lifecycleHistory, Approvals?.Events ?? [], Viewer, nameResolver, EmployeeNames);
+            Ticket, Notes, Escalations, lifecycleHistory, Approvals?.Events ?? [], Viewer, nameResolver, EmployeeNames, timeline);
 
         // Pre-fill the RowVersion the forms will post back, and default the
         // employee/status pickers so an untouched form still submits something valid.
@@ -1306,8 +1319,17 @@ public sealed class TicketDetailsModel(
         IReadOnlyList<TicketWorkflowEventDto> workflowEvents,
         CurrentUser? viewer,
         TicketNameResolver nameResolver,
-        IReadOnlyDictionary<Guid, string>? employeeNames = null)
+        IReadOnlyDictionary<Guid, string>? employeeNames = null,
+        TicketActivityTimelineDto? timeline = null)
     {
+        // The Api's full timeline owns creation, conversation milestones, handoffs, ownership, transfers, lifecycle, SLA and closures.
+        // This page then adds only what the Api timeline does not carry: notes, escalations and approval-cycle events. Without the
+        // timeline (the call failed) the page falls back to the basic feed below, unchanged.
+        if (timeline is not null)
+        {
+            return BuildTimelineFeed(timeline, notes, escalations, workflowEvents, viewer, nameResolver);
+        }
+
         var entries = new List<ActivityEntry>
         {
             new(ticket.CreatedAtUtc, "created", "System", $"Ticket {ticket.TicketNumber} created", null, false)
@@ -1406,6 +1428,86 @@ public sealed class TicketDetailsModel(
         }
 
         return [.. entries.OrderBy(e => e.TimestampUtc)];
+    }
+
+    private static IReadOnlyList<ActivityEntry> BuildTimelineFeed(
+        TicketActivityTimelineDto timeline,
+        IReadOnlyList<TicketNoteResponseDto> notes,
+        IReadOnlyList<TicketEscalationResponseDto> escalations,
+        IReadOnlyList<TicketWorkflowEventDto> workflowEvents,
+        CurrentUser? viewer,
+        TicketNameResolver nameResolver)
+    {
+        var reopenFacts = workflowEvents
+            .Where(e => string.Equals(e.EventType, nameof(WorkflowEventType.Reopened), StringComparison.Ordinal))
+            .ToDictionary(e => e.OccurredAtUtc, e => e.Note);
+
+        var entries = new List<ActivityEntry>();
+        foreach (var evt in timeline.Events)
+        {
+            var kind = evt switch
+            {
+                { EventType: "TicketReopened" } => "reopen",
+                { Closure: not null } => "closure",
+                { Severity: "Warning" } => "anomaly",
+                { Category: "Ownership" } => "transfer",
+                { Category: "Handoff" or "Routing" } => "handoff",
+                { Category: "Conversation" } => "conversation",
+                { Category: "Sla" } => "sla",
+                _ => "status"
+            };
+
+            // A reopen's department move / new SLA deadline comes from the typed Reopened event, matched by its instant.
+            var detail = evt.EventType == "TicketReopened" && reopenFacts.TryGetValue(evt.OccurredAtUtc, out var reopenNote)
+                ? DescribeReopenFacts(reopenNote, nameResolver)
+                : null;
+
+            entries.Add(new ActivityEntry(
+                evt.OccurredAtUtc, kind, evt.ActorName, evt.EventName, evt.Reason,
+                evt.ActorType is TimelineActorTypes.Agent or TimelineActorTypes.Supervisor,
+                detail, evt));
+        }
+
+        foreach (var note in notes)
+        {
+            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? $"Employee #{note.AuthorEmployeeId.ToString()[..8]}";
+            entries.Add(new ActivityEntry(note.CreatedAtUtc, "note", author, "added a note", note.NoteText, true));
+        }
+
+        foreach (var escalation in escalations)
+        {
+            var levelLabel = TicketDisplay.EscalationLevelLabel($"Level{escalation.Level}");
+            entries.Add(new ActivityEntry(
+                escalation.RaisedAtUtc, "escalation", "System",
+                $"Escalated to {levelLabel} ({escalation.TriggerType})",
+                escalation.NotifiedRoles is null ? null : $"Notified: {escalation.NotifiedRoles}", false));
+        }
+
+        // Approval-cycle events only: handoffs, transfers and Genesys agent events are already told, with more evidence, by the timeline.
+        var covered = new HashSet<string>
+        {
+            nameof(WorkflowEventType.TicketTransferred), nameof(WorkflowEventType.GenesysAgentConnected),
+            nameof(WorkflowEventType.GenesysCallTransferred), nameof(WorkflowEventType.HandoffRequested),
+            nameof(WorkflowEventType.HandoffAssigned), nameof(WorkflowEventType.HandoffStarted),
+            nameof(WorkflowEventType.HandoffCompleted), nameof(WorkflowEventType.HandoffCancelled),
+            nameof(WorkflowEventType.Reopened)
+        };
+
+        foreach (var approvalEvent in workflowEvents.Where(e => !covered.Contains(e.EventType)))
+        {
+            if (DescribeApprovalEvent(approvalEvent.EventType) is not { } description)
+            {
+                continue;
+            }
+
+            var actor = approvalEvent.ActorEmployeeId is { } actorId
+                ? TicketNameResolver.ResolveSelfAuthorName(actorId, viewer) ?? approvalEvent.ActorName ?? $"Employee #{actorId.ToString()[..8]}"
+                : "System";
+            entries.Add(new ActivityEntry(approvalEvent.OccurredAtUtc, "approval", actor, description, approvalEvent.Note, true));
+        }
+
+        // Stable: events on the same instant keep the Api's order (it ranks created → conversation → handoff → status → closure).
+        return [.. entries.Select((e, index) => (e, index)).OrderBy(x => x.e.TimestampUtc).ThenBy(x => x.index).Select(x => x.e)];
     }
 
     /// <summary>
