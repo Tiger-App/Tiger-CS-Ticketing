@@ -96,6 +96,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "GET /api/tickets",
         "GET /api/tickets/{ticketId}",
         "POST /api/tickets/{ticketId}/assignment",
+        "POST /api/tickets/{ticketId}/assignment/retry",
         "POST /api/tickets/{ticketId}/ownership",
         "POST /api/tickets/{ticketId}/transfer",
         "POST /api/tickets/{ticketId}/status",
@@ -391,6 +392,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
     [InlineData("/api/intake-records", "POST", OpenApiTags.Intake)]
     [InlineData("/api/tickets", "POST", OpenApiTags.Tickets)]
     [InlineData("/api/tickets/{ticketId}/assignment", "POST", OpenApiTags.Assignment)]
+    [InlineData("/api/tickets/{ticketId}/assignment/retry", "POST", OpenApiTags.Assignment)]
     [InlineData("/api/tickets/{ticketId}/ownership", "POST", OpenApiTags.Assignment)]
     [InlineData("/api/tickets/{ticketId}/transfer", "POST", OpenApiTags.Transfer)]
     [InlineData("/api/tickets/{ticketId}/status", "POST", OpenApiTags.TicketLifecycle)]

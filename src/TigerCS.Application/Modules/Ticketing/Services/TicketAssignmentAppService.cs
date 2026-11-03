@@ -34,6 +34,68 @@ public sealed class TicketAssignmentAppService(
     IRequestTypeRepository? requestTypeRepository = null)
 {
     /// <summary>
+    /// Safe retry of a failed automatic CS Agent assignment. Authority is cross-department assignment (CS Manager; the administrator
+    /// override applies as for Assign). Idempotent: an already-assigned ticket is returned untouched. A second concurrent retry loses at
+    /// the row version / unique current-assignment index and is reported as a conflict, never a double assignment.
+    /// </summary>
+    public async Task<TicketMutationResult> RetryCsAgentAssignmentAsync(
+        Guid callerEmployeeId,
+        IReadOnlyCollection<string> callerRoles,
+        long ticketId,
+        CancellationToken cancellationToken = default)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
+        if (ticket is null)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        var authorized = await AuthorizationGate.EvaluateAsync(callerRoles, () =>
+            Task.FromResult(callerRoles.Any(TicketRoleSets.AssignCrossDepartment.Contains)));
+        if (!authorized)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
+        }
+
+        if (ticket.TicketStatus is TicketStatus.Closed or TicketStatus.Resolved)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.TicketClosed);
+        }
+
+        if (ticket.CurrentOwnerEmployeeId is not null)
+        {
+            return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
+        }
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var correlationId = Guid.NewGuid();
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+
+        var result = await autoAssignmentService.EnsureCsAgentAsync(
+            ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.ManualRetry, now, correlationId, cancellationToken);
+
+        await auditWriter.WriteAsync(
+            callerEmployeeId, "RetryCsAgentAssignment", "Ticket", ticketId.ToString(),
+            beforeValue: "Unassigned",
+            afterValue: $"Outcome={result.Outcome};AssignedEmployeeId={result.AssignedEmployeeId?.ToString() ?? "none"}",
+            correlationId, cancellationToken);
+
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.ConcurrencyConflict);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return result.AssignedEmployeeId is null
+            ? TicketMutationResult.Failure(TicketMutationOutcome.NoEligibleCsAgent)
+            : TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
+    }
+
+    /// <summary>
     /// PR correction — the caller's role alone decides Assign authority now;
     /// there is no more self-claim path. CS Agent and Department Employee
     /// hold no assignment capability at all (see TicketRoleSets' remarks).
@@ -281,16 +343,15 @@ public sealed class TicketAssignmentAppService(
         // (the previous department's employee cannot stay accountable). The
         // ticket is therefore never without a responsible department: it moves
         // straight from department B to department C.
-        ticket.TransferToDepartment(request.TargetDepartmentId);
-
-        // Single current owner: the previous assignment ends with the transfer (history row kept, just no longer current), so the previous
-        // owner holds no ownership-based right on the ticket whether or not the new department can assign it to anyone.
-        (await ticketAssignmentRepository.GetCurrentAsync(ticketId, cancellationToken))?.MarkSuperseded();
+        // The CS Agent and the department are independent fields: the transfer moves the department and KEEPS the agent. The agent changes
+        // only by an explicit reassignment (AssignToEmployeeId below, or a later Assign). A ticket with no agent gets one from the shared rotation.
+        ticket.TransferToDepartment(request.TargetDepartmentId, preserveOwner: true);
 
         await auditWriter.WriteAsync(
             callerEmployeeId, "Transfer", "Ticket", ticketId.ToString(),
             beforeValue: $"DepartmentId={previousDepartmentId};AssignedEmployeeId={previousOwnerEmployeeId?.ToString() ?? "DepartmentQueue"}",
-            afterValue: $"DepartmentId={request.TargetDepartmentId};Reason={request.Reason}",
+            afterValue: $"DepartmentId={request.TargetDepartmentId};Reason={request.Reason}"
+                + (previousOwnerEmployeeId is not null ? ";CsAgentPreserved=true" : string.Empty),
             correlationId, cancellationToken);
 
         if (request.AssignToEmployeeId is { } explicitAssignee)
@@ -318,7 +379,7 @@ public sealed class TicketAssignmentAppService(
                 afterValue: $"{explicitAssignee};DepartmentId={request.TargetDepartmentId};ViaTransfer=true",
                 correlationId, cancellationToken);
         }
-        else
+        else if (ticket.CurrentOwnerEmployeeId is null)
         {
             // ...THEN re-evaluate the assignment automation against the new
             // department + the ticket's request type. Every non-assignable case
@@ -328,9 +389,8 @@ public sealed class TicketAssignmentAppService(
             var configured = await autoAssignmentService.ApplyAsync(
                 ticket, now, correlationId, AutoAssignmentTrigger.DepartmentTransfer, cancellationToken);
 
-            // No explicit rule decided: the destination department's Round Robin picks ONE eligible employee (or, when
-            // nobody is eligible, the queue stays visibly unassigned). A specific assignee, an explicit department-queue
-            // rule or disabled assignment still win — see ApplyRoundRobinFallbackAsync.
+            // No rule decided: the ONE shared CS Agent rotation picks the agent (and a failure is recorded, never silent) — see
+            // ApplyRoundRobinFallbackAsync. Only reached for a ticket that had no agent to preserve.
             await autoAssignmentService.ApplyRoundRobinFallbackAsync(
                 ticket, configured, AutoAssignmentTrigger.DepartmentTransfer, now, correlationId, cancellationToken);
         }
@@ -343,7 +403,9 @@ public sealed class TicketAssignmentAppService(
             await workflowEventRepository.AddAsync(
                 TicketWorkflowEvent.ForTransfer(
                     ticketId, now, callerEmployeeId, request.ReasonCode ?? TicketTransferReason.Unspecified,
-                    previousDepartmentId, request.TargetDepartmentId, ticket.CurrentOwnerEmployeeId,
+                    previousDepartmentId, request.TargetDepartmentId,
+                    // Who TOOK it: a CS Agent that merely stayed on the ticket is not a receiving employee.
+                    ticket.CurrentOwnerEmployeeId != previousOwnerEmployeeId ? ticket.CurrentOwnerEmployeeId : null,
                     request.Reason, correlationId),
                 cancellationToken);
         }

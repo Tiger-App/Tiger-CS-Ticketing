@@ -554,12 +554,23 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     // =====================================================================
 
     /// <summary>A CS Manager moves the ticket to <paramref name="targetDepartmentId"/> — the existing Department Transfer, which also clears the owner.</summary>
-    private static async Task TransferAsync(HttpClient manager, long ticketId, int targetDepartmentId)
+    /// <summary>
+    /// A transfer keeps the ticket's CS Agent, so handing the work to the receiving team is an EXPLICIT reassignment: the manager names
+    /// <paramref name="assignTo"/> (default: a fresh employee of the receiving department).
+    /// </summary>
+    private async Task TransferAsync(HttpClient manager, long ticketId, int targetDepartmentId, Guid? assignTo = null)
     {
+        if (assignTo is null)
+        {
+            var (_, _, receiverId) = await _factory.SeedEmployeeAsync(Roles.DepartmentEmployee);
+            await _factory.AssignPrimaryDepartmentAsync(receiverId, targetDepartmentId);
+            assignTo = receiverId;
+        }
+
         var current = await (await manager.GetAsync($"/api/tickets/{ticketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
         var response = await manager.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/transfer",
-            new TransferTicketRequestDto(targetDepartmentId, "Handled by the receiving team.", Convert.FromBase64String(current!.RowVersion)));
+            new TransferTicketRequestDto(targetDepartmentId, "Handled by the receiving team.", Convert.FromBase64String(current!.RowVersion), assignTo));
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
 
@@ -596,7 +607,7 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         var after = await (await creator.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.True(after!.IsReadOnlyAccess);
         Assert.Equal(receiving, after.CurrentDepartmentId);
-        Assert.Null(after.CurrentOwnerEmployeeId);
+        Assert.NotNull(after.CurrentOwnerEmployeeId);   // reassigned explicitly on transfer: never ownerless
         foreach (var suffix in new[] { "/history", "/notes", "/interactions", "/sla", "/escalations", "/approvals", "/customer-history", "/reviews" })
         {
             Assert.NotEqual(HttpStatusCode.Forbidden, (await creator.GetAsync($"/api/tickets/{ticket.TicketId}{suffix}")).StatusCode);
@@ -626,10 +637,10 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         var (receivingB, receivingBId) = await ClientAsync(departmentId: receiving);
 
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(colleague, ticket.TicketId));
-        await TransferAsync(manager, ticket.TicketId, receiving);
+        await TransferAsync(manager, ticket.TicketId, receiving, assignTo: receivingAId);
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(colleague, ticket.TicketId));
 
-        // The transfer round-robins the ticket to ONE eligible agent of the receiving department; only that assignee sees it.
+        // The manager's transfer explicitly reassigns the ticket to ONE agent of the receiving department; only that assignee sees it.
         // A CS Agent's department membership alone still grants nothing.
         var after = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
         var (assignee, other) = after!.CurrentOwnerEmployeeId == receivingAId ? (receivingA, receivingB) : (receivingB, receivingA);
@@ -668,7 +679,7 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         Assert.Equal(HttpStatusCode.Forbidden, note.StatusCode);
         var notes = await (await manager.GetAsync($"/api/tickets/{ticketId}/notes")).Content.ReadFromJsonAsync<TicketNoteListResultDto>();
         Assert.DoesNotContain(notes!.Items, n => n.NoteText == "Still me.");
-        Assert.Null(await _factory.GetTicketCurrentOwnerAsync(ticketId));
+        Assert.NotNull(await _factory.GetTicketCurrentOwnerAsync(ticketId));   // reassigned explicitly on transfer: never ownerless
         Assert.NotEqual(Guid.Empty, creatorId);
     }
 

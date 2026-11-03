@@ -133,7 +133,7 @@ public class GenesysCallCenterFirstTests
             agent, [Roles.CsAgent], ticket.TicketId, new TransferTicketRequestDto(leasing.DepartmentId, "x", []));
         Assert.Equal(TicketMutationOutcome.Success, right.Outcome);
         Assert.Equal(leasing.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(leasingEmployee, ticket.CurrentOwnerEmployeeId);           // the explicit rule decides first
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);                     // the CS Agent is preserved; the department rule does not strip it
     }
 
     [Fact]

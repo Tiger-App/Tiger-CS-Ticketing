@@ -68,7 +68,8 @@ public class TicketLifecycleAppServiceTests
         // department, so the tests wire the real service over fakes rather
         // than a stand-in — that is the behaviour under test.
         var autoAssignment = new TicketAutoAssignmentService(
-            assignmentRules, departmentSettings, departmentAssignments, assignments, audit);
+            assignmentRules, departmentSettings, departmentAssignments, assignments, audit,
+            rotationRepository: new FakeAssignmentRotationRepository(), departmentRepository: departments, workflowEventRepository: workflowEvents);
 
         var service = new TicketLifecycleAppService(
             tickets, resolutions, statusHistory, departmentAssignments, unitOfWork, audit, sla.BreachProcessor,
@@ -476,7 +477,7 @@ public class TicketLifecycleAppServiceTests
         Assert.Contains($"DepartmentId={OtherDepartmentId}", audit.AfterValue);
         Assert.Contains("Reason=Customer called back", audit.AfterValue);
 
-        var workflowEvent = Assert.Single(f.WorkflowEvents.All);
+        var workflowEvent = Assert.Single(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.Reopened);
         Assert.Equal(WorkflowEventType.Reopened, workflowEvent.EventType);
         Assert.Equal(agent, workflowEvent.ActorEmployeeId);
         Assert.Equal(1, f.UnitOfWork.TransactionsCommitted);
@@ -856,6 +857,73 @@ public class TicketLifecycleAppServiceTests
         Assert.Equal(OtherDepartmentId, assignment.AssignedDepartmentId);
     }
 
+    // -- Reopen always ends with an eligible CS Agent (previous one kept, otherwise the shared rotation) --
+
+    private static async Task<(Ticket Ticket, Guid PreviousAgent, Guid CallCenterId)> ClosedTicketOwnedByCallCenterAgentAsync(Fixture f, DateTime now, bool previousStillCsAgent)
+    {
+        var (ticket, owner) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+        var callCenter = f.Departments.AddDepartment("Call Center", "CC");
+        if (previousStillCsAgent)
+        {
+            f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(owner, callCenter.DepartmentId, true, now.AddYears(-1), null));
+        }
+
+        return (ticket, owner, Guid.Empty);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_KeepsThePreviousCsAgent_WhenStillEligible_EvenIntoADepartmentWithNoStaff()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, previousAgent, _) = await ClosedTicketOwnedByCallCenterAgentAsync(f, now, previousStillCsAgent: true);
+        var otherAgent = Guid.NewGuid();
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(otherAgent, 4, true, now.AddYears(-1), null));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(OtherDepartmentId, ticket.CurrentDepartmentId);              // department follows the reopen request...
+        Assert.Equal(previousAgent, ticket.CurrentOwnerEmployeeId);               // ...the CS Agent is independent of it
+        var autoAssign = Assert.Single(f.Audit.Entries, e => e.Action == "AutoAssign");
+        Assert.Contains("Mode=PreservedCsAgent", autoAssign.AfterValue);
+        Assert.Single(f.Assignments.Added, a => a.IsCurrent && a.AssignedEmployeeId == previousAgent);
+        Assert.DoesNotContain(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.ManualAssignmentRequired);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_WhenThePreviousAgentIsGone_TakesTheNextAgentOfTheSharedRotation()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, previousAgent, _) = await ClosedTicketOwnedByCallCenterAgentAsync(f, now, previousStillCsAgent: false);
+        var callCenterId = (await f.Departments.ListAsync(activeOnly: true)).Single(d => d.Code == "CC").DepartmentId;
+        var current = Guid.NewGuid();
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(current, callCenterId, true, now.AddYears(-1), null));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.NotEqual(previousAgent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(current, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(OtherDepartmentId, ticket.CurrentDepartmentId);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_WithNoEligibleAgent_StillReopens_AndRecordsTheAssignmentFailureForStaff()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _, _) = await ClosedTicketOwnedByCallCenterAgentAsync(f, now, previousStillCsAgent: false);
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(TicketStatus.InProgress, ticket.TicketStatus);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Single(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.ManualAssignmentRequired);
+    }
+
     [Fact]
     public async Task ReopenAsync_RespectsTheSourceDepartmentsTransferSetting_OnlyWhenItActuallyMoves()
     {
@@ -977,7 +1045,7 @@ public class TicketLifecycleAppServiceTests
 
         Assert.Equal(TicketMutationOutcome.ConcurrencyConflict, second.Outcome);
         Assert.Equal(1, ticket.ReopenCount);
-        Assert.Single(f.WorkflowEvents.All);
+        Assert.Single(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.Reopened);
         Assert.Single(f.Audit.Entries, e => e.Action == "Reopen");
         Assert.Single(f.Outbox.Committed, m => m.EventType == OutboxEventTypes.TicketReopened);
         Assert.Single(f.Sla.SlaInstances.All, i => i.ChangeReason == SlaChangeReason.Reopen);
@@ -1251,7 +1319,7 @@ public class TicketLifecycleAppServiceTests
         var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
-        var reopened = Assert.Single(f.WorkflowEvents.All);
+        var reopened = Assert.Single(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.Reopened);
         Assert.Equal(WorkflowEventType.Reopened, reopened.EventType);
         Assert.Equal(OtherDepartmentId, reopened.ToDepartmentId);
         Assert.Null(reopened.ToEmployeeId);

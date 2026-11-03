@@ -778,7 +778,7 @@ public class Ticket
     }
 
     /// <summary>MVP-API-Contracts.md §3.6 — moves CurrentDepartmentId, leaves OriginatingDepartmentId untouched (write-once, MVP-ERD.md §2.3), and clears the current owner: the receiving department must explicitly claim/assign it.</summary>
-    public void TransferToDepartment(int targetDepartmentId)
+    public void TransferToDepartment(int targetDepartmentId, bool preserveOwner = false)
     {
         EnsureNotClosed();
 
@@ -788,7 +788,13 @@ public class Ticket
         }
 
         CurrentDepartmentId = targetDepartmentId;
-        CurrentOwnerEmployeeId = null;
+
+        // The department and the CS Agent are independent fields: a business transfer keeps the agent unless the caller reassigns explicitly.
+        // Only system routing that deliberately releases an automatic pre-assignment (Call Center first) clears it.
+        if (!preserveOwner)
+        {
+            CurrentOwnerEmployeeId = null;
+        }
     }
 
     /// <summary>

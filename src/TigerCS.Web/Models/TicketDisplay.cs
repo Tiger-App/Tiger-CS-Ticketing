@@ -56,17 +56,18 @@ public static class TicketDisplay
     public const string UnknownDepartmentQueueLabel = "Department queue";
 
     /// <summary>
-    /// Who the ticket is assigned to — the SECONDARY assignment. A null
-    /// <paramref name="currentOwnerEmployeeId"/> means only that no specific
-    /// employee holds it, never that the ticket is ownerless: it falls back to
-    /// the responsible department's queue ("Facility Management Queue"), which
-    /// is a real, accountable destination. "Unassigned" is deliberately never
-    /// produced here — it misrepresents a queued ticket as having no owner.
+    /// Who the ticket is assigned to — the CS Agent, independent of the
+    /// responsible department. The old "{Department} Queue (Unassigned)" wording
+    /// is gone: an active ticket always has a CS Agent, so a missing one is an
+    /// assignment failure that staff can see and retry, never a department queue.
     /// </summary>
+    /// <summary>Shown only for an assignment failure: an active ticket with no CS Agent. Never worded as a department queue.</summary>
+    public const string UnassignedCsAgentLabel = "Unassigned — awaiting CS Agent";
+
     public static string AssignedToLabel(
         Guid? currentOwnerEmployeeId, string? ownerName, int currentDepartmentId, string? departmentName)
         => currentOwnerEmployeeId is not { } ownerId
-            ? departmentName is null ? UnknownDepartmentQueueLabel : $"{departmentName} Queue (Unassigned)"
+            ? UnassignedCsAgentLabel
             : ownerName ?? $"Employee #{ownerId.ToString()[..8]}";
 
     /// <summary>True when the ticket sits in its department queue rather than with a named employee — for styling only, never for the label text.</summary>
