@@ -1040,8 +1040,12 @@ public class TicketLifecycleAppServiceTests
         // The losing request still holds the pre-reopen token. It must not
         // produce a second cycle, event, audit entry or email — and it must
         // say "your copy is stale", not "this ticket is ineligible".
+        // The reopened ticket has no owner and an unassigned ticket is invisible to a CS Agent, so the losing
+        // agent is the one the ticket is assigned to by now.
+        var loser = Guid.NewGuid();
+        ticket.AssignTo(loser);
         FakeTicketRepository.SetStoredRowVersion(ticket, [7, 7, 7, 7]);
-        var second = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+        var second = await f.Service.ReopenAsync(loser, [Roles.CsAgent], ticket.TicketId, ReopenRequest());
 
         Assert.Equal(TicketMutationOutcome.ConcurrencyConflict, second.Outcome);
         Assert.Equal(1, ticket.ReopenCount);
