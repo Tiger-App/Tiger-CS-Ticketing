@@ -7,10 +7,11 @@
  matches the ORIGINATING interaction (TicketInteractions.IsOriginatingInteraction = 1) by TicketInteractions.ChannelId, so a ticket that
  never carried that exact ChannelId cannot be found under that channel, however it is routed or assigned.
 
-   1. Channel catalogue: the rows must exist, be active and Genesys-enabled (Instagram = 10, Facebook = 11, WhatsApp = 6, Live Chat = 7).
+   1. Channel catalogue (1b: PASS/FAIL verdict for Instagram = 10 and Facebook = 11): the rows must exist, be active and Genesys-enabled (Instagram = 10, Facebook = 11, WhatsApp = 6, Live Chat = 7).
       An inactive/missing row makes Genesys ingestion fail with 'channel-not-configured'.
    2. Genesys originating interactions per channel, Open vs Closed. Before this fix every Instagram or Facebook conversation Genesys
       reported as 'SocialMedia' sits under SOCIAL_DM (4) - they are NOT lost, only filed under the generic social channel.
+   2b. Generic SOCIAL_DM tickets by Genesys queue: shows whether Architect still sends 'SocialMedia' for Instagram/Facebook.
    3. Originating interactions with a channel id that is not in the catalogue, and Genesys tickets with NO originating interaction
       (invisible to every channel filter). Both counts must be 0.
    4. Digital Genesys tickets that need a person but have no owner (Open, in Call Center) - waiting for manual assignment or Round Robin.
@@ -28,6 +29,16 @@ SELECT c.ChannelId, c.Code, c.Name, c.IsActive, c.IsGenesysEnabled,
 FROM dbo.Channels AS c
 ORDER BY c.DisplayOrder;
 
+-- 1b. Verdict for the two channels this release depends on: exactly one row each, and PASS only if active AND Genesys-enabled ------------
+SELECT want.ChannelId, want.Code AS ExpectedCode, c.Name, c.Code AS ActualCode, c.IsActive, c.IsGenesysEnabled,
+       CASE WHEN c.ChannelId IS NULL THEN 'FAIL: row missing'
+            WHEN c.Code <> want.Code THEN 'FAIL: unexpected code'
+            WHEN c.IsActive = 0 THEN 'FAIL: inactive'
+            WHEN c.IsGenesysEnabled = 0 THEN 'FAIL: not Genesys-enabled'
+            ELSE 'PASS' END AS Verdict
+FROM (VALUES (10, N'INSTAGRAM'), (11, N'FACEBOOK')) AS want(ChannelId, Code)
+LEFT JOIN dbo.Channels AS c ON c.ChannelId = want.ChannelId;
+
 -- 2. Genesys tickets by ORIGINATING channel, Open vs Closed ------------------------------------------------------------------------
 SELECT ISNULL(c.Code, CONCAT('(unknown id ', i.ChannelId, ')')) AS ChannelCode,
        SUM(CASE WHEN t.TicketStatus IN (1, 2, 3, 4) THEN 1 ELSE 0 END) AS ActiveTickets,  -- Open, InProgress, PendingCustomer, PendingThirdParty
@@ -39,6 +50,21 @@ LEFT JOIN dbo.Channels AS c ON c.ChannelId = i.ChannelId
 WHERE i.Source = 2 AND i.IsOriginatingInteraction = 1
 GROUP BY ISNULL(c.Code, CONCAT('(unknown id ', i.ChannelId, ')'))
 ORDER BY AllTickets DESC;
+
+-- 2b. Is Genesys Architect sending Instagram / Facebook separately? ----------------------------------------------------------------------
+-- TigerCS stores the NORMALIZED channel, so the raw value Architect sent is not kept. The proxy is the queue: tickets still filed under the
+-- generic SOCIAL_DM channel (id 4) whose Genesys queue is an Instagram/Facebook/Messenger queue mean the flow still sends 'SocialMedia'.
+-- After the fix + a flow change this list should show NEW rows only with queues that are neither Instagram nor Facebook.
+SELECT ISNULL(i.GenesysQueueName, N'(no queue)') AS GenesysQueueName,
+       COUNT(*) AS SocialDmTickets,
+       MIN(t.CreatedAtUtc) AS FirstCreatedUtc, MAX(t.CreatedAtUtc) AS LastCreatedUtc,
+       CASE WHEN i.GenesysQueueName LIKE N'%insta%' OR i.GenesysQueueName LIKE N'%facebook%' OR i.GenesysQueueName LIKE N'%messenger%'
+            THEN 'LIKELY MIS-FILED: Instagram/Facebook queue under generic Social Media' ELSE '' END AS Note
+FROM dbo.TicketInteractions AS i
+JOIN dbo.Tickets AS t ON t.TicketId = i.TicketId
+WHERE i.Source = 2 AND i.IsOriginatingInteraction = 1 AND i.ChannelId = 4
+GROUP BY i.GenesysQueueName
+ORDER BY COUNT(*) DESC;
 
 -- 3. Tickets no channel filter can find --------------------------------------------------------------------------------------------
 SELECT 'originating interaction with a channel id missing from the catalogue' AS Problem, COUNT(*) AS Tickets
@@ -60,19 +86,20 @@ WHERE t.CurrentOwnerEmployeeId IS NULL AND t.TicketStatus IN (1, 2, 3, 4) AND i.
 GROUP BY c.Code ORDER BY UnownedInCallCenter DESC;
 
 -- 5. Digital tickets by channel and owner type ----------------------------------------------------------------------------------------
-SELECT c.Code AS ChannelCode,
-       SUM(CASE WHEN t.CurrentOwnerEmployeeId IS NULL THEN 1 ELSE 0 END) AS Unowned,
-       SUM(CASE WHEN t.CurrentOwnerEmployeeId IS NOT NULL AND EXISTS (
-                SELECT 1 FROM dbo.UserDepartmentAssignments a JOIN dbo.Departments d ON d.DepartmentId = a.DepartmentId
-                WHERE a.EmployeeId = t.CurrentOwnerEmployeeId AND d.Code = N'CC') THEN 1 ELSE 0 END) AS OwnedByCallCenterMember,
-       SUM(CASE WHEN t.CurrentOwnerEmployeeId IS NOT NULL AND NOT EXISTS (
-                SELECT 1 FROM dbo.UserDepartmentAssignments a JOIN dbo.Departments d ON d.DepartmentId = a.DepartmentId
-                WHERE a.EmployeeId = t.CurrentOwnerEmployeeId AND d.Code = N'CC') THEN 1 ELSE 0 END) AS OwnedByOthers
-FROM dbo.Tickets AS t
-JOIN dbo.TicketInteractions AS i ON i.TicketId = t.TicketId AND i.IsOriginatingInteraction = 1 AND i.Source = 2
-JOIN dbo.Channels AS c ON c.ChannelId = i.ChannelId
-WHERE i.ChannelId <> 1
-GROUP BY c.Code ORDER BY c.Code;
+SELECT x.ChannelCode,
+       SUM(CASE WHEN x.OwnerId IS NULL THEN 1 ELSE 0 END)                         AS Unowned,
+       SUM(CASE WHEN x.OwnerId IS NOT NULL AND x.OwnerInCallCenter = 1 THEN 1 ELSE 0 END) AS OwnedByCallCenterMember,
+       SUM(CASE WHEN x.OwnerId IS NOT NULL AND x.OwnerInCallCenter = 0 THEN 1 ELSE 0 END) AS OwnedByOthers
+FROM (
+    SELECT c.Code AS ChannelCode, t.CurrentOwnerEmployeeId AS OwnerId,
+           CASE WHEN EXISTS (SELECT 1 FROM dbo.UserDepartmentAssignments a JOIN dbo.Departments d ON d.DepartmentId = a.DepartmentId
+                             WHERE a.EmployeeId = t.CurrentOwnerEmployeeId AND d.Code = N'CC') THEN 1 ELSE 0 END AS OwnerInCallCenter
+    FROM dbo.Tickets AS t
+    JOIN dbo.TicketInteractions AS i ON i.TicketId = t.TicketId AND i.IsOriginatingInteraction = 1 AND i.Source = 2
+    JOIN dbo.Channels AS c ON c.ChannelId = i.ChannelId
+    WHERE i.ChannelId <> 1
+) AS x
+GROUP BY x.ChannelCode ORDER BY x.ChannelCode;
 
 -- 6. Invariants - every count must be 0 -------------------------------------------------------------------------------------------------
 SELECT 'ticket with two current assignments' AS Invariant, COUNT(*) AS Violations
