@@ -56,6 +56,18 @@ public sealed class ProductionConfigurationTests
     }
 
     [Fact]
+    public void Api_ShipsTheCallCenterReconcilerDisabled_AndInDryRun()
+    {
+        var c = Layered("TigerCS.Api");
+
+        // The reconciler writes ticket ownership when enabled with DryRun=false. Production ships it OFF and, even if switched on, writing
+        // nothing: enabling it for real is a deliberate, separate decision.
+        Assert.False(c.GetValue<bool>("CallCenterReconciliation:Enabled"));
+        Assert.True(c.GetValue<bool>("CallCenterReconciliation:DryRun"));
+        Assert.True(c.GetValue<bool>("CallCenterReconciliation:CsAgentRoleOnly"));
+    }
+
+    [Fact]
     public void Api_UsesTheRealProviders_NotMockOrFixtureOnes()
     {
         var c = Layered("TigerCS.Api");

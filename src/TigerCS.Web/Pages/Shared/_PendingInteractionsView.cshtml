@@ -212,17 +212,20 @@
                                 @if (h.Status != "InProgress")
                                 {
                                     <form method="post" asp-page="/Tickets" asp-page-handler="Start" asp-all-route-data="@Model.PendingRouteValues" class="inline-form">
+                                    <input type="hidden" name="returnPage" value="@Model.PageNumber" />
                                         <input type="hidden" name="handoffId" value="@h.TicketAgentHandoffId" />
                                         <button class="btn btn-sm btn-gold" type="submit" title="Claim this interaction and the ticket for yourself; an Open ticket moves to In Progress. Not a first response.">Accept &amp; Start</button>
                                     </form>
                                 }
                                 <form method="post" asp-page="/Tickets" asp-page-handler="Complete" asp-all-route-data="@Model.PendingRouteValues" class="inline-form">
+                                    <input type="hidden" name="returnPage" value="@Model.PageNumber" />
                                     <input type="hidden" name="handoffId" value="@h.TicketAgentHandoffId" />
                                     <button class="btn btn-sm" type="submit" title="Mark the human follow-up as done. The ticket is not resolved or closed.">Complete Follow-up</button>
                                 </form>
                                 <details class="inline-details">
                                     <summary class="btn btn-sm btn-quiet" title="Cancel the human follow-up (reason required). The ticket stays as it is.">Cancel Follow-up</summary>
                                     <form method="post" asp-page="/Tickets" asp-page-handler="Cancel" asp-all-route-data="@Model.PendingRouteValues" class="inline-form inline-form--stacked">
+                                    <input type="hidden" name="returnPage" value="@Model.PageNumber" />
                                         <input type="hidden" name="handoffId" value="@h.TicketAgentHandoffId" />
                                         <input class="field-input" type="text" name="reason" required
                                                placeholder="Why is this no longer needed?" aria-label="Cancellation reason" />
