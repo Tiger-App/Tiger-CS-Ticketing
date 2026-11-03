@@ -155,7 +155,7 @@ public sealed class TicketsModel(
 
     public int TotalCount { get; private set; }
 
-    public int TotalPages => TotalCount == 0 ? 1 : (int)Math.Ceiling(TotalCount / (double)PageSize);
+    public int TotalPages => TicketsPaging.TotalPages(TotalCount, PageSize);
 
     public TicketNameResolver NameResolver => nameResolver;
 
@@ -193,7 +193,7 @@ public sealed class TicketsModel(
     public IReadOnlyList<PendingInteractionRow> PendingRows { get; private set; } = [];
     public IReadOnlyList<ChannelDto> Channels { get; private set; } = [];
     public int PendingTotalCount { get; private set; }
-    public int PendingTotalPages => PendingTotalCount == 0 ? 1 : (int)Math.Ceiling(PendingTotalCount / (double)PageSize);
+    public int PendingTotalPages => TicketsPaging.TotalPages(PendingTotalCount, PageSize);
 
     /// <summary>Set when a Start/Complete/Cancel action failed — carried across the redirect and shown above the list rather than swallowed.</summary>
     [TempData]
@@ -216,9 +216,13 @@ public sealed class TicketsModel(
         }
     }
 
+    // NOTE: the page-number parameter is bound with [FromQuery(Name = "page")] on purpose. "page" is also the reserved Razor Pages
+    // route value (the page name, "/Tickets"), so a plain `int page` binds from the route first and never sees ?page=2 — and
+    // Url.Page("/Tickets", new { page = 2 }) overwrites it with the page name. Both made Next/Prev a no-op. Links are therefore built
+    // with TicketsPaging.Url (a plain query string), never Url.Page.
     public async Task OnGetAsync(
         int? departmentId, byte? priorityId, string? ticketStatus, string? verificationStatus,
-        Guid? ownerEmployeeId, string? search, string? sortBy, string? sortDir, int page, int pageSize,
+        Guid? ownerEmployeeId, string? search, string? sortBy, string? sortDir, [FromQuery(Name = "page")] int pageNumber, int pageSize,
         CancellationToken cancellationToken,
         byte? channelId = null, int? requestTypeId = null, bool activeOnly = false, bool inDepartmentQueue = false,
         bool slaBreached = false, bool dueToday = false, string? backlogAge = null, bool pendingApproval = false,
@@ -270,7 +274,7 @@ public sealed class TicketsModel(
         Search = search;
         SortBy = sortBy;
         SortDir = sortDir;
-        PageNumber = page < 1 ? 1 : page;
+        PageNumber = pageNumber < 1 ? 1 : pageNumber;
         PageSize = pageSize is < 1 or > 100 ? 20 : pageSize;
         ChannelId = channelId;
         RequestTypeId = requestTypeId;
@@ -400,6 +404,14 @@ public sealed class TicketsModel(
             CreatedByMe ? true : null, Escalated ? true : null, AvailableToTake ? true : null);
 
         var result = await ticketsApiClient.GetQueueAsync(request, cancellationToken);
+
+        // A bookmarked/stale page past the end (e.g. after tickets closed): show the last page instead of an empty list with a dead pager.
+        if (result.IsSuccess && result.Value is { } overshoot && TicketsPaging.OvershootsLastPage(PageNumber, overshoot.TotalCount, PageSize, overshoot.Items.Count))
+        {
+            PageNumber = TicketsPaging.TotalPages(overshoot.TotalCount, PageSize);
+            result = await ticketsApiClient.GetQueueAsync(request with { Page = PageNumber }, cancellationToken);
+        }
+
         Outcome = result.Outcome;
 
         if (result.IsSuccess && result.Value is not null)
@@ -423,12 +435,17 @@ public sealed class TicketsModel(
 
         var channelsTask = channelsApiClient?.GetChannelsAsync(activeOnly: false, cancellationToken);
 
-        var result = await handoffsApiClient.ListAsync(
-            new AgentHandoffListRequestDto(
-                DepartmentId, ChannelId,
-                MineOnly ? Viewer?.EmployeeId : null,
-                UnassignedOnly, IncludeResolved, PageNumber, PageSize),
-            cancellationToken);
+        var pendingRequest = new AgentHandoffListRequestDto(
+            DepartmentId, ChannelId,
+            MineOnly ? Viewer?.EmployeeId : null,
+            UnassignedOnly, IncludeResolved, PageNumber, PageSize);
+        var result = await handoffsApiClient.ListAsync(pendingRequest, cancellationToken);
+
+        if (result.IsSuccess && result.Value is { } overshoot && TicketsPaging.OvershootsLastPage(PageNumber, overshoot.TotalCount, PageSize, overshoot.Items.Count))
+        {
+            PageNumber = TicketsPaging.TotalPages(overshoot.TotalCount, PageSize);
+            result = await handoffsApiClient.ListAsync(pendingRequest with { Page = PageNumber }, cancellationToken);
+        }
 
         PendingOutcome = result.Outcome;
 
