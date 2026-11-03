@@ -218,7 +218,7 @@ public sealed class TicketAutoAssignmentService(
     /// with no eligible agent, leaves the ticket visibly unassigned in the Call Center queue (audited), never a guess.
     /// </summary>
     public async Task<AutoAssignmentResult> AssignCallCenterIntakeAsync(
-        Ticket ticket, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default)
+        Ticket ticket, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default, string? requiredRole = null)
     {
         var settings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(ticket.CurrentDepartmentId, cancellationToken);
         if (settings is { AllowAssignment: false })
@@ -227,7 +227,7 @@ public sealed class TicketAutoAssignmentService(
                 "Call Center workflow settings disable assignment; Status=Unassigned", AutoAssignmentTrigger.CallCenterIntake, correlationId, cancellationToken);
         }
 
-        return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, AutoAssignmentTrigger.CallCenterIntake, ruleId: null, cancellationToken);
+        return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, AutoAssignmentTrigger.CallCenterIntake, ruleId: null, cancellationToken, requiredRole);
     }
 
     /// <summary>
@@ -242,7 +242,7 @@ public sealed class TicketAutoAssignmentService(
     /// </para>
     /// </summary>
     public async Task<bool> RouteExistingTicketToCallCenterAsync(
-        Ticket ticket, DateTime nowUtc, Guid correlationId, string reason, CancellationToken cancellationToken = default)
+        Ticket ticket, DateTime nowUtc, Guid correlationId, string reason, CancellationToken cancellationToken = default, string? requiredRole = null)
     {
         ArgumentNullException.ThrowIfNull(ticket);
 
@@ -296,7 +296,7 @@ public sealed class TicketAutoAssignmentService(
                 cancellationToken);
         }
 
-        await AssignCallCenterIntakeAsync(ticket, nowUtc, correlationId, cancellationToken);
+        await AssignCallCenterIntakeAsync(ticket, nowUtc, correlationId, cancellationToken, requiredRole);
         return true;
     }
 
@@ -338,7 +338,8 @@ public sealed class TicketAutoAssignmentService(
     /// store) leaves the ticket in the department queue with the reason audited — never a guess.
     /// </summary>
     private async Task<AutoAssignmentResult> AssignRoundRobinAsync(
-        Ticket ticket, DateTime nowUtc, Guid correlationId, AutoAssignmentTrigger trigger, int? ruleId, CancellationToken cancellationToken)
+        Ticket ticket, DateTime nowUtc, Guid correlationId, AutoAssignmentTrigger trigger, int? ruleId, CancellationToken cancellationToken,
+        string? requiredRole = null)
     {
         var ruleText = ruleId is { } id ? $"Rule {id}" : trigger == AutoAssignmentTrigger.CallCenterIntake ? "Call Center intake" : "Round Robin default";
         if (rotationRepository is null)
@@ -358,7 +359,7 @@ public sealed class TicketAutoAssignmentService(
 
         var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(
             ticket.CurrentDepartmentId, activeEmployeesOnly: true, cancellationToken);
-        var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), cancellationToken);
+        var eligible = await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), cancellationToken, requiredRole);
         if (eligible.Count == 0)
         {
             return await QueueAsync(ticket, AutoAssignmentOutcome.NoEligibleEmployee,
@@ -396,7 +397,7 @@ public sealed class TicketAutoAssignmentService(
     /// read-only users, supervisors/managers and administrators are skipped. A lookup that cannot answer excludes the person: rotation
     /// never guesses. (The three readers are optional only so unit tests can build the service bare; the composition root supplies all.)
     /// </summary>
-    private async Task<List<Guid>> FilterEligibleAsync(IEnumerable<Guid> candidateIds, CancellationToken cancellationToken)
+    private async Task<List<Guid>> FilterEligibleAsync(IEnumerable<Guid> candidateIds, CancellationToken cancellationToken, string? requiredRole = null)
     {
         var eligible = new List<Guid>();
         foreach (var id in candidateIds)
@@ -419,6 +420,16 @@ public sealed class TicketAutoAssignmentService(
                 {
                     continue;
                 }
+
+                // Optional narrowing (the reconciler deals only to CS Agents, the role that can Transfer as owner).
+                if (requiredRole is not null && !roles.Contains(requiredRole, StringComparer.Ordinal))
+                {
+                    continue;
+                }
+            }
+            else if (requiredRole is not null)
+            {
+                continue;   // a role that cannot be verified is not assumed
             }
 
             eligible.Add(id);

@@ -522,7 +522,7 @@ public sealed class DashboardUiTests
         foreach (var name in new[] { "channelId", "requestTypeId", "activeOnly", "inDepartmentQueue", "slaBreached", "dueToday", "backlogAge", "pendingApproval", "createdFrom", "createdTo" })
         {
             Assert.Contains($"name=\"{name}\"", view);
-            Assert.Contains($"{name} = ", view);
+            Assert.Contains($"[\"{name}\"] = ", view);
         }
 
         Assert.Contains("Filtered from Dashboard", view);
@@ -625,8 +625,8 @@ public sealed class DashboardUiTests
 
         Assert.Contains("string? closureCategory = null", page);
         Assert.Contains("Unclassified ? true : null, ClosureCategory, ClosedFrom, ClosedTo", page);
-        Assert.Contains("closureCategory = Model.ClosureCategory", list);
-        Assert.Contains("closedFrom = Model.ClosedFrom", list);
+        Assert.Contains("[\"closureCategory\"] = Model.ClosureCategory", list);
+        Assert.Contains("[\"closedFrom\"] = Model.ClosedFrom", list);
         Assert.Contains("name=\"closedTo\"", list);
         Assert.Contains("query[\"closedFrom\"]", client);
         Assert.Contains("name=\"closureCategory\"", list);
