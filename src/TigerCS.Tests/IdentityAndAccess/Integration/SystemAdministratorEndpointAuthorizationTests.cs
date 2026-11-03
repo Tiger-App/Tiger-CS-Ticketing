@@ -63,7 +63,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
         CreateClientAsync(Roles.SystemAdministrator);
 
     /// <summary>Runs the real intake -> customer lookup -> ticket sequence as the given client, returning the created ticket.</summary>
-    private async Task<TicketDetailDto> CreateVerifiedTicketAsync(HttpClient client, string departmentPrefix)
+    private async Task<TicketDetailDto> CreateVerifiedTicketAsync(HttpClient client, string departmentPrefix, bool takeOwnership = false)
     {
         await _factory.SeedPrioritiesAsync();
         var departmentId = await _factory.CreateDepartmentAsync(
@@ -88,9 +88,14 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
                 intake.IntakeRecordId, crmUnit.UnitReferenceId, crmUnit.ContactReferenceId, categoryId, (byte)PriorityLevel.High, "AC unit not cooling"));
         Assert.Equal(HttpStatusCode.Created, ticketResponse.StatusCode);
         var created = await ticketResponse.Content.ReadFromJsonAsync<TicketResponseDto>();
-        await _factory.RecordHandlerAsync(created!.TicketId, client);
+        if (takeOwnership)
+        {
+            // A CS Agent creator takes the ticket (assigned to them): a CS Agent sees only tickets currently assigned to them. (An
+            // administrator creator leaves it unassigned - the tests that follow assign it themselves.)
+            await _factory.AssignOwnerAsync(created!.TicketId, TigerCsApiFactory.UserIdOf(client));
+        }
 
-        var detailResponse = await client.GetAsync($"/api/tickets/{created.TicketId}");
+        var detailResponse = await client.GetAsync($"/api/tickets/{created!.TicketId}");
         detailResponse.EnsureSuccessStatusCode();
         return (await detailResponse.Content.ReadFromJsonAsync<TicketDetailDto>())!;
     }
@@ -494,7 +499,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     public async Task GetTicketDetail_ForATicketInADepartmentTheAdministratorDoesNotBelongTo_Returns200()
     {
         var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
-        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities");
+        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities", takeOwnership: true);
         var (adminClient, _) = await CreateAdministratorAsync();
 
         var response = await adminClient.GetAsync($"/api/tickets/{ticket.TicketId}");
@@ -1282,7 +1287,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     public async Task AddAndListTicketNotes_Return201And200()
     {
         var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
-        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities");
+        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities", takeOwnership: true);
         var (adminClient, _) = await CreateAdministratorAsync();
 
         var addResponse = await adminClient.PostAsJsonAsync(
@@ -1308,7 +1313,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     public async Task GetTicketSla_Returns200()
     {
         var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
-        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities");
+        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities", takeOwnership: true);
         var (adminClient, _) = await CreateAdministratorAsync();
 
         var response = await adminClient.GetAsync($"/api/tickets/{ticket.TicketId}/sla");
@@ -1327,7 +1332,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     public async Task RecordFirstResponse_Returns200()
     {
         var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
-        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities");
+        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities", takeOwnership: true);
         var (adminClient, _) = await CreateAdministratorAsync();
 
         var response = await adminClient.PostAsJsonAsync(
@@ -1343,7 +1348,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     public async Task EscalateTicketAndListEscalations_Return201And200()
     {
         var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
-        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities");
+        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities", takeOwnership: true);
         var (adminClient, _) = await CreateAdministratorAsync();
 
         // Level 4 specifically: MVP-ERD.md §2.17 restricts ManualLevel4 to a
@@ -1678,7 +1683,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
         var (adminClient, _) = await CreateAdministratorAsync();
 
         // Ticket 1: request -> list -> pending inbox -> approve.
-        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities");
+        var ticket = await CreateVerifiedTicketAsync(agentClient, "Facilities", takeOwnership: true);
         var requestResponse = await agentClient.PostAsJsonAsync(
             $"/api/tickets/{ticket.TicketId}/sla/priority-downgrade-requests",
             new CreateDowngradeRequestRequestDto((byte)PriorityLevel.Medium, "Customer confirmed it is not urgent."));
@@ -1702,7 +1707,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
         Assert.Equal("Downgrade", decision.NewSlaPeriod!.ChangeReason);
 
         // Ticket 2: request -> reject.
-        var second = await CreateVerifiedTicketAsync(agentClient, "Facilities");
+        var second = await CreateVerifiedTicketAsync(agentClient, "Facilities", takeOwnership: true);
         var secondRequest = await (await agentClient.PostAsJsonAsync(
                 $"/api/tickets/{second.TicketId}/sla/priority-downgrade-requests",
                 new CreateDowngradeRequestRequestDto((byte)PriorityLevel.Low, "Cosmetic issue only.")))

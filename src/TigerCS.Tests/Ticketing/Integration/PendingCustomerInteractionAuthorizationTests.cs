@@ -53,11 +53,18 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
     }
 
     /// <summary>
-    /// Genesys connecting <paramref name="agent"/> to the conversation. A CS Agent reaches a ticket (and so the work item behind it) only
-    /// through assignment or by having handled its Genesys interaction, so every test below in which a CS Agent acts on the work first has
-    /// Genesys connect them — which is also exactly how the work reaches an agent in production.
+    /// Genesys connecting <paramref name="agent"/> to the conversation (and so making them its responsible CS Agent). Handling grants no
+    /// ticket visibility by itself under the current rule - tests that need the agent to see the ticket use <see cref="OwnAsync"/>.
     /// </summary>
     private Task ConnectAsync(long ticketId, HttpClient agent) => _factory.RecordHandlerAsync(ticketId, agent);
+
+    /// <summary>
+    /// Assigns the ticket to <paramref name="agent"/>. A CS Agent sees a ticket (and the work behind it) only when it is currently assigned to
+    /// them (or a department employee holds it and they are responsible for it): an unassigned ticket is invisible to them, whoever
+    /// handled its Genesys interaction. Used by the tests below that need the agent to SEE the work (list, cancel) or to reach the
+    /// membership check on it, rather than just start it.
+    /// </summary>
+    private Task OwnAsync(long ticketId, Guid agentId) => _factory.AssignOwnerAsync(ticketId, agentId);
 
     /// <summary>
     /// An AI website chat that ends with nobody having taken it — the exact
@@ -109,8 +116,8 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
         var (genesys, _) = await ClientForAsync(Roles.CsAgent);
         var (ticketId, handoffId, _) = await WaitingInteractionAsync(genesys);
 
-        var (agent, _) = await ClientForAsync(Roles.CsAgent);
-        await ConnectAsync(ticketId, agent);
+        var (agent, agentId) = await ClientForAsync(Roles.CsAgent);
+        await OwnAsync(ticketId, agentId);
         var response = await agent.GetAsync("/api/pending-customer-interactions");
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -146,8 +153,8 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
         var (genesys, _) = await ClientForAsync(Roles.CsAgent);
         var (ticketId, handoffId, departmentId) = await WaitingInteractionAsync(genesys);
 
-        var (agent, _) = await ClientForAsync(Roles.CsAgent, departmentId);
-        await ConnectAsync(ticketId, agent);
+        var (agent, agentId) = await ClientForAsync(Roles.CsAgent, departmentId);
+        await OwnAsync(ticketId, agentId);
 
         var cancelled = await agent.PostAsJsonAsync(
             $"/api/pending-customer-interactions/{handoffId}/cancel",
@@ -258,8 +265,8 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
 
         var otherDepartmentId = await _factory.CreateDepartmentAsync(
             "Other CS " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
-        var (outsideAgent, _) = await ClientForAsync(Roles.CsAgent, otherDepartmentId);
-        await ConnectAsync(ticketId, outsideAgent);
+        var (outsideAgent, outsideAgentId) = await ClientForAsync(Roles.CsAgent, otherDepartmentId);
+        await OwnAsync(ticketId, outsideAgentId);
 
         var started = await outsideAgent.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { });
 
@@ -276,7 +283,8 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
         var ticket = await (await outsideAgent.GetAsync($"/api/tickets/{ticketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.Equal("Open", ticket!.TicketStatus);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        // (Unchanged: still held by the agent the test assigned it to - a CS Agent sees only an assigned ticket - not taken by the refused start.)
+        Assert.Equal(outsideAgentId, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
@@ -288,7 +296,7 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
         var newDepartmentId = await _factory.CreateDepartmentAsync(
             "Receiving " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
         var (receivingAgent, receivingAgentId) = await ClientForAsync(Roles.CsAgent, newDepartmentId);
-        await ConnectAsync(ticketId, receivingAgent);
+        await OwnAsync(ticketId, receivingAgentId);
 
         // Refused while the ticket is elsewhere.
         Assert.Equal(
@@ -377,8 +385,9 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
         var (agent, agentId) = await ClientForAsync(Roles.CsAgent, departmentId);
         await ConnectAsync(ticketId, agent);
 
-        // While waiting: Open and unowned (confirmed decision 8).
-        var waiting = await (await agent.GetAsync($"/api/tickets/{ticketId}"))
+        // While waiting: Open and unowned (confirmed decision 8). Read as a CS Supervisor: a CS Agent cannot open an unassigned ticket.
+        var (supervisor, _) = await ClientForAsync(Roles.CsSupervisor);
+        var waiting = await (await supervisor.GetAsync($"/api/tickets/{ticketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.Equal("Open", waiting!.TicketStatus);
         Assert.Null(waiting.CurrentOwnerEmployeeId);

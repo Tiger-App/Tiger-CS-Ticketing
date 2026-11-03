@@ -30,29 +30,33 @@ public sealed class TransferredOwnerAccessTests : IDisposable
         TicketVisibilityRule.GetTicketAccessAsync(
             new FakeUserDepartmentAssignmentRepository(), new TicketInteractionHandlerRepository(context), caller, roles, ticket);
 
+    // OLD RULE REPLACED: a Genesys handler used to keep Full access until a manual transfer, then ReadOnly, and a handling recorded after the
+    // transfer granted access again. Handling a ticket now grants a restricted CS Agent nothing at all, before or after a transfer; what a
+    // transfer takes away is OWNERSHIP (last test below), and a system routing to the Call Center takes nothing from the current owner.
+
     [Fact]
-    public async Task PreviousGenesysHandler_BeforeAManualTransfer_KeepsReadOnly_ButCannotModify()
+    public async Task PreviousGenesysHandler_HasNoAccessBeforeOrAfterAManualTransfer_AndCannotModify()
     {
         using var context = _db.CreateContext();
         var ticket = _db.AddTicket(context, _db.CustomerServiceId);
         var handler = _db.CsAgentId;
         _db.AddHandler(context, ticket, handler);                                   // handled 30 minutes before "now"
 
-        Assert.Equal(TicketAccessLevel.Full, await AccessAsync(context, handler, Agent, ticket));
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(context, handler, Agent, ticket));
 
         AddTransfer(context, ticket.TicketId, DashboardSqliteFixture.Now.AddMinutes(-10), TicketTransferReason.WrongDepartment);
 
-        Assert.Equal(TicketAccessLevel.ReadOnly, await AccessAsync(context, handler, Agent, ticket));
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(context, handler, Agent, ticket));
         Assert.False(await TicketVisibilityRule.CanModifyTicketAsync(
             new FakeUserDepartmentAssignmentRepository(), new TicketInteractionHandlerRepository(context), handler, Agent, ticket));
     }
 
     [Fact]
-    public async Task SystemRoutingToCallCenter_DoesNotRevokeTheHandler()
+    public async Task SystemRoutingToCallCenter_DoesNotRevokeTheCurrentOwner_WhoAlsoHandledTheCall()
     {
         using var context = _db.CreateContext();
-        var ticket = _db.AddTicket(context, _db.CustomerServiceId);
         var handler = _db.CsAgentId;
+        var ticket = _db.AddTicket(context, _db.CustomerServiceId, owner: handler);
         _db.AddHandler(context, ticket, handler);
         AddTransfer(context, ticket.TicketId, DashboardSqliteFixture.Now.AddMinutes(-10), TicketTransferReason.SystemRouting);
 
@@ -60,7 +64,7 @@ public sealed class TransferredOwnerAccessTests : IDisposable
     }
 
     [Fact]
-    public async Task HandlingRecordedAfterTheTransfer_GrantsAccessAgain()
+    public async Task HandlingRecordedAfterTheTransfer_GrantsNothing_OnlyOwnershipDoes()
     {
         using var context = _db.CreateContext();
         var ticket = _db.AddTicket(context, _db.CustomerServiceId);
@@ -73,7 +77,12 @@ public sealed class TransferredOwnerAccessTests : IDisposable
             InteractionHandlerSource.Routing, connectedAtUtc: null, DashboardSqliteFixture.Now.AddMinutes(-5)));
         context.SaveChanges();
 
-        Assert.Equal(TicketAccessLevel.ReadOnly, await AccessAsync(context, first, Agent, ticket));
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(context, first, Agent, ticket));
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(context, second, Agent, ticket));
+
+        ticket.AssignTo(second);                                                     // being assigned the ticket is what gives access
+
+        Assert.Equal(TicketAccessLevel.None, await AccessAsync(context, first, Agent, ticket));
         Assert.Equal(TicketAccessLevel.Full, await AccessAsync(context, second, Agent, ticket));
     }
 

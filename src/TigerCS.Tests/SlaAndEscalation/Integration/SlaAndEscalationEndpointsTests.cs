@@ -68,7 +68,8 @@ public class SlaAndEscalationEndpointsTests : IClassFixture<TigerCsApiFactory>
         // failing later on an empty response body.
         Assert.Equal(HttpStatusCode.Created, createResponse.StatusCode);
         var created = await createResponse.Content.ReadFromJsonAsync<TicketResponseDto>();
-        await _factory.RecordHandlerAsync(created!.TicketId, client);
+        // The creating CS Agent takes the ticket: a CS Agent sees only tickets currently assigned to them. (Re-read below, as this changes its RowVersion.)
+        await _factory.AssignOwnerAsync(created!.TicketId, TigerCsApiFactory.UserIdOf(client));
 
         return (await (await client.GetAsync($"/api/tickets/{created.TicketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>())!;
@@ -388,7 +389,7 @@ public class SlaAndEscalationEndpointsTests : IClassFixture<TigerCsApiFactory>
         await _factory.AssignPrimaryDepartmentAsync(managerId, ticket.CurrentDepartmentId);
 
         var assigned = await (await managerClient.PostAsJsonAsync(
-                $"/api/tickets/{ticket.TicketId}/assignment", new AssignTicketRequestDto(managerId, RowVersionOf(ticket))))
+                $"/api/tickets/{ticket.TicketId}/assignment", new AssignTicketRequestDto(managerId, RowVersionOf(ticket), TicketTransferReason.NeedsEscalation, "Taken over by the manager.")))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
         var inProgress = await (await managerClient.PostAsJsonAsync(
                 $"/api/tickets/{ticket.TicketId}/status", new ChangeStatusRequestDto("InProgress", RowVersionOf(assigned!))))
