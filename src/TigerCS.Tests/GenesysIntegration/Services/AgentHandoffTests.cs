@@ -32,7 +32,7 @@ public class AgentHandoffTests
 
     /// <summary>
     /// For tests whose subject is the SHAPE of the work list (ordering, columns, channels), not who may see it: a CS Supervisor sees all
-    /// work. A CS Agent sees only work on tickets assigned to them or that they handled on Genesys — that is covered by
+    /// work. A CS Agent sees only work on tickets assigned to them (or held by a department employee they are responsible for) — that is covered by
     /// <c>CsAgentTicketVisibilityTests</c>.
     /// </summary>
     private static readonly string[] SupervisorRoles = [Roles.CsSupervisor];
@@ -41,6 +41,14 @@ public class AgentHandoffTests
         string conversationId, GenesysChannel channel, int departmentId, string? customerName = null) =>
         new(conversationId, channel,
             CustomerPhone: "+971500000001", CustomerName: customerName, DepartmentId: departmentId);
+
+    /// <summary>A CS Agent acts on a ticket only when it is assigned to them (or a department employee holds it and they are responsible for it).</summary>
+    private static Guid AssignedAgent(GenesysServiceFixture f, long ticketId)
+    {
+        var agent = Guid.NewGuid();
+        f.Tickets.All.Single(t => t.TicketId == ticketId).AssignTo(agent);
+        return agent;
+    }
 
     /// <summary>An ingested inquiry on any channel — the state every handoff starts from.</summary>
     private static async Task<(GenesysServiceFixture Fixture, long TicketId, int DepartmentId)> IngestAsync(
@@ -276,7 +284,7 @@ public class AgentHandoffTests
         var statusBefore = ticket.TicketStatus;
         var slaBefore = ticket.SlaState;
 
-        var agent = Guid.NewGuid();
+        var agent = AssignedAgent(f, ticketId);
         var completed = await f.PendingWork.CompleteAsync(
             agent, AgentRoles, requested.TicketAgentHandoffId!.Value,
             new CompleteAgentHandoffRequestDto("Replied in the WhatsApp thread."));
@@ -373,7 +381,7 @@ public class AgentHandoffTests
                     new GenesysTranscriptMessageDto("Customer", DateTime.UtcNow.AddMinutes(-1), "Yes.")
                 ]));
 
-        var history = await f.InteractionQuery.GetForTicketAsync(Guid.NewGuid(), AgentRoles, ticketId);
+        var history = await f.InteractionQuery.GetForTicketAsync(AssignedAgent(f, ticketId), AgentRoles, ticketId);
         Assert.Equal(TicketQueryOutcome.Success, history.Outcome);
 
         var interaction = Assert.Single(history.Response!.Interactions);
@@ -429,10 +437,10 @@ public class AgentHandoffTests
     [Fact]
     public async Task CompletedWork_AcceptsNoFurtherChanges()
     {
-        var (f, _, _) = await IngestAsync("conv-done", GenesysChannel.Phone);
+        var (f, ticketId, _) = await IngestAsync("conv-done", GenesysChannel.Phone);
         var requested = await f.AgentHandoff.RequestAsync(ServiceAccount, new GenesysHandoffRequestDto("conv-done"));
         var handoffId = requested.TicketAgentHandoffId!.Value;
-        var agent = Guid.NewGuid();
+        var agent = AssignedAgent(f, ticketId);
 
         await f.PendingWork.CompleteAsync(agent, AgentRoles, handoffId, new CompleteAgentHandoffRequestDto(null));
 
@@ -447,10 +455,10 @@ public class AgentHandoffTests
     [Fact]
     public async Task CancellingRequiresAReason_BecauseCustomerWorkIsNeverDroppedSilently()
     {
-        var (f, _, _) = await IngestAsync("conv-cancel", GenesysChannel.SocialMedia);
+        var (f, ticketId, _) = await IngestAsync("conv-cancel", GenesysChannel.SocialMedia);
         var requested = await f.AgentHandoff.RequestAsync(ServiceAccount, new GenesysHandoffRequestDto("conv-cancel"));
         var handoffId = requested.TicketAgentHandoffId!.Value;
-        var agent = Guid.NewGuid();
+        var agent = AssignedAgent(f, ticketId);
 
         var noReason = await f.PendingWork.CancelAsync(
             agent, AgentRoles, handoffId, new CancelAgentHandoffRequestDto("   "));
@@ -476,7 +484,7 @@ public class AgentHandoffTests
         // new piece of work on the same ticket, never a new ticket.
         var (f, ticketId, _) = await IngestAsync("conv-again", GenesysChannel.WhatsApp);
         var first = await f.AgentHandoff.RequestAsync(ServiceAccount, new GenesysHandoffRequestDto("conv-again"));
-        var agent = Guid.NewGuid();
+        var agent = AssignedAgent(f, ticketId);
         await f.PendingWork.CompleteAsync(
             agent, AgentRoles, first.TicketAgentHandoffId!.Value, new CompleteAgentHandoffRequestDto("Answered."));
 

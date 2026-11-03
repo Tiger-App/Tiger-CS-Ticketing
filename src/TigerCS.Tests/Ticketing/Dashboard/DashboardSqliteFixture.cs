@@ -103,11 +103,11 @@ public sealed class DashboardSqliteFixture : IDisposable
     {
         var time = new FixedTimeProvider(nowUtc ?? Now);
         var assignments = new UserDepartmentAssignmentRepository(context);
-        var tickets = new TicketRepository(context);
+        var tickets = new TicketRepository(context, ReopenPolicy.Default, time);
         var queries = new TicketQueryAppService(
             tickets, assignments, new FakeTicketResolutionRepository(), new FakeTicketStatusHistoryRepository(), ReopenPolicy.Default, time,
             handlerRepository: new TicketInteractionHandlerRepository(context));
-        return new DashboardAppService(tickets, queries, time, new DashboardQueryRepository(context), assignments, notificationMode: mode);
+        return new DashboardAppService(tickets, queries, time, new DashboardQueryRepository(context, ReopenPolicy.Default, time), assignments, notificationMode: mode);
     }
 
     public TicketQueryAppService CreateQueryService(
@@ -117,7 +117,7 @@ public sealed class DashboardSqliteFixture : IDisposable
         var time = new FixedTimeProvider(nowUtc ?? Now);
         var assignments = new UserDepartmentAssignmentRepository(context);
         return new TicketQueryAppService(
-            new TicketRepository(context), assignments, new FakeTicketResolutionRepository(), new FakeTicketStatusHistoryRepository(),
+            new TicketRepository(context, ReopenPolicy.Default, time), assignments, new FakeTicketResolutionRepository(), new FakeTicketStatusHistoryRepository(),
             ReopenPolicy.Default, time, notificationMode: mode, handlerRepository: new TicketInteractionHandlerRepository(context),
             serviceIdentities: serviceIdentities);
     }
@@ -126,6 +126,58 @@ public sealed class DashboardSqliteFixture : IDisposable
     /// Records <paramref name="userId"/> as having handled a Genesys interaction on the ticket, on the ticket's own interaction (created
     /// here as a Phone interaction when the ticket has none) or on <paramref name="interactionNumber"/>-th additional one.
     /// </summary>
+    /// <summary>An UNOWNED, Closed ticket whose current resolution is the chatbot inactivity closure, closed at <paramref name="closedAtUtc"/>.</summary>
+    public Ticket AddInactivityClosedTicket(TigerCsDbContext context, int departmentId, DateTime closedAtUtc, Guid? creator = null, Guid? owner = null)
+    {
+        var ticket = AddTicket(context, departmentId, status: TicketStatus.Closed, closedAtUtc: closedAtUtc, owner: owner);
+        if (owner is null)
+        {
+            // The chatbot closes only ownerless tickets; a Closed ticket cannot be un-assigned through the domain, so clear the seed's worker in SQL.
+            context.Database.ExecuteSqlInterpolated($"UPDATE Tickets SET CurrentOwnerEmployeeId = NULL WHERE TicketId = {ticket.TicketId}");
+        }
+
+        if (creator is { } c)
+        {
+            ticket.RecordCreator(c);
+        }
+
+        foreach (var current in context.TicketResolutions.Where(r => r.TicketId == ticket.TicketId && r.IsCurrent).ToList())
+        {
+            current.Archive();
+        }
+
+        context.TicketResolutions.Add(TicketResolution.ForCustomerInactivity(ticket.TicketId, "No reply from the customer.", Guid.NewGuid(), closedAtUtc));
+        context.SaveChanges();
+        return ticket;
+    }
+
+    /// <summary>Gives the (bare-id) employee the CS Agent Identity role, so the visibility rule recognises them as a CS Agent.</summary>
+    public void MakeCsAgent(TigerCsDbContext context, Guid employeeId)
+    {
+        var role = context.Roles.FirstOrDefault(r => r.Name == Roles.CsAgent);
+        if (role is null)
+        {
+            role = new ApplicationRole(Roles.CsAgent, "CS Agent") { Id = Guid.NewGuid(), NormalizedName = Roles.CsAgent.ToUpperInvariant() };
+            context.Roles.Add(role);
+            context.SaveChanges();
+        }
+
+        if (!context.UserRoles.Any(ur => ur.UserId == employeeId && ur.RoleId == role.Id))
+        {
+            context.UserRoles.Add(new Microsoft.AspNetCore.Identity.IdentityUserRole<Guid> { UserId = employeeId, RoleId = role.Id });
+            context.SaveChanges();
+        }
+    }
+
+    /// <summary>An earlier (superseded) assignment of the ticket to <paramref name="employeeId"/> - the history that makes a CS Agent its responsible agent.</summary>
+    public void AddAssignmentHistory(TigerCsDbContext context, Ticket ticket, Guid employeeId)
+    {
+        var row = new TicketAssignment(ticket.TicketId, employeeId, ticket.CurrentDepartmentId, Now.AddHours(-2), assigningActorEmployeeId: null);
+        row.MarkSuperseded();
+        context.TicketAssignments.Add(row);
+        context.SaveChanges();
+    }
+
     public TicketInteractionHandler AddHandler(TigerCsDbContext context, Ticket ticket, Guid userId, bool additionalInteraction = false)
     {
         var interaction = additionalInteraction

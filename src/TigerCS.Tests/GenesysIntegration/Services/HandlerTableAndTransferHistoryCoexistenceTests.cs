@@ -72,13 +72,21 @@ public class HandlerTableAndTransferHistoryCoexistenceTests
     }
 
     [Fact]
-    public async Task VisibilityComesFromTheHandlerTableAlone_TheTimelineGrantsNothing()
+    public async Task HandlingAndTheTimelineGrantNothing_OnlyTheCurrentAssignmentDoes()
     {
         var (f, ticketId, a, b, _) = await TransferredCallAsync();
 
-        // Both handlers see the ticket; an agent who appears nowhere does not.
-        Assert.Equal(TicketQueryOutcome.Success, (await f.StrictTicketQuery.GetDetailAsync(a, AgentRole, ticketId)).Outcome);
+        // Both agents are in the handler table and the timeline, but neither handling nor the timeline grants a CS Agent visibility: the
+        // ticket is unassigned, so nobody sees it.
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(a, AgentRole, ticketId)).Outcome);
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(b, AgentRole, ticketId)).Outcome);
+
+        // Once the ticket is assigned to the agent the call was transferred to, only that agent sees it - the first handler no longer does.
+        f.DepartmentAssignments.RolesByEmployee[a] = [Roles.CsAgent];
+        f.DepartmentAssignments.RolesByEmployee[b] = [Roles.CsAgent];
+        f.Tickets.All.Single(t => t.TicketId == ticketId).AssignTo(b);
         Assert.Equal(TicketQueryOutcome.Success, (await f.StrictTicketQuery.GetDetailAsync(b, AgentRole, ticketId)).Outcome);
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(a, AgentRole, ticketId)).Outcome);
         Assert.Equal(TicketQueryOutcome.Forbidden, (await f.StrictTicketQuery.GetDetailAsync(Guid.NewGuid(), AgentRole, ticketId)).Outcome);
     }
 

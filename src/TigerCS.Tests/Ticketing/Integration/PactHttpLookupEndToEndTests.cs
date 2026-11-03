@@ -238,7 +238,8 @@ public sealed class PactHttpLookupEndToEndTests : IAsyncLifetime
         // Ticket detail (what the Ticket Details page renders) reads the
         // selection back — enough to display "Verified via PACT" with the
         // tenant/unit ids, distinct from a plain manual entry.
-        await _factory.RecordHandlerAsync(ticket.TicketId, client);
+        // The agent takes the ticket (assigned to them), the only way a CS Agent can open it.
+        await _factory.AssignOwnerAsync(ticket.TicketId, TigerCsApiFactory.UserIdOf(client));
         var detailResponse = await client.GetAsync($"/api/tickets/{ticket.TicketId}");
         Assert.Equal(HttpStatusCode.OK, detailResponse.StatusCode);
         var detail = await detailResponse.Content.ReadFromJsonAsync<TicketDetailDto>();

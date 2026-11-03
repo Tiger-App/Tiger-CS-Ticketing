@@ -11,6 +11,29 @@ public interface IUserDepartmentAssignmentRepository
 
     Task<bool> ExistsAsync(Guid employeeId, int departmentId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Whether the employee currently holds the named Identity role. Lives here only because every ticket-visibility call site already holds this
+    /// repository: <c>TicketVisibilityRule</c> asks it whether a ticket's current owner is a CS Agent (a CS Agent never sees a ticket assigned to
+    /// another CS Agent).
+    /// </summary>
+    Task<bool> HoldsRoleAsync(Guid employeeId, string roleName, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether <paramref name="employeeId"/> is the CS Agent responsible for the ticket while a department employee owns it: the employee on
+    /// the ticket's most recent assignment row who holds the CS Agent role; when no CS Agent was ever assigned, the ticket's creator if they
+    /// are a CS Agent. Derived from the append-only assignment history, so it moves the moment another CS Agent is assigned and nothing is stored.
+    /// </summary>
+    Task<bool> IsResponsibleCsAgentAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Whether the ticket's CURRENT resolution is the chatbot inactivity closure, it was closed at or after <paramref name="closedNotBeforeUtc"/>
+    /// (the start of the existing reopen window), and <paramref name="employeeId"/> is its responsible CS Agent
+    /// (<see cref="IsResponsibleCsAgentAsync"/>). The one exception that lets the last responsible CS Agent see and reopen an
+    /// unowned, inactivity-closed ticket; it grants nothing for any other closure.
+    /// </summary>
+    Task<bool> IsResponsibleForInactivityClosureAsync(
+        long ticketId, Guid? creatorEmployeeId, Guid employeeId, DateTime closedNotBeforeUtc, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<UserDepartmentAssignment>> GetByDepartmentIdAsync(
         int departmentId, bool activeEmployeesOnly, CancellationToken cancellationToken = default);
 

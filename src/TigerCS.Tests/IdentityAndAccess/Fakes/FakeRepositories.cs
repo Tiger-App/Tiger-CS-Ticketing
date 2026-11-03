@@ -88,6 +88,33 @@ public sealed class FakeUserDepartmentAssignmentRepository : IUserDepartmentAssi
 {
     public readonly List<UserDepartmentAssignment> Assignments = [];
 
+    /// <summary>Identity roles per employee, for <see cref="HoldsRoleAsync"/> (tests that model "the ticket's owner is a CS Agent").</summary>
+    public readonly Dictionary<Guid, HashSet<string>> RolesByEmployee = [];
+
+    /// <summary>The responsible CS Agent per ticket, for <see cref="IsResponsibleCsAgentAsync"/> (tests that model department work on a ticket).</summary>
+    public readonly Dictionary<long, Guid> ResponsibleCsAgentByTicket = [];
+
+    /// <summary>
+    /// When true every user counts as the responsible CS Agent of every ticket a non-CS-Agent owns. For tests whose subject is some OTHER rule
+    /// (reopen windows, SLA clocks, classification…) and that use a CS Agent as an arbitrary actor on a ticket a department employee holds.
+    /// Tests OF visibility never use it.
+    /// </summary>
+    public bool EveryUserIsResponsible { get; init; }
+
+    public Task<bool> IsResponsibleCsAgentAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(EveryUserIsResponsible
+            || (ResponsibleCsAgentByTicket.TryGetValue(ticketId, out var agent) && agent == employeeId));
+
+    /// <summary>(ticket, employee) pairs that are the responsible CS Agent of an inactivity-closed ticket still inside the reopen window.</summary>
+    public readonly HashSet<(long TicketId, Guid EmployeeId)> InactivityClosureResponsible = [];
+
+    public Task<bool> IsResponsibleForInactivityClosureAsync(
+        long ticketId, Guid? creatorEmployeeId, Guid employeeId, DateTime closedNotBeforeUtc, CancellationToken cancellationToken = default) =>
+        Task.FromResult(InactivityClosureResponsible.Contains((ticketId, employeeId)));
+
+    public Task<bool> HoldsRoleAsync(Guid employeeId, string roleName, CancellationToken cancellationToken = default) =>
+        Task.FromResult(RolesByEmployee.TryGetValue(employeeId, out var roles) && roles.Contains(roleName));
+
     public Task<IReadOnlyCollection<UserDepartmentAssignment>> GetByEmployeeIdAsync(
         Guid employeeId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyCollection<UserDepartmentAssignment>>(

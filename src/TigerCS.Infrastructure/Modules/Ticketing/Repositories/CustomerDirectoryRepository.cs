@@ -30,7 +30,7 @@ namespace TigerCS.Infrastructure.Modules.Ticketing.Repositories;
 /// the row still shows the customer's number as it was captured.
 /// </para>
 /// </summary>
-public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext) : ICustomerDirectoryRepository
+public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, TigerCS.Application.Modules.Ticketing.Services.ReopenPolicy? reopenPolicy = null, TimeProvider? clock = null) : ICustomerDirectoryRepository
 {
     private const int CrmKind = (int)CustomerIdentityKind.Crm;
     private const int ExternalKind = (int)CustomerIdentityKind.External;
@@ -52,7 +52,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext) : IC
 
     private IQueryable<IdentifiedTicket> Identified(IReadOnlyCollection<int>? visibleDepartmentIds, Guid? agentScopeEmployeeId = null)
     {
-        var tickets = dbContext.Tickets.AsNoTracking().VisibleTo(dbContext, visibleDepartmentIds, agentScopeEmployeeId);
+        var tickets = dbContext.Tickets.AsNoTracking().VisibleTo(
+            dbContext, visibleDepartmentIds, agentScopeEmployeeId, inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
 
         var withPhone = tickets.Select(t => new
         {

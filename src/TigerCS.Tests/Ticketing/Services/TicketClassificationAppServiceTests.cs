@@ -51,7 +51,7 @@ public class TicketClassificationAppServiceTests
         var priorities = new FakePriorityRepository();
         var requestTypes = new FakeRequestTypeRepository();
         var workflowTemplates = new FakeWorkflowTemplateRepository();
-        var departmentAssignments = new FakeUserDepartmentAssignmentRepository();
+        var departmentAssignments = new FakeUserDepartmentAssignmentRepository { EveryUserIsResponsible = true };
         var statusHistory = new FakeTicketStatusHistoryRepository();
         var audit = new FakeAuditEntryWriter();
         var unitOfWork = new FakeTicketingUnitOfWork();
@@ -77,6 +77,8 @@ public class TicketClassificationAppServiceTests
             "TG-CS-20260910-0001", departmentId,
             "Customer asked about an NOC", CreatedAt);
         await f.Tickets.AddAsync(ticket);
+        // A CS Agent works only the tickets assigned to them: the classifying agent owns it (department classification keeps the owner).
+        ticket.AssignTo(Guid.NewGuid());
         return ticket;
     }
 
@@ -93,7 +95,7 @@ public class TicketClassificationAppServiceTests
         var category = f.Categories.Seed(ticket.CurrentDepartmentId, "NOC Request");
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
 
@@ -127,7 +129,7 @@ public class TicketClassificationAppServiceTests
         Assert.Empty(f.Sla.SlaInstances.All);
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(SlaState.Running, ticket.SlaState);
@@ -154,7 +156,7 @@ public class TicketClassificationAppServiceTests
         var category = f.Categories.Seed(ticket.CurrentDepartmentId);
 
         await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
 
         var instance = Assert.Single(f.Sla.SlaInstances.All);
         // An SLA policy is a commitment to resolve a KNOWN request within a
@@ -184,7 +186,7 @@ public class TicketClassificationAppServiceTests
         Assert.Empty(f.Sla.SlaInstances.All);
 
         await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
 
         // Classification opens the business/resolution clock and leaves the
         // already-measured human response exactly as it was.
@@ -204,7 +206,7 @@ public class TicketClassificationAppServiceTests
             allowAgentPriorityChange: false, allowPendingCustomer: true, allowPendingInternal: true, allowReopen: true));
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId,
             Request(category.CategoryId, requestTypeId: requestType.RequestTypeId));
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
@@ -223,10 +225,11 @@ public class TicketClassificationAppServiceTests
             "TG-CS-20260910-0002", departmentId: 2, categoryId: 7,
             priorityId: (byte)PriorityLevel.Medium, "AC not cooling", CreatedAt);
         await f.Tickets.AddAsync(ticket);
+        ticket.AssignTo(Guid.NewGuid());   // a CS Agent works only the tickets assigned to them
         var category = f.Categories.Seed(ticket.CurrentDepartmentId);
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
 
         Assert.Equal(TicketMutationOutcome.AlreadyClassified, result.Outcome);
         Assert.Equal(7, ticket.CategoryId);
@@ -243,10 +246,11 @@ public class TicketClassificationAppServiceTests
             "TG-CS-20260910-0003", departmentId: 2, categoryId: 7,
             priorityId: (byte)PriorityLevel.High, "AC not cooling", CreatedAt);
         await f.Tickets.AddAsync(ticket);
+        ticket.AssignTo(Guid.NewGuid());   // a CS Agent works only the tickets assigned to them
         var category = f.Categories.Seed(ticket.CurrentDepartmentId);
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId,
             Request(category.CategoryId, (byte)PriorityLevel.Low));
 
         Assert.Equal(TicketMutationOutcome.DowngradeRequiresApproval, result.Outcome);
@@ -264,7 +268,7 @@ public class TicketClassificationAppServiceTests
         var foreignCategory = f.Categories.Seed(departmentId: 9, name: "Leasing Renewal");
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(foreignCategory.CategoryId));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(foreignCategory.CategoryId));
 
         Assert.Equal(TicketMutationOutcome.CategoryDepartmentMismatch, result.Outcome);
         Assert.False(ticket.IsClassified);
@@ -281,7 +285,7 @@ public class TicketClassificationAppServiceTests
         var retired = f.Categories.Seed(ticket.CurrentDepartmentId, "Retired", isActive: false);
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(retired.CategoryId));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(retired.CategoryId));
 
         Assert.Equal(TicketMutationOutcome.CategoryNotFound, result.Outcome);
         Assert.False(ticket.IsClassified);
@@ -295,7 +299,7 @@ public class TicketClassificationAppServiceTests
         var category = f.Categories.Seed(ticket.CurrentDepartmentId);
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId, priorityId: 99));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId, priorityId: 99));
 
         Assert.Equal(TicketMutationOutcome.PriorityNotFound, result.Outcome);
         Assert.False(ticket.IsClassified);
@@ -314,7 +318,7 @@ public class TicketClassificationAppServiceTests
         ticket.Close();
 
         var result = await f.Service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
+            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
 
         Assert.Equal(TicketMutationOutcome.TicketClosed, result.Outcome);
         Assert.False(ticket.IsClassified);

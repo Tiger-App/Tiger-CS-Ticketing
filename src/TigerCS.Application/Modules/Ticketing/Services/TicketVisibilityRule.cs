@@ -14,17 +14,13 @@ namespace TigerCS.Application.Modules.Ticketing.Services;
 /// <list type="bullet">
 /// <item>a CS-layer/executive role (<see cref="TicketRoleSets.CrossDepartmentView"/> other than CS Agent: CS Supervisor, CS Manager,
 /// General Manager, Chairman/CEO, System Administrator) sees every department;</item>
-/// <item>a <b>CS Agent</b> (<see cref="IsRestrictedCsAgent(IReadOnlyCollection{string})"/>) sees only the tickets that are <b>assigned to them</b> right now or on
-/// which they <b>actually handled a Genesys interaction</b> (<see cref="ITicketInteractionHandlerRepository"/>) — not every ticket, and
-/// not every ticket of their department or Genesys queue;</item>
+/// <item>a <b>CS Agent</b> (<see cref="IsRestrictedCsAgent(IReadOnlyCollection{string})"/>) sees only the tickets <b>currently assigned to them</b>, plus
+/// the tickets a <b>department employee</b> is working for which they are the <b>responsible CS Agent</b> (the CS Agent who last owned the
+/// ticket, see <see cref="CanFollowDepartmentWorkAsync"/>) so they can follow up and close them. Never a ticket assigned to another CS Agent,
+/// never an unassigned one (except the explicitly authorized Take Ownership pool, <see cref="TicketClaimPolicy"/>), and never because they once
+/// created or handled it;</item>
 /// <item>everyone else sees only departments they are actually assigned to.</item>
 /// </list>
-///
-/// <para>
-/// The two grants a CS Agent has are independent: reassigning the ticket takes away the previous assignee's assignment grant but never
-/// their handling grant, and a ticket handled by several agents (a transfer) is visible to each of them. An unassigned ticket nobody
-/// handled is visible to no CS Agent.
-/// </para>
 ///
 /// <para>
 /// Extracted from <c>TicketQueryAppService</c> (which still owns the read paths and simply delegates here) when the approved Reopen rule
@@ -140,10 +136,10 @@ public static class TicketVisibilityRule
     /// modification of any kind; <see cref="TicketAccessLevel.None"/> is no access.
     ///
     /// <para>
-    /// For a restricted CS Agent: Full when the ticket is assigned to them, they handled a Genesys interaction on it, or a department role
-    /// of theirs covers its department; otherwise ReadOnly when <b>they created it</b> — which is how a creator keeps following a ticket
-    /// after it has moved to another department — otherwise None. Everyone else keeps exactly their department-based answer (Full or None):
-    /// roles that can see tickets across departments, and department members, are unchanged.
+    /// For a restricted CS Agent: Full when the ticket is currently assigned to them, when a department employee holds it and they are the
+    /// responsible CS Agent, or when a department role of theirs covers its department; otherwise None (an eligible Call Center agent may
+    /// additionally OPEN an unassigned claimable ticket read-only). Having created or handled a ticket grants nothing by itself.
+    /// Everyone else keeps exactly their department-based answer (Full or None).
     /// </para>
     /// </summary>
     public static Task<TicketAccessLevel> GetTicketAccessAsync(
@@ -154,7 +150,8 @@ public static class TicketVisibilityRule
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
         CancellationToken cancellationToken = default,
-        TicketClaimPolicy? claimPolicy = null)
+        TicketClaimPolicy? claimPolicy = null,
+        DateTime? inactivityReopenCutoffUtc = null)
     {
         ArgumentNullException.ThrowIfNull(userDepartmentAssignmentRepository);
         ArgumentNullException.ThrowIfNull(ticket);
@@ -195,21 +192,17 @@ public static class TicketVisibilityRule
                     : TicketAccessLevel.None;
             }
 
-            if (ticket.CurrentOwnerEmployeeId == callerEmployeeId
-                || (handlerRepository is not null
-                    && await handlerRepository.HasActiveHandlerGrantAsync(ticket.TicketId, callerEmployeeId, cancellationToken))
+            // A restricted CS Agent has Full access to: a ticket currently assigned to them (above); a ticket a DEPARTMENT employee (not a
+            // CS Agent) is working, when they are its responsible CS Agent - the agent who last owned it - so they can follow up and close it;
+            // and what a department role of theirs covers. Having created or handled the ticket in the past grants nothing by itself: once
+            // another CS Agent owns it, or nobody does, it is not theirs to see.
+            if (await CanFollowDepartmentWorkAsync(userDepartmentAssignmentRepository, callerEmployeeId, ticket, cancellationToken)
+                || await CanReopenInactivityClosureAsync(
+                    userDepartmentAssignmentRepository, callerEmployeeId, ticket, inactivityReopenCutoffUtc, cancellationToken)
                 || await CanViewDepartmentAsync(
                     userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket.CurrentDepartmentId, serviceIdentities, cancellationToken))
             {
                 return TicketAccessLevel.Full;
-            }
-
-            // A handler whose handling predates a manual transfer keeps following the ticket, read-only (like a creator).
-            if (ticket.CreatedByEmployeeId == callerEmployeeId
-                || (handlerRepository is not null
-                    && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken)))
-            {
-                return TicketAccessLevel.ReadOnly;
             }
 
             // An eligible Call Center agent may OPEN (never change) an unassigned, human-handling ticket of any department, to review it
@@ -225,6 +218,34 @@ public static class TicketVisibilityRule
         }
     }
 
+    /// <summary>
+    /// True when a department employee (an owner who is not a CS Agent) holds the ticket and <paramref name="callerEmployeeId"/> is its
+    /// responsible CS Agent (<see cref="IUserDepartmentAssignmentRepository.IsResponsibleCsAgentAsync"/>). The set-based twin is
+    /// <c>TicketQueryFilters.VisibleTo</c>; keep them in step.
+    /// </summary>
+    public static async Task<bool> CanFollowDepartmentWorkAsync(
+        IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository, Guid callerEmployeeId, Ticket ticket,
+        CancellationToken cancellationToken = default) =>
+        ticket.CurrentOwnerEmployeeId is { } owner
+        && owner != callerEmployeeId
+        && !await userDepartmentAssignmentRepository.HoldsRoleAsync(owner, Roles.CsAgent, cancellationToken)
+        && await userDepartmentAssignmentRepository.IsResponsibleCsAgentAsync(ticket.TicketId, ticket.CreatedByEmployeeId, callerEmployeeId, cancellationToken);
+
+    /// <summary>
+    /// The inactivity-closure exception: an UNOWNED ticket the chatbot closed for customer inactivity, still inside the reopen window
+    /// (<paramref name="inactivityReopenCutoffUtc"/> = now minus the window), stays visible to - and reopenable by - its last responsible CS Agent.
+    /// Without a cutoff (a caller that does not model it) the exception is off, so this fails closed. Nothing else about the agent's earlier
+    /// handling or creation of the ticket is restored. The set-based twin is <c>TicketQueryFilters.VisibleTo</c>.
+    /// </summary>
+    public static async Task<bool> CanReopenInactivityClosureAsync(
+        IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository, Guid callerEmployeeId, Ticket ticket,
+        DateTime? inactivityReopenCutoffUtc, CancellationToken cancellationToken = default) =>
+        inactivityReopenCutoffUtc is { } cutoff
+        && ticket.TicketStatus == TicketStatus.Closed
+        && ticket.CurrentOwnerEmployeeId is null
+        && await userDepartmentAssignmentRepository.IsResponsibleForInactivityClosureAsync(
+            ticket.TicketId, ticket.CreatedByEmployeeId, callerEmployeeId, cutoff, cancellationToken);
+
     /// <summary>May the caller open and read the ticket — Full or ReadOnly access. Reads (details, history, notes list, SLA, interactions…) use this.</summary>
     public static async Task<bool> CanViewTicketAsync(
         IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
@@ -234,9 +255,11 @@ public static class TicketVisibilityRule
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
         CancellationToken cancellationToken = default,
-        TicketClaimPolicy? claimPolicy = null) =>
+        TicketClaimPolicy? claimPolicy = null,
+        DateTime? inactivityReopenCutoffUtc = null) =>
         await GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy)
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy,
+            inactivityReopenCutoffUtc)
         != TicketAccessLevel.None;
 
     /// <summary>
@@ -251,9 +274,11 @@ public static class TicketVisibilityRule
         IReadOnlyCollection<string> callerRoles,
         Ticket ticket,
         IServiceIdentityRegistry? serviceIdentities = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        DateTime? inactivityReopenCutoffUtc = null) =>
         await GetTicketAccessAsync(
-            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken)
+            userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken,
+            claimPolicy: null, inactivityReopenCutoffUtc)
         == TicketAccessLevel.Full;
 }
 

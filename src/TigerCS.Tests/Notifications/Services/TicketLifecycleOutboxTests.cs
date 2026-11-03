@@ -36,7 +36,7 @@ public class TicketLifecycleOutboxTests
         var tickets = new FakeTicketRepository();
         var resolutions = new FakeTicketResolutionRepository();
         var statusHistory = new FakeTicketStatusHistoryRepository();
-        var departmentAssignments = new FakeUserDepartmentAssignmentRepository();
+        var departmentAssignments = new FakeUserDepartmentAssignmentRepository { EveryUserIsResponsible = true };
         var audit = new FakeAuditEntryWriter();
         var unitOfWork = new FakeTicketingUnitOfWork();
         var outbox = new FakeOutboxWriter();

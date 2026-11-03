@@ -193,8 +193,9 @@ public class NotificationOutboxIntegrationTests : IClassFixture<TigerCsApiFactor
     [Fact]
     public async Task AcknowledgementDelivery_DoesNotSatisfyFirstResponseOnTheSlaEndpoint()
     {
-        var (client, _) = await CreateClientAsync(Roles.CsAgent);
+        var (client, agentId) = await CreateClientAsync(Roles.CsAgent);
         var ticket = await CreateTicketAsync(client);
+        await _factory.AssignOwnerAsync(ticket.TicketId, agentId); // a CS Agent reads the SLA of a ticket assigned to them
 
         var before = await (await client.GetAsync($"/api/tickets/{ticket.TicketId}/sla"))
             .Content.ReadFromJsonAsync<TicketSlaSummaryResponseDto>();
@@ -222,8 +223,9 @@ public class NotificationOutboxIntegrationTests : IClassFixture<TigerCsApiFactor
     [Fact]
     public async Task AcknowledgedButUnansweredTicket_StillBreachesFirstResponse()
     {
-        var (client, _) = await CreateClientAsync(Roles.CsAgent);
+        var (client, agentId) = await CreateClientAsync(Roles.CsAgent);
         var ticket = await CreateTicketAsync(client);
+        await _factory.AssignOwnerAsync(ticket.TicketId, agentId); // a CS Agent reads the SLA of a ticket assigned to them
 
         await _factory.RunOutboxDispatchAsync();
         Assert.NotNull((await _factory.GetTicketAsync(ticket.TicketId))!.AcknowledgementSentAtUtc);

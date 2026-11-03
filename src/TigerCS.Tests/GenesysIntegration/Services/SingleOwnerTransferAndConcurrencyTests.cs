@@ -61,7 +61,7 @@ public class SingleOwnerTransferAndConcurrencyTests
     }
 
     [Fact]
-    public async Task AfterAnExplicitReassignmentOnTransfer_ThePreviousOwnerCanNoLongerResolveCloseOrTransfer()
+    public async Task AfterAnExplicitReassignmentOnTransfer_ThePreviousOwnerCanNoLongerResolveOrTransfer_ButAsTheResponsibleCsAgentStillCloses()
     {
         var s = await NewAsync();
         var previous = await OwnAsync(s);
@@ -75,14 +75,15 @@ public class SingleOwnerTransferAndConcurrencyTests
         var transfer = await s.Assign.TransferAsync(
             previous, CsAgent, s.TicketId, new TransferTicketRequestDto(s.FromDepartmentId, "take it back", []));
 
-        // Resolve it legitimately (as a manager) so Close is the only thing left to refuse.
+        // Resolve it legitimately (as the department's work) so Close is the only thing left to try. The previous owner is the ticket's
+        // responsible CS Agent while a department employee holds it: they follow up and close it, but never resolve or transfer it.
         ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
         await s.F.Resolutions.AddAsync(new TicketResolution(s.TicketId, ResolutionOutcome.Resolved, "done", null, null, Guid.NewGuid(), DateTime.UtcNow));
         var close = await s.F.Lifecycle.CloseAsync(previous, CsAgent, s.TicketId, new CloseTicketRequestDto(ticket.RowVersion));
 
         Assert.Equal(TicketMutationOutcome.Forbidden, resolve.Outcome);
         Assert.Equal(TicketMutationOutcome.Forbidden, transfer.Outcome);
-        Assert.Equal(TicketMutationOutcome.Forbidden, close.Outcome);
+        Assert.Equal(TicketMutationOutcome.Success, close.Outcome);
         Assert.Equal(s.ToDepartmentId, ticket.CurrentDepartmentId);
     }
 

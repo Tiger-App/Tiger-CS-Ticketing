@@ -288,7 +288,7 @@ public class RoundRobinAndOwnerPermissionTests
         var tickets = new FakeTicketRepository();
         var categories = new FakeCategoryRepository();
         var departments = new FakeDepartmentRepository();
-        var members = new FakeUserDepartmentAssignmentRepository();
+        var members = new FakeUserDepartmentAssignmentRepository { EveryUserIsResponsible = true };
         var statusHistory = new FakeTicketStatusHistoryRepository();
         var audit = new FakeAuditEntryWriter();
         var unitOfWork = new FakeTicketingUnitOfWork();
@@ -317,8 +317,10 @@ public class RoundRobinAndOwnerPermissionTests
             var ticket = Ticket.CreateUnclassified($"TG-CC-20261031-{i:D4}", callCenter.DepartmentId, "Customer asks about payment", Now);
             await tickets.AddAsync(ticket);
 
+            // The ticket is unassigned (the rotation is what gives it an owner), and an unassigned ticket is invisible to a
+            // restricted CS Agent - so the classifier is a CS Manager, who sees the whole queue.
             var result = await service.ClassifyAsync(
-                Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
+                Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
                 new ClassifyTicketRequestDto(category.CategoryId, (byte)PriorityLevel.High, null, RowVersion: [1, 2, 3, 4, 5, 6, 7, 8]));
 
             Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
@@ -340,7 +342,7 @@ public class RoundRobinAndOwnerPermissionTests
         var tickets = new FakeTicketRepository();
         var categories = new FakeCategoryRepository();
         var departments = new FakeDepartmentRepository();
-        var members = new FakeUserDepartmentAssignmentRepository();
+        var members = new FakeUserDepartmentAssignmentRepository { EveryUserIsResponsible = true };
         var statusHistory = new FakeTicketStatusHistoryRepository();
         var audit = new FakeAuditEntryWriter();
         var unitOfWork = new FakeTicketingUnitOfWork();
@@ -359,10 +361,12 @@ public class RoundRobinAndOwnerPermissionTests
             departmentRepository: departments, autoAssignmentService: auto);
 
         var ticket = Ticket.CreateUnclassified("TG-CS-20261031-0001", cs.DepartmentId, "Question", Now);
+        var actor = Guid.NewGuid();
+        ticket.AssignTo(actor); // a restricted CS Agent works only tickets assigned to them
         await tickets.AddAsync(ticket);
 
         var result = await service.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
+            actor, [Roles.CsAgent], ticket.TicketId,
             new ClassifyTicketRequestDto(category.CategoryId, (byte)PriorityLevel.High, null, RowVersion: [1, 2, 3, 4, 5, 6, 7, 8]));
 
         Assert.Equal(TicketMutationOutcome.CategoryDepartmentMismatch, result.Outcome);

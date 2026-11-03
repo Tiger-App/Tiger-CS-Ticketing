@@ -182,8 +182,10 @@ public class GenesysCategoryResolutionTests
 
         var created = await w.F.Ingestion.IngestAsync(ServiceAccount, Inquiry(w, "conv-person", requestType: null));
         var ticket = w.F.Tickets.All.Single(t => t.TicketId == created.Ticket!.TicketId);
+        var agent = Guid.NewGuid();
+        ticket.AssignTo(agent); // a CS Agent works only a ticket assigned to them
         var manual = await w.F.Classification.ClassifyAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
+            agent, [Roles.CsAgent], ticket.TicketId,
             new ClassifyTicketRequestDto(personsCategory.CategoryId, (byte)PriorityLevel.Medium, null, ticket.RowVersion));
         Assert.Equal(TicketMutationOutcome.Success, manual.Outcome);
 

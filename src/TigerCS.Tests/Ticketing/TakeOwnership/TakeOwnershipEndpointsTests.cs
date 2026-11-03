@@ -118,14 +118,19 @@ public sealed class TakeOwnershipEndpointsTests(TigerCsApiFactory factory) : ICl
     // =====================================================================
 
     [Fact]
-    public async Task AnAgent_SeesOldUnassignedTicketsOfEveryDepartment_InTheList_AndCanOpenThemReadOnly()
+    public async Task AnAgent_SeesOldUnassignedTicketsOfEveryDepartment_OnlyInTheExplicitPoolView_AndCanOpenThemReadOnly()
     {
         await CallCenterAsync();
         var (agent, _) = await AgentAsync();
         var accounting = await SeedAsync(_accountingId);
         var leasing = await SeedAsync(_leasingId);
 
-        var seen = await ListedAsync(agent);
+        // The shared pool is a separate, explicitly requested view: never part of the agent's personal Queue / My Tickets.
+        var personal = await ListedAsync(agent);
+        Assert.DoesNotContain(accounting, personal);
+        Assert.DoesNotContain(leasing, personal);
+
+        var seen = await ListedAsync(agent, "&availableToTake=true");
         Assert.Contains(accounting, seen);
         Assert.Contains(leasing, seen);
 
@@ -137,7 +142,7 @@ public sealed class TakeOwnershipEndpointsTests(TigerCsApiFactory factory) : ICl
     }
 
     [Fact]
-    public async Task TheDefaultList_TheAvailableToTakeFilter_AndTheCallCenterFilter_AllShowThePoolBeforeItIsClaimed()
+    public async Task OnlyTheAvailableToTakeView_ShowsThePoolBeforeItIsClaimed_ThePersonalListsNeverDo()
     {
         var cc = await CallCenterAsync();
         var (agent, agentId) = await AgentAsync();
@@ -146,7 +151,7 @@ public sealed class TakeOwnershipEndpointsTests(TigerCsApiFactory factory) : ICl
         var mine = await SeedAsync(cc, (t, _) => t.AssignTo(agentId));
 
         var all = await ListedAsync(agent);
-        Assert.Contains(pool, all);
+        Assert.DoesNotContain(pool, all);   // unassigned work is never in the personal Queue / My Tickets
         Assert.Contains(mine, all);
         Assert.DoesNotContain(ownedByOther, all);
 
@@ -156,18 +161,20 @@ public sealed class TakeOwnershipEndpointsTests(TigerCsApiFactory factory) : ICl
         Assert.DoesNotContain(mine, available);
         Assert.DoesNotContain(ownedByOther, available);
 
-        // The Call Center filter: Call Center tickets of mine PLUS what is waiting to be taken in other departments.
+        // Department filters narrow the personal list; they do not bring the pool back.
         var callCenter = await ListedAsync(agent, $"&departmentId={cc}");
-        Assert.Contains(pool, callCenter);
         Assert.Contains(mine, callCenter);
+        Assert.DoesNotContain(pool, callCenter);
         Assert.DoesNotContain(ownedByOther, callCenter);
 
-        // Any other department filter stays exactly that department (still only what the agent may see).
         var response = await agent.GetAsync($"/api/tickets?pageSize=200&departmentId={_accountingId}");
         var accountingOnly = (await response.Content.ReadFromJsonAsync<TicketListResultDto>())!.Items;
-        Assert.Contains(accountingOnly, t => t.TicketId == pool);
-        Assert.All(accountingOnly, t => Assert.Equal(_accountingId, t.CurrentDepartmentId));
-        Assert.DoesNotContain(accountingOnly, t => t.TicketId == mine);
+        Assert.DoesNotContain(accountingOnly, t => t.TicketId == pool);
+        Assert.DoesNotContain(accountingOnly, t => t.TicketId == ownedByOther);
+
+        // Counts agree with the lists (no leakage through totals).
+        var page = await (await agent.GetAsync("/api/tickets?pageSize=200")).Content.ReadFromJsonAsync<TicketListResultDto>();
+        Assert.Equal(page!.Items.Count, page.TotalCount);
     }
 
     // =====================================================================

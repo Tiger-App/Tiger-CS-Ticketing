@@ -66,12 +66,30 @@ public class PendingInteractionRoleScopeTests
         var customerServiceAgent = Guid.NewGuid();
         Member(f, customerServiceAgent, departmentId + 100);
 
+        // The outsider does not own the ticket and is not a member of its department: CS Agent alone gives no cross-department right to accept.
+        var ticket = Assert.Single(f.Tickets.All);
         Assert.Equal(
-            AgentHandoffOutcome.AgentNotInTicketDepartment,
+            AgentHandoffOutcome.Forbidden,
             (await f.PendingWork.AcceptAsync(customerServiceAgent, [Roles.CsAgent], handoffId)).Outcome);
+
         Assert.Equal(
             AgentHandoffOutcome.Success,
             (await f.PendingWork.AcceptAsync(callCenterAgent, [Roles.CsAgent], handoffId)).Outcome);
+    }
+
+    [Fact]
+    public async Task TheCsAgentWhoAlreadyOwnsTheTicket_AcceptsItsWork_EvenAfterTheTicketMovedToADepartmentTheyAreNotIn()
+    {
+        var (f, handoffId, departmentId) = await WaitingInAsync("Customer Service", "CS");
+        var responsibleAgent = Guid.NewGuid();
+        Member(f, responsibleAgent, departmentId + 100);   // not a member of the ticket's (receiving) department
+        var ticket = Assert.Single(f.Tickets.All);
+        ticket.AssignTo(responsibleAgent);                 // a department change keeps the responsible CS Agent on the ticket
+
+        var accepted = await f.PendingWork.AcceptAsync(responsibleAgent, [Roles.CsAgent], handoffId);
+
+        Assert.Equal(AgentHandoffOutcome.Success, accepted.Outcome);   // no Take Ownership step, no membership requirement
+        Assert.Equal(responsibleAgent, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]

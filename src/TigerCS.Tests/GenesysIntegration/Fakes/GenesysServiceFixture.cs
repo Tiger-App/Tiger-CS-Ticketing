@@ -61,7 +61,7 @@ public sealed class GenesysServiceFixture
     public FakeCrmBuyerLookupGateway CrmBuyers { get; } = new();
     public FakePactCustomerLookupGateway Pact { get; } = new();
     public FakeTasleehGateway Tasleeh { get; } = new();
-    public FakeUserDepartmentAssignmentRepository DepartmentAssignments { get; } = new();
+    public FakeUserDepartmentAssignmentRepository DepartmentAssignments { get; } = new() { EveryUserIsResponsible = true };
     public FakeTicketAssignmentRepository TicketAssignments { get; } = new();
 
     // Workflow configuration shared by every service below, so a test that

@@ -233,8 +233,8 @@ public sealed class CustomerDocumentsEndpointTests : IDisposable
     }
 
     /// <summary>A ticket for the CRM customer 9001 (phone <see cref="Phone"/>) — the Customers directory then has <c>crm:9001</c>.</summary>
-    /// <param name="handledBy">A CS Agent's client to record as having handled the ticket's call — a CS Agent sees a customer only through a ticket assigned to them or one they handled.</param>
-    private async Task<int> CreateCrmCustomerTicketAsync(HttpClient client, TigerCsApiFactory? factory = null, HttpClient? handledBy = null)
+    /// <param name="assignedTo">A CS Agent's client to assign the ticket to - a CS Agent sees a customer only through a ticket currently assigned to them (or one a department employee holds for them); handling the call grants nothing.</param>
+    private async Task<int> CreateCrmCustomerTicketAsync(HttpClient client, TigerCsApiFactory? factory = null, HttpClient? assignedTo = null)
     {
         factory ??= _factory;
         await factory.SeedPrioritiesAsync();
@@ -256,10 +256,10 @@ public sealed class CustomerDocumentsEndpointTests : IDisposable
                 CrmBuyerProjectId: unit.ProjectId, CrmBuyerCustomerName: buyer.Customer.FullNameEnglish,
                 CrmBuyerProjectName: unit.ProjectName, CrmBuyerUnitNumber: unit.UnitNumber));
         Assert.Equal(HttpStatusCode.Created, created.StatusCode);
-        if (handledBy is not null)
+        if (assignedTo is not null)
         {
             var ticket = await created.Content.ReadFromJsonAsync<TicketResponseDto>();
-            await factory.RecordHandlerAsync(ticket!.TicketId, handledBy);
+            await factory.AssignOwnerAsync(ticket!.TicketId, TigerCsApiFactory.UserIdOf(assignedTo));
         }
 
         return departmentId;
@@ -724,11 +724,11 @@ public sealed class CustomerDocumentsEndpointTests : IDisposable
     [Fact]
     public async Task ARoleThatMaySeeTheCustomer_ButHasNoSendGrant_CanListAndOpen_ButNotSend()
     {
-        // A CS Agent sees a customer whose ticket they handled; with the grant narrowed to CS Manager it can read but not send.
+        // A CS Agent sees a customer whose ticket is assigned to them; with the grant narrowed to CS Manager it can read but not send.
         using var factory = CreateFactory(enabled: true, configure: null, sendRoles: [Roles.CsManager]);
         var admin = await ClientAsync(factory: factory);
         var agent = await ClientAsync(Roles.CsAgent, factory);
-        await CreateCrmCustomerTicketAsync(admin, factory, handledBy: agent);
+        await CreateCrmCustomerTicketAsync(admin, factory, assignedTo: agent);
         _crm.Requests.Clear();
 
         var list = await JsonAsync(await agent.GetAsync($"/api/customers/{Key}/documents?crmLeadId=12345"));
@@ -760,7 +760,7 @@ public sealed class CustomerDocumentsEndpointTests : IDisposable
     {
         var admin = await ClientAsync();
         var client = await ClientAsync(role);
-        await CreateCrmCustomerTicketAsync(admin, handledBy: client);
+        await CreateCrmCustomerTicketAsync(admin, assignedTo: client);
 
         var response = await client.SendAsync(Send(Key, new { crmLeadId = 12345, documentType = "Contract", recordId = "5001" }, NewKey()));
 
