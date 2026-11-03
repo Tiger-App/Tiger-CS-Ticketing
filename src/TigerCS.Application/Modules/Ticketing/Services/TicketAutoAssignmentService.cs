@@ -805,6 +805,7 @@ public sealed class TicketAutoAssignmentService(
         AnsweringAgentIssue.ServiceAccount => "the mapped user is a service account",
         AnsweringAgentIssue.NotCallCenterMember => "the mapped user is not a Call Center member",
         AnsweringAgentIssue.NoOperationalRole => "the mapped user holds no operational role",
+        AnsweringAgentIssue.AmbiguousMapping => "more than one Ticketing user carries that Genesys id (fix AspNetUsers.GenesysUserId)",
         AnsweringAgentIssue.NotCsAgent => "the mapped user does not hold the CS Agent role, which the Call Center requires",
         _ => "the agent id is not usable"
     };
