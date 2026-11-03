@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
+using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Infrastructure.Persistence;
 
@@ -21,8 +22,10 @@ internal static class TicketQueryFilters
     /// <summary>
     /// The full visibility scope as one predicate — the set-based form of <c>TicketVisibilityRule.CanViewTicketAsync</c>; keep them in step.
     /// With no <paramref name="agentEmployeeId"/> this is exactly <see cref="InScope"/>. With one (a restricted CS Agent) a ticket is
-    /// visible when it is <b>currently assigned</b> to that employee, or that employee <b>handled a Genesys interaction</b> on it
-    /// (<c>TicketInteractionHandlers</c>), or — only for a caller whose other role grants it — it sits in one of
+    /// visible when it is <b>currently assigned</b> to that employee, or - <b>unless another CS Agent owns it</b> - that employee <b>handled a
+    /// Genesys interaction</b> on it (<c>TicketInteractionHandlers</c>) or created it. A ticket currently assigned to another CS Agent is never
+    /// visible through those grants: reassigning it to a colleague takes it out of the previous handler's/creator's view; one owned by a
+    /// department employee stays followable. Or — only for a caller whose other role grants it — it sits in one of
     /// <paramref name="departmentIds"/>. A null/empty department set grants nothing here: department or queue membership alone never
     /// shows a CS Agent a ticket. The handler test is a correlated EXISTS on (HandledByUserId, TicketId), so a ticket handled by several
     /// agents is still one row.
@@ -56,14 +59,21 @@ internal static class TicketQueryFilters
         }
 
         var departments = departmentIds?.ToList() ?? [];
-        Expression<Func<Ticket, bool>> visible = includeCreated
-            ? t => t.CurrentOwnerEmployeeId == agentId
-                || t.CreatedByEmployeeId == agentId
+        var csAgentRole = Roles.CsAgent;
+
+        // A ticket currently assigned to ANOTHER CS Agent is never visible through the handling / creator grants: that agent owns it.
+        Expression<Func<Ticket, bool>> notAnotherAgentsTicket = t =>
+            t.CurrentOwnerEmployeeId == null
+            || t.CurrentOwnerEmployeeId == agentId
+            || !dbContext.UserRoles.Any(ur => ur.UserId == t.CurrentOwnerEmployeeId
+                && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == csAgentRole));
+
+        Expression<Func<Ticket, bool>> followed = includeCreated
+            ? t => t.CreatedByEmployeeId == agentId
                 || dbContext.TicketInteractionHandlers.Any(h => h.TicketId == t.TicketId && h.HandledByUserId == agentId)
-                || departments.Contains(t.CurrentDepartmentId)
-            : t => t.CurrentOwnerEmployeeId == agentId
-                || dbContext.TicketInteractionHandlers.Any(h => h.TicketId == t.TicketId && h.HandledByUserId == agentId)
-                || departments.Contains(t.CurrentDepartmentId);
+            : t => dbContext.TicketInteractionHandlers.Any(h => h.TicketId == t.TicketId && h.HandledByUserId == agentId);
+
+        Expression<Func<Ticket, bool>> visible = ((Expression<Func<Ticket, bool>>)(t => t.CurrentOwnerEmployeeId == agentId)).OrElse(followed.AndAlso(notAnotherAgentsTicket)).OrElse(t => departments.Contains(t.CurrentDepartmentId));
 
         // Call Center agents also SEE (read-only) the unassigned human-handling tickets they may take ownership of. This only widens the
         // list for a caller the application service has already proven eligible; the same predicate gates the Take Ownership action.

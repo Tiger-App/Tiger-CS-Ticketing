@@ -22,6 +22,10 @@ public sealed class UserDepartmentAssignmentRepository(TigerCsDbContext dbContex
         dbContext.UserDepartmentAssignments
             .AnyAsync(a => a.EmployeeId == employeeId && a.DepartmentId == departmentId, cancellationToken);
 
+    public Task<bool> HoldsRoleAsync(Guid employeeId, string roleName, CancellationToken cancellationToken = default) =>
+        dbContext.UserRoles.AnyAsync(
+            ur => ur.UserId == employeeId && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == roleName), cancellationToken);
+
     public async Task<IReadOnlyCollection<UserDepartmentAssignment>> GetByDepartmentIdAsync(
         int departmentId, bool activeEmployeesOnly, CancellationToken cancellationToken = default)
     {

@@ -14,16 +14,17 @@ namespace TigerCS.Application.Modules.Ticketing.Services;
 /// <list type="bullet">
 /// <item>a CS-layer/executive role (<see cref="TicketRoleSets.CrossDepartmentView"/> other than CS Agent: CS Supervisor, CS Manager,
 /// General Manager, Chairman/CEO, System Administrator) sees every department;</item>
-/// <item>a <b>CS Agent</b> (<see cref="IsRestrictedCsAgent(IReadOnlyCollection{string})"/>) sees only the tickets that are <b>assigned to them</b> right now or on
-/// which they <b>actually handled a Genesys interaction</b> (<see cref="ITicketInteractionHandlerRepository"/>) — not every ticket, and
+/// <item>a <b>CS Agent</b> (<see cref="IsRestrictedCsAgent(IReadOnlyCollection{string})"/>) sees only the tickets that are <b>assigned to them</b> right now or - unless
+/// another CS Agent owns the ticket - on which they <b>actually handled a Genesys interaction</b> (<see cref="ITicketInteractionHandlerRepository"/>) — not every ticket, and
 /// not every ticket of their department or Genesys queue;</item>
 /// <item>everyone else sees only departments they are actually assigned to.</item>
 /// </list>
 ///
 /// <para>
-/// The two grants a CS Agent has are independent: reassigning the ticket takes away the previous assignee's assignment grant but never
-/// their handling grant, and a ticket handled by several agents (a transfer) is visible to each of them. An unassigned ticket nobody
-/// handled is visible to no CS Agent.
+/// A ticket currently assigned to <b>another CS Agent</b> is visible through neither the handling nor the creator grant: reassigning it to a
+/// colleague removes it from the previous assignee's, handler's and creator's view. The grants still let an agent follow a ticket nobody
+/// owns yet, or one a department employee owns (the agent who took the call can follow and close it). An unassigned ticket nobody handled
+/// is visible to no CS Agent.
 /// </para>
 ///
 /// <para>
@@ -195,8 +196,14 @@ public static class TicketVisibilityRule
                     : TicketAccessLevel.None;
             }
 
+            // Handling or creating a ticket never gives access to one that is currently assigned to ANOTHER CS Agent: that agent owns it. (A ticket
+            // assigned to a department employee stays followable by the agent who took the call / created it, so they can still close it.)
+            var assignedToSomeoneElse = ticket.CurrentOwnerEmployeeId is { } owner
+                && owner != callerEmployeeId
+                && await userDepartmentAssignmentRepository.HoldsRoleAsync(owner, Roles.CsAgent, cancellationToken);
+
             if (ticket.CurrentOwnerEmployeeId == callerEmployeeId
-                || (handlerRepository is not null
+                || (!assignedToSomeoneElse && handlerRepository is not null
                     && await handlerRepository.HasActiveHandlerGrantAsync(ticket.TicketId, callerEmployeeId, cancellationToken))
                 || await CanViewDepartmentAsync(
                     userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket.CurrentDepartmentId, serviceIdentities, cancellationToken))
@@ -205,9 +212,10 @@ public static class TicketVisibilityRule
             }
 
             // A handler whose handling predates a manual transfer keeps following the ticket, read-only (like a creator).
-            if (ticket.CreatedByEmployeeId == callerEmployeeId
+            if (!assignedToSomeoneElse
+                && (ticket.CreatedByEmployeeId == callerEmployeeId
                 || (handlerRepository is not null
-                    && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken)))
+                    && await handlerRepository.HasHandledAsync(ticket.TicketId, callerEmployeeId, cancellationToken))))
             {
                 return TicketAccessLevel.ReadOnly;
             }

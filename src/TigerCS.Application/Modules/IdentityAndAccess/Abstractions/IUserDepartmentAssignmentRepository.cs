@@ -11,6 +11,13 @@ public interface IUserDepartmentAssignmentRepository
 
     Task<bool> ExistsAsync(Guid employeeId, int departmentId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Whether the employee currently holds the named Identity role. Lives here only because every ticket-visibility call site already holds this
+    /// repository: <c>TicketVisibilityRule</c> asks it whether a ticket's current owner is a CS Agent (a CS Agent never sees a ticket assigned to
+    /// another CS Agent).
+    /// </summary>
+    Task<bool> HoldsRoleAsync(Guid employeeId, string roleName, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<UserDepartmentAssignment>> GetByDepartmentIdAsync(
         int departmentId, bool activeEmployeesOnly, CancellationToken cancellationToken = default);
 

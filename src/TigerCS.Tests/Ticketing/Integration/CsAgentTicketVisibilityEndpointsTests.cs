@@ -212,7 +212,7 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
-    public async Task ReassigningAwayFromAnAgentWhoAnsweredTheCall_DoesNotTakeTheTicketFromThem()
+    public async Task ReassigningToAnotherCsAgent_TakesTheTicketFromTheAgentWhoAnsweredTheCall()
     {
         var (genesys, _) = await ClientAsync();
         var (manager, _) = await ClientAsync(Roles.CsManager);
@@ -224,8 +224,85 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         await AssignAsync(manager, ticketId, answererId);
         await AssignAsync(manager, ticketId, otherId);
 
-        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(answerer, ticketId));   // answered it: keeps it
-        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(other, ticketId));      // assigned to it: has it
+        // Now another CS Agent's ticket: gone from the first agent's list and closed to them by URL, even though they answered the call.
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(answerer, ticketId));
+        Assert.DoesNotContain(ticketId, await ListedIdsAsync(answerer));
+        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(other, ticketId));
+        Assert.Contains(ticketId, await ListedIdsAsync(other));
+        Assert.Equal(otherId, (await _factory.GetTicketAsync(ticketId))!.CurrentOwnerEmployeeId);   // ownership untouched
+    }
+
+    [Fact]
+    public async Task FourCsAgents_EachSeeOnlyTheirOwnTickets_ByListCountSearchAndDirectUrl_WhileSupervisorManagerAndAdminSeeThemAll()
+    {
+        var (genesys, _) = await ClientAsync();
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var (supervisor, _) = await ClientAsync(Roles.CsSupervisor);
+        var (admin, _) = await ClientAsync(Roles.SystemAdministrator);
+
+        // Shahd, Esraa, Moaz and Bader: four CS Agents, two tickets each, every ticket answered on the phone by Shahd.
+        var gShahd = NewGenesysId();
+        var agents = new List<(string Name, HttpClient Client, Guid Id, List<long> Tickets)>();
+        foreach (var name in new[] { "Shahd", "Esraa", "Moaz", "Bader" })
+        {
+            var (client, id) = await ClientAsync(genesysUserId: name == "Shahd" ? gShahd : NewGenesysId());
+            agents.Add((name, client, id, []));
+        }
+
+        foreach (var agent in agents)
+        {
+            for (var i = 0; i < 2; i++)
+            {
+                var (ticketId, _) = await GenesysTicketAsync(genesys, answeredBy: gShahd);
+                await AssignAsync(manager, ticketId, agent.Id);
+                agent.Tickets.Add(ticketId);
+            }
+        }
+
+        var everyTicket = agents.SelectMany(a => a.Tickets).Order().ToArray();
+        foreach (var agent in agents)
+        {
+            var others = everyTicket.Except(agent.Tickets).ToArray();
+
+            // The list (Queue / My Tickets / "All tickets I can see") and its count hold only this agent's tickets.
+            var page = await (await agent.Client.GetAsync("/api/tickets?pageSize=200")).Content.ReadFromJsonAsync<TicketListResultDto>();
+            Assert.Equal(agent.Tickets.Order(), page!.Items.Select(i => i.TicketId).Order().Where(everyTicket.Contains));
+            Assert.Empty(page.Items.Select(i => i.TicketId).Intersect(others));
+
+            // Searching for another agent's ticket by its number finds nothing; a hostile owner filter finds nothing either.
+            foreach (var foreign in others.Take(2))
+            {
+                var number = (await _factory.GetTicketAsync(foreign))!.TicketNumber;
+                var found = await (await agent.Client.GetAsync($"/api/tickets?search={number}&pageSize=50")).Content.ReadFromJsonAsync<TicketListResultDto>();
+                Assert.DoesNotContain(foreign, found!.Items.Select(i => i.TicketId));
+            }
+
+            var foreignOwner = agents.First(a => a.Id != agent.Id).Id;
+            var byOwner = await (await agent.Client.GetAsync($"/api/tickets?ownerEmployeeId={foreignOwner}&pageSize=200")).Content.ReadFromJsonAsync<TicketListResultDto>();
+            Assert.Empty(byOwner!.Items.Select(i => i.TicketId).Intersect(others));
+
+            // Direct URLs and the API: the agent's own open, everyone else's are refused.
+            foreach (var own in agent.Tickets)
+            {
+                Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(agent.Client, own));
+            }
+
+            foreach (var foreign in others)
+            {
+                Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(agent.Client, foreign));   // including the call Shahd answered
+                Assert.Equal(HttpStatusCode.Forbidden, (await agent.Client.GetAsync($"/api/tickets/{foreign}/history")).StatusCode);
+            }
+        }
+
+        // Supervisor, Manager and Administrator see every one of them, with unchanged access.
+        foreach (var privileged in new[] { supervisor, manager, admin })
+        {
+            Assert.Subset(new HashSet<long>(await ListedIdsAsync(privileged)), new HashSet<long>(everyTicket));
+            foreach (var ticketId in everyTicket)
+            {
+                Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(privileged, ticketId));
+            }
+        }
     }
 
     // =====================================================================
@@ -717,7 +794,7 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
 
         Assert.Equal([moved.TicketId, stillMine.TicketId], await CreatedByMe(creator));
         Assert.Contains(colleaguesTicket.TicketId, await ListedIdsAsync(creator));       // assigned to me: in the normal list, not in "created by me"
-        Assert.Equal([colleaguesTicket.TicketId], await CreatedByMe(colleague));          // the filter is "created by the caller", nothing else
+        Assert.Empty(await CreatedByMe(colleague));          // created by the colleague, but now assigned to another CS Agent: no longer theirs to see
         Assert.NotEqual(creatorId, colleagueId);
     }
 

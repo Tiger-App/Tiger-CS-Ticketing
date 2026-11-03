@@ -88,6 +88,12 @@ public sealed class FakeUserDepartmentAssignmentRepository : IUserDepartmentAssi
 {
     public readonly List<UserDepartmentAssignment> Assignments = [];
 
+    /// <summary>Identity roles per employee, for <see cref="HoldsRoleAsync"/> (tests that model "the ticket's owner is a CS Agent").</summary>
+    public readonly Dictionary<Guid, HashSet<string>> RolesByEmployee = [];
+
+    public Task<bool> HoldsRoleAsync(Guid employeeId, string roleName, CancellationToken cancellationToken = default) =>
+        Task.FromResult(RolesByEmployee.TryGetValue(employeeId, out var roles) && roles.Contains(roleName));
+
     public Task<IReadOnlyCollection<UserDepartmentAssignment>> GetByEmployeeIdAsync(
         Guid employeeId, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyCollection<UserDepartmentAssignment>>(
