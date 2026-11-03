@@ -9,7 +9,11 @@
     var isMyView = Model.View == TicketsView.My;
     var showAssigneeFilter = !isMyView && Model.AssigneeDepartmentId is not null;
 
-    string PageUrl(int p) => Url.Page("/Tickets", new
+    // "page" is the reserved route key that names the Razor Page itself, so Url.Page silently DROPS a route value called "page" (Next/Prev
+    // would reload page 1). The page number is appended to the query string by hand instead.
+    string PageUrl(int p)
+    {
+        var baseUrl = Url.Page("/Tickets", new
     {
         view = viewKey,
         departmentId = Model.DepartmentId,
@@ -20,7 +24,6 @@
         search = Model.Search,
         sortBy = Model.SortBy,
         sortDir = Model.SortDir,
-        page = p,
         pageSize = Model.PageSize,
         channelId = Model.ChannelId,
         requestTypeId = Model.RequestTypeId,
@@ -39,7 +42,9 @@
         closedTo = Model.ClosedTo?.ToString("yyyy-MM-dd"),
         createdFrom = Model.CreatedFrom?.ToString("yyyy-MM-dd"),
         createdTo = Model.CreatedTo?.ToString("yyyy-MM-dd")
-    }) ?? Model.View.Href();
+        }) ?? Model.View.Href();
+        return baseUrl + (baseUrl.Contains('?') ? "&" : "?") + "page=" + p;
+    }
 }
 
 <form class="filter-bar" id="ticketFilters" method="get">

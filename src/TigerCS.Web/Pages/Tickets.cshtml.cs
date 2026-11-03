@@ -210,15 +210,18 @@ public sealed class TicketsModel(
             if (MineOnly) values["mineOnly"] = "true";
             if (UnassignedOnly) values["unassignedOnly"] = "true";
             if (IncludeResolved) values["includeResolved"] = "true";
-            if (PageNumber > 1) values["page"] = PageNumber.ToString();
+            // Not "page": that is the reserved route key naming the Razor Page, which route-data generation drops. The page travels as a
+            // "returnPage" form field instead (see RedirectToPendingView).
             if (PageSize != 20) values["pageSize"] = PageSize.ToString();
             return values;
         }
     }
 
+    // [FromQuery] on page: a plain 'int page' parameter binds from ROUTE data first, and in Razor Pages the route value named 'page' is the page
+    // path ('/Tickets'), so the number never bound and Next/Prev always showed page 1.
     public async Task OnGetAsync(
         int? departmentId, byte? priorityId, string? ticketStatus, string? verificationStatus,
-        Guid? ownerEmployeeId, string? search, string? sortBy, string? sortDir, int page, int pageSize,
+        Guid? ownerEmployeeId, string? search, string? sortBy, string? sortDir, [FromQuery(Name = "page")] int page, int pageSize,
         CancellationToken cancellationToken,
         byte? channelId = null, int? requestTypeId = null, bool activeOnly = false, bool inDepartmentQueue = false,
         bool slaBreached = false, bool dueToday = false, string? backlogAge = null, bool pendingApproval = false,
@@ -367,6 +370,12 @@ public sealed class TicketsModel(
             !string.Equals(pair.Key, TicketsViews.QueryKey, StringComparison.OrdinalIgnoreCase)
             && !string.Equals(pair.Key, "handler", StringComparison.OrdinalIgnoreCase)));
 
+        if (Request.HasFormContentType
+            && int.TryParse(Request.Form["returnPage"], out var returnPage) && returnPage > 1)
+        {
+            query.Add(new("page", returnPage.ToString()));
+        }
+
         return LocalRedirect($"/Tickets{QueryString.Create(query)}");
     }
 
@@ -400,6 +409,16 @@ public sealed class TicketsModel(
             CreatedByMe ? true : null, Escalated ? true : null, AvailableToTake ? true : null);
 
         var result = await ticketsApiClient.GetQueueAsync(request, cancellationToken);
+
+        // A page number past the last page (a stale Next/Prev link, or a list that shrank since it was opened) would render an empty
+        // "No tickets match" panel with a pager that steps back one page per click. Show the last page instead.
+        if (result.IsSuccess && result.Value is { Items.Count: 0, TotalCount: > 0 } outOfRange
+            && PageNumber > (int)Math.Ceiling(outOfRange.TotalCount / (double)PageSize))
+        {
+            PageNumber = (int)Math.Ceiling(outOfRange.TotalCount / (double)PageSize);
+            result = await ticketsApiClient.GetQueueAsync(request with { Page = PageNumber }, cancellationToken);
+        }
+
         Outcome = result.Outcome;
 
         if (result.IsSuccess && result.Value is not null)
@@ -429,6 +448,18 @@ public sealed class TicketsModel(
                 MineOnly ? Viewer?.EmployeeId : null,
                 UnassignedOnly, IncludeResolved, PageNumber, PageSize),
             cancellationToken);
+
+        if (result.IsSuccess && result.Value is { Items.Count: 0, TotalCount: > 0 } outOfRange
+            && PageNumber > (int)Math.Ceiling(outOfRange.TotalCount / (double)PageSize))
+        {
+            PageNumber = (int)Math.Ceiling(outOfRange.TotalCount / (double)PageSize);
+            result = await handoffsApiClient.ListAsync(
+                new AgentHandoffListRequestDto(
+                    DepartmentId, ChannelId,
+                    MineOnly ? Viewer?.EmployeeId : null,
+                    UnassignedOnly, IncludeResolved, PageNumber, PageSize),
+                cancellationToken);
+        }
 
         PendingOutcome = result.Outcome;
 

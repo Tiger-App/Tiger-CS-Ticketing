@@ -440,7 +440,7 @@ public sealed class TicketAutoAssignmentService(
 
     /// <summary>
     /// Whether the person Genesys reported as having answered can be given a Call Center ticket: not a service identity, account not locked
-    /// out, an operational (non read-only) role, and a member of the Call Center. Mapped-and-active is established earlier by the Genesys
+    /// out, the CS Agent role (and not read-only), and a member of the Call Center. Mapped-and-active is established earlier by the Genesys
     /// resolver (<see cref="AnsweringAgentIssue.NotMapped"/> / <see cref="AnsweringAgentIssue.Inactive"/>). A lookup that cannot answer
     /// counts AGAINST the person — the ticket then waits in the queue for a human to assign; it is never guessed onto somebody.
     /// </summary>
@@ -477,6 +477,12 @@ public sealed class TicketAutoAssignmentService(
             if (Roles.IsReadOnlyCaller(roles) || !roles.Any(TicketRoleSets.RoundRobinEligible.Contains))
             {
                 return AnsweringAgentIssue.NoOperationalRole;
+            }
+
+            // Call Center tickets belong to CS Agents only - the same pool Round Robin deals from.
+            if (!roles.Contains(Roles.CsAgent, StringComparer.Ordinal))
+            {
+                return AnsweringAgentIssue.NotCsAgent;
             }
         }
 
@@ -681,6 +687,7 @@ public sealed class TicketAutoAssignmentService(
         AnsweringAgentIssue.ServiceAccount => "the mapped user is a service account",
         AnsweringAgentIssue.NotCallCenterMember => "the mapped user is not a Call Center member",
         AnsweringAgentIssue.NoOperationalRole => "the mapped user holds no operational role",
+        AnsweringAgentIssue.NotCsAgent => "the mapped user does not hold the CS Agent role",
         _ => "the agent id is not usable"
     };
 

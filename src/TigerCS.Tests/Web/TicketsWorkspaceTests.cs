@@ -409,7 +409,8 @@ public sealed class TicketsWorkspaceTests
         Assert.Equal("pending", model.PendingRouteValues["view"]);
         Assert.Equal("true", model.PendingRouteValues["mineOnly"]);
         Assert.Equal("3", model.PendingRouteValues["channelId"]);
-        Assert.Equal("2", model.PendingRouteValues["page"]);
+        // "page" is the reserved Razor Pages route key and would be dropped; the page returns via the "returnPage" form field instead.
+        Assert.DoesNotContain("page", model.PendingRouteValues.Keys);
     }
 
     [Fact]
