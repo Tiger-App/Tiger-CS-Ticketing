@@ -45,7 +45,13 @@ public enum GenesysAgentResolutionOutcome
     Ambiguous,
 
     /// <summary>The Genesys User ID is mapped to a service / integration identity (e.g. the Genesys integration account). It is never a handling agent.</summary>
-    ServiceAccount
+    ServiceAccount,
+
+    /// <summary>Resolved only through the e-mail-form <c>senderId</c> fallback: the matched account is locked out, so it is never used as a handling agent.</summary>
+    LockedOut,
+
+    /// <summary>Resolved only through the e-mail-form <c>senderId</c> fallback: the matched user does not hold the CS Agent role, so the e-mail alone is not enough to treat it as the answering agent.</summary>
+    NotCsAgent
 }
 
 /// <summary>

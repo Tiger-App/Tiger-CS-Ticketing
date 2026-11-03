@@ -35,7 +35,8 @@ public sealed class GenesysInteractionHandlerRecorder(
     /// </summary>
     public async Task<bool> RecordAsync(
         Guid callerEmployeeId, TicketInteraction interaction, string? genesysAgentId,
-        InteractionHandlerSource source, DateTime? connectedAtUtc, CancellationToken cancellationToken = default)
+        InteractionHandlerSource source, DateTime? connectedAtUtc, CancellationToken cancellationToken = default,
+        bool identityIsTranscriptSenderId = false)
     {
         ArgumentNullException.ThrowIfNull(interaction);
 
@@ -44,7 +45,10 @@ public sealed class GenesysInteractionHandlerRecorder(
             return false;
         }
 
-        var resolution = await agentResolution.ResolveByGenesysUserIdAsync(genesysAgentId, cancellationToken);
+        // A HumanAgent transcript senderId is the GUID, or (strict, unique-CS-Agent fallback) an e-mail; every other agent id is the GUID only.
+        var resolution = identityIsTranscriptSenderId
+            ? await agentResolution.ResolveSenderIdAsync(genesysAgentId, cancellationToken)
+            : await agentResolution.ResolveByGenesysUserIdAsync(genesysAgentId, cancellationToken);
         if (!resolution.IsResolved)
         {
             return false;

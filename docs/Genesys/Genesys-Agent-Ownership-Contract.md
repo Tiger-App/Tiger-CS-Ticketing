@@ -10,10 +10,10 @@ TigerCS has exactly four sources. Only the first three are *confirmation*:
 |---|---|---|
 | `agentId` on the ticket-creating inquiry of a **phone call** (or an inquiry already flagged `humanFollowUpRequired`) | `POST /api/genesys/tickets` | **Yes** — answered before the ticket existed (handler Source `Inquiry`) |
 | `routing.agentId` (+ `connectedAtUtc`) | `POST /api/genesys/tickets/{id}/updates` | **Yes** — "agent now **connected**" (handler Source `Routing`) |
-| A `HumanAgent` transcript line whose `senderId` maps to a user | updates / conversation end | **Yes** — the first mapped person who wrote to the customer |
+| A `HumanAgent` transcript line whose `senderId` maps to a user (GUID, or strict e-mail fallback §9) | updates / conversation end | **Yes** — the first mapped person who wrote to the customer; every such person is also recorded as a handler (Source `Transcript`) |
 | Top-level `agentId` on an update / end; `handoff.agentAvailable`+`agentId`; `handoff.assignedAgentId` | | **No** — context only / "assigned or ringing". Recorded as display data or a pending work item, never as ownership |
 
-Identity is `AspNetUsers.GenesysUserId` only (filtered unique index `UX_AspNetUsers_GenesysUserId`); never a name or e-mail.
+Identity is `AspNetUsers.GenesysUserId` only (filtered unique index `UX_AspNetUsers_GenesysUserId`); never a name. The one exception is the **HumanAgent transcript `senderId`** — see §9.
 
 ## 2. Precedence
 
@@ -91,3 +91,29 @@ Same-event redelivery writes nothing (unique handler row per interaction+agent, 
 - [ ] Classify to Facilities Management / Finance / Maintenance → department changes, CS Agent unchanged.
 - [ ] Reopen a closed ticket → previous agent restored if eligible, else shared round robin.
 - [ ] Run the diagnostic: sections 4–6 contain only the intentional exceptions.
+
+## 9. HumanAgent transcript `senderId`: GUID contract, strict e-mail fallback (Ticket 225)
+
+**Incident.** Ticket 225's three `HumanAgent` lines carried `senderName = "Esraa Alfadil Alnour Ahmed"` and `senderId = callcenter5@tigergroup.ae`, while her
+`AspNetUsers.GenesysUserId` is a GUID. The lookup is by `GenesysUserId`, so every line resolved to nobody (`SENDERID_MAPS_TO_NOBODY`), no `TicketInteractionHandlers`
+row was written, and the ticket kept its explicit owner (Shahd Mirza, Take Ownership) — correctly.
+
+**Contract.** `transcript[].senderId` for a `HumanAgent` is the agent's **Genesys User ID (GUID)** — the same value as `routing.agentId`
+(`docs/Genesys/Live-Transcript-And-Unclassified-Tickets.md`, `Genesys-UAT-Final-Handoff.md`). Nothing in this repository documents or sends an e-mail there.
+
+**What TigerCS now does** (`GenesysAgentResolutionAppService.ResolveSenderIdAsync`, HumanAgent transcript lines only — `routing.agentId`, inquiry `agentId` and every other id stay GUID-only):
+
+1. GUID first, exactly as before. If the id maps to *anybody* (even an inactive/ambiguous/service user) that answer is final.
+2. Only if it maps to nobody **and** is a bare, well-formed e-mail **and** `Genesys:AllowEmailSenderIdFallback` is `true` (default; `false` = GUID only): match the *whole address*, case-insensitively, to
+   `AspNetUsers.NormalizedEmail` or `GenesysEmail`. Names, display names, partial addresses, lists and `Name <addr>` forms never match.
+3. Accepted only if exactly one distinct account matches **and** it is an active employee, not locked out, not a service identity, and holds the **CS Agent** role. Two or more matches
+   (even if one is inactive) = `Ambiguous`, nobody is chosen. Inactive / locked / service / non-CS-Agent are rejected with their own outcome and flagged exactly like the GUID path.
+4. A recognised sender is recorded as a handler (`InteractionHandlerSource.Transcript = 5`, tinyint — no schema change) with the account's GUID when it has one, else the e-mail. This records evidence only.
+5. Ownership rules are untouched: an explicit/manual/supervisor owner is never overwritten (the recognised agent becomes a handler and can see the ticket); an unowned or provisional-Round-Robin ticket goes to the recognised, eligible agent.
+
+**Required Genesys-side contract update (to be confirmed).** The flow/data action that builds the transcript `senderId` must send the agent's Genesys **User ID (GUID)** (`participant.userId` / the user's `id`),
+not the user's e-mail or username. This repository contains no captured Genesys connected-agent event, so whether `routing.agentId` is also an e-mail in production is **unverified**:
+check the live `routing.agentId` values (`TicketInteractions.GenesysAgentId`, `TicketInteractionHandlers.GenesysAgentUserId`) with a read-only query. `routing.agentId` is **not** given the e-mail fallback; if it turns out to be an e-mail, fix it in the flow rather than widening this fallback.
+The fallback is a safety net and can be switched off once Genesys sends GUIDs.
+
+**Existing data.** Nothing is backfilled. Ticket 225 (and any other ticket whose lines carried an e-mail `senderId`) gets no retroactive handler row; a redelivered transcript line for it would record one, and still would not change Shahd's ownership.
