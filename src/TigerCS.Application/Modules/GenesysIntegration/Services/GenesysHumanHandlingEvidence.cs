@@ -101,6 +101,23 @@ public static class GenesysHumanHandlingEvidence
             .FirstOrDefault();
     }
 
+    /// <summary>
+    /// Every distinct <c>senderId</c> of a <c>HumanAgent</c> line this update carries, earliest writer first. Each is evidence that a person
+    /// wrote to the customer (resolved - GUID or the strict e-mail fallback - and recorded as a handler by the caller).
+    /// </summary>
+    public static IReadOnlyList<(string SenderId, DateTime FirstSentAtUtc)> HumanSenderIds(GenesysTicketUpdateDto request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        return (request.Transcript ?? [])
+            .Concat(request.Ended?.Transcript ?? [])
+            .Where(m => string.Equals(m.Sender?.Trim(), "HumanAgent", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(m.SenderId))
+            .GroupBy(m => m.SenderId!.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Select(g => (SenderId: g.Key, FirstSentAtUtc: g.Min(m => m.SentAtUtc)))
+            .OrderBy(x => x.FirstSentAtUtc)
+            .ToList();
+    }
+
     private static bool HasHumanLine(IReadOnlyList<GenesysTranscriptMessageDto>? messages) =>
         messages is not null
         && messages.Any(m => string.Equals(m.Sender?.Trim(), "HumanAgent", StringComparison.OrdinalIgnoreCase)

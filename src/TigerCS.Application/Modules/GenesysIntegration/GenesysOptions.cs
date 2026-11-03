@@ -96,6 +96,16 @@ public sealed class GenesysOptions
     public bool AssignOnAnswer { get; set; } = true;
 
     /// <summary>
+    /// <b>E-mail-form HumanAgent <c>senderId</c></b> (<c>Genesys:AllowEmailSenderIdFallback</c>, default <b>true</b>). The contract says a transcript
+    /// <c>senderId</c> is the agent's Genesys User ID (GUID), and that is always tried first. Genesys has been observed to send the agent's
+    /// e-mail there instead (ticket 225: <c>callcenter5@...</c>). With this on, an e-mail-form id resolves to a Ticketing user only when it
+    /// equals - exactly, as a whole address - the account e-mail (or recorded Genesys e-mail) of ONE active, unlocked, non-service CS Agent;
+    /// anything else (none, several, inactive, locked, service, not a CS Agent) resolves to nobody. Display names are never matched.
+    /// Set <c>false</c> to accept the GUID form only.
+    /// </summary>
+    public bool AllowEmailSenderIdFallback { get; set; } = true;
+
+    /// <summary>
     /// The code of the department that acts as the <b>safe classification queue</b> (<c>Genesys:ClassificationDepartmentCode</c>, e.g. the
     /// department whose staff triage Unclassified tickets). Used only when configuration cannot place a Genesys ticket: no department,
     /// queue mapping or valid request type named one, or a supplied request type is unusable (unmapped intent, retired department, no

@@ -20,6 +20,9 @@ public enum InteractionHandlerSource : byte
     /// <summary>The conversation-end event named the handling agent.</summary>
     ConversationEnd = 4,
 
+    /// <summary>A <c>HumanAgent</c> transcript line whose <c>senderId</c> resolved to an eligible CS Agent (Genesys User ID, or the unique-e-mail fallback) - that person wrote to the customer.</summary>
+    Transcript = 5,
+
     /// <summary>Copied from <c>TicketInteractions.HandledByUserId</c> when this table was introduced — the single handler the integration recorded before per-agent history existed.</summary>
     Legacy = 9
 }

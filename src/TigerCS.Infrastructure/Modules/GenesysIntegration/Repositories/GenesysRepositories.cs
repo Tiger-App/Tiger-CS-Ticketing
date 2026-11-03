@@ -203,6 +203,36 @@ public sealed class GenesysAgentMappingRepository(TigerCsDbContext dbContext) : 
             : ToMapped(row[0].Id, row[0].GenesysUserId!, row[0].GenesysEmail, row[0].UserName, row[0].Employee?.DisplayName, row[0].Employee is not null && row[0].Employee!.DeactivatedAtUtc == null);
     }
 
+    public async Task<IReadOnlyList<GenesysMappedAgent>> FindByEmailAsync(
+        string email, CancellationToken cancellationToken = default)
+    {
+        var normalized = email.Trim().ToUpperInvariant();
+
+        var rows = await dbContext.Users.AsNoTracking()
+            .Where(u => (u.NormalizedEmail != null && u.NormalizedEmail == normalized)
+                || (u.GenesysEmail != null && u.GenesysEmail.ToUpper() == normalized))
+            .Select(u => new
+            {
+                u.Id,
+                u.GenesysUserId,
+                u.GenesysEmail,
+                u.UserName,
+                Employee = dbContext.Employees.AsNoTracking()
+                    .Where(e => e.EmployeeId == u.Id)
+                    .Select(e => new { e.DisplayName, e.DeactivatedAtUtc })
+                    .FirstOrDefault()
+            })
+            .OrderBy(u => u.Id)
+            .Take(2)
+            .ToListAsync(cancellationToken);
+
+        // A user without a Genesys id is still returned (GenesysUserId = ""): the resolver decides whether the e-mail alone is enough.
+        return rows
+            .Select(r => ToMapped(r.Id, r.GenesysUserId ?? string.Empty, r.GenesysEmail, r.UserName, r.Employee?.DisplayName,
+                r.Employee is not null && r.Employee.DeactivatedAtUtc == null))
+            .ToList();
+    }
+
     private static GenesysMappedAgent ToMapped(Guid id, string genesysUserId, string? email, string? userName, string? displayName, bool isActive) =>
         // The existing rule (ActiveEmployeeRequirement): an Employee row that is not deactivated. No Employee row is not a valid, active Ticketing user either.
         new(id, genesysUserId, email, userName, displayName, isActive);
