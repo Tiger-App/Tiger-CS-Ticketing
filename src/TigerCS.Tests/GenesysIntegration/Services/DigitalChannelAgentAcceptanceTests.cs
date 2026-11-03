@@ -7,8 +7,8 @@ using TigerCS.Tests.GenesysIntegration.Fakes;
 namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
-/// "Whoever accepts owns it" holds on EVERY Genesys channel, not just Phone: Website Chat, WhatsApp and Social DM (Genesys normalizes Instagram
-/// and Facebook messaging to <see cref="GenesysChannel.SocialMedia"/>). A mapped CS Agent reported as CONNECTED (routing.agentId) gets the ticket
+/// "Whoever accepts owns it" holds on EVERY Genesys channel, not just Phone: Website Chat, WhatsApp, Instagram, Facebook and generic Social DM (Genesys normalizes Instagram
+/// and Facebook have their own channels; <see cref="GenesysChannel.SocialMedia"/> remains the generic fallback for other platforms). A mapped CS Agent reported as CONNECTED (routing.agentId) gets the ticket
 /// directly - no Round Robin turn is spent. An accepting agent who is not a CS Agent (or otherwise cannot take it) leaves the ticket in the Call
 /// Center queue, flagged. Nobody accepted but a person is required: Round Robin among CS Agents. AI-only chats and existing owners are untouched.
 /// </summary>
@@ -18,7 +18,7 @@ public class DigitalChannelAgentAcceptanceTests
 
     public static TheoryData<GenesysChannel> DigitalChannels => new()
     {
-        GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp, GenesysChannel.SocialMedia
+        GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp, GenesysChannel.Instagram, GenesysChannel.Facebook, GenesysChannel.SocialMedia
     };
 
     private sealed record World(GenesysServiceFixture F, Department Cs, (Guid Id, string GenesysId)[] Agents)
@@ -100,15 +100,20 @@ public class DigitalChannelAgentAcceptanceTests
 
     [Theory]
     [MemberData(nameof(DigitalChannels))]
-    public async Task ChatCreatedWithAHumanAlreadyAccepted_IsAssignedDirectlyAtCreation(GenesysChannel channel)
+    public async Task DigitalInquiryNamingAnAgent_EvenWithHumanFollowUp_IsNotAnAcceptance_UntilRoutingReportsThemConnected(GenesysChannel channel)
     {
         var w = NewWorld();
+        var conversation = $"conv-{channel}-created";
 
-        var ticketId = await IngestAsync(w, channel, $"conv-{channel}-created", w.Accepting.GenesysId, humanFollowUp: true);
-
-        AssertSingleOwner(w, ticketId, w.Accepting.Id);
+        // A top-level agentId on a digital inquiry is who is offered/assigned/queued - never proof of acceptance. The ticket needs a person, so it
+        // enters the Call Center and Round Robin picks a CS Agent (an automatic pre-assignment)...
+        var ticketId = await IngestAsync(w, channel, conversation, w.Accepting.GenesysId, humanFollowUp: true);
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        Assert.True(CursorUntouched(w));
+        AssertSingleOwner(w, ticketId, w.RoundRobinNext.Id);
+
+        // ...and the agent owns it only once Genesys reports them CONNECTED; that replaces the automatic pick, leaving one owner, one row.
+        await AcceptAsync(w, ticketId, conversation, w.Accepting.GenesysId);
+        AssertSingleOwner(w, ticketId, w.Accepting.Id);
     }
 
     [Theory]
@@ -180,7 +185,8 @@ public class DigitalChannelAgentAcceptanceTests
     public async Task ExistingHumanOwner_IsNeverOverwritten_WhenAnotherAgentAccepts(GenesysChannel channel)
     {
         var w = NewWorld();
-        var ticketId = await IngestAsync(w, channel, $"conv-{channel}-owned", w.Agents[1].GenesysId, humanFollowUp: true);
+        var ticketId = await IngestAsync(w, channel, $"conv-{channel}-owned");
+        await AcceptAsync(w, ticketId, $"conv-{channel}-owned", w.Agents[1].GenesysId);
         AssertSingleOwner(w, ticketId, w.Agents[1].Id);
 
         await AcceptAsync(w, ticketId, $"conv-{channel}-owned", w.Accepting.GenesysId);

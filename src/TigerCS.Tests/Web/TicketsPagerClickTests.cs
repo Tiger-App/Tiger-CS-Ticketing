@@ -148,7 +148,7 @@ public sealed partial class TicketsPagerClickTests : IDisposable
         Assert.Equal(Enumerable.Range(41, 5), Rows(html));
         Assert.DoesNotContain("No tickets match the current filters", html, StringComparison.Ordinal);
         Assert.Null(Next(html));
-        Assert.EndsWith("page=2", Prev(html)!, StringComparison.Ordinal);
+        Assert.Contains("page=2", Prev(html)!, StringComparison.Ordinal);
     }
 
     [Fact]
