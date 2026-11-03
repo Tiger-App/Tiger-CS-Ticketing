@@ -705,6 +705,50 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
+    public async Task DepartmentWork_ThenCsFollowUpAndClosure_ThroughTheRealEndpoints_WhileOtherAgentsStayOut()
+    {
+        var own = await DepartmentAsync();
+        var (agent, _) = await ClientAsync(departmentId: own);                 // takes the call, creates the ticket, owns it
+        var (otherAgent, _) = await ClientAsync(departmentId: own);
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var receiving = await NewDepartmentAsync();
+        var (worker, workerId) = await ClientAsync(Roles.DepartmentEmployee, departmentId: receiving);
+        var ticket = await CreateManualTicketAsync(agent, own);
+
+        await TransferAsync(manager, ticket.TicketId, receiving, assignTo: workerId);   // department classification / transfer: the employee works it
+
+        // The department employee performs the work...
+        var detail = await (await worker.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        var started = await worker.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/status", new ChangeStatusRequestDto("InProgress", Convert.FromBase64String(detail!.RowVersion)));
+        Assert.Equal(HttpStatusCode.OK, started.StatusCode);
+        var working = await started.Content.ReadFromJsonAsync<TicketDetailDto>();
+        var resolved = await worker.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/resolution",
+            new ResolveTicketRequestDto("Resolved", "Fixed.", null, null, Convert.FromBase64String(working!.RowVersion)));
+        Assert.Equal(HttpStatusCode.OK, resolved.StatusCode);
+        var afterResolve = await resolved.Content.ReadFromJsonAsync<TicketDetailDto>();
+
+        // ...while the responsible CS Agent keeps seeing it, and nobody else of their kind does.
+        Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
+        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(otherAgent));
+
+        // The responsible CS Agent follows up and closes it...
+        var close = await agent.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/close", new CloseTicketRequestDto(Convert.FromBase64String(afterResolve!.RowVersion)));
+        Assert.Equal(HttpStatusCode.OK, close.StatusCode);
+        var closed = await close.Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", closed!.TicketStatus);
+
+        // ...and still finds it, closed, while it stays assigned to the department employee; ownership was never touched.
+        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(agent, ticket.TicketId));
+        Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
+        Assert.Equal(workerId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
+    }
+
+    [Fact]
     public async Task OnceAnotherCsAgentOwnsTheTicket_TheCreatorAndEarlierResponsibleAgentLoseItEntirely()
     {
         var own = await DepartmentAsync();
