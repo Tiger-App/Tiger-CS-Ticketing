@@ -288,7 +288,7 @@ public class RoundRobinAndOwnerPermissionTests
         var tickets = new FakeTicketRepository();
         var categories = new FakeCategoryRepository();
         var departments = new FakeDepartmentRepository();
-        var members = new FakeUserDepartmentAssignmentRepository();
+        var members = new FakeUserDepartmentAssignmentRepository { EveryUserIsResponsible = true };
         var statusHistory = new FakeTicketStatusHistoryRepository();
         var audit = new FakeAuditEntryWriter();
         var unitOfWork = new FakeTicketingUnitOfWork();
@@ -340,7 +340,7 @@ public class RoundRobinAndOwnerPermissionTests
         var tickets = new FakeTicketRepository();
         var categories = new FakeCategoryRepository();
         var departments = new FakeDepartmentRepository();
-        var members = new FakeUserDepartmentAssignmentRepository();
+        var members = new FakeUserDepartmentAssignmentRepository { EveryUserIsResponsible = true };
         var statusHistory = new FakeTicketStatusHistoryRepository();
         var audit = new FakeAuditEntryWriter();
         var unitOfWork = new FakeTicketingUnitOfWork();

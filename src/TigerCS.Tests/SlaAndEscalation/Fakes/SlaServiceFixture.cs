@@ -51,7 +51,7 @@ public sealed class SlaServiceFixture
         Tickets = tickets ?? new FakeTicketRepository();
         Resolutions = resolutions ?? new FakeTicketResolutionRepository();
         StatusHistory = statusHistory ?? new FakeTicketStatusHistoryRepository();
-        DepartmentAssignments = departmentAssignments ?? new FakeUserDepartmentAssignmentRepository();
+        DepartmentAssignments = departmentAssignments ?? new FakeUserDepartmentAssignmentRepository { EveryUserIsResponsible = true };
         Audit = audit ?? new FakeAuditEntryWriter();
         UnitOfWork = unitOfWork ?? new FakeTicketingUnitOfWork();
         Time = timeProvider ?? TimeProvider.System;

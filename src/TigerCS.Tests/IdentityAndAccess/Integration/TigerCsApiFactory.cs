@@ -617,8 +617,8 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
 
     /// <summary>
     /// Records <paramref name="userId"/> as having handled the ticket's (first) interaction — what a Genesys connect event does in
-    /// production — which is what lets a CS Agent see a ticket they neither own nor were assigned. Tests whose subject is something other
-    /// than visibility use it to say "this agent took the call".
+    /// production — and records them as the ticket's responsible CS Agent, so they can follow a ticket a department employee works. Tests whose
+    /// subject is something other than visibility use it to say "this agent took the call".
     /// </summary>
     public async Task RecordHandlerAsync(long ticketId, Guid userId)
     {
@@ -629,6 +629,30 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
         db.TicketInteractionHandlers.Add(TicketInteractionHandler.Create(
             interactionId, ticketId, userId, "test-genesys-" + userId.ToString("N")[..8],
             InteractionHandlerSource.Routing, connectedAtUtc: null, DateTime.UtcNow));
+
+        // Handling alone grants no access (a CS Agent sees only tickets assigned to them, or that a department employee holds and they are
+        // responsible for). So the test actor also becomes the ticket's responsible CS Agent the legitimate way: a superseded assignment row on
+        // its history. The ticket row itself (and so its RowVersion and owner) is left untouched; use AssignOwnerAsync to make them the owner.
+        var ticketDepartmentId = await db.Tickets.Where(t => t.TicketId == ticketId).Select(t => t.CurrentDepartmentId).FirstAsync();
+        var history = new TicketAssignment(ticketId, userId, ticketDepartmentId, DateTime.UtcNow, assigningActorEmployeeId: null);
+        history.MarkSuperseded();
+        db.TicketAssignments.Add(history);
+
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>
+    /// Makes <paramref name="userId"/> the ticket's current owner (as an unassigned ticket's first assignment): the CS Agent a ticket is
+    /// assigned to. This changes the ticket's RowVersion - re-read it before a request that carries one.
+    /// </summary>
+    public async Task AssignOwnerAsync(long ticketId, Guid userId)
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        var ticket = await db.Tickets.FirstAsync(t => t.TicketId == ticketId);
+        ticket.AssignTo(userId);
+        (await db.TicketAssignments.FirstOrDefaultAsync(a => a.TicketId == ticketId && a.IsCurrent))?.MarkSuperseded();
+        db.TicketAssignments.Add(new TicketAssignment(ticketId, userId, ticket.CurrentDepartmentId, DateTime.UtcNow, assigningActorEmployeeId: null));
         await db.SaveChangesAsync();
     }
 

@@ -60,6 +60,7 @@ public sealed class TicketQueryAppService(
         // A restricted CS Agent who may take ownership also SEES (read-only) the unassigned human-handling tickets of every department, and the
         // Call Center filter lists them too. Only an eligible Call Center agent ever gets this; for everyone else the list is exactly as before.
         var seesClaimablePool = claimPolicy is not null
+            && request.AvailableToTake == true   // the pool is a separate, explicitly requested view - never part of Queue / My Tickets
             && IsRestrictedAgent(callerEmployeeId, callerRoles)
             && await claimPolicy.IsEligibleClaimerAsync(callerEmployeeId, callerRoles, cancellationToken);
         var callCenterFilter = seesClaimablePool

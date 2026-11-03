@@ -76,7 +76,7 @@ public sealed class TicketAgentHandoffRepository(TigerCsDbContext dbContext) : I
             return visibleDepartmentIds is null ? handoffs : handoffs.Where(h => visibleDepartmentIds.Contains(h.DepartmentId));
         }
 
-        var visibleTickets = dbContext.Tickets.VisibleTo(dbContext, visibleDepartmentIds, agentScopeEmployeeId, includeCreated: false).Select(t => t.TicketId);
+        var visibleTickets = dbContext.Tickets.VisibleTo(dbContext, visibleDepartmentIds, agentScopeEmployeeId).Select(t => t.TicketId);
         var claimable = claimableDepartmentIds?.ToList() ?? [];
         return handoffs.Where(h =>
             visibleTickets.Contains(h.TicketId)

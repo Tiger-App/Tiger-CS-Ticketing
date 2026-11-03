@@ -18,6 +18,13 @@ public interface IUserDepartmentAssignmentRepository
     /// </summary>
     Task<bool> HoldsRoleAsync(Guid employeeId, string roleName, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Whether <paramref name="employeeId"/> is the CS Agent responsible for the ticket while a department employee owns it: the employee on
+    /// the ticket's most recent assignment row who holds the CS Agent role; when no CS Agent was ever assigned, the ticket's creator if they
+    /// are a CS Agent. Derived from the append-only assignment history, so it moves the moment another CS Agent is assigned and nothing is stored.
+    /// </summary>
+    Task<bool> IsResponsibleCsAgentAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyCollection<UserDepartmentAssignment>> GetByDepartmentIdAsync(
         int departmentId, bool activeEmployeesOnly, CancellationToken cancellationToken = default);
 
