@@ -86,9 +86,16 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     /// <summary>Razor encodes "—" and "+" as numeric entities; assertions on prose read the decoded text.</summary>
     private static string Dec(string html) => WebUtility.HtmlDecode(html);
 
-    private static string Strip(string html) => Section(html, "class=\"customer-strip\"", "</section>");
-    private static string NextStep(string html) => Section(html, "class=\"attention ", "</section>");
-    private static string Menu(string html) => Section(html, "id=\"actions-menu\"", "class=\"customer-strip\"");
+    /// <summary>Everything the page says about the customer: the header's identity line plus the sidebar's Customer section (when present).</summary>
+    private static string Strip(string html)
+    {
+        var who = Section(html, "class=\"tw-who\"", "</header>");
+        var side = html.IndexOf("class=\"tw-sec tw-cust\"", StringComparison.Ordinal);
+        return side < 0 ? who : who + Section(html, "class=\"tw-sec tw-cust\"", "</section>");
+    }
+
+    private static string NextStep(string html) => Section(html, "class=\"tw-next ", "</section>");
+    private static string Menu(string html) => Section(html, "id=\"actions-menu\"", "class=\"tw-next ");
 
     // ---------------------------------------------------------------- the four questions, every scenario
 
@@ -101,7 +108,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Contains("Customer not identified", Strip(html));
         var next = NextStep(html);
         Assert.Contains("Classify this ticket", next);
-        Assert.Equal(1, Count(html, "attention__cta"));
+        Assert.Equal(1, Count(html, "tw-next__cta"));
         Assert.Contains("Unassigned — awaiting CS Agent", Dec(html));
         Assert.Contains("SLA: Not started", html);
         Assert.Contains("Not yet classified", html);
@@ -115,7 +122,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
 
         Assert.Contains("Assign this ticket", NextStep(html));
         Assert.Contains("waiting in the Customer Service queue", NextStep(html));
-        Assert.Equal(1, Count(html, "attention__cta"));
+        Assert.Equal(1, Count(html, "tw-next__cta"));
     }
 
     [Fact]
@@ -128,8 +135,8 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Contains("Contact the customer", NextStep(html));   // yours, and nobody has replied yet
 
         // One dominant action: the Next step button is the only gold control outside forms' own submit buttons.
-        Assert.Equal(1, Count(html, "btn btn-gold btn-sm attention__cta"));
-        var summaries = Section(html, "id=\"actions-menu\"", "class=\"customer-strip\"");
+        Assert.Equal(1, Count(html, "btn btn-gold btn-sm tw-next__cta"));
+        var summaries = Menu(html);
         Assert.DoesNotContain("<summary class=\"btn btn-gold", summaries);
         Assert.Contains("id=\"action-resolve\"", summaries);
         Assert.Contains("id=\"action-escalate\"", summaries);
@@ -219,7 +226,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Contains("id=\"action-reopen\"", menu);
         Assert.DoesNotContain("id=\"action-assign\"", menu);
         Assert.DoesNotContain("id=\"action-resolve\"", menu);
-        Assert.Equal(0, Count(html, "attention__cta"));
+        Assert.Equal(0, Count(html, "tw-next__cta"));
     }
 
     [Fact]
@@ -249,7 +256,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         var html = await Page(203, Roles.ReportingUser);
 
         Assert.DoesNotContain("id=\"actions-menu\"", html);
-        Assert.Equal(0, Count(html, "attention__cta"));
+        Assert.Equal(0, Count(html, "tw-next__cta"));
         Assert.Contains("view-only", NextStep(html));
         Assert.DoesNotContain("asp-page-handler", html);
         Assert.DoesNotContain("Record first response", html);
@@ -273,6 +280,64 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.DoesNotContain("tab-attachments", html);
         Assert.Contains("<details class=\"more-details\" id=\"additional-details\">", html);   // collapsed by default
         Assert.Contains("name=\"pageTab\"", html);
+    }
+
+    // ---------------------------------------------------------------- workspace structure
+
+    [Theory]
+    [InlineData(201)]
+    [InlineData(203)]
+    [InlineData(205)]
+    [InlineData(208)]
+    public async Task Workspace_IsHeader_ThenOneLineNextStep_ThenWorkPaneAndPropertiesSidebar_InThatOrder(long ticketId)
+    {
+        var html = await Page(ticketId, Roles.CsManager);
+
+        int At(string marker) => html.IndexOf(marker, StringComparison.Ordinal);
+        var order = new[]
+        {
+            At("<header class=\"tw-head\""), At("class=\"tw-next "), At("class=\"tw-body\""), At("class=\"tw-main\""),
+            At("id=\"conversation-title\""), At("<aside class=\"tw-side\""), At(">Request Details</div>"), At(">SLA Information</div>"),
+        };
+        Assert.All(order, position => Assert.True(position >= 0));
+        Assert.Equal(order.OrderBy(p => p), order);
+        Assert.Contains("aria-label=\"Ticket properties\"", html);
+    }
+
+    [Fact]
+    public async Task NextStep_IsOneLine_TheReasonAndBlockersLiveInsideTheWhyPopover()
+    {
+        var html = await Page(203, Roles.CsAgent);
+        var next = NextStep(html);
+
+        Assert.Contains("class=\"tw-next__headline\">Contact the customer</span>", next);
+        var popover = next.IndexOf("tw-next__pop", StringComparison.Ordinal);
+        Assert.True(popover > 0);
+        Assert.True(next.IndexOf("tw-next__reason", StringComparison.Ordinal) > popover, "the explanatory sentence is inside the popover, not on the line");
+        Assert.DoesNotContain("<p class=\"attention", html);
+    }
+
+    [Fact]
+    public async Task OwnerAndDepartment_AreInTheHeaderOnly_NotRepeatedInTheSidebar()
+    {
+        var html = await Page(203, Roles.CsAgent);
+        var sidebar = html[html.IndexOf("<aside class=\"tw-side\"", StringComparison.Ordinal)..];
+
+        Assert.Equal(1, Count(html, "Assigned To:"));
+        Assert.Equal(1, Count(html, "Assigned Department:"));
+        Assert.DoesNotContain("Assigned To", sidebar);
+        Assert.DoesNotContain("<dt>Status</dt>", sidebar);
+        Assert.DoesNotContain("<dt>Priority</dt>", sidebar);
+    }
+
+    [Fact]
+    public async Task OnlyTheNextStepButtonIsGold_TheMenuAndHeaderCarryNoGoldControls()
+    {
+        var html = await Page(203, Roles.CsAgent);
+        var head = Section(html, "<header class=\"tw-head\"", "class=\"tw-next ");
+
+        Assert.DoesNotContain("<summary class=\"btn btn-gold", head);
+        Assert.Equal(1, Count(html, "btn btn-gold btn-sm tw-next__cta"));
     }
 
     // ---------------------------------------------------------------- fakes

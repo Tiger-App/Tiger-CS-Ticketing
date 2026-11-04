@@ -62,11 +62,14 @@
                         {
                             <div class="convo-meta__item"><dt>Duration</dt><dd>@duration</dd></div>
                         }
-                        @if (!string.IsNullOrWhiteSpace(interaction.CustomerName))
+                        @* The ticket's own customer and phone are already in the page header; only a DIFFERENT name/number on this interaction is worth repeating. *@
+                        @if (!string.IsNullOrWhiteSpace(interaction.CustomerName)
+                            && !string.Equals(interaction.CustomerName.Trim(), Model.CustomerDisplayName, StringComparison.OrdinalIgnoreCase))
                         {
                             <div class="convo-meta__item"><dt>Customer</dt><dd>@interaction.CustomerName</dd></div>
                         }
-                        @if (!string.IsNullOrWhiteSpace(interaction.CustomerPhone))
+                        @if (!string.IsNullOrWhiteSpace(interaction.CustomerPhone)
+                            && !string.Equals(interaction.CustomerPhone.Trim(), Model.CustomerPhone, StringComparison.Ordinal))
                         {
                             <div class="convo-meta__item"><dt>Phone</dt><dd class="text-mono">@interaction.CustomerPhone</dd></div>
                         }
