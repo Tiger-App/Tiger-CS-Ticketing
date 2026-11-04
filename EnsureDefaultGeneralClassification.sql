@@ -10,8 +10,16 @@
  SAFE BY CONSTRUCTION
    * Reuses an existing General category / request type of a department. A second run creates nothing.
    * Additive: no UPDATE, no DELETE, no ticket is touched. Never creates a department. Collections is never given a General.
-   * A department with duplicate General rows, a General request type whose workflow has no Published version, or a workflow code already in use by
-     something else is REPORTED and SKIPPED (nothing written for it). If that department is CS the script stops with an error.
+   * WORKFLOW CODE ALREADY IN USE (e.g. Production WorkflowId 4 = CS-GEN-001 'General Inquiry', created by the business-review import):
+     the existing workflow is INSPECTED, never duplicated. It is REUSED only when compatible with a General flow:
+       active workflow; exactly one Published template that belongs to it and is active; no approval required / approval steps; first step Created (1),
+       an Assigned step (2), a Resolved step (8), last step Closed (9); and every request type already using it belongs to the SAME department.
+     Reuse creates only the missing General request type (pointing at the existing WorkflowId) and the missing General category.
+     The existing workflow, templates, steps and request types are never modified.
+     If it is NOT compatible, the unique alternate code '<CODE>-GENERAL-001' is tried the same way (reuse if compatible, create if free).
+   * A department with duplicate General rows, a General request type whose workflow has no Published version, or when both codes are in use by
+     incompatible workflows is REPORTED and SKIPPED (nothing written for it). If that department is CS the script stops with an error.
+   * Section 1 below is a READ-ONLY inspection of CS-GEN-001 (workflow, templates, steps, request types) so the result can be reviewed first.
    * No assignment rule and no SLA policy row is created: tickets get a CS Agent through the existing confirmed-agent / sequential Round-Robin rules.
    * Dry run: set @CommitChanges = 0 - everything is applied inside the transaction, the result is printed, then rolled back.
 
@@ -30,11 +38,22 @@ DECLARE @CommitChanges bit = 0;     -- 0 = dry run (rolled back). Set to 1 only 
 IF NOT EXISTS (SELECT 1 FROM [Departments] WHERE [Code] = N'CS')
     THROW 50700, N'ABORTED: the Customer Services department (Code = CS) does not exist. It is never created by this script.', 1;
 
-CREATE TABLE #Report (DepartmentCode nvarchar(50), Result nvarchar(200), CategoryId int NULL, RequestTypeId int NULL);
+-- 1. READ-ONLY INSPECTION of the workflow code in question (no writes).
+SELECT N'WORKFLOW' AS [Section], w.[WorkflowId], w.[Code], w.[Name], w.[IsActive] FROM [Workflows] w WHERE w.[Code] IN (N'CS-GEN-001', N'CS-GENERAL-001');
+SELECT N'TEMPLATE' AS [Section], t.[WorkflowTemplateId], t.[WorkflowId], t.[Code], t.[VersionNumber], t.[Status], t.[IsActive], t.[RequiresApproval]
+FROM [WorkflowTemplates] t WHERE t.[Code] IN (N'CS-GEN-001', N'CS-GENERAL-001') OR t.[WorkflowId] IN (SELECT [WorkflowId] FROM [Workflows] WHERE [Code] IN (N'CS-GEN-001', N'CS-GENERAL-001'));
+SELECT N'STEP' AS [Section], s.[WorkflowTemplateId], s.[Sequence], s.[Name], s.[Kind], s.[IsOptional], s.[ApprovalType]
+FROM [WorkflowTemplateSteps] s WHERE s.[WorkflowTemplateId] IN (SELECT [WorkflowTemplateId] FROM [WorkflowTemplates] WHERE [Code] IN (N'CS-GEN-001', N'CS-GENERAL-001')) ORDER BY s.[WorkflowTemplateId], s.[Sequence];
+SELECT N'REQUESTTYPE' AS [Section], r.[RequestTypeId], r.[DepartmentId], d.[Code] AS DepartmentCode, r.[Name], r.[WorkflowId], r.[IsActive]
+FROM [RequestTypes] r JOIN [Departments] d ON d.[DepartmentId] = r.[DepartmentId]
+WHERE r.[WorkflowId] IN (SELECT [WorkflowId] FROM [Workflows] WHERE [Code] IN (N'CS-GEN-001', N'CS-GENERAL-001'));
+
+CREATE TABLE #Report (DepartmentCode nvarchar(50), Result nvarchar(400), CategoryId int NULL, RequestTypeId int NULL, WorkflowId int NULL);
 
 DECLARE @Now datetime2 = SYSUTCDATETIME();
 DECLARE @DepartmentId int, @DepartmentCode nvarchar(50), @DepartmentName nvarchar(200);
 DECLARE @CategoryId int, @RequestTypeId int, @WorkflowId int, @TemplateId int, @Code nvarchar(50), @WorkflowName nvarchar(200), @Description nvarchar(1000);
+DECLARE @Attempt int, @ExistingWorkflowId int, @ExistingTemplateId int, @Compatible bit, @WhyNot nvarchar(200), @Reused bit;
 
 BEGIN TRANSACTION;
 
@@ -52,7 +71,7 @@ BEGIN
     IF (SELECT COUNT(*) FROM [Categories] WHERE [DepartmentId] = @DepartmentId AND [Name] = N'General') > 1
        OR (SELECT COUNT(*) FROM [RequestTypes] WHERE [DepartmentId] = @DepartmentId AND [Name] = N'General') > 1
     BEGIN
-        INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: duplicate General records - a person must choose the canonical one', NULL, NULL);
+        INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: duplicate General records - a person must choose the canonical one', NULL, NULL, NULL);
         IF @DepartmentCode = N'CS' THROW 50701, N'ABORTED: more than one General category or request type exists in Customer Services.', 1;
         FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
     END;
@@ -62,26 +81,68 @@ BEGIN
 
     IF @RequestTypeId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM [WorkflowTemplates] WHERE [WorkflowId] = @WorkflowId AND [Status] = 2)
     BEGIN
-        INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: General request type has no Published workflow - publish it from Administration', @CategoryId, @RequestTypeId);
+        INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: General request type has no Published workflow - publish it from Administration', @CategoryId, @RequestTypeId, @WorkflowId);
         IF @DepartmentCode = N'CS' THROW 50702, N'ABORTED: the Customer Services General request type has no Published workflow.', 1;
-        FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
-    END;
-
-    IF @RequestTypeId IS NULL
-       AND (EXISTS (SELECT 1 FROM [Workflows] WHERE [Code] = @Code) OR EXISTS (SELECT 1 FROM [WorkflowTemplates] WHERE [Code] = @Code))
-    BEGIN
-        INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: workflow code ' + @Code + N' is already in use by something else', @CategoryId, NULL);
-        IF @DepartmentCode = N'CS' THROW 50703, N'ABORTED: workflow code CS-GEN-001 is already in use.', 1;
         FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
     END;
 
     IF @CategoryId IS NOT NULL AND @RequestTypeId IS NOT NULL
     BEGIN
-        INSERT #Report VALUES (@DepartmentCode, N'ALREADY CONFIGURED', @CategoryId, @RequestTypeId);
+        INSERT #Report VALUES (@DepartmentCode, N'ALREADY CONFIGURED', @CategoryId, @RequestTypeId, @WorkflowId);
         FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
     END;
 
+    SET @Reused = 0;
     IF @RequestTypeId IS NULL
+    BEGIN
+        -- Resolve the workflow: attempt 1 = <CODE>-GEN-001, attempt 2 = unique alternate <CODE>-GENERAL-001.
+        SET @Attempt = 1; SET @WhyNot = NULL;
+        WHILE @Attempt <= 2 AND @WorkflowId IS NULL
+        BEGIN
+            SET @Code = @DepartmentCode + CASE WHEN @Attempt = 1 THEN N'-GEN-001' ELSE N'-GENERAL-001' END;
+            SET @ExistingWorkflowId = (SELECT [WorkflowId] FROM [Workflows] WHERE [Code] = @Code);
+            SET @ExistingTemplateId = NULL; SET @Compatible = 0;
+
+            IF @ExistingWorkflowId IS NULL AND NOT EXISTS (SELECT 1 FROM [WorkflowTemplates] WHERE [Code] = @Code)
+                BREAK;   -- code is free: create below with @Code
+
+            IF @ExistingWorkflowId IS NULL
+                SET @WhyNot = N'template code ' + @Code + N' is used without a matching workflow';
+            ELSE
+            BEGIN
+                SELECT @ExistingTemplateId = MIN([WorkflowTemplateId]) FROM [WorkflowTemplates] WHERE [WorkflowId] = @ExistingWorkflowId AND [Status] = 2;
+                IF NOT EXISTS (SELECT 1 FROM [Workflows] WHERE [WorkflowId] = @ExistingWorkflowId AND [IsActive] = 1) SET @WhyNot = @Code + N' workflow is inactive';
+                ELSE IF (SELECT COUNT(*) FROM [WorkflowTemplates] WHERE [WorkflowId] = @ExistingWorkflowId AND [Status] = 2) <> 1 SET @WhyNot = @Code + N' does not have exactly one Published template';
+                ELSE IF NOT EXISTS (SELECT 1 FROM [WorkflowTemplates] WHERE [WorkflowTemplateId] = @ExistingTemplateId AND [IsActive] = 1 AND [RequiresApproval] = 0) SET @WhyNot = @Code + N' published template is inactive or requires approval';
+                ELSE IF EXISTS (SELECT 1 FROM [WorkflowTemplateSteps] WHERE [WorkflowTemplateId] = @ExistingTemplateId AND [ApprovalType] IS NOT NULL) SET @WhyNot = @Code + N' has approval steps';
+                ELSE IF NOT EXISTS (SELECT 1 FROM [WorkflowTemplateSteps] s WHERE s.[WorkflowTemplateId] = @ExistingTemplateId AND s.[Kind] = 1
+                                    AND s.[Sequence] = (SELECT MIN([Sequence]) FROM [WorkflowTemplateSteps] WHERE [WorkflowTemplateId] = @ExistingTemplateId)) SET @WhyNot = @Code + N' does not start with a Created step';
+                ELSE IF NOT EXISTS (SELECT 1 FROM [WorkflowTemplateSteps] s WHERE s.[WorkflowTemplateId] = @ExistingTemplateId AND s.[Kind] = 9
+                                    AND s.[Sequence] = (SELECT MAX([Sequence]) FROM [WorkflowTemplateSteps] WHERE [WorkflowTemplateId] = @ExistingTemplateId)) SET @WhyNot = @Code + N' does not end with a Closed step';
+                ELSE IF NOT EXISTS (SELECT 1 FROM [WorkflowTemplateSteps] WHERE [WorkflowTemplateId] = @ExistingTemplateId AND [Kind] = 2) SET @WhyNot = @Code + N' has no Assigned step';
+                ELSE IF NOT EXISTS (SELECT 1 FROM [WorkflowTemplateSteps] WHERE [WorkflowTemplateId] = @ExistingTemplateId AND [Kind] = 8) SET @WhyNot = @Code + N' has no Resolved step';
+                ELSE IF EXISTS (SELECT 1 FROM [RequestTypes] WHERE [WorkflowId] = @ExistingWorkflowId AND [DepartmentId] <> @DepartmentId) SET @WhyNot = @Code + N' is used by another department''s request type';
+                ELSE SET @Compatible = 1;
+            END;
+
+            IF @Compatible = 1
+            BEGIN
+                SET @WorkflowId = @ExistingWorkflowId; SET @Reused = 1;
+            END
+            ELSE SET @Attempt += 1;
+        END;
+
+        IF @WorkflowId IS NULL AND @Attempt > 2
+        BEGIN
+            INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: no compatible/free workflow code - ' + ISNULL(@WhyNot, N'both codes in use'), @CategoryId, NULL, NULL);
+            IF @DepartmentCode = N'CS' THROW 50703, N'ABORTED: workflow codes CS-GEN-001 and CS-GENERAL-001 are in use and not compatible with a General flow (see report).', 1;
+            FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
+        END;
+        SET @WorkflowName = @Code + N' General';
+        SET @Description = N'Default classification: ' + @DepartmentName + N' / General. ' + @DepartmentCode + N' Queue -> Agent -> Review -> Resolve -> Close. Used when a ticket has no valid classification.';
+    END;
+
+    IF @RequestTypeId IS NULL AND @WorkflowId IS NULL
     BEGIN
         INSERT INTO [Workflows] ([Code], [Name], [Description], [IsActive], [CreatedAtUtc]) VALUES (@Code, @WorkflowName, @Description, 1, @Now);
         SET @WorkflowId = CAST(SCOPE_IDENTITY() AS int);
@@ -97,6 +158,10 @@ BEGIN
         FROM (VALUES (1, N'Ticket Created', 1), (2, @DepartmentCode + N' Queue', 2), (3, N'Agent', 2), (4, N'Review', 5), (5, N'Resolve', 8), (6, N'Close', 9))
              AS v([Sequence], [Name], [Kind]);
 
+    END;
+
+    IF @RequestTypeId IS NULL
+    BEGIN
         -- DefaultPriorityId 3 = Medium ("Normal").
         INSERT INTO [RequestTypes]
             ([DepartmentId], [Name], [WorkflowId], [DefaultPriorityId], [AllowAgentPriorityChange], [AllowPendingCustomer],
@@ -111,7 +176,7 @@ BEGIN
         SET @CategoryId = CAST(SCOPE_IDENTITY() AS int);
     END;
 
-    INSERT #Report VALUES (@DepartmentCode, N'CREATED (missing parts only)', @CategoryId, @RequestTypeId);
+    INSERT #Report VALUES (@DepartmentCode, CASE WHEN @Reused = 1 THEN N'CREATED (missing parts only; EXISTING workflow ' + @Code + N' reused)' ELSE N'CREATED (missing parts only; new workflow ' + @Code + N')' END, @CategoryId, @RequestTypeId, @WorkflowId);
     FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName;
 END;
 CLOSE dept_cursor; DEALLOCATE dept_cursor;
