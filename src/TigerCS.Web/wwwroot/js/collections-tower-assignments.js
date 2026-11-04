@@ -41,7 +41,7 @@
             checked.forEach(b => {
                 const li = document.createElement('span');
                 li.className = 'tower-tag';
-                li.appendChild(document.createTextNode(b.closest('label').querySelector('span').textContent.trim()));
+                li.appendChild(document.createTextNode((b.closest('li').dataset.display || b.closest('label').textContent).trim()));
                 const x = document.createElement('button');
                 x.type = 'button';
                 x.setAttribute('aria-label', 'Remove ' + li.textContent);

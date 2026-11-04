@@ -9,7 +9,7 @@ public sealed record TowerPickerModel(string Id, IReadOnlyList<CollectionsTowerD
 
 /// <summary>The searchable multi-select Project / Tower filter (checkboxes named <c>towerId</c>). No selection = <see cref="AllText"/>.</summary>
 public sealed record TowerMultiPickerModel(string Id, IReadOnlyList<CollectionsTowerDto> Towers, IReadOnlyList<int> SelectedTowerIds, bool LoadFailed = false,
-    string Label = "Project / Tower", string AllText = "All projects");
+    string Label = "Project / Tower", string AllText = "All towers");
 
 /// <summary>The one place the Project / Tower selection of a request is read and normalised, shared by Campaigns and Receivables so both pages treat the same URL the same way.</summary>
 public static class TowerSelection

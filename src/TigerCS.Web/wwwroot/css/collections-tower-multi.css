@@ -1,21 +1,85 @@
-/* Searchable multi-select tower filter (Pages/Shared/_TowerMultiPicker.cshtml). Shared by Collections > Campaigns and Collections > Receivables. */
-.tower-multi { position: relative; }
-.tower-multi__box > summary { cursor: pointer; list-style: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tower-multi__box > summary::-webkit-details-marker { display: none; }
-.tower-multi__panel { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 100%; width: max-content; max-width: 22rem; padding: .5rem; background: var(--surface, #fff); border: 1px solid var(--border, #d0d5dd); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, .12); }
-.tower-multi__search { width: 100%; margin-bottom: .4rem; }
-.tower-multi__actions { display: flex; gap: .4rem; margin-bottom: .4rem; }
-.tower-multi__list { list-style: none; margin: 0; padding: 0; max-height: 15rem; overflow-y: auto; }
-.tower-multi__list li { padding: .15rem 0; }
-.tower-multi__list li[hidden] { display: none; }
-.tower-multi__list label { display: flex; gap: .45rem; align-items: center; cursor: pointer; }
-.tower-multi__empty { color: var(--muted, #667085); font-size: 13px; }
+/* Searchable multi-select tower filter (Pages/Shared/_TowerMultiPicker.cshtml). Shared by Collections > Campaigns, Receivables and Tower Assignments.
+   Every rule is scoped to .tower-multi so no other select on the site is affected. Gold is the official --tiger-gold (#E7B95E) with dark text. */
+.tower-multi { position: relative; min-width: 190px; }
 
-/* Phones: the filter fields stack full width; the dropdown panel fills the field and never runs past the screen edge. */
+/* The closed control: a select-looking field with a chevron, a gold focus / open ring. */
+.tower-multi__box > summary {
+    position: relative; display: flex; align-items: center; height: 38px; width: 100%; padding-right: 34px;
+    cursor: pointer; list-style: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    -webkit-appearance: none; appearance: none; background-image: none;
+}
+.tower-multi__box > summary::-webkit-details-marker { display: none; }
+.tower-multi__box > summary::after {
+    content: ""; position: absolute; right: 13px; top: 50%; width: 7px; height: 7px; margin-top: -6px;
+    border-right: 2px solid var(--color-text-secondary); border-bottom: 2px solid var(--color-text-secondary); transform: rotate(45deg);
+    transition: transform .15s ease;
+}
+.tower-multi__box[open] > summary::after { transform: rotate(225deg); margin-top: -2px; }
+.tower-multi__box > summary:hover { border-color: var(--color-border-strong); }
+.tower-multi__box > summary:focus-visible, .tower-multi__box[open] > summary {
+    outline: none; border-color: var(--tiger-gold); box-shadow: 0 0 0 3px var(--tiger-gold-tint);
+}
+
+/* The panel: 300-340px, never wider than the screen, above the table. */
+.tower-multi__panel {
+    position: absolute; z-index: 60; top: calc(100% + 6px); left: 0;
+    width: 320px; min-width: min(300px, calc(100vw - 32px)); max-width: min(340px, calc(100vw - 32px));
+    padding: 10px; background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md);
+    box-shadow: 0 12px 32px rgba(23, 23, 26, 0.16), 0 2px 6px rgba(23, 23, 26, 0.06);
+}
+
+.tower-multi__searchbox {
+    display: flex; align-items: center; gap: 8px; height: 36px; padding: 0 12px;
+    border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-bg);
+}
+.tower-multi__searchbox svg { width: 15px; height: 15px; flex: none; color: var(--color-text-secondary); }
+.tower-multi__searchbox:focus-within { background: var(--color-surface); border-color: var(--tiger-gold); box-shadow: 0 0 0 3px var(--tiger-gold-tint); }
+.tower-multi__search { flex: 1; min-width: 0; height: 100%; border: 0; outline: none; background: transparent; font-size: var(--text-sm); color: var(--color-text); }
+.tower-multi__search::placeholder { color: var(--color-text-secondary); }
+
+/* Select all / Clear all: compact text actions, with the selected count at the left. */
+.tower-multi__actions { display: flex; align-items: center; gap: 14px; padding: 8px 2px 6px; }
+.tower-multi__count { flex: 1; font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+.tower-multi__action {
+    padding: 2px 0; border: 0; background: none; cursor: pointer; font: inherit; font-size: var(--text-xs); font-weight: var(--weight-strong);
+    color: var(--tiger-gold-ink); border-radius: 3px;
+}
+.tower-multi__action:hover { text-decoration: underline; text-underline-offset: 3px; }
+.tower-multi__action:focus-visible { outline: 2px solid var(--tiger-gold); outline-offset: 2px; }
+
+/* The option list: scrolls past ~240px. */
+.tower-multi__list { list-style: none; margin: 0; padding: 0; max-height: 240px; overflow-y: auto; border-top: 1px solid var(--color-border); padding-top: 4px; }
+.tower-multi__list li { padding: 0; }
+.tower-multi__list li[hidden] { display: none; }
+.tower-multi__list label {
+    display: grid; grid-template-columns: 18px 64px minmax(0, 1fr); align-items: center; column-gap: 10px;
+    min-height: 36px; padding: 6px 8px; margin: 1px 0; border-radius: var(--radius-sm); cursor: pointer;
+    font-size: var(--text-sm); line-height: 1.35;
+}
+.tower-multi__list label:hover { background: var(--color-bg); }
+.tower-multi__list label:has(input:checked) { background: var(--tiger-gold-tint); }
+.tower-multi__list label:has(input:focus-visible) { box-shadow: inset 0 0 0 2px var(--tiger-gold); background: var(--tiger-gold-pale); }
+.tower-multi__code { font-weight: var(--weight-strong); color: var(--color-text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.tower-multi__name { color: var(--color-text-secondary); overflow-wrap: anywhere; }
+/* A tower with no usable name: the code takes the rest of the row. */
+.tower-multi__list label > .tower-multi__code:last-child { grid-column: 2 / -1; }
+
+/* Gold checkbox with a dark tick. */
+.tower-multi__list input[type=checkbox] {
+    -webkit-appearance: none; appearance: none; width: 18px; height: 18px; margin: 0; border: 1.5px solid var(--color-border-strong);
+    border-radius: 5px; background: var(--color-surface); display: grid; place-content: center; cursor: pointer;
+}
+.tower-multi__list input[type=checkbox]:checked {
+    background: var(--tiger-gold) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%232A1F06' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3.5 8.5l3 3 6-7'/%3E%3C/svg%3E") center / 12px no-repeat;
+    border-color: var(--tiger-gold);
+}
+.tower-multi__list input[type=checkbox]:focus-visible { outline: none; }
+.tower-multi__empty { padding: 10px 8px; color: var(--color-text-secondary); font-size: var(--text-sm); }
+
+/* Phones: the filter fields stack full width; the dropdown fills the field and never runs past the screen edge. */
 @media (max-width: 640px) {
     .tower-multi { flex: 1 1 100%; }
-    .tower-multi__box > summary { width: 100%; }
-    .tower-multi__panel { width: auto; right: 0; max-width: none; }
-    .tower-multi__list { max-height: 40vh; }
-    .tower-multi__list label { padding: .2rem 0; }
+    .tower-multi__panel { width: auto; min-width: 0; max-width: none; right: 0; }
+    .tower-multi__list { max-height: min(240px, 40vh); }
+    .tower-multi__list label { min-height: 40px; }
 }

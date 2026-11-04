@@ -67,3 +67,14 @@ rendered with the previous CSS and shell.
 - Tickets list panel has more inner padding than the Ticket Details cards.
 - Login / Access Denied (own layout) keep their hero type sizes; Collections receivables notices keep their amber warning tints (semantic, not brand).
 - Modals other than the Ticket Details Actions modals were verified by CSS inheritance, not individually screenshotted.
+
+## Tower multi-select (Collections)
+
+`Pages/Shared/_TowerMultiPicker.cshtml` + `collections-tower-multi.css` + `collections-tower-multi.js`
+(Receivables, Campaigns and Tower Assignments share it). Searchable, 300-340px panel above the
+table, "All towers" / "N towers selected", code and name in aligned columns, 240px scrolling list,
+gold (`--tiger-gold`) checkboxes / selected rows / focus rings, compact "Select all" / "Clear all"
+text actions. Keyboard: Down opens and enters the search, Down/Up/Home/End walk the options, Space
+toggles, Escape closes. Searching only hides rows, so ticked towers stay ticked and are still
+submitted. All CSS is scoped to `.tower-multi`. Screenshots: `screenshots/tower-multiselect/`.
+Tower Assignments keeps its own empty label ("No towers"): there, nothing ticked means none, not all.
