@@ -3,23 +3,23 @@
  EnsureDefaultGeneralClassification.sql        (idempotent configuration change)
 
  Makes sure the approved default classification exists:
-   * for EVERY active department except Collections (COL): a General category and a General request type with workflow '<CODE>-GEN-001'
+   * for EVERY active department except Collections (COL): a General category and a General request type with workflow '<CODE>-GENERAL-001'
      (version 1 Published), so a ticket whose department is known is classified General / General WITHIN that department;
    * Customer Services (Code = 'CS') is REQUIRED: it is the last-resort default when no valid department is known.
 
  SAFE BY CONSTRUCTION
    * Reuses an existing General category / request type of a department. A second run creates nothing.
    * Additive: no UPDATE, no DELETE, no ticket is touched. Never creates a department. Collections is never given a General.
-   * WORKFLOW CODE ALREADY IN USE (e.g. Production WorkflowId 4 = CS-GEN-001 'General Inquiry', created by the business-review import):
-     the existing workflow is INSPECTED, never duplicated. It is REUSED only when compatible with a General flow:
+   * DEDICATED WORKFLOW PER DEPARTMENT: every General request type gets its OWN workflow with the code '<CODE>-GENERAL-001'
+     (CS -> CS-GENERAL-001). The business-review workflows (e.g. Production WorkflowId 4 = CS-GEN-001 'General Inquiry') and their request types are
+     NEVER reused, shared or modified by this script.
+   * If '<CODE>-GENERAL-001' already exists it is INSPECTED and reused only when compatible with a General flow:
        active workflow; exactly one Published template that belongs to it and is active; no approval required / approval steps; first step Created (1),
        an Assigned step (2), a Resolved step (8), last step Closed (9); and every request type already using it belongs to the SAME department.
-     Reuse creates only the missing General request type (pointing at the existing WorkflowId) and the missing General category.
-     The existing workflow, templates, steps and request types are never modified.
-     If it is NOT compatible, the unique alternate code '<CODE>-GENERAL-001' is tried the same way (reuse if compatible, create if free).
-   * A department with duplicate General rows, a General request type whose workflow has no Published version, or when both codes are in use by
-     incompatible workflows is REPORTED and SKIPPED (nothing written for it). If that department is CS the script stops with an error.
-   * Section 1 below is a READ-ONLY inspection of CS-GEN-001 (workflow, templates, steps, request types) so the result can be reviewed first.
+     Reuse creates only the missing General request type / category. An incompatible workflow is never modified: the department is reported and skipped.
+   * A department with duplicate General rows, a General request type whose workflow has no Published version, or when its dedicated
+     workflow code is in use by an incompatible workflow is REPORTED and SKIPPED (nothing written for it). If that department is CS the script stops with an error.
+   * Section 1 below is a READ-ONLY inspection of CS-GEN-001 (left untouched) and CS-GENERAL-001 (workflow, templates, steps, request types) so the result can be reviewed first.
    * No assignment rule and no SLA policy row is created: tickets get a CS Agent through the existing confirmed-agent / sequential Round-Robin rules.
    * Dry run: set @CommitChanges = 0 - everything is applied inside the transaction, the result is printed, then rolled back.
 
@@ -64,7 +64,7 @@ FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName
 WHILE @@FETCH_STATUS = 0
 BEGIN
     SET @CategoryId = NULL; SET @RequestTypeId = NULL; SET @WorkflowId = NULL;
-    SET @Code = @DepartmentCode + N'-GEN-001';
+    SET @Code = @DepartmentCode + N'-GENERAL-001';
     SET @WorkflowName = @Code + N' General';
     SET @Description = N'Default classification: ' + @DepartmentName + N' / General. ' + @DepartmentCode + N' Queue -> Agent -> Review -> Resolve -> Close. Used when a ticket has no valid classification.';
 
@@ -95,11 +95,11 @@ BEGIN
     SET @Reused = 0;
     IF @RequestTypeId IS NULL
     BEGIN
-        -- Resolve the workflow: attempt 1 = <CODE>-GEN-001, attempt 2 = unique alternate <CODE>-GENERAL-001.
+        -- Resolve the dedicated workflow <CODE>-GENERAL-001: reuse if compatible, create if free, otherwise skip.
         SET @Attempt = 1; SET @WhyNot = NULL;
-        WHILE @Attempt <= 2 AND @WorkflowId IS NULL
+        WHILE @Attempt <= 1 AND @WorkflowId IS NULL
         BEGIN
-            SET @Code = @DepartmentCode + CASE WHEN @Attempt = 1 THEN N'-GEN-001' ELSE N'-GENERAL-001' END;
+            SET @Code = @DepartmentCode + N'-GENERAL-001';
             SET @ExistingWorkflowId = (SELECT [WorkflowId] FROM [Workflows] WHERE [Code] = @Code);
             SET @ExistingTemplateId = NULL; SET @Compatible = 0;
 
@@ -132,10 +132,10 @@ BEGIN
             ELSE SET @Attempt += 1;
         END;
 
-        IF @WorkflowId IS NULL AND @Attempt > 2
+        IF @WorkflowId IS NULL AND @Attempt > 1
         BEGIN
-            INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: no compatible/free workflow code - ' + ISNULL(@WhyNot, N'both codes in use'), @CategoryId, NULL, NULL);
-            IF @DepartmentCode = N'CS' THROW 50703, N'ABORTED: workflow codes CS-GEN-001 and CS-GENERAL-001 are in use and not compatible with a General flow (see report).', 1;
+            INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: dedicated workflow code is not usable - ' + ISNULL(@WhyNot, @Code + N' is in use'), @CategoryId, NULL, NULL);
+            IF @DepartmentCode = N'CS' THROW 50703, N'ABORTED: workflow code CS-GENERAL-001 is in use and not compatible with a General flow (see report).', 1;
             FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
         END;
         SET @WorkflowName = @Code + N' General';
@@ -176,7 +176,7 @@ BEGIN
         SET @CategoryId = CAST(SCOPE_IDENTITY() AS int);
     END;
 
-    INSERT #Report VALUES (@DepartmentCode, CASE WHEN @Reused = 1 THEN N'CREATED (missing parts only; EXISTING workflow ' + @Code + N' reused)' ELSE N'CREATED (missing parts only; new workflow ' + @Code + N')' END, @CategoryId, @RequestTypeId, @WorkflowId);
+    INSERT #Report VALUES (@DepartmentCode, CASE WHEN @Reused = 1 THEN N'CREATED (missing parts only; EXISTING dedicated workflow ' + @Code + N' reused)' ELSE N'CREATED (missing parts only; new dedicated workflow ' + @Code + N')' END, @CategoryId, @RequestTypeId, @WorkflowId);
     FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName;
 END;
 CLOSE dept_cursor; DEALLOCATE dept_cursor;
