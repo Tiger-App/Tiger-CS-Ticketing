@@ -27,9 +27,14 @@ public sealed class CollectionsCampaignAppService(
         CollectionsCaller caller, string? stage, DateOnly? businessDate = null, int? companyId = null,
         string? search = null, int page = 1, int pageSize = 25, bool forExport = false,
         CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null,
-        string? paymentStatus = null)
+        string? paymentStatus = null, IReadOnlyList<int>? towerIds = null)
     {
         var total = Stopwatch.StartNew();
+        // Project / Tower filter: any number of local tower ids (the single towerId is kept for old callers). None = All projects. One tower keeps the
+        // established single-tower paths; several are read tower by tower through the same in-memory evaluation, so counts, totals and pages stay exact.
+        var towers = (towerIds ?? []).Concat(towerId is { } single ? new[] { single } : Array.Empty<int>()).Distinct().Order().ToList();
+        towerId = towers.Count == 1 ? towers[0] : null;
+        var multiTower = towers.Count > 1;
         var permissions = await authorization.ResolveAsync(caller, cancellationToken);
         if (!permissions.CanReadFinancials || (forExport && !permissions.CanSendReminders))
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.Forbidden);
@@ -40,7 +45,7 @@ public sealed class CollectionsCampaignAppService(
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.InvalidRequest, "Payment status must be Due, Overdue or Both.");
         if (!CollectionsEnums.TryParse<CollectionsCampaignStage>(stage, out var selected)
             || date.Year is < 2000 or > 2100 || companyId is not (null or 4 or 32)
-            || search?.Length > 200 || page < 1 || pageSize is < 1 or > 100 || towerId is <= 0 || minTotal < 0 || minTotal > sourceOptions.MaxMinOutstandingAmount
+            || search?.Length > 200 || page < 1 || pageSize is < 1 or > 100 || towers.Any(t => t <= 0) || minTotal < 0 || minTotal > sourceOptions.MaxMinOutstandingAmount
             || (long)(page - 1) * pageSize > int.MaxValue)
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.InvalidRequest,
                 "Choose a campaign stage, a date in 2000-2100, company 4 or 32, a minimum amount of 0 or more, page >= 1 and pageSize 1-100; search is limited to 200 characters.");
@@ -90,7 +95,7 @@ public sealed class CollectionsCampaignAppService(
             // page - or, for an export, the bounded full result - reaches the application. Otherwise (a source without that capability, or a
             // snapshot the engine cannot use) every instalment of the window is read and evaluated in memory, as before.
             // A single payment status is evaluated in memory (the reference implementation): an engine that does not know the filter must never answer for it.
-            if (source is IPactCampaignSource campaign && paymentFilter == CampaignPaymentFilter.Both)
+            if (source is IPactCampaignSource campaign && paymentFilter == CampaignPaymentFilter.Both && !multiTower)
             {
                 var request = new PactCampaignRequest(from, to, min, stageFrom, stageToExclusive, CollectionsCampaignPolicy.Threshold(selected),
                     selected != CollectionsCampaignStage.LegalReferral, term, phoneDigits,
@@ -100,7 +105,19 @@ public sealed class CollectionsCampaignAppService(
             }
             // Company and window are pushed down to the source: a single-company request must not wait for the other
             // company's (much slower) procedure, and rows outside the window are never read.
-            if (sqlPage is null)
+            if (sqlPage is null && multiTower)
+            {
+                PactReceivablesSnapshot? merged = null;
+                var rows = new List<PactReceivableInstalment>();
+                foreach (var tower in towers)
+                {
+                    var part = await source.ReadAsync(new PactReceivablesRequest(from, to, companyId, tower, MinAmount: min), budget.Token);
+                    merged ??= part;
+                    rows.AddRange(part.Items);
+                }
+                snapshot = merged! with { Items = rows };
+            }
+            else if (sqlPage is null)
                 snapshot = await source.ReadAsync(new PactReceivablesRequest(from, to, companyId, towerId, MinAmount: min), budget.Token);
         }
         catch (PactReceivablesScopeException ex)
@@ -229,7 +246,7 @@ public sealed class CollectionsCampaignAppService(
             count, ready, review, page, pageSize, items,
             from, to, CollectionsCampaignPolicy.RangeNotes(selected, date, eligibleFrom, to), towerId, snapshotStatus, min,
             new ServerTimingsDto(sourceMs, total.Elapsed.TotalMilliseconds - sourceMs, total.Elapsed.TotalMilliseconds), CrmContactStatusDto.From(crmSet.Availability), notEligible,
-            CampaignPaymentFilters.Name(paymentFilter), eligibleTotal, eligibleOutstanding, PaymentStatusNote(paymentFilter, dateFrom, to, today), gate));
+            CampaignPaymentFilters.Name(paymentFilter), eligibleTotal, eligibleOutstanding, PaymentStatusNote(paymentFilter, dateFrom, to, today), gate, towers.Count == 0 ? null : towers));
     }
 
     /// <summary>
@@ -382,7 +399,7 @@ public sealed class CollectionsCampaignAppService(
 
     public async Task<CollectionsResult<CollectionsCampaignExportDto>> ExportAsync(CollectionsCaller caller,
         string? stage, string? mode, DateOnly? businessDate = null, int? companyId = null, string? search = null,
-        CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null)
+        CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null)
     {
         // No source read for an unauthorized export, including malformed requests.
         if (!(await authorization.ResolveAsync(caller, cancellationToken)).CanSendReminders)
@@ -390,7 +407,7 @@ public sealed class CollectionsCampaignAppService(
         if (mode is not ("review" or "genesys"))
             return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest, "Choose review or genesys export.");
         var result = await PreviewAsync(caller, stage, businessDate, companyId, search,
-            forExport: true, cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus);
+            forExport: true, cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds);
         if (!result.IsSuccess) return CollectionsResult<CollectionsCampaignExportDto>.Fail(result.Outcome, result.Detail);
         var report = result.Value!;
         // Freshness requirement (both export modes): the snapshot of every company in scope must be loaded and no older than
