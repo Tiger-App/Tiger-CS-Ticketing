@@ -7,6 +7,7 @@
     Layout = "_Layout";
 }
 <link rel="stylesheet" href="~/css/collections-snapshot.css" asp-append-version="true" />
+<link rel="stylesheet" href="~/css/collections-tower-multi.css" asp-append-version="true" />
 <div class="page receivables-workspace">
     <div class="page-header">
         <div>
@@ -21,7 +22,7 @@
             <label class="field-label" for="receivableSearch">Search</label>
             <input class="field-input" type="search" id="receivableSearch" name="search" maxlength="200" value="@Model.Search" placeholder="Customer name, mobile, tower or apartment" />
         </div>
-        <partial name="_TowerPicker" model="@(new TowerPickerModel("receivableTower", Model.Towers, Model.TowerId, Model.TowersFailed))" />
+        <partial name="_TowerMultiPicker" model="@(new TowerMultiPickerModel("receivableTower", Model.Towers, Model.TowerIds, Model.TowersFailed, "Tower", "All towers"))" />
         <div class="field-group">
             <label class="field-label" for="receivableStatus">Status</label>
             <select class="field-select" id="receivableStatus" name="status">
@@ -67,4 +68,4 @@
 </div>
 <script src="~/js/receivables-load-monitor.js" asp-append-version="true"></script>
 <script src="~/js/receivables.js" asp-append-version="true"></script>
-<script src="~/js/collections-towers.js" asp-append-version="true"></script>
+<script src="~/js/collections-tower-multi.js" asp-append-version="true"></script>

@@ -38,4 +38,5 @@ public sealed record PactInstalmentsPageDto(
     PactInstalmentTotalsDto Totals, int Page, int PageSize, IReadOnlyList<PactInstalmentRowDto> Items,
     SnapshotStatusDto Snapshot, PaymentViewAvailabilityDto Views, IReadOnlyList<string> Notes, DateTime ReadAtUtc, ServerTimingsDto? Timings = null,
     string View = "instalments", IReadOnlyList<PactInstalmentUnitDto>? Units = null,
-    IReadOnlyList<PactInstalmentMonthDto>? Months = null, string? DueMonth = null, CrmContactStatusDto? Crm = null);
+    IReadOnlyList<PactInstalmentMonthDto>? Months = null, string? DueMonth = null, CrmContactStatusDto? Crm = null,
+    IReadOnlyList<int>? TowerIds = null);

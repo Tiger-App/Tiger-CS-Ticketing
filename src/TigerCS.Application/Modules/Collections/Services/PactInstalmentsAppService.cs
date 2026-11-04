@@ -21,16 +21,26 @@ public sealed class PactInstalmentsAppService(
     ILogger<PactInstalmentsAppService> logger,
     CollectionsUnitLinkService? links = null)
 {
+    /// <summary>The most towers one request may name: the catalogue is a few dozen, so more is a malformed request, not a selection.</summary>
+    public const int MaxTowers = 200;
+
     public async Task<CollectionsResult<PactInstalmentsPageDto>> ListAsync(
         CollectionsCaller caller, int? towerId = null, DateOnly? dateFrom = null, DateOnly? dateTo = null, string? paymentStatus = null,
         decimal? minAmount = null, string? search = null, int page = 1, int pageSize = 25, CancellationToken cancellationToken = default,
-        string? view = null, string? dueMonth = null, string? unitStatusFilter = null, decimal? minTotal = null)
+        string? view = null, string? dueMonth = null, string? unitStatusFilter = null, decimal? minTotal = null, IReadOnlyList<int>? towerIds = null)
     {
         var total = Stopwatch.StartNew();
         if (!(await authorization.ResolveAsync(caller, cancellationToken)).CanReadFinancials)
             return CollectionsResult<PactInstalmentsPageDto>.Fail(CollectionsOutcome.Forbidden);
         if (!collectionsOptions.Enabled || !sourceOptions.Enabled)
             return CollectionsResult<PactInstalmentsPageDto>.Fail(CollectionsOutcome.Disabled);
+        // Tower filter: any number of local tower ids (the single towerId is kept for old callers and old URLs). None = all towers; one travels as TowerId; two or more as the set.
+        // Duplicates collapse, so an id sent twice (or as both towerId and towerIds) never counts twice. A non-positive id is an invalid selection.
+        var towers = (towerIds ?? []).Concat(towerId is { } single ? new[] { single } : Array.Empty<int>()).Distinct().Order().ToList();
+        if (towers.Any(id => id <= 0) || towers.Count > MaxTowers)
+            return CollectionsResult<PactInstalmentsPageDto>.Fail(CollectionsOutcome.InvalidRequest, "The selected towers are not valid. Choose towers from the list.");
+        towerId = towers.Count == 1 ? towers[0] : null;
+        IReadOnlyList<int>? manyTowers = towers.Count > 1 ? towers : null;
         if (!CollectionsPaymentFilters.TryParse(paymentStatus, out var filter)
             || page < 1 || pageSize is < 1 or > 100 || (long)(page - 1) * pageSize > int.MaxValue || search?.Length > 200
             || towerId is <= 0 || minAmount < 0 || minAmount > sourceOptions.MaxMinOutstandingAmount || minTotal < 0 || minTotal > sourceOptions.MaxMinOutstandingAmount)
@@ -97,7 +107,7 @@ public sealed class PactInstalmentsAppService(
         {
             // By unit classifies every instalment against the current Dubai MONTH of today (Overdue: before its first day, Due: inside it); the other view keeps the month rule.
             var overview = new PactInstalmentsRequest(from, to, byUnit ? today : monthStart, min, CollectionsPaymentFilters.ToWire(filter),
-                string.IsNullOrEmpty(term) ? null : term, digits, 1, pageSize, null, towerId, unitStatus, byUnit, unitMinTotal);
+                string.IsNullOrEmpty(term) ? null : term, digits, 1, pageSize, null, towerId, unitStatus, byUnit, unitMinTotal, manyTowers);
             // The list (and its totals) use the window narrowed to the selected month; Overdue is still "due before the current month" for every row.
             var request = overview;
             if (monthFrom is { } mf && monthTo is { } mt)
@@ -159,6 +169,6 @@ public sealed class PactInstalmentsAppService(
         return CollectionsResult<PactInstalmentsPageDto>.Ok(new PactInstalmentsPageDto(today, monthStart, monthEnd, from, to, towerId,
             CollectionsPaymentFilters.ToWire(filter), min, minApplies, sourceOptions.Currency, result.Totals, page, pageSize, result.Rows, status, views, notes,
             result.ReadAtUtc, new ServerTimingsDto(result.SqlMs, total.Elapsed.TotalMilliseconds - result.SqlMs, total.Elapsed.TotalMilliseconds),
-            byUnit ? "units" : "instalments", units, months, string.IsNullOrWhiteSpace(dueMonth) ? null : dueMonth, crm));
+            byUnit ? "units" : "instalments", units, months, string.IsNullOrWhiteSpace(dueMonth) ? null : dueMonth, crm, manyTowers));
     }
 }
