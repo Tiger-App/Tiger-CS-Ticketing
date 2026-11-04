@@ -67,7 +67,8 @@ public sealed class TicketClassificationAppService(
     IServiceIdentityRegistry? serviceIdentities = null,
     IDepartmentRepository? departmentRepository = null,
     TicketAutoAssignmentService? autoAssignmentService = null,
-    ITicketWorkflowEventRepository? workflowEventRepository = null)
+    ITicketWorkflowEventRepository? workflowEventRepository = null,
+    DefaultClassificationService? defaultClassification = null)
 {
     public async Task<TicketMutationResult> ClassifyAsync(
         Guid callerEmployeeId,
@@ -117,7 +118,14 @@ public sealed class TicketClassificationAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.DowngradeRequiresApproval);
         }
 
-        if (ticket.IsClassified)
+        // A ticket on the default classification (Customer Services / General) is a placeholder, not a judgement: an authorized user may
+        // replace it once the real classification is known. Any other existing classification stays write-once, as before.
+        var replacingDefault = ticket.IsClassified
+            && defaultClassification is not null
+            && await defaultClassification.IsDefaultAsync(ticket.CategoryId, ticket.RequestTypeId, cancellationToken);
+
+        // Choosing the default again is not a reclassification: nothing changes and nothing moves.
+        if (ticket.IsClassified && (!replacingDefault || request.CategoryId == ticket.CategoryId))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.AlreadyClassified);
         }
@@ -137,8 +145,10 @@ public sealed class TicketClassificationAppService(
         var routeToCategoryDepartment = false;
         if (category.DepartmentId != ticket.CurrentDepartmentId)
         {
+            // The Call Center routes to the category's department by design; so does reclassifying a default (General) ticket, whose
+            // placeholder department says nothing about where the real request belongs. The owner is preserved either way.
             if (departmentRepository is null || autoAssignmentService is null
-                || !await IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
+                || !(replacingDefault || await IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken))
                 || await departmentRepository.GetByIdAsync(category.DepartmentId, cancellationToken) is not { IsActive: true })
             {
                 return TicketMutationResult.Failure(TicketMutationOutcome.CategoryDepartmentMismatch);
@@ -190,6 +200,8 @@ public sealed class TicketClassificationAppService(
         // ticket already runs on its default priority and SLA period.
         var priorityBefore = ticket.PriorityId;
         var slaStateBefore = ticket.SlaState;
+        var categoryBefore = ticket.CategoryId;
+        var requestTypeBefore = ticket.RequestTypeId;
         var hadRunningPeriod = priorityBefore is not null && slaStateBefore != SlaState.NotApplicable;
 
         try
@@ -200,18 +212,33 @@ public sealed class TicketClassificationAppService(
                 // request MORE urgent (a less urgent one was refused above).
                 // Setting the category must not restart the clock, so the
                 // running period is kept — or tightened by an upgrade.
-                ticket.Classify(category.CategoryId, alreadyHas);
+                if (replacingDefault)
+                {
+                    ticket.ReplaceDefaultClassification(
+                        category.CategoryId, requestType?.RequestTypeId, workflowVersion?.WorkflowTemplateId);
+                }
+                else
+                {
+                    ticket.Classify(category.CategoryId, alreadyHas);
+                }
+
                 if (request.PriorityId < alreadyHas)
                 {
                     ticket.ChangePriority(request.PriorityId);
                 }
+            }
+            else if (replacingDefault)
+            {
+                ticket.ReplaceDefaultClassification(
+                    category.CategoryId, requestType?.RequestTypeId, workflowVersion?.WorkflowTemplateId);
+                ticket.ApplyDefaultPriority(request.PriorityId);
             }
             else
             {
                 ticket.Classify(category.CategoryId, request.PriorityId);
             }
 
-            if (requestType is not null && workflowVersion is not null)
+            if (!replacingDefault && requestType is not null && workflowVersion is not null)
             {
                 ticket.ClassifyRequestType(requestType.RequestTypeId);
                 ticket.PinWorkflowVersion(workflowVersion.WorkflowTemplateId);
@@ -291,8 +318,9 @@ public sealed class TicketClassificationAppService(
             }
 
             await auditWriter.WriteAsync(
-                callerEmployeeId, "ClassifyTicket", "Ticket", ticket.TicketId.ToString(),
-                beforeValue: $"CategoryId=(none);PriorityId={priorityBefore?.ToString() ?? "(none)"};RequestTypeId=(none);SlaState={slaStateBefore}",
+                callerEmployeeId, replacingDefault ? "ReclassifyTicket" : "ClassifyTicket", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: $"CategoryId={categoryBefore?.ToString() ?? "(none)"};PriorityId={priorityBefore?.ToString() ?? "(none)"};RequestTypeId={requestTypeBefore?.ToString() ?? "(none)"};SlaState={slaStateBefore}"
+                    + (replacingDefault ? $";Default={DefaultClassificationService.DisplayLabel}" : string.Empty),
                 afterValue:
                     $"CategoryId={ticket.CategoryId};PriorityId={ticket.PriorityId};"
                     + $"RequestTypeId={ticket.RequestTypeId?.ToString() ?? "(none)"};SlaState={ticket.SlaState}",

@@ -138,6 +138,55 @@ public sealed class TicketDetailsClassifyControlTests
     }
 
     [Fact]
+    public async Task ATicketOnTheDefaultClassification_IsStillOfferedReclassify_ForAnyAuthorizedEmployee_AndTheDefaultIsNotPreselected()
+    {
+        var categories = new[] { new CategoryDto(10, "General", DepartmentId, "Leasing"), new CategoryDto(11, "Handover", DepartmentId, "Leasing") };
+        var types = new[] { new RequestTypeOptionDto(16, "General", DepartmentId, 3, true), new RequestTypeOptionDto(17, "Handover", DepartmentId, 3, true) };
+        var ticket = Ticket(categoryId: 10, requestTypeId: 16) with { IsDefaultClassification = true, RequestTypeName = "General" };
+        var (model, _) = Build(ticket, categories, types, Roles.DepartmentEmployee);
+
+        await model.OnGetAsync(1, null, CancellationToken.None);
+
+        Assert.True(model.CanClassify);                                       // a placeholder is replaceable
+        Assert.False(model.Classify.RequestTypeAlreadySet);                   // the request type is chosen again, not kept
+        Assert.Equal(11, model.Classify.CategoryId);                          // starts on the first real category, not the default
+        Assert.Equal(17, model.Classify.RequestTypeId);
+    }
+
+    [Fact]
+    public async Task AReadOnlyRole_IsNotOfferedReclassify_OnTheDefaultClassification()
+    {
+        var ticket = Ticket(categoryId: 10, requestTypeId: 16) with { IsDefaultClassification = true };
+        var (model, _) = Build(ticket, Roles.ReportingUser);
+
+        await model.OnGetAsync(1, null, CancellationToken.None);
+
+        Assert.False(model.CanClassify);
+    }
+
+    [Fact]
+    public void TicketDetailsView_ShowsCustomerServicesGeneral_ForTheFallback_AndRelabelsTheActionReclassify()
+    {
+        var view = File.ReadAllText(FindRepoFile("TigerCS.Web/Pages/TicketDetails.cshtml"));
+
+        Assert.Contains("t.IsDefaultClassification", view);
+        Assert.Contains("DefaultClassificationService.DisplayLabel", view);
+        Assert.Contains("\"Reclassify\" : \"Classify\"", view);
+        Assert.Equal("Customer Services / General", TigerCS.Application.Modules.Ticketing.Services.DefaultClassificationService.DisplayLabel);
+    }
+
+    private static string FindRepoFile(string relative)
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null && !File.Exists(Path.Combine(dir.FullName, relative)))
+        {
+            dir = dir.Parent;
+        }
+
+        return Path.Combine(dir?.FullName ?? throw new FileNotFoundException(relative), relative);
+    }
+
+    [Fact]
     public async Task ADepartmentWithNothingConfigured_HasClassifyOfferedButExplained_AndTheGuidanceDoesNotRecommendIt()
     {
         var (model, _) = Build(Ticket(categoryId: null), [], [], Roles.DepartmentEmployee);

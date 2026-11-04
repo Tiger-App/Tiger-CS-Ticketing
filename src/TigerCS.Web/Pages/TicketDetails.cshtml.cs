@@ -976,7 +976,7 @@ public sealed class TicketDetailsModel(
     {
         CanClassify =
             categoriesApiClient is not null && requestTypesApiClient is not null
-            && ticket.CategoryId is null
+            && (ticket.CategoryId is null || ticket.IsDefaultClassification)
             && !string.Equals(ticket.TicketStatus, nameof(TicketStatus.Closed), StringComparison.Ordinal)
             && Viewer is not null
             && !TigerCS.Domain.Modules.IdentityAndAccess.Roles.IsReadOnlyCaller(Viewer.Roles);
@@ -1004,14 +1004,18 @@ public sealed class TicketDetailsModel(
         ClassifyPriorities = Enumerable.Range(1, current).Select(p => (byte)p).ToList();
 
         // Default to the category the AI's own request type belongs under, otherwise the first one; the request type follows the category.
-        var defaultCategory = ClassifyOptions.CategoryForRequestType(ticket.RequestTypeName) ?? ClassifyOptions.Categories.FirstOrDefault();
+        // A ticket on the default classification is being REplaced, so the default itself is not offered as the starting choice.
+        var defaultCategory = ticket.IsDefaultClassification
+            ? ClassifyOptions.Categories.FirstOrDefault(c => !string.Equals(c.Name, TigerCS.Application.Modules.Ticketing.Services.DefaultClassificationService.CategoryName, StringComparison.OrdinalIgnoreCase))
+                ?? ClassifyOptions.Categories.FirstOrDefault()
+            : ClassifyOptions.CategoryForRequestType(ticket.RequestTypeName) ?? ClassifyOptions.Categories.FirstOrDefault();
         Classify = new ClassifyInput
         {
             RowVersionBase64 = ticket.RowVersion,
             CategoryId = defaultCategory?.CategoryId ?? 0,
             PriorityId = current,
             RequestTypeId = defaultCategory?.RequestTypes.FirstOrDefault()?.RequestTypeId ?? 0,
-            RequestTypeAlreadySet = ticket.RequestTypeId is not null,
+            RequestTypeAlreadySet = ticket.RequestTypeId is not null && !ticket.IsDefaultClassification,
         };
     }
 

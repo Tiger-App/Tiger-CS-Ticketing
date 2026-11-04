@@ -53,7 +53,8 @@ public sealed class HandoffWordingTests
     {
         var view = Read("TigerCS.Web/Pages/TicketDetails.cshtml");
 
-        Assert.Contains("t.RequestTypeName ?? \"Not yet classified\"", view);
+        // A ticket on the default classification shows its request type; one with a category but no request type says "Not specified".
+        Assert.Contains("t.RequestTypeName ?? (t.CategoryId is null ? \"Not yet classified\" : \"Not specified\")", view);
         Assert.Contains("_TicketConversationHistory", view);
         // Who handled it is said once, per interaction, in Conversation History — not repeated in the request facts.
         Assert.DoesNotContain("Being handled by", view);

@@ -5,7 +5,9 @@ using TigerCS.Application.Modules.GenesysIntegration.Services;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.ClassificationAndRouting;
 using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
+using TigerCS.Domain.Modules.WorkflowConfiguration;
 using TigerCS.Tests.Administration.Services;
 using TigerCS.Tests.CustomerVerification.Fakes;
 using TigerCS.Tests.IdentityAndAccess.Fakes;
@@ -47,6 +49,12 @@ public sealed class GenesysServiceFixture
 
     /// <summary>The Unclassified → Classified transition an agent performs after reading the inquiry.</summary>
     public TicketClassificationAppService Classification { get; }
+
+    /// <summary>
+    /// The approved default classification (Customer Services / General), resolved from this fixture's departments, categories, request types
+    /// and workflows. Until <see cref="SeedDefaultClassification"/> runs it is "not configured" and every service keeps its previous behaviour.
+    /// </summary>
+    public DefaultClassificationService DefaultClassification { get; }
 
     public FakeChannelRepository Channels { get; } = new FakeChannelRepository().SeedWellKnown();
     public FakeDepartmentRepository Departments { get; } = new();
@@ -219,13 +227,17 @@ public sealed class GenesysServiceFixture
                 AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit);
         AutoAssignment = autoAssignment;
 
+        DefaultClassification = new DefaultClassificationService(
+            Departments, Categories, RequestTypes, WorkflowTemplates, Tickets, UnitOfWork, Audit);
+
         var ticketCreationAppService = new TicketCreationAppService(
             IntakeRecords, new FakeUnitReferenceRepository(), new FakeContactReferenceRepository(),
             Categories, new FakePriorityRepository(), Departments, Tickets,
             new FakeTicketRequesterSnapshotRepository(), StatusHistory, UnitOfWork, Audit, outbox,
             sla.DueDates, Clock, RequestTypes, Interactions,
             autoAssignment,
-            WorkflowTemplates, serviceIdentities: null, workflowEventRepository: WorkflowEvents);
+            WorkflowTemplates, serviceIdentities: null, workflowEventRepository: WorkflowEvents,
+            defaultClassification: DefaultClassification);
         ManualTicketCreation = ticketCreationAppService;
 
         // The same customer lookup the New Ticket wizard uses — composed
@@ -272,7 +284,8 @@ public sealed class GenesysServiceFixture
             new GenesysDefaultPriorityResolver(Options, new FakePriorityRepository()),
             RequestTypeClassification,
             HandlingHistory,
-            HandlerRecorder);
+            HandlerRecorder,
+            DefaultClassification);
 
         StrictTicketQuery = new TicketQueryAppService(
             Tickets, DepartmentAssignments, new FakeTicketResolutionRepository(),
@@ -281,7 +294,9 @@ public sealed class GenesysServiceFixture
         Classification = new TicketClassificationAppService(
             Tickets, Categories, new FakePriorityRepository(), RequestTypes,
             WorkflowTemplates, DepartmentAssignments, StatusHistory, UnitOfWork, Audit,
-            sla.DueDates, TimeProvider.System, handlerRepository: FakeTicketInteractionHandlerRepository.Permissive());
+            sla.DueDates, TimeProvider.System, handlerRepository: FakeTicketInteractionHandlerRepository.Permissive(),
+            departmentRepository: Departments, autoAssignmentService: autoAssignment, workflowEventRepository: WorkflowEvents,
+            defaultClassification: DefaultClassification);
 
         ConversationEnd = new GenesysConversationEndAppService(
             Options, Conversations, Tickets, Handoffs, WorkflowEvents, sla.FirstHumanResponse,
@@ -345,6 +360,21 @@ public sealed class GenesysServiceFixture
         var department = Departments.AddDepartment(name, code);
         var category = Categories.Seed(department.DepartmentId, $"{name} Enquiry");
         return (department, category);
+    }
+
+    /// <summary>
+    /// Configures the approved default classification the way the idempotent importer does: the Customer Services department (CS) with ONE
+    /// General category, ONE General request type and a Published workflow, and no assignment rule. Returns what was created.
+    /// </summary>
+    public (Department Department, Category Category, RequestType RequestType) SeedDefaultClassification(Department? department = null)
+    {
+        department ??= Departments.ListAsync(activeOnly: false).GetAwaiter().GetResult().FirstOrDefault(d => d.Code == "CS") ?? Departments.AddDepartment("Customer Services", "CS");
+        var category = Categories.Seed(department.DepartmentId, "General");
+        var template = WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: 9100));
+        var requestType = RequestTypes.Add(new RequestType(
+            department.DepartmentId, "General", template.WorkflowId, (byte)PriorityLevel.Medium,
+            allowAgentPriorityChange: false, allowPendingCustomer: true, allowPendingInternal: true, allowReopen: true));
+        return (department, category, requestType);
     }
 
     /// <summary>

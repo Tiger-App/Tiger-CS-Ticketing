@@ -683,6 +683,38 @@ public class Ticket
         PriorityId = priorityId;
     }
 
+    /// <summary>
+    /// Records the approved default classification (Customer Services / General) on a ticket whose classification is missing, partial or
+    /// invalid. <b>Classification only</b>: priority, SLA, status, department and owner are deliberately untouched, so applying the
+    /// fallback can never restart a clock, change urgency or move work between people. Idempotent for the same values. Not guarded by
+    /// <see cref="EnsureNotClosed"/>: a historical backfill records a label on a closed ticket without reopening or changing it.
+    /// </summary>
+    public void ApplyDefaultClassification(int categoryId, int requestTypeId, int workflowTemplateId)
+    {
+        CategoryId = categoryId;
+        RequestTypeId = requestTypeId;
+        WorkflowTemplateId = workflowTemplateId;
+    }
+
+    /// <summary>
+    /// Replaces the default classification (Customer Services / General) with the real one once it is known — the explicit, authorized
+    /// reclassification of a fallback ticket. The calling service decides that the current classification IS the fallback; this method
+    /// only guards that the ticket is open. The request type and its pinned workflow are replaced together (or cleared together when the
+    /// agent classified by category alone). Priority, SLA and ownership are the caller's concern and untouched here.
+    /// </summary>
+    public void ReplaceDefaultClassification(int categoryId, int? requestTypeId, int? workflowTemplateId)
+    {
+        EnsureNotClosed();
+        if ((requestTypeId is null) != (workflowTemplateId is null))
+        {
+            throw new ArgumentException("A request type and its workflow version are replaced together.", nameof(workflowTemplateId));
+        }
+
+        CategoryId = categoryId;
+        RequestTypeId = requestTypeId;
+        WorkflowTemplateId = workflowTemplateId;
+    }
+
     public void ClassifyRequestType(int requestTypeId)
     {
         if (RequestTypeId is not null)
