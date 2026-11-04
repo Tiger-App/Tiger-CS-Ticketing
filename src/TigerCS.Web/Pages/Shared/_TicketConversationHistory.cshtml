@@ -62,9 +62,9 @@
                         {
                             <div class="convo-meta__item"><dt>Duration</dt><dd>@duration</dd></div>
                         }
-                        @if (!string.IsNullOrWhiteSpace(interaction.CustomerName))
+                        @if (TigerCS.Application.Modules.Ticketing.CustomerNames.CustomerNameResolver.FirstValid(interaction.CustomerName) is { } interactionCustomerName)
                         {
-                            <div class="convo-meta__item"><dt>Customer</dt><dd>@interaction.CustomerName</dd></div>
+                            <div class="convo-meta__item"><dt>Customer</dt><dd>@interactionCustomerName</dd></div>
                         }
                         @if (!string.IsNullOrWhiteSpace(interaction.CustomerPhone))
                         {

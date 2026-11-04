@@ -540,7 +540,8 @@ public sealed class TicketQueryAppService(
         RequestTypeId: ticket.RequestTypeId,
         WorkflowTemplateId: ticket.WorkflowTemplateId,
         IsClassified: ticket.IsClassified,
-        CreatedByEmployeeId: ticket.CreatedByEmployeeId);
+        CreatedByEmployeeId: ticket.CreatedByEmployeeId,
+        ExternalCustomerName: ticket.ExternalCustomerName);
 }
 
 /// <summary>The answer to <see cref="TicketQueryAppService.CheckAccessAsync"/>.</summary>

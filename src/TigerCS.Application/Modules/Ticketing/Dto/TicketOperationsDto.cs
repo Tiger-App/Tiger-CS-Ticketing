@@ -145,6 +145,7 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="EscalationCount">How many of those were recorded as UnableToResolve or NeedsEscalation.</param>
 /// <param name="FirstHandledByName">Display name of <c>FirstHandledByEmployeeId</c>, read from the employee directory itself — so it resolves even when that person has since left the department or been deactivated.</param>
 /// <param name="ResolvedByName">Display name of <c>ResolvedByEmployeeId</c>, resolved the same way.</param>
+/// <param name="ExternalCustomerName">Ticket-time snapshot of the verified external customer's own name (PACT/Tasleeh), or null. The external counterpart of <c>CrmBuyerCustomerName</c>; Ticket Details needs it to name an externally verified customer.</param>
 /// <param name="HandoffState">
 /// Whether this ticket is waiting on a human agent, <b>derived</b> from the
 /// one open <c>TicketAgentHandoff</c> row: WaitingForAgent, Assigned or
@@ -210,7 +211,8 @@ public sealed record TicketDetailDto(
     int EscalationCount = 0,
     string? FirstHandledByName = null,
     string? ResolvedByName = null,
-    bool CanTakeOwnership = false);
+    bool CanTakeOwnership = false,
+    string? ExternalCustomerName = null);
 
 public enum TicketQueryOutcome
 {

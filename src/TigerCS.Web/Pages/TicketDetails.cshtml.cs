@@ -7,6 +7,7 @@ using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
 using TigerCS.Application.Modules.Ticketing.ActivityTimeline;
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.SlaAndEscalation;
@@ -98,6 +99,9 @@ public sealed class TicketDetailsModel(
 
     /// <summary>The best persisted customer name: the CRM Buyer snapshot, else what the originating call/chat reported, else the history's own name.</summary>
     public string? CustomerDisplayName { get; private set; }
+
+    /// <summary>Where <see cref="CustomerDisplayName"/> came from: a verified CRM/external snapshot, or a name that was only submitted (not verified).</summary>
+    public CustomerNameSource CustomerNameSource { get; private set; }
 
     /// <summary>The customer's phone: the intake snapshot the history read reports, else the originating interaction's caller number.</summary>
     public string? CustomerPhone { get; private set; }
@@ -286,7 +290,7 @@ public sealed class TicketDetailsModel(
     /// <summary>The Customer Summary band: who the customer is and how sure the ticket is about it. Null only when the ticket did not load.</summary>
     public TicketCustomerSummary? CustomerSummary => Ticket is null
         ? null
-        : TicketCustomerSummary.Build(Ticket, CustomerNameLabel, CustomerDisplayName is not null, CustomerVerificationLabel, CustomerPhone, CustomerProfileHref);
+        : TicketCustomerSummary.Build(Ticket, CustomerNameLabel, CustomerDisplayName is not null, CustomerVerificationLabel, CustomerPhone, CustomerProfileHref, CustomerNameSource);
 
     private TicketGuidance? guidance;
 
@@ -1123,12 +1127,14 @@ public sealed class TicketDetailsModel(
 
         var originating = Interactions.FirstOrDefault(i => i.IsOriginatingInteraction) ?? Interactions.FirstOrDefault();
         CustomerPhone = FirstNonEmpty(CustomerHistory?.PhoneNumberSnapshot, originating?.CustomerPhone);
-        // A source system's placeholder ("NOT_REGISTERED", "UNKNOWN", "N/A") is not a name: it is treated as missing,
-        // so the page says "Customer not identified" instead of printing it.
-        CustomerDisplayName = FirstNonEmpty(
-            CustomerNameValidator.Sanitize(Ticket.CrmBuyerCustomerName),
-            CustomerNameValidator.Sanitize(originating?.CustomerName),
-            CustomerNameValidator.Sanitize(CustomerHistory?.CustomerDisplayName));
+        // One rule for the name (shared with the Customers directory and profile): CRM snapshot, then the verified external snapshot,
+        // then any name that was merely submitted (the chat form / call, then the history's name). A placeholder ("NOT_REGISTERED",
+        // "UNKNOWN", "N/A"), a blank or an unsuccessful lookup is skipped, so it never replaces or hides a valid name; with nothing
+        // valid the page says "Unnamed caller" rather than printing a placeholder.
+        var resolvedName = CustomerNameResolver.Resolve(
+            Ticket.CrmBuyerCustomerName, Ticket.ExternalCustomerName, originating?.CustomerName, CustomerHistory?.CustomerDisplayName);
+        CustomerDisplayName = resolvedName.Name;
+        CustomerNameSource = resolvedName.Source;
         CustomerKey = CustomerHistory?.CustomerKey
             ?? CustomerIdentity.FromTicketFacts(Ticket.CrmBuyerCustomerId, Ticket.CustomerVerificationSource, Ticket.ExternalCustomerId, CustomerPhone)?.Key;
 
