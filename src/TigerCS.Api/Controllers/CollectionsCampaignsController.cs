@@ -28,12 +28,12 @@ public sealed class CollectionsCampaignsController(CollectionsCampaignAppService
         [FromQuery] int? companyId, [FromQuery] string? search, [FromQuery] int page = 1,
         [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default,
         [FromQuery] DateOnly? dateFrom = null, [FromQuery] DateOnly? dateTo = null, [FromQuery] int? towerId = null,
-        [FromQuery] decimal? minTotal = null, [FromQuery] string? paymentStatus = null)
+        [FromQuery] decimal? minTotal = null, [FromQuery] string? paymentStatus = null, [FromQuery] int[]? towerIds = null)
     {
         var caller = Caller();
         if (caller is null) return Unauthorized();
         return Result(await service.PreviewAsync(caller, stage, businessDate, companyId, search, page, pageSize,
-            cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus));
+            cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds));
     }
 
     /// <summary>Export the full filtered list. Review mode is for internal review; Genesys mode refuses any unresolved row,
@@ -47,11 +47,11 @@ public sealed class CollectionsCampaignsController(CollectionsCampaignAppService
     public async Task<IActionResult> Export([FromQuery] string? stage, [FromQuery] string? mode,
         [FromQuery] DateOnly? businessDate, [FromQuery] int? companyId, [FromQuery] string? search,
         CancellationToken cancellationToken = default, [FromQuery] DateOnly? dateFrom = null, [FromQuery] DateOnly? dateTo = null,
-        [FromQuery] int? towerId = null, [FromQuery] decimal? minTotal = null, [FromQuery] string? paymentStatus = null)
+        [FromQuery] int? towerId = null, [FromQuery] decimal? minTotal = null, [FromQuery] string? paymentStatus = null, [FromQuery] int[]? towerIds = null)
     {
         var caller = Caller();
         if (caller is null) return Unauthorized();
-        return Result(await service.ExportAsync(caller, stage, mode, businessDate, companyId, search, cancellationToken, dateFrom, dateTo, towerId, minTotal, paymentStatus));
+        return Result(await service.ExportAsync(caller, stage, mode, businessDate, companyId, search, cancellationToken, dateFrom, dateTo, towerId, minTotal, paymentStatus, towerIds));
     }
 
     private CollectionsCaller? Caller() => Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id)

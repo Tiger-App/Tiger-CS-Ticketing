@@ -8,7 +8,7 @@ public sealed record ReviewFilter(
     int? Year = null, int? Month = null, DateOnly? DueFrom = null, DateOnly? DueTo = null,
     string? PaymentStatus = null, decimal? MinRemaining = null, decimal? MaxRemaining = null,
     string? ReminderType = null, string? ValidationStatus = null, string? Reason = null,
-    string? DueStatus = null, int? TowerId = null);
+    string? DueStatus = null, int? TowerId = null, IReadOnlyList<int>? TowerIds = null);
 
 /// <summary>
 /// The normalized, validated filter the store understands. <see cref="PaymentStatuses"/> is null for "All".
@@ -17,7 +17,7 @@ public sealed record ReviewQuerySpec(
     int? CompanyId, string? Project, string? Unit, string? CustomerText, string? PhoneDigits,
     DateOnly? DueFrom, DateOnly? DueTo, IReadOnlyList<ReviewPaymentStatus>? PaymentStatuses,
     decimal? MinRemaining, decimal? MaxRemaining, CampaignReminderType? ReminderType,
-    ReviewValidationStatus? ValidationStatus, string? Reason, int? TowerId = null);
+    ReviewValidationStatus? ValidationStatus, string? Reason, int? TowerId = null, IReadOnlyList<int>? TowerIds = null);
 
 public sealed record ReviewRunDto(
     long RunId, string Status, string Phase, int ProgressPercent, DateOnly AsOfDate, int? CompanyId,

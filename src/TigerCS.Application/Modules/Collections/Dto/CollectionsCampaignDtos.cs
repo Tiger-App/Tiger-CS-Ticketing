@@ -25,7 +25,7 @@ public sealed record CollectionsCampaignPreviewDto(
     int? TowerId = null, SnapshotStatusDto? Snapshot = null, decimal MinAmount = 0m, ServerTimingsDto? Timings = null, CrmContactStatusDto? Crm = null, int NotEligibleCount = 0,
     string PaymentStatus = "Both", decimal? EligibleTotalAmount = null,
     decimal? EligibleOutstandingAmount = null, string? PaymentStatusNote = null,
-    Reconciliation.SourceGateDto? SourceGate = null);
+    Reconciliation.SourceGateDto? SourceGate = null, IReadOnlyList<int>? TowerIds = null);
 
 /// <summary>
 /// The state of the CRM contact data behind a list. <c>State</c>: Disabled (CRM linking is switched off: PACT contacts only), Ready, NotLoaded, Stale or ReadFailed. A <c>Blocks</c> state is a CRM
@@ -36,5 +36,9 @@ public sealed record CrmContactStatusDto(string State, bool Blocks, string? Mess
     public static CrmContactStatusDto From(Services.CrmAvailability a) => new(a.State.ToString(), a.Blocks, a.Message, a.LastSuccessUtc, a.LastRefreshFailed);
 }
 
-/// <summary>Internal API transport; the Web serves Csv as a UTF-8 downloadable file.</summary>
-public sealed record CollectionsCampaignExportDto(string FileName, string Csv, int RowCount);
+/// <summary>
+/// Internal API transport. <c>Csv</c> is the full audit/machine file (the Genesys import file, and the audit CSV for review mode).
+/// For review mode <c>Xlsx</c> is the simplified employee workbook (8 columns) and <c>XlsxFileName</c> its name; the Web serves that
+/// one when present, otherwise Csv as a UTF-8 downloadable file.
+/// </summary>
+public sealed record CollectionsCampaignExportDto(string FileName, string Csv, int RowCount, byte[]? Xlsx = null, string? XlsxFileName = null);

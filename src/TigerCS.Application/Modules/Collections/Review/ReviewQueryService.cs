@@ -80,7 +80,7 @@ public sealed class ReviewQueryService(
         var unknown = await store.CountAsync(run.CollectionsReviewRunId,
             spec with { ValidationStatus = null, PaymentStatuses = [ReviewPaymentStatus.Unknown] }, stale, ct);
         // A tower chosen on data read before towers were stored matches nothing: say so instead of looking like "this project has no customers" (and never fall back to all projects).
-        var towerMissing = spec.TowerId is not null && items.TotalCount == 0 && !await store.RunHasTowerDataAsync(run.CollectionsReviewRunId, ct);
+        var towerMissing = (spec.TowerId is not null || spec.TowerIds is not null) && items.TotalCount == 0 && !await store.RunHasTowerDataAsync(run.CollectionsReviewRunId, ct);
         return CollectionsResult<ReviewPageDto>.Ok(new(ToDto(run), counts with { UnknownPaymentStatus = unknown.Total }, page, pageSize,
             items.TotalCount, items.Items.Select(v => ToDto(v, stale)).ToList(), applied, towerMissing));
     }
@@ -261,7 +261,7 @@ public sealed class ReviewQueryService(
         if ((f.Year is null) != (f.Month is null) || f.Year is < 2000 or > 2100 || f.Month is < 1 or > 12)
             return (null, "Year and month go together (2000-2100, 1-12).");
         if (f.DueFrom is { } from && f.DueTo is { } to && from > to) return (null, "The due-date range starts after it ends.");
-        if (f.TowerId is <= 0) return (null, "Choose a valid project / tower.");
+        if (f.TowerId is <= 0 || f.TowerIds?.Any(t => t <= 0) == true) return (null, "Choose a valid project / tower.");
         if (f.MinRemaining is < 0 || f.MaxRemaining is < 0 || (f.MinRemaining is { } lo && f.MaxRemaining is { } hi && lo > hi))
             return (null, "Minimum remaining must not exceed maximum remaining, and neither may be negative.");
         if (new[] { f.Project, f.Unit, f.Customer, f.Reason }.Any(v => v?.Length > 200)) return (null, "Text filters are limited to 200 characters.");
@@ -321,9 +321,13 @@ public sealed class ReviewQueryService(
             var d = new string(customer.Where(char.IsAsciiDigit).ToArray());
             if (d.Length >= 3) digits = d.TrimStart('0');
         }
+        var towerSet = TowerSet(f);
         return (new ReviewQuerySpec(f.CompanyId, Blank(f.Project), Blank(f.Unit), Blank(customer), digits, dueFrom, dueTo, statuses,
-            f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, f.TowerId), null);
+            f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, towerSet is { Count: 1 } onlyTower ? onlyTower[0] : null, towerSet is { Count: > 1 } manyTowers ? manyTowers : null), null);
     }
+
+    /// <summary>The distinct tower ids of a filter (the single id and the list together); empty = All projects.</summary>
+    private static List<int> TowerSet(ReviewFilter f) => (f.TowerIds ?? []).Concat(f.TowerId is { } one ? new[] { one } : Array.Empty<int>()).Distinct().Order().ToList();
 
     private static string? Blank(string? v) => string.IsNullOrWhiteSpace(v) ? null : v.Trim();
 }
