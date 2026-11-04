@@ -39,12 +39,13 @@ public class TicketNoteAppServiceTests
     }
 
     [Fact]
-    public async Task AddNoteAsync_CallerWithinDepartmentScope_Succeeds()
+    public async Task AddNoteAsync_EmployeeAssignedTheTicket_Succeeds()
     {
         var f = CreateService();
         var ticket = await SeedTicketAsync(f.Tickets);
         var employeeId = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(employeeId, ticket.CurrentDepartmentId, true, DateTime.UtcNow, null));
+        ticket.AssignTo(employeeId);
 
         var result = await f.Service.AddNoteAsync(
             employeeId, [Roles.DepartmentEmployee], ticket.TicketId, new CreateNoteRequestDto("Contacted the tenant."));
@@ -63,12 +64,34 @@ public class TicketNoteAppServiceTests
         var ticket = await SeedTicketAsync(f.Tickets);
         var employeeId = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(employeeId, ticket.CurrentDepartmentId, true, DateTime.UtcNow, null));
+        ticket.AssignTo(employeeId);
 
         var result = await f.Service.AddNoteAsync(
             employeeId, [Roles.DepartmentEmployee], ticket.TicketId, new CreateNoteRequestDto("Called the tenant, no answer."));
 
         Assert.Equal(NoteOutcome.Success, result.Outcome);
         Assert.Null(ticket.FirstHumanResponseAtUtc);
+    }
+
+    [Fact]
+    public async Task AddNoteAsync_DepartmentColleagueNotAssignedTheTicket_ReturnsForbidden_ForUnassignedAndAColleaguesTicket()
+    {
+        var f = CreateService();
+        var unassigned = await SeedTicketAsync(f.Tickets);
+        var colleagues = await SeedTicketAsync(f.Tickets);
+        colleagues.AssignTo(Guid.NewGuid());
+        var employeeId = Guid.NewGuid();
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(employeeId, unassigned.CurrentDepartmentId, true, DateTime.UtcNow, null));
+
+        foreach (var ticket in new[] { unassigned, colleagues })
+        {
+            var result = await f.Service.AddNoteAsync(
+                employeeId, [Roles.DepartmentEmployee], ticket.TicketId, new CreateNoteRequestDto("Should not be allowed."));
+            Assert.Equal(NoteOutcome.Forbidden, result.Outcome);
+            Assert.Equal(TicketQueryOutcome.Forbidden, (await f.Service.ListNotesAsync(employeeId, [Roles.DepartmentEmployee], ticket.TicketId, 1, 50)).Outcome);
+        }
+
+        Assert.Empty(f.Notes.Added);
     }
 
     [Fact]

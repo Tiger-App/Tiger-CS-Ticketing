@@ -7,8 +7,8 @@ namespace TigerCS.Api.Filters;
 
 /// <summary>
 /// Refuses a request that addresses a ticket (<c>{ticketId}</c> in the route) the caller may not see — the server-side half of CS Agent
-/// ticket visibility for direct URLs and API calls. A CS Agent sees only tickets assigned to them or on which they handled a Genesys
-/// interaction (<see cref="TicketVisibilityRule"/>); without this, every endpoint under <c>api/tickets/{ticketId}</c> would have to
+/// and Department Employee ticket visibility for direct URLs and API calls. A CS Agent sees only tickets assigned to them (or the follow-up
+/// and intake exceptions of <see cref="TicketVisibilityRule"/>), and a Department Employee only tickets assigned to them; without this, every endpoint under <c>api/tickets/{ticketId}</c> would have to
 /// remember that, and the CS Agent's cross-department action rights (close, classify, reopen, escalate, …) would reach tickets they cannot
 /// even open.
 ///
@@ -49,7 +49,7 @@ internal sealed class RequireTicketAccessFilter(TicketQueryAppService ticketQuer
         var idValue = context.HttpContext.User.FindFirstValue(ClaimTypes.NameIdentifier);
         if (idValue is null || !Guid.TryParse(idValue, out var employeeId))
         {
-            if (!TicketVisibilityRule.IsRestrictedCsAgent(roles))
+            if (!TicketVisibilityRule.IsRestrictedCsAgent(roles) && !TicketVisibilityRule.IsAssignmentOnlyEmployee(roles))
             {
                 await next();
                 return;
@@ -59,9 +59,10 @@ internal sealed class RequireTicketAccessFilter(TicketQueryAppService ticketQuer
             return;
         }
 
-        // Only a human CS Agent (per-ticket rule) and the Genesys integration account (Genesys-created tickets only) are scoped here;
-        // everyone else passes straight through without a database read.
+        // Only a human CS Agent (per-ticket rule), a regular Department Employee (assignment-only rule) and the Genesys integration account
+        // (Genesys-created tickets only) are scoped here; everyone else passes straight through without a database read.
         if (!ticketQueryAppService.IsRestrictedAgent(employeeId, roles)
+            && !TicketVisibilityRule.IsAssignmentOnlyEmployee(roles)
             && !ticketQueryAppService.IsGenesysIntegration(employeeId, roles))
         {
             await next();
@@ -73,7 +74,7 @@ internal sealed class RequireTicketAccessFilter(TicketQueryAppService ticketQuer
         {
             context.Result = Forbidden(
                 "Ticket not accessible.",
-                "You can only access tickets assigned to you, tickets on which you handled a Genesys interaction, or tickets you created (the Genesys integration account: Genesys-created tickets).");
+                "You can only access tickets assigned to you (the Genesys integration account: Genesys-created tickets).");
             return;
         }
 

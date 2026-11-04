@@ -199,13 +199,17 @@ public class CustomerHistoryAppServiceTests
     // ---------------------------------------------------------------
 
     [Fact]
-    public async Task GetByCrmCustomerIdAsync_DepartmentEmployee_OnlySeesTicketsInOwnDepartment()
+    public async Task GetByCrmCustomerIdAsync_DepartmentEmployee_OnlySeesTicketsAssignedToThem()
     {
         var f = CreateService();
         var employeeId = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(employeeId, 2, true, DateTime.UtcNow, null));
-        await SeedCrmBuyerTicketAsync(f.Tickets, 2, 493575, "2508", DateTime.UtcNow);
-        await SeedCrmBuyerTicketAsync(f.Tickets, 3, 493575, "2608", DateTime.UtcNow);
+        var mine = await SeedCrmBuyerTicketAsync(f.Tickets, 2, 493575, "2508", DateTime.UtcNow);
+        mine.AssignTo(employeeId);
+        var colleagues = await SeedCrmBuyerTicketAsync(f.Tickets, 2, 493575, "2509", DateTime.UtcNow);   // same department, a colleague's
+        colleagues.AssignTo(Guid.NewGuid());
+        await SeedCrmBuyerTicketAsync(f.Tickets, 2, 493575, "2510", DateTime.UtcNow);                    // same department, unassigned
+        await SeedCrmBuyerTicketAsync(f.Tickets, 3, 493575, "2608", DateTime.UtcNow);                    // another department
 
         var result = await f.Service.GetByCrmCustomerIdAsync(employeeId, [Roles.DepartmentEmployee], 493575);
 
@@ -336,13 +340,15 @@ public class CustomerHistoryAppServiceTests
     }
 
     [Fact]
-    public async Task GetByExternalIdentityAsync_IsScopedByTheCallersVisibleDepartments()
+    public async Task GetByExternalIdentityAsync_ForADepartmentEmployee_IsScopedToTheirAssignedTickets()
     {
         var f = CreateService();
         var caller = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(caller, 2, true, DateTime.UtcNow, null));
-        await SeedExternalTicketAsync(f.Tickets, "Pact", "PACT-CUST-1", "1506", DateTime.UtcNow.AddDays(-2), departmentId: 2);
+        var mine = await SeedExternalTicketAsync(f.Tickets, "Pact", "PACT-CUST-1", "1506", DateTime.UtcNow.AddDays(-2), departmentId: 2);
+        mine.AssignTo(caller);
         await SeedExternalTicketAsync(f.Tickets, "Pact", "PACT-CUST-1", "1204", DateTime.UtcNow.AddDays(-1), departmentId: 9);
+        await SeedExternalTicketAsync(f.Tickets, "Pact", "PACT-CUST-1", "1302", DateTime.UtcNow.AddDays(-1), departmentId: 2);   // own department, not assigned to them
 
         var result = await f.Service.GetByExternalIdentityAsync(caller, [Roles.DepartmentEmployee], "Pact", "PACT-CUST-1");
 

@@ -121,7 +121,8 @@ public sealed class TicketQueryAppService(
             OwnerVisibilityEmployeeId: callerEmployeeId,
             IncludeClaimable: seesClaimablePool,
             AvailableToTakeOnly: request.AvailableToTake == true,
-            DepartmentFilterIncludesClaimable: callCenterFilter);
+            DepartmentFilterIncludesClaimable: callCenterFilter,
+            IncludeGenesysIntake: await SeesGenesysIntakeAsync(callerEmployeeId, callerRoles, cancellationToken));
 
         var result = await ticketRepository.SearchAsync(query, cancellationToken);
 
@@ -327,6 +328,13 @@ public sealed class TicketQueryAppService(
             return null;
         }
 
+        if (TicketVisibilityRule.IsAssignmentOnlyEmployee(callerRoles))
+        {
+            // A regular employee's department membership grants no ticket visibility: the empty set fails every department-scoped surface
+            // closed, and the surfaces that know the ownership rule add only the tickets assigned to the caller.
+            return Array.Empty<int>();
+        }
+
         var assignments = await userDepartmentAssignmentRepository.GetByEmployeeIdAsync(callerEmployeeId, cancellationToken);
         return assignments.Select(a => a.DepartmentId).ToList();
     }
@@ -435,6 +443,18 @@ public sealed class TicketQueryAppService(
         TicketVisibilityRule.HoldsDepartmentRole(callerRoles)
         && !TigerCS.Domain.Modules.IdentityAndAccess.Roles.IsReadOnlyCaller(callerRoles)
         && !callerRoles.Any(TicketRoleSets.CrossDepartmentView.Contains);
+
+    /// <summary>
+    /// True when the caller also sees the unassigned Genesys-originated tickets of the CS intake / classification queue (read-only until taken):
+    /// a restricted CS Agent who is an eligible Call Center claimer (<see cref="TicketClaimPolicy.IsEligibleClaimerAsync"/>). Never a department
+    /// employee, never the Genesys service identity, never anyone merely because they share a department. The same eligibility gates
+    /// Take Ownership, so the queue, the details page and the claim cannot disagree.
+    /// </summary>
+    public async Task<bool> SeesGenesysIntakeAsync(
+        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, CancellationToken cancellationToken = default) =>
+        claimPolicy is not null
+        && IsRestrictedAgent(callerEmployeeId, callerRoles)
+        && await claimPolicy.IsEligibleClaimerAsync(callerEmployeeId, callerRoles, cancellationToken);
 
     /// <summary>True when the caller is the Genesys integration account: it sees the Genesys-created tickets of every department (see <see cref="TicketVisibilityRule.IsGenesysIntegration"/>).</summary>
     public bool IsGenesysIntegration(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles) =>
