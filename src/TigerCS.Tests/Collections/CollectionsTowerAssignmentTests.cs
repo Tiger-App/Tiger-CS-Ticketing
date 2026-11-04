@@ -50,6 +50,7 @@ public class CollectionsTowerAssignmentTests
         public CollectionsTicketRoutingService Routing = null!;
         public CollectionsTeam Team = null!;
         public CollectionsOptions Options = new();
+        public TicketAutoAssignmentService AutoAssignment = null!;
 
         public static Fixture Create()
         {
@@ -74,7 +75,8 @@ public class CollectionsTowerAssignmentTests
             var resolver = new CollectionsTicketTowerResolver(f.ProjectMap, f.Catalog);
             f.Routing = new CollectionsTicketRoutingService(f.Team, resolver, f.TowerRows, f.TicketAssignments, f.History, f.Audit, f.Options);
             var auto = new TicketAutoAssignmentService(
-                new FakeRequestTypeAssignmentRuleRepository(), workflowSettings, f.Members, f.TicketAssignments, f.Audit, departmentRepository: f.Departments);
+                new FakeRequestTypeAssignmentRuleRepository(), workflowSettings, f.Members, f.TicketAssignments, f.Audit, departmentRepository: f.Departments, collectionsOptions: f.Options);
+            f.AutoAssignment = auto;
             f.Assignments = new TicketAssignmentAppService(
                 f.Tickets, f.TicketAssignments, f.Members, f.Departments, f.UnitOfWork, f.Audit, f.Clock, workflowSettings, auto,
                 collectionsTeam: f.Team, collectionsRouting: f.Routing, collectionsTowerResolver: resolver, assignmentHistory: f.History);
@@ -200,6 +202,7 @@ public class CollectionsTowerAssignmentTests
         var entry = Assert.Single(f.History.Entries);
         Assert.Equal((TicketAssignmentKind.Automatic, f.CsAgent, f.Alice, (Guid?)null), (entry.Kind, entry.PreviousEmployeeId, entry.NewEmployeeId, entry.ChangedByEmployeeId));
         Assert.Equal(f.Collections.DepartmentId, entry.DepartmentId);
+        Assert.Equal(November, entry.ChangedAtUtc);                      // when
         Assert.Contains(f.Audit.Entries, a => a.Action == "AutoAssign" && a.AfterValue!.Contains("Mode=CollectionsTower"));
     }
 
@@ -240,17 +243,88 @@ public class CollectionsTowerAssignmentTests
     }
 
     [Fact]
-    public async Task ATicketWithoutAVerifiedProjectAndUnit_IsNotRoutedByName()
+    public async Task ATicketWithoutAVerifiedProjectAndUnit_IsNotRoutedByName_OrByATypedUnit()
     {
         var f = Fixture.Create();
         await f.ActivateAsync(f.Alice, 2026, 11, 1);
-        var ticket = Ticket.CreateUnverified(
-            "TG-MANUAL-0001", f.CallCenter.DepartmentId, 5, (byte)PriorityLevel.Medium, "Payment query", November, manualProjectName: "Tiger Tower 140", manualUnitNumber: "1001");
-        await f.Tickets.AddAsync(ticket);
+        var typed = Ticket.CreateUnverified(
+            "TG-MANUAL-0001", f.CallCenter.DepartmentId, 5, (byte)PriorityLevel.Medium, "Payment query", November, manualProjectName: "Tiger Tower 140", manualUnitNumber: "TP140-1001");
+        var pact = Ticket.CreateFromExternalLookup(
+            "TG-PACT-0001", f.CallCenter.DepartmentId, "Pact", "T-77", "U-9", "Tiger Tower 140", "TP140-1001", 5, (byte)PriorityLevel.Medium, "Payment query", November);
+        await f.Tickets.AddAsync(typed);
+        await f.Tickets.AddAsync(pact);
+        typed.AssignTo(f.CsAgent);
 
+        await f.TransferToCollectionsAsync(typed);
+        await f.TransferToCollectionsAsync(pact);
+
+        Assert.Null(typed.CurrentOwnerEmployeeId);                       // not routed, and not left with the Call Center agent either
+        Assert.Null(pact.CurrentOwnerEmployeeId);
+        Assert.Empty(f.History.Entries);
+    }
+
+    [Fact]
+    public async Task NoValidTowerAssignment_ReleasesTheCallCenterAgent_ToTheCollectionsQueue()
+    {
+        var f = Fixture.Create();                                         // nobody holds any tower
+        var ticket = await f.CallCenterTicketAsync(owner: f.CsAgent);
+        var (status, priority, sla) = (ticket.TicketStatus, ticket.PriorityId, ticket.SlaState);
+
+        var result = await f.TransferToCollectionsAsync(ticket);
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(f.Collections.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                       // in the Collections queue, not with the Call Center agent
+        Assert.Empty(f.TicketAssignments.Added);                          // (the agent's own row is superseded; no new owner row exists)
+        Assert.Equal((status, priority, sla), (ticket.TicketStatus, ticket.PriorityId, ticket.SlaState));
+        Assert.Contains(f.Audit.Entries, a => a.Action == "CollectionsAutoAssignSkipped" && a.BeforeValue == f.CsAgent.ToString() && a.AfterValue!.Contains("ReleasedToCollectionsQueue"));
+        Assert.Contains(f.Audit.Entries, a => a.Action == "Transfer");   // the transfer audit is unchanged
+    }
+
+    [Fact]
+    public async Task AnUnmappedProject_ReleasesTheAgent_AndALaterManualAssignmentStillWorks()
+    {
+        var f = Fixture.Create();
+        var ticket = await f.CallCenterTicketAsync(crmProjectId: 999, owner: f.CsAgent);
         await f.TransferToCollectionsAsync(ticket);
-
         Assert.Null(ticket.CurrentOwnerEmployeeId);
+
+        var result = await f.Assignments.AssignAsync(f.Alice, [Roles.DepartmentEmployee], ticket.TicketId, new AssignTicketRequestDto(f.Bob, []));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(f.Bob, ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task EnteringCollectionsFromAnotherDepartment_KeepsItsOwner_AndRoutesAnUnownedTicketByTower()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);
+        var owned = await f.CallCenterTicketAsync(owner: f.Outsider);
+        var unowned = await f.CallCenterTicketAsync();
+        foreach (var t in new[] { owned, unowned }) t.TransferToDepartment(f.Collections.DepartmentId, preserveOwner: true);
+
+        var keep = await f.Routing.RouteAsync(owned, departmentEntry: true, fromCallCenter: false, November, Guid.NewGuid());
+        var route = await f.Routing.RouteAsync(unowned, departmentEntry: true, fromCallCenter: false, November, Guid.NewGuid());
+
+        Assert.Equal(CollectionsRoutingOutcome.OwnerKept, keep.Outcome);
+        Assert.Equal(f.Outsider, owned.CurrentOwnerEmployeeId);
+        Assert.Equal(CollectionsRoutingOutcome.Assigned, route.Outcome);
+        Assert.Equal(f.Alice, unowned.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task TheCsAgentRotation_NeverGivesACollectionsTicketToACallCenterAgent_ButStillWorksElsewhere()
+    {
+        var f = Fixture.Create();
+        var collectionsTicket = await f.CallCenterTicketAsync();
+        collectionsTicket.TransferToDepartment(f.Collections.DepartmentId);
+
+        var result = await f.AutoAssignment.EnsureCsAgentAsync(collectionsTicket, null, AutoAssignmentTrigger.Backfill, November, Guid.NewGuid());
+
+        Assert.Equal(AutoAssignmentOutcome.NotApplicable, result.Outcome);
+        Assert.Null(collectionsTicket.CurrentOwnerEmployeeId);
+        Assert.Empty(f.TicketAssignments.Added);
     }
 
     [Fact]
@@ -283,9 +357,10 @@ public class CollectionsTowerAssignmentTests
         var manual = f.History.Entries.Last();
         Assert.Equal((TicketAssignmentKind.Manual, f.Alice, f.Bob, (Guid?)f.Alice, "Alice is on leave"), (manual.Kind, manual.PreviousEmployeeId, manual.NewEmployeeId, manual.ChangedByEmployeeId, manual.Reason));
         Assert.Equal("140", manual.TowerCode);
+        Assert.Equal(November, manual.ChangedAtUtc);
 
         // A later automatic attempt while the ticket stays in Collections leaves the manual choice alone.
-        var retry = await f.Routing.RouteAsync(ticket, departmentEntry: false, November, Guid.NewGuid());
+        var retry = await f.Routing.RouteAsync(ticket, departmentEntry: false, fromCallCenter: false, November, Guid.NewGuid());
         Assert.Equal(CollectionsRoutingOutcome.ManualAssignmentKept, retry.Outcome);
         Assert.Equal(f.Bob, ticket.CurrentOwnerEmployeeId);
     }

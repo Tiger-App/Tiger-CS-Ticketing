@@ -410,10 +410,11 @@ public sealed class TicketAssignmentAppService(
             }
         }
         else if (collectionsRouting is not null
-            && await autoAssignmentService.IsCallCenterDepartmentAsync(previousDepartmentId, cancellationToken)
-            && (await collectionsRouting.RouteAsync(ticket, departmentEntry: true, now, correlationId, cancellationToken)).Handled)
+            && (await collectionsRouting.RouteAsync(
+                ticket, departmentEntry: true, fromCallCenter: await autoAssignmentService.IsCallCenterDepartmentAsync(previousDepartmentId, cancellationToken),
+                now, correlationId, cancellationToken)).Handled)
         {
-            // Call Center -> Collections: the collector responsible for the unit's tower this month took it, or (unknown tower / nobody assigned) it stays for manual handling.
+            // Into Collections: the collector responsible for the unit's tower this month took it, or (unknown tower / nobody assigned) it waits in the Collections queue.
             // Tower routing owns this decision, so neither the department rule nor the CS Agent rotation picks someone for it.
         }
         else if (ticket.CurrentOwnerEmployeeId is null)

@@ -68,7 +68,8 @@ public sealed class TicketClassificationAppService(
     IDepartmentRepository? departmentRepository = null,
     TicketAutoAssignmentService? autoAssignmentService = null,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
-    DefaultClassificationService? defaultClassification = null)
+    DefaultClassificationService? defaultClassification = null,
+    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null)
 {
     public async Task<TicketMutationResult> ClassifyAsync(
         Guid callerEmployeeId,
@@ -294,7 +295,13 @@ public sealed class TicketClassificationAppService(
                     afterValue: $"DepartmentId={category.DepartmentId};Reason={(replacing ? "Reclassified to" : "Call Center selected")} category {category.CategoryId}",
                     correlationId, cancellationToken);
 
-                if (ticket.CurrentOwnerEmployeeId is null)
+                // Into Collections the unit's tower decides (collector, or the Collections queue); the rule/rotation below never picks someone for it.
+                var collectionsRouted = collectionsRouting is not null
+                    && (await collectionsRouting.RouteAsync(
+                        ticket, departmentEntry: true, fromCallCenter: await autoAssignmentService!.IsCallCenterDepartmentAsync(fromDepartmentId, cancellationToken),
+                        now, correlationId, cancellationToken)).Handled;
+
+                if (!collectionsRouted && ticket.CurrentOwnerEmployeeId is null)
                 {
                     var configured = await autoAssignmentService!.ApplyAsync(
                         ticket, now, correlationId, AutoAssignmentTrigger.CategoryRouted, cancellationToken);

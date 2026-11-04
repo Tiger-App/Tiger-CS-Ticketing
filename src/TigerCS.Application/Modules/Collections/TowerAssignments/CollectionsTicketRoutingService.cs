@@ -24,6 +24,9 @@ public enum CollectionsRoutingOutcome
     /// <summary>The responsible collector is no longer an active Collections employee. Left for manual handling.</summary>
     CollectorUnavailable,
 
+    /// <summary>The ticket entered Collections from a department other than the Call Center with an owner already: that owner is kept (the existing transfer rule) and tower routing does not override it.</summary>
+    OwnerKept,
+
     /// <summary>Someone assigned the ticket by hand while it was in Collections: never overwritten.</summary>
     ManualAssignmentKept
 }
@@ -51,15 +54,19 @@ public sealed class CollectionsTicketRoutingService(
 {
     /// <param name="ticket">The ticket, already moved into its new department.</param>
     /// <param name="departmentEntry">True when the ticket has just entered Collections (a new stint): earlier manual assignments belong to a previous stint and do not block it.</param>
+    /// <param name="fromCallCenter">True when the ticket came from the Call Center: its Call Center agent never stays the owner in Collections - a collector replaces them, or the ticket is released to the Collections queue.</param>
     /// <param name="nowUtc">The current UTC time (also picks the month whose assignments apply).</param>
     /// <param name="correlationId">Ties the audit entries to the surrounding operation.</param>
     /// <param name="cancellationToken">Cancellation.</param>
     public async Task<CollectionsRoutingResult> RouteAsync(
-        Ticket ticket, bool departmentEntry, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default)
+        Ticket ticket, bool departmentEntry, bool fromCallCenter, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         if (!await team.IsCollectionsDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken))
             return new(CollectionsRoutingOutcome.NotApplicable);
+
+        if (departmentEntry && !fromCallCenter && ticket.CurrentOwnerEmployeeId is not null)
+            return new(CollectionsRoutingOutcome.OwnerKept, ticket.CurrentOwnerEmployeeId);
 
         if (!departmentEntry
             && await history.GetLatestAsync(ticket.TicketId, cancellationToken) is { Kind: TicketAssignmentKind.Manual } manual
@@ -68,17 +75,17 @@ public sealed class CollectionsTicketRoutingService(
 
         var resolution = await resolver.ResolveAsync(ticket, cancellationToken);
         if (resolution.Tower is not { } tower)
-            return await LeftInQueueAsync(ticket, CollectionsRoutingOutcome.TowerUnresolved, resolution.Reason, correlationId, cancellationToken);
+            return await LeftInQueueAsync(ticket, CollectionsRoutingOutcome.TowerUnresolved, resolution.Reason, fromCallCenter, nowUtc, correlationId, cancellationToken);
 
         var (year, month) = BusinessMonth(nowUtc);
         var row = await towerAssignments.GetActivePrimaryAsync(tower.TowerId, year, month, cancellationToken);
         if (row is null)
             return await LeftInQueueAsync(ticket, CollectionsRoutingOutcome.NoActiveAssignment,
-                $"Tower {tower.TowerCode} has no active collector for {year}-{month:00}.", correlationId, cancellationToken);
+                $"Tower {tower.TowerCode} has no active collector for {year}-{month:00}.", fromCallCenter, nowUtc, correlationId, cancellationToken);
 
         if (!await team.IsActiveMemberAsync(row.EmployeeId, ticket.CurrentDepartmentId, cancellationToken))
             return await LeftInQueueAsync(ticket, CollectionsRoutingOutcome.CollectorUnavailable,
-                $"The collector of tower {tower.TowerCode} for {year}-{month:00} is not an active Collections employee.", correlationId, cancellationToken);
+                $"The collector of tower {tower.TowerCode} for {year}-{month:00} is not an active Collections employee.", fromCallCenter, nowUtc, correlationId, cancellationToken);
 
         var collector = row.EmployeeId;
         if (ticket.CurrentOwnerEmployeeId == collector)
@@ -106,12 +113,23 @@ public sealed class CollectionsTicketRoutingService(
     public (int Year, int Month) BusinessMonth(DateTime utc) => CollectionsMonths.Of(utc, options.TimeZoneId);
 
     private async Task<CollectionsRoutingResult> LeftInQueueAsync(
-        Ticket ticket, CollectionsRoutingOutcome outcome, string reason, Guid correlationId, CancellationToken cancellationToken)
+        Ticket ticket, CollectionsRoutingOutcome outcome, string reason, bool releaseCallCenterOwner, DateTime nowUtc, Guid correlationId,
+        CancellationToken cancellationToken)
     {
+        var previousOwner = ticket.CurrentOwnerEmployeeId;
+        // No collector can be named: the ticket must wait in the Collections queue, not stay with the Call Center agent who transferred it. Only the owner
+        // pointer and the current assignment row change (the row is superseded, never deleted); status, priority and SLA are untouched.
+        var released = releaseCallCenterOwner && previousOwner is not null;
+        if (released)
+        {
+            (await ticketAssignments.GetCurrentAsync(ticket.TicketId, cancellationToken))?.MarkSuperseded();
+            ticket.ReleaseOwner();
+        }
+
         await auditWriter.WriteAsync(
             actorEmployeeId: null, "CollectionsAutoAssignSkipped", "Ticket", ticket.TicketId.ToString(),
-            beforeValue: ticket.CurrentOwnerEmployeeId?.ToString() ?? "DepartmentQueue",
-            afterValue: $"Outcome={outcome};Reason={reason}", correlationId, cancellationToken);
+            beforeValue: previousOwner?.ToString() ?? "DepartmentQueue",
+            afterValue: $"Outcome={outcome};Reason={reason};Result={(released ? "ReleasedToCollectionsQueue" : "CollectionsQueue")}", correlationId, cancellationToken);
         return new(outcome, null, reason);
     }
 }

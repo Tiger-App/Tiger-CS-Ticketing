@@ -122,7 +122,8 @@ public sealed class TicketAutoAssignmentService(
     IUserAccountManager? accountManager = null,
     IServiceIdentityRegistry? serviceIdentities = null,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
-    ITicketNoteRepository? ticketNoteRepository = null)
+    ITicketNoteRepository? ticketNoteRepository = null,
+    TigerCS.Application.Modules.Collections.CollectionsOptions? collectionsOptions = null)
 {
     /// <summary>
     /// Runs inside the caller's creation transaction, after the ticket row
@@ -403,6 +404,16 @@ public sealed class TicketAutoAssignmentService(
         if (ticket.CurrentOwnerEmployeeId is { } existing)
         {
             return new AutoAssignmentResult(AutoAssignmentOutcome.AlreadyAssigned, existing);
+        }
+
+        // A Collections ticket is owned by its tower's collector or waits in the Collections queue for a person to assign it; the shared CS Agent rotation
+        // (new tickets, the backfill, the retry) never gives it to a Call Center agent.
+        if (collectionsOptions is not null
+            && departmentRepository is not null
+            && await departmentRepository.GetByIdAsync(ticket.CurrentDepartmentId, cancellationToken) is { } currentDepartment
+            && string.Equals(currentDepartment.Code, collectionsOptions.CollectionsDepartmentCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.NotApplicable);
         }
 
         if (await RestorePreviousCsAgentAsync(ticket, preferredOwnerEmployeeId, trigger, nowUtc, correlationId, cancellationToken) is { } restored)

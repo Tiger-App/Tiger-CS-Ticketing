@@ -16,15 +16,13 @@ public sealed record ResolvedTower(int TowerId, string TowerCode, string TowerNa
 /// Finds the tower of the unit a ticket was raised for - the unit of THAT request, not any unit the customer owns. Only verified identifiers are used:
 /// <list type="bullet">
 /// <item>a CRM Buyer ticket: its CRM <c>ProjectId</c> through the verified project mapping (<see cref="ICollectionsCrmProjectMap"/>) to the tower code, then the local tower (<c>CollectionsTowers.TowerId</c>);</item>
-/// <item>a PACT ticket: the PACT unit code the agent selected (<c>TP140-1001</c> carries its tower code before the first hyphen);</item>
-/// <item>anything else (a project name typed by hand, no unit at all) is unresolved. Names are never matched.</item>
+/// <item>anything else is unresolved: a PACT-only ticket (its project/unit text is an editable snapshot, not a verified project id), a project or unit typed by hand, no unit at all.
+/// Names and typed unit numbers are never matched.</item>
 /// </list>
 /// An unmapped project, several different tower codes, an unknown tower or one that exists under two companies is unresolved too.
 /// </summary>
 public sealed class CollectionsTicketTowerResolver(ICollectionsCrmProjectMap projectMap, ICollectionsTowerCatalog towers)
 {
-    public const string PactSource = "Pact";
-
     public async Task<TicketTowerResolution> ResolveAsync(Ticket ticket, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(ticket);
@@ -49,15 +47,9 @@ public sealed class CollectionsTicketTowerResolver(ICollectionsCrmProjectMap pro
             var companies = rows.Select(r => r.CompanyId).Distinct().ToList();
             if (companies is [{ } onlyCompany]) companyHint = onlyCompany;
         }
-        else if (string.Equals(ticket.CustomerVerificationSource, PactSource, StringComparison.OrdinalIgnoreCase)
-                 && ticket.ManualUnitNumber is { } pactUnit && pactUnit.Contains('-') && CollectionsTowerNumber.Parse(pactUnit) is { } pactTower)
-        {
-            unit = pactUnit.Trim();
-            towerCode = pactTower;
-        }
         else
         {
-            return TicketTowerResolution.Unresolved("The ticket carries no verified project and unit.", ticket.ManualUnitNumber ?? ticket.CrmBuyerUnitNumber);
+            return TicketTowerResolution.Unresolved("The ticket carries no verified CRM project and unit.", ticket.ManualUnitNumber);
         }
 
         IReadOnlyList<Dto.CollectionsTowerDto> catalogue;

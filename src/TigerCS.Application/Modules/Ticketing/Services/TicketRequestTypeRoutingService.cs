@@ -94,7 +94,8 @@ public sealed class TicketRequestTypeRoutingService(
     SlaDueDateService slaDueDateService,
     ITicketStatusHistoryRepository statusHistoryRepository,
     IAuditEntryWriter auditWriter,
-    ITicketWorkflowEventRepository workflowEventRepository)
+    ITicketWorkflowEventRepository workflowEventRepository,
+    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null)
 {
     /// <summary>
     /// The Category that pairs with a request type under the only rule the data model has: an active category of the request type's
@@ -265,7 +266,16 @@ public sealed class TicketRequestTypeRoutingService(
         // (and that did not move) keeps its owner.
         var assignmentOutcome = "OwnerKept";
         Guid? assignedEmployeeId = ticket.CurrentOwnerEmployeeId;
-        if (ticket.CurrentOwnerEmployeeId is null)
+        // Moved into Collections by request-type routing: the unit's tower decides (collector, or the Collections queue); an owner the ticket already has is kept.
+        var collectionsRouted = transferred
+            && collectionsRouting is not null
+            && (await collectionsRouting.RouteAsync(ticket, departmentEntry: true, fromCallCenter: false, nowUtc, correlationId, cancellationToken)).Handled;
+        if (collectionsRouted)
+        {
+            assignmentOutcome = "CollectionsTower";
+            assignedEmployeeId = ticket.CurrentOwnerEmployeeId;
+        }
+        else if (ticket.CurrentOwnerEmployeeId is null)
         {
             var trigger = transferred ? AutoAssignmentTrigger.DepartmentTransfer : AutoAssignmentTrigger.RequestTypeClassified;
             var assignment = inCallCenter
