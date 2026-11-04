@@ -90,7 +90,8 @@ public sealed class SlaBreachProcessor(
     /// </param>
     /// <param name="settlingClosure">
     /// True only for the system closure that Resolves and Closes in one step: the ticket is already Closed in memory, but this is the single
-    /// moment its Resolution SLA outcome can still be settled (nothing may touch a Closed ticket afterwards).
+    /// moment its Resolution SLA outcome can still be settled (nothing may touch a Closed ticket afterwards). On time it records Met; late it
+    /// records the Resolution breach (flag, SlaState, history, audit) but, because the ticket is closing, no Level 2 escalation.
     /// </param>
     public async Task<SlaBreachProcessingOutcome> ProcessDeadlineAsync(
         Ticket ticket,
@@ -154,14 +155,6 @@ public sealed class SlaBreachProcessor(
             return SlaBreachProcessingOutcome.NotBreached;
         }
 
-        if (settlingClosure)
-        {
-            // A late resolution would need a breach flag, an escalation and a status-history row on a ticket that is already Closed, which
-            // the closed-ticket immutability rule forbids (the domain throws). Settling a closure may therefore only ever record Met;
-            // a late system closure is left exactly as before (nothing written).
-            return SlaBreachProcessingOutcome.TicketClosed;
-        }
-
         // SLA-Architecture.md §15 — the claim that makes the scheduled job
         // and the safety sweep safe to overlap. Everything below this line
         // happens exactly once per due event.
@@ -200,7 +193,13 @@ public sealed class SlaBreachProcessor(
             correlationId,
             cancellationToken);
 
-        await RaiseAutomaticLevel2Async(ticket, dueAtUtc, deadlineType, nowUtc, correlationId, cancellationToken);
+        // A ticket that is closing in this same step cannot be escalated (the domain refuses to raise the level of a Closed ticket, and
+        // there is nobody left to act on it), but the breach itself is still recorded: a system closure that landed after the deadline
+        // is a late resolution exactly like a person's, and must not read as "Running" forever.
+        if (!settlingClosure)
+        {
+            await RaiseAutomaticLevel2Async(ticket, dueAtUtc, deadlineType, nowUtc, correlationId, cancellationToken);
+        }
 
         return SlaBreachProcessingOutcome.BreachRecorded;
     }

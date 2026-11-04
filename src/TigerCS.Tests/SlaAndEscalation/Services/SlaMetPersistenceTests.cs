@@ -127,10 +127,14 @@ public class SlaMetPersistenceTests
         Assert.Equal(SlaState.Met, h.Ticket.SlaState);
     }
 
+    /// <summary>
+    /// A system closure that lands after the Resolution deadline is a late resolution exactly like a person's. It used to leave the ticket at
+    /// Running with no breach (the Closed guard returned first). The breach is now recorded - flag, ticket state, history, audit - while the
+    /// closing ticket is NOT escalated (the domain forbids raising the level of a Closed ticket) and the First Response clock is untouched.
+    /// </summary>
     [Fact]
-    public async Task SystemClosure_ResolvedAfterTheResolutionDeadline_NeverClaimsMet_AndDoesNotTouchTheClosedTicket()
+    public async Task SystemClosure_ResolvedAfterTheResolutionDeadline_RecordsTheBreach_WithoutEscalatingTheClosedTicket()
     {
-        // Recording a breach would mutate a Closed ticket (forbidden); the closure only ever settles Met, so a late one stays as it was.
         var h = await CreateAsync(CreatedAt.AddHours(8), CreatedAt.AddHours(1), CreatedAt.AddHours(6));
         h.Ticket.RecordFirstHumanResponse(CreatedAt.AddMinutes(30));
 
@@ -138,8 +142,26 @@ public class SlaMetPersistenceTests
             Guid.NewGuid(), h.Ticket.TicketId, ResolutionOutcome.Resolved, "Document delivered", "detail");
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
-        Assert.NotEqual(SlaState.Met, h.Ticket.SlaState);
+        Assert.Equal(TicketStatus.Closed, h.Ticket.TicketStatus);
+        Assert.Equal(SlaState.Breached, h.Ticket.SlaState);
+        var instance = (await h.Sla.SlaInstances.GetCurrentAsync(h.Ticket.TicketId))!;
+        Assert.True(instance.ResolutionBreached);
+        Assert.False(instance.FirstResponseBreached);
+        Assert.Equal(EscalationLevel.None, h.Ticket.EscalationLevel);
         Assert.Empty(h.Sla.Escalations.All);
+        Assert.Contains(h.Sla.StatusHistory.Added, e => e.Dimension == TicketStatusDimension.SlaState && e.NewValue == (byte)SlaState.Breached && e.ActorIsSystem);
+        Assert.Contains(h.Sla.Audit.Entries, e => e.Action == "DetectSlaBreach");
+    }
+
+    [Fact]
+    public async Task SystemClosure_ResolvedExactlyOnTheDeadline_IsMet_NotBreached()
+    {
+        var h = await CreateAsync(CreatedAt.AddHours(6), CreatedAt.AddHours(3), CreatedAt.AddHours(6));
+
+        await h.Service.CloseForDocumentDeliveryAsync(
+            Guid.NewGuid(), h.Ticket.TicketId, ResolutionOutcome.Resolved, "Document delivered", "detail");
+
+        Assert.Equal(SlaState.Met, h.Ticket.SlaState);
     }
 
     [Fact]
