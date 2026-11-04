@@ -331,14 +331,15 @@ public class GenesysOwnershipLifecycleTests
     // ---- 8. Mapping problems ----------------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task UnmappedAgent_NeverTakesTheTicket_AndIsFlaggedForAPerson()
+    public async Task UnmappedAgent_NeverTakesTheTicket_IsFlagged_AndTheExistingCsAgentIsPreserved()
     {
         var w = NewWorld();
         var chat = await ChatAsync(w, "c-unmapped", humanFollowUp: true);
 
         await ConnectAsync(w, chat, "g-not-in-tigercs");
 
-        Assert.Null(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);                                   // the provisional owner is released, nobody else is guessed
+        // The unmapped person never becomes the owner; the ticket is never left without a CS Agent (an eligible CS Agent owns it).
+        Assert.Contains(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId, w.Agents.Select(a => (Guid?)a.Id));
         Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == chat.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note!.Contains("g-not-in-tigercs"));
     }
 

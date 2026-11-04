@@ -89,19 +89,18 @@ public class GenesysHumanAcceptedCallRoutingTests
     }
 
     [Fact]
-    public async Task PhoneCallNamingAnUnmappedAgent_WaitsInTheCallCenterQueue_Flagged_AndIsNeverGivenToAnotherAgent()
+    public async Task PhoneCallNamingAnUnmappedAgent_IsFlagged_AndGetsACsAgentFromTheSharedRotation()
     {
         var s = Build();
 
-        // A voice call picked up by an agent TigerCS cannot map: the person who answered cannot be given the ticket, and nobody else
-        // may be handed it by Round Robin. It waits, unowned, in the Call Center queue and is flagged for manual assignment.
+        // A voice call picked up by an agent TigerCS cannot map: the person who answered cannot be given the ticket. It is flagged for staff
+        // AND (final rule) dealt to the next CS Agent of the shared rotation - never left unassigned.
         var ticket = await IngestAsync(s, "ph-unmapped", GenesysChannel.Phone, agentId: "some-unmapped-id");
 
         Assert.Equal(s.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(s.Accounting.DepartmentId, ticket.OriginatingDepartmentId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
         Assert.Contains(s.F.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
-        Assert.DoesNotContain(s.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticket.TicketId.ToString());
     }
 
     [Theory]
@@ -212,7 +211,10 @@ public class GenesysHumanAcceptedCallRoutingTests
             "no-pullback", Routing: new GenesysRoutingUpdateDto(AgentId: HumanGenesysId),
             Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow, "customer disconnected")));
 
+        // The person's transfer stands (department unchanged, not pulled back to the Call Center). This test clears the owner as it transfers, so
+        // under the final rule the still-unowned human ticket is given a CS Agent from the shared rotation - in place, never moved.
         Assert.Equal(s.Accounting.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(owner, ticket.CurrentOwnerEmployeeId);
+        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        _ = owner;
     }
 }

@@ -233,6 +233,24 @@ public sealed class GenesysAgentHandoffAppService(
                 }
             }
         }
+        else if (autoAssignmentService is not null
+            && ticket.CurrentOwnerEmployeeId is null
+            && ticket.TicketStatus is not (TicketStatus.Resolved or TicketStatus.Closed))
+        {
+            // No routing was needed - the ticket is ALREADY in the Call Center (or an agent-to-agent transfer is in progress) - but nobody owns
+            // it. A human was requested, so it must not wait unassigned: a confirmed answering agent first (only for a ticket already in the
+            // Call Center, so nothing is moved), otherwise the next CS Agent of the shared rotation. Failure is recorded, never silent.
+            if (await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
+                && await ResolveAnsweringAgentAsync(connectedAgentId, interaction, cancellationToken) is { } answeredInPlace)
+            {
+                await autoAssignmentService.ApplyAnsweringAgentAsync(
+                    ticket, answeredInPlace, "HandoffRequest", now, requestCorrelationId, callerEmployeeId,
+                    routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+            }
+
+            await autoAssignmentService.EnsureCsAgentAsync(
+                ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.CallCenterIntake, now, requestCorrelationId, cancellationToken);
+        }
 
         await workflowEventRepository.AddAsync(
             new TicketWorkflowEvent(

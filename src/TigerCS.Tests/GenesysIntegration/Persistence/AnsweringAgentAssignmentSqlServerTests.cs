@@ -303,7 +303,7 @@ public sealed class AnsweringAgentAssignmentSqlServerTests : IDisposable
     }
 
     [VisibilitySqlServerFact]
-    public async Task AUnmappedAnsweringAgent_LeavesTheRealTicketUnownedInTheQueue_WithOneFlag_EvenWhenRedelivered()
+    public async Task AUnmappedAnsweringAgent_FlagsOnce_AndTheRealTicketGetsOneCsAgent_EvenWhenRedelivered()
     {
         var seed = CreateAndSeedDatabase();
         var (ticketId, _) = AddTicket(seed, 1);
@@ -312,12 +312,12 @@ public sealed class AnsweringAgentAssignmentSqlServerTests : IDisposable
         {
             using var db = CreateContext();
             var result = await ConnectAsync(Compose(db), db, ticketId, "genesys-nobody");
-            Assert.True(result.Outcome is AnswerAssignmentOutcome.QueuedForManualAssignment or AnswerAssignmentOutcome.AlreadyFlagged);
+            Assert.True(result.Outcome is AnswerAssignmentOutcome.AssignedByRoundRobinFallback or AnswerAssignmentOutcome.AlreadyFlagged or AnswerAssignmentOutcome.HumanOwnerKept);
         }
 
         var (owner, rows) = Read(ticketId);
-        Assert.Null(owner);
-        Assert.DoesNotContain(rows, r => r.IsCurrent);
+        Assert.NotNull(owner);                                            // final rule: never left unassigned (shared rotation); redelivery does not re-deal
+        Assert.Single(rows, r => r.IsCurrent);
         using var read = CreateContext();
         Assert.Equal(seed.CallCenterId, read.Tickets.AsNoTracking().Single(t => t.TicketId == ticketId).CurrentDepartmentId);
         Assert.Single(read.TicketWorkflowEvents.AsNoTracking().ToList(), e => e.TicketId == ticketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);

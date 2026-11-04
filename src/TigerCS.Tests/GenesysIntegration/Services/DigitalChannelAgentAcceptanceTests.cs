@@ -133,34 +133,34 @@ public class DigitalChannelAgentAcceptanceTests
 
     [Theory]
     [MemberData(nameof(DigitalChannels))]
-    public async Task AcceptingAgentWhoIsNotACsAgent_LeavesTheTicketInTheCallCenterQueue_Flagged_NoRoundRobin(GenesysChannel channel)
+    public async Task AcceptingAgentWhoIsNotACsAgent_IsFlagged_AndTheSharedRotationGivesTheTicketACsAgent(GenesysChannel channel)
     {
         var w = NewWorld();
         // A Call Center member with an operational role - but not CS Agent. Call Center tickets belong to CS Agents only.
-        w.F.AddAgent("g-dept-employee", "Dept Employee", roles: [Roles.DepartmentEmployee]);
+        var employee = w.F.AddAgent("g-dept-employee", "Dept Employee", roles: [Roles.DepartmentEmployee]);
         var ticketId = await IngestAsync(w, channel, $"conv-{channel}-ineligible");
 
         await AcceptAsync(w, ticketId, $"conv-{channel}-ineligible", "g-dept-employee");
 
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        AssertSingleOwner(w, ticketId, null);
+        var owner = w.Ticket(ticketId).CurrentOwnerEmployeeId;
+        Assert.NotEqual(employee, owner);
+        Assert.Contains(owner, w.Agents.Select(a => (Guid?)a.Id));                           // an eligible CS Agent, never unassigned
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
         Assert.Equal(1, FlagCount(w, ticketId));
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.AfterValue!.Contains("Issue=NotCsAgent"));
-        Assert.True(CursorUntouched(w));
-        Assert.DoesNotContain(w.F.Tickets.All, t => w.Agents.Any(a => a.Id == t.CurrentOwnerEmployeeId));
     }
 
     [Fact]
-    public async Task PhoneCallAnsweredByANonCsAgent_IsFlagged_NotAssigned()
+    public async Task PhoneCallAnsweredByANonCsAgent_IsFlagged_AndAnEligibleCsAgentOwnsIt()
     {
         var w = NewWorld();
         w.F.AddAgent("g-dept-head", "Dept Head", roles: [Roles.DepartmentHead]);
 
         var ticketId = await IngestAsync(w, GenesysChannel.Phone, "conv-phone-head", "g-dept-head");
 
-        AssertSingleOwner(w, ticketId, null);
+        Assert.Contains(w.Ticket(ticketId).CurrentOwnerEmployeeId, w.Agents.Select(a => (Guid?)a.Id));
         Assert.Equal(1, FlagCount(w, ticketId));
-        Assert.True(CursorUntouched(w));
     }
 
     [Theory]

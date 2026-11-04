@@ -846,7 +846,17 @@ public sealed class GenesysTicketUpdateAppService(
                 ticket, timeProvider.GetUtcNow().UtcDateTime, correlationId,
                 "Human follow-up required — routed to Call Center first", cancellationToken);
 
-        if (!changed && !routed)
+        // Routing declined (already in / passed through the Call Center, or an automatic owner that is kept) but the person who is needed still
+        // has no CS Agent: the shared rotation gives one. No-op for an owned / closed ticket; a failure is recorded once, never silent.
+        var ensured = autoAssignmentService is not null
+            && !routed
+            && ticket.CurrentOwnerEmployeeId is null
+            && (await autoAssignmentService.EnsureCsAgentAsync(
+                    ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.CallCenterIntake,
+                    timeProvider.GetUtcNow().UtcDateTime, correlationId, cancellationToken))
+                .Outcome is not (AutoAssignmentOutcome.AlreadyAssigned or AutoAssignmentOutcome.NotApplicable);
+
+        if (!changed && !routed && !ensured)
         {
             return;
         }

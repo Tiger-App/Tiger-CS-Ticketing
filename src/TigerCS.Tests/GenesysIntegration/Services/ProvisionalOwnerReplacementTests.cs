@@ -178,8 +178,10 @@ public class ProvisionalOwnerReplacementTests
 
         await ConnectAsync(w, ticketId, "c-xfer", AnotherAgent(w, provisional));
 
+        // The person's transfer stands: the department is unchanged and the connected agent does NOT take the ticket (no AssignOnAnswer). The setup
+        // above clears the owner, and the final rule is that a human-needed ticket is never left without a CS Agent, so the shared rotation gives it one.
         Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticketId.ToString());
     }
 

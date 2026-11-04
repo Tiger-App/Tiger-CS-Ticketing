@@ -108,8 +108,6 @@ public class CsAgentBackfillTests
             [CsAgentBackfillClass.Eligible] = await env.SeedAsync(env.Facilities),
             [CsAgentBackfillClass.PendingApproval] = await env.SeedAsync(env.Facilities, pendingApproval: true),
             [CsAgentBackfillClass.ActiveAiConversation] = await env.SeedAsync(env.Facilities, liveAi: true),
-            [CsAgentBackfillClass.AiEndedNoHumanNeed] = await env.SeedAsync(env.Facilities, aiEnded: true),
-            [CsAgentBackfillClass.HumanHandledNeedsManualReview] = await env.SeedAsync(env.Facilities, answeredBy: Guid.NewGuid()),
             [CsAgentBackfillClass.TooNew] = await env.SeedAsync(env.Facilities, created: Now.AddMinutes(-1)),
         };
 
@@ -118,12 +116,21 @@ public class CsAgentBackfillTests
             Assert.Equal(expected, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[ticket.TicketId], Now, env.Options));
         }
 
-        // A live AI conversation that DID ask for a person is human work; an AI-ended one is eligible only when the business opts in.
+        // A live AI conversation that DID ask for a person is human work.
         var asked = await env.SeedAsync(env.Facilities, liveAi: true, humanFollowUp: true);
         Assert.Equal(CsAgentBackfillClass.Eligible, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[asked.TicketId], Now, env.Options));
+
+        // Final rule: an AI conversation that ENDED without resolving/closing the ticket gets a CS Agent by default (opt OUT only to hold it back).
+        var aiEnded = await env.SeedAsync(env.Facilities, aiEnded: true);
+        Assert.True(new CsAgentBackfillOptions().IncludeAiEndedWithoutHuman);
+        Assert.Equal(CsAgentBackfillClass.Eligible, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[aiEnded.TicketId], Now, env.Options));
+        env.Options.IncludeAiEndedWithoutHuman = false;
+        Assert.Equal(CsAgentBackfillClass.AiEndedNoHumanNeed, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[aiEnded.TicketId], Now, env.Options));
         env.Options.IncludeAiEndedWithoutHuman = true;
-        Assert.Equal(CsAgentBackfillClass.Eligible,
-            CsAgentBackfillClassifier.Classify(env.Evidence.Rows[tickets[CsAgentBackfillClass.AiEndedNoHumanNeed].TicketId], Now, env.Options));
+
+        // A confirmed handling agent means a person is on it: eligible even inside a "live" conversation (never ActiveAiConversation).
+        var handled = await env.SeedAsync(env.Facilities, liveAi: true, answeredBy: env.Agents[0]);
+        Assert.Equal(CsAgentBackfillClass.Eligible, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[handled.TicketId], Now, env.Options));
 
         // Closed / Resolved / owned are never eligible, whatever else is true of them.
         var closed = env.Evidence.Rows[tickets[CsAgentBackfillClass.Eligible].TicketId] with { Status = TicketStatus.Closed };
@@ -244,10 +251,10 @@ public class CsAgentBackfillTests
         {
             await env.SeedAsync(env.Facilities, liveAi: true),
             await env.SeedAsync(env.Facilities, pendingApproval: true),
-            await env.SeedAsync(env.Facilities, answeredBy: Guid.NewGuid()),
-            await env.SeedAsync(env.Facilities, aiEnded: true),
+            await env.SeedAsync(env.Facilities, aiEnded: true),   // excluded only because this test holds AI-ended tickets back
             await env.SeedAsync(env.Facilities, created: Now.AddSeconds(-30)),
         };
+        env.Options.IncludeAiEndedWithoutHuman = false;
 
         foreach (var t in tickets)
         {
@@ -258,6 +265,97 @@ public class CsAgentBackfillTests
         Assert.Equal(0, env.UnitOfWork.SaveChangesCallCount);
         Assert.Empty(env.Assignments.Added);
         Assert.Empty(env.Rotation.Rows);   // the cursor was never even created
+    }
+
+    // ---- final business rules: confirmed handler, AI-ended, non-CS-agent handler ------------------------------------------------------
+
+    [Fact]
+    public async Task Backfill_GivesATicketToItsConfirmedHandlingCsAgent_WithoutMovingItOrAdvancingTheRotation()
+    {
+        var env = new Env(3);
+        (await env.Rotation.GetForUpdateAsync(env.CallCenter.DepartmentId, Now)).Advance(env.Agents[0], Now);
+        var handled = await env.SeedAsync(env.Facilities, answeredBy: env.Agents[2]);
+        var plain = await env.SeedAsync(env.Leasing);
+        var departmentBefore = handled.CurrentDepartmentId;
+
+        var preview = await env.Service().PreviewAsync(0, 10, env.Options);
+        var handledRow = preview.Rows.Single(r => r.TicketId == handled.TicketId);
+        Assert.Equal(env.Agents[2], handledRow.ProposedEmployeeId);
+        Assert.Equal(CsAgentBackfillSource.ConfirmedHandler, handledRow.ProposedSource);
+        Assert.Equal(env.Agents[1], preview.Rows.Single(r => r.TicketId == plain.TicketId).ProposedEmployeeId);   // the rotation was not consumed by the handler
+
+        var dry = await env.Service().TryBackfillAsync(handled.TicketId, "b", env.Options, dryRun: true);
+        Assert.Equal(env.Agents[2], dry.AssignedEmployeeId);
+        Assert.Null(handled.CurrentOwnerEmployeeId);
+
+        var live = await env.Service().TryBackfillAsync(handled.TicketId, "b", env.Options, dryRun: false);
+        var liveRr = await env.Service().TryBackfillAsync(plain.TicketId, "b", env.Options, dryRun: false);
+
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, live.Outcome);
+        Assert.Equal(CsAgentBackfillSource.ConfirmedHandler, live.Source);
+        Assert.Equal(env.Agents[2], handled.CurrentOwnerEmployeeId);
+        Assert.Equal(departmentBefore, handled.CurrentDepartmentId);                                  // never moved to the Call Center
+        Assert.Equal(env.Agents[1], plain.CurrentOwnerEmployeeId);                                    // cursor continued from agent 0, untouched by the handler
+        Assert.Equal(CsAgentBackfillSource.RoundRobin, liveRr.Source);
+        Assert.Contains(env.Audit.Entries, e => e.Action == "BackfillAssign" && e.AfterValue!.Contains("Source=ConfirmedHandler"));
+        Assert.Empty(env.Events.All);
+    }
+
+    [Fact]
+    public async Task Backfill_AHandlerWhoIsNotAnEligibleCsAgent_FallsBackToTheSharedRotation()
+    {
+        var env = new Env(2);
+        var supervisor = env.AddAgent(Roles.DepartmentEmployee);   // a department employee in the pool's department: never given tickets automatically
+        var outsider = Guid.NewGuid();                              // not a Call Center member at all
+        var a = await env.SeedAsync(env.Facilities, answeredBy: supervisor);
+        var b = await env.SeedAsync(env.Facilities, answeredBy: outsider);
+
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, (await env.Service().TryBackfillAsync(a.TicketId, "b", env.Options, false)).Outcome);
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, (await env.Service().TryBackfillAsync(b.TicketId, "b", env.Options, false)).Outcome);
+
+        Assert.Equal([env.Agents[0], env.Agents[1]], new[] { a.CurrentOwnerEmployeeId!.Value, b.CurrentOwnerEmployeeId!.Value });
+    }
+
+    [Fact]
+    public async Task Backfill_AssignsAiEndedTickets_ByDefault_ButNotALiveAiConversationOrAPendingApproval()
+    {
+        var env = new Env(2);
+        var ended = await env.SeedAsync(env.Facilities, aiEnded: true);
+        var live = await env.SeedAsync(env.Facilities, liveAi: true);
+        var approval = await env.SeedAsync(env.Facilities, pendingApproval: true);
+
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, (await env.Service().TryBackfillAsync(ended.TicketId, "b", env.Options, false)).Outcome);
+        Assert.Equal(CsAgentBackfillOutcome.Skipped, (await env.Service().TryBackfillAsync(live.TicketId, "b", env.Options, false)).Outcome);
+        Assert.Equal(CsAgentBackfillOutcome.Skipped, (await env.Service().TryBackfillAsync(approval.TicketId, "b", env.Options, false)).Outcome);
+        Assert.NotNull(ended.CurrentOwnerEmployeeId);
+        Assert.Null(live.CurrentOwnerEmployeeId);
+        Assert.Null(approval.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task Backfill_AfterAFullPass_NoEligibleTicketRemainsUnassigned_AndEveryOwnerIsACsAgent()
+    {
+        var env = new Env(3);
+        var worked = new[]
+        {
+            await env.SeedAsync(env.Facilities, TicketStatus.Open),
+            await env.SeedAsync(env.Leasing, TicketStatus.InProgress),
+            await env.SeedAsync(env.Facilities, aiEnded: true),
+            await env.SeedAsync(env.Leasing, answeredBy: env.Agents[1]),
+        };
+        var live = await env.SeedAsync(env.Facilities, liveAi: true);          // intentionally excluded
+        var approval = await env.SeedAsync(env.Leasing, pendingApproval: true);    // intentionally excluded
+
+        foreach (var row in (await env.Service().PreviewAsync(0, 50, env.Options)).Rows.Where(r => r.Class == CsAgentBackfillClass.Eligible))
+        {
+            Assert.Equal(CsAgentBackfillOutcome.Assigned, (await env.Service().TryBackfillAsync(row.TicketId, "b", env.Options, false)).Outcome);
+        }
+
+        Assert.All(worked, t => Assert.Contains(t.CurrentOwnerEmployeeId!.Value, env.Agents));   // every owner is a CS Agent, never a department employee
+        Assert.Equal(env.Agents[1], worked[3].CurrentOwnerEmployeeId);                           // the confirmed handler kept the ticket
+        Assert.Null(live.CurrentOwnerEmployeeId);
+        Assert.Null(approval.CurrentOwnerEmployeeId);
+        Assert.Equal(env.Facilities.DepartmentId, worked[0].CurrentDepartmentId);                // department untouched
     }
 
     [Fact]
