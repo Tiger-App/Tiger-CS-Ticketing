@@ -130,6 +130,29 @@ public sealed class ReceivablesTowerMultiSelectRenderTests
             Assert.Contains("collections-tower-multi.css", File.ReadAllText(Path.Combine(RepoRoot(), $"src/TigerCS.Web/Pages/Collections/{page}.cshtml")));
     }
 
+    /// <summary>The restyle must never leak: every selector in the picker's stylesheet is scoped to .tower-multi, so no other select on the site changes.</summary>
+    [Fact]
+    public void ThePickerStylesheet_IsScopedToTheComponent_AndUsesTheOfficialGold()
+    {
+        var css = File.ReadAllText(Path.Combine(RepoRoot(), "src/TigerCS.Web/wwwroot/css/collections-tower-multi.css"));
+        var noComments = Regex.Replace(css, @"/\*.*?\*/", "", RegexOptions.Singleline);
+        var selectors = Regex.Matches(noComments, @"(?:^|\})\s*([^{}@]+)\{", RegexOptions.Multiline).Select(m => m.Groups[1].Value);
+        foreach (var group in selectors)
+            foreach (var selector in group.Split(','))
+                Assert.StartsWith(".tower-multi", selector.Trim());
+        Assert.Contains("var(--tiger-gold)", css);
+        Assert.Contains("max-height: 240px", css);
+    }
+
+    /// <summary>Keyboard support: arrows walk the options, Escape closes; the selection of hidden (filtered-out) towers is never touched by a search.</summary>
+    [Fact]
+    public void ThePickerScript_SupportsKeyboardNavigation_AndNeverUnticksOnSearch()
+    {
+        var js = File.ReadAllText(Path.Combine(RepoRoot(), "src/TigerCS.Web/wwwroot/js/collections-tower-multi.js"));
+        foreach (var key in new[] { "ArrowDown", "ArrowUp", "Home", "End", "Escape" }) Assert.Contains($"'{key}'", js);
+        Assert.DoesNotContain(".checked = false", js.Substring(0, js.IndexOf("data-tower-clear", StringComparison.Ordinal)));   // typing in the search only toggles visibility
+    }
+
     private static string RepoRoot()
     {
         var dir = new DirectoryInfo(AppContext.BaseDirectory);

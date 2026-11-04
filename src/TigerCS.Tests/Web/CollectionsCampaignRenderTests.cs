@@ -16,12 +16,12 @@ public sealed class CollectionsCampaignRenderTests
         var html = await (await client.GetAsync("/Collections/Campaigns?stage=CurrentMonthReminder&towerId=7&businessDate=2026-10-14&search=3001")).Content.ReadAsStringAsync();
         Assert.Empty(api.Calls("/campaigns/preview"));
         Assert.Contains("data-results-idle", html); Assert.Contains("Preview Customers", html);
-        Assert.Contains("<input type=\"checkbox\" name=\"towerId\" value=\"7\" checked=\"checked\" /> <span>124 - Tower 124</span>", html);      // multi-select: ticked, shown with its name
+        Assert.Contains("<input type=\"checkbox\" name=\"towerId\" value=\"7\" checked=\"checked\" /> <span class=\"tower-multi__code\">124</span><span class=\"tower-multi__name\">Tower 124</span>", html);      // multi-select: ticked, shown with its name
         // Month and Year were redundant with the date range and are gone; Payment status and Project / Tower are the new controls.
         Assert.DoesNotContain("name=\"month\"", html); Assert.DoesNotContain("name=\"year\"", html);
         Assert.DoesNotContain("data-month-select", html); Assert.DoesNotContain("All months", html);
         Assert.Contains("name=\"paymentStatus\"", html); Assert.Contains("<option value=\"Both\" selected=\"selected\">Due and Overdue (both)</option>", html);
-        Assert.Contains("Project / Tower", html); Assert.Contains("All projects", html);
+        Assert.Contains("Project / Tower", html); Assert.Contains("All towers", html);
         Assert.Contains("name=\"dateFrom\"", html); Assert.Contains("name=\"dateTo\"", html);
         Assert.Contains("<option value=\"LastSixMonths\"", html);
         Assert.Contains("Minimum Total (AED)", html); Assert.Contains("name=\"minTotal\"", html); Assert.Contains("value=\"100\"", html);
