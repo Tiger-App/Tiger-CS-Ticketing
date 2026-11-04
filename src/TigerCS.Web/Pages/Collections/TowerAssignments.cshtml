@@ -1,0 +1,153 @@
+@page "/Collections/TowerAssignments"
+@model TigerCS.Web.Pages.Collections.TowerAssignmentsModel
+@using TigerCS.Web.Pages.Collections
+@using TigerCS.Web.Services.Api
+@{
+    ViewData["Title"] = "Tower assignments";
+    ViewData["ActiveNav"] = "collections";
+    Layout = "_Layout";
+}
+<link rel="stylesheet" href="~/css/collections-snapshot.css" asp-append-version="true" />
+<link rel="stylesheet" href="~/css/collections-tower-multi.css" asp-append-version="true" />
+<link rel="stylesheet" href="~/css/collections-tower-assignments.css" asp-append-version="true" />
+<div class="page receivables-workspace tower-assign">
+    <div class="page-header">
+        <div>
+            <p class="receivables-eyebrow">Collections</p>
+            <h1 class="page-title">Tower assignments</h1>
+        </div>
+        <div class="page-header__actions">
+            <a class="btn" href="/Collections/Receivables">Receivables</a>
+            <a class="btn" href="/Collections/Campaigns">Campaigns</a>
+        </div>
+    </div>
+
+    @if (Model.Notice is { } notice) { <div class="receivables-notice" role="status" data-ta-notice>@notice</div> }
+    @if (Model.Error is { } error) { <div class="receivables-notice receivables-notice--warning" role="alert" data-ta-error>@error</div> }
+
+    @if (Model.Data is not { } data)
+    {
+        <div class="panel"><div class="error-state" role="alert">@Model.LoadError</div></div>
+    }
+    else
+    {
+        var monthLabel = $"{TowerAssignmentsModel.MonthNames[data.Month - 1]} {data.Year}";
+        var editing = Model.EditEmployeeId is { } editId && data.CanManage ? data.Collectors.FirstOrDefault(c => c.EmployeeId == editId) : null;
+        <form class="filter-bar tower-assign__bar" method="get" action="/Collections/TowerAssignments">
+            <div class="field-group">
+                <label class="field-label" for="taMonth">Month</label>
+                <select class="field-select" id="taMonth" name="month">
+                    @for (var m = 1; m <= 12; m++) { <option value="@m" selected="@(m == data.Month)">@TowerAssignmentsModel.MonthNames[m - 1]</option> }
+                </select>
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="taYear">Year</label>
+                <input class="field-input" id="taYear" name="year" type="number" min="2000" max="2200" value="@data.Year" />
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="taSearch">Search</label>
+                <input class="field-input" id="taSearch" type="search" placeholder="Employee or tower" autocomplete="off" data-ta-search />
+            </div>
+            <div class="field-group"><button class="btn" type="submit">Show</button></div>
+        </form>
+
+        @if (data.CanManage)
+        {
+            <div class="tower-assign__actions">
+                <form method="post" asp-page-handler="Copy" data-ta-confirm="Copy last month's assignments into @monthLabel as drafts? Towers that already have a collector are skipped.">
+                    <input type="hidden" name="year" value="@data.Year" /><input type="hidden" name="month" value="@data.Month" />
+                    <button class="btn btn-sm" type="submit">Copy from previous month</button>
+                </form>
+                <form method="post" asp-page-handler="Activate">
+                    <input type="hidden" name="year" value="@data.Year" /><input type="hidden" name="month" value="@data.Month" />
+                    <button class="btn btn-gold btn-sm" type="submit" disabled="@(data.DraftCount == 0)">Activate drafts@(data.DraftCount > 0 ? $" ({data.DraftCount})" : "")</button>
+                </form>
+                <span class="receivables-meta">Only Active assignments route tickets. Tickets already in Collections are never reassigned automatically.</span>
+            </div>
+        }
+        else
+        {
+            <p class="receivables-meta">View only. Tower assignments are changed by the Collections manager.</p>
+        }
+
+        <div class="panel tower-assign__panel">
+            <table class="receivables-table tower-assign__table" data-ta-table>
+                <thead><tr><th>Collector</th><th>Towers - @monthLabel</th><th class="num">Count</th>@if (data.CanManage) { <th></th> }</tr></thead>
+                <tbody>
+                @foreach (var collector in data.Collectors)
+                {
+                    var isEditing = editing?.EmployeeId == collector.EmployeeId;
+                    var searchText = (collector.EmployeeName + " " + string.Join(' ', collector.Towers.Select(TowerAssignmentsModel.TowerText))).ToLowerInvariant();
+                    <tr data-ta-row data-search="@searchText" class="@(isEditing ? "is-editing" : "")">
+                        <td>@collector.EmployeeName@if (!collector.IsActiveMember) { <span class="tower-assign__flag" title="No longer an active Collections employee">inactive</span> }</td>
+                        <td>
+                            @if (collector.Towers.Count == 0) { <span class="receivables-meta">No towers</span> }
+                            <ul class="tower-tags">
+                                @foreach (var tower in collector.Towers)
+                                {
+                                    <li class="tower-tag tower-tag--@tower.Status.ToLowerInvariant()" title="@tower.Status">@TowerAssignmentsModel.TowerText(tower)@if (tower.Status == "Draft") { <span class="tower-tag__state">draft</span> }</li>
+                                }
+                            </ul>
+                        </td>
+                        <td class="num">@collector.Towers.Count</td>
+                        @if (data.CanManage)
+                        {
+                            <td class="tower-assign__edit">@if (collector.IsActiveMember && !isEditing) { <a class="btn btn-sm" href="/Collections/TowerAssignments?year=@data.Year&month=@data.Month&edit=@collector.EmployeeId">Edit</a> }</td>
+                        }
+                    </tr>
+                    if (isEditing)
+                    {
+                        var held = collector.Towers.Select(t => t.TowerId).ToList();
+                        <tr class="tower-assign__editor">
+                            <td colspan="4">
+                                <form method="post" asp-page-handler="Save" data-ta-editor>
+                                    <input type="hidden" name="year" value="@data.Year" /><input type="hidden" name="month" value="@data.Month" /><input type="hidden" name="employeeId" value="@collector.EmployeeId" />
+                                    <div class="tower-assign__editor-grid">
+                                        <partial name="_TowerMultiPicker" model="@(new TowerMultiPickerModel("taTowers", data.Towers, held, false, "Towers of " + collector.EmployeeName, "No towers"))" />
+                                        <div class="tower-assign__tags" aria-live="polite" data-ta-tags></div>
+                                    </div>
+                                    <label class="tower-assign__move"><input type="checkbox" name="moveFromOthers" value="true" /> Take towers another collector holds this month</label>
+                                    <div class="tower-assign__buttons">
+                                        <button class="btn" type="submit" name="activate" value="false">Save draft</button>
+                                        <button class="btn btn-gold" type="submit" name="activate" value="true">Save and activate</button>
+                                        <a class="btn btn-link" href="/Collections/TowerAssignments?year=@data.Year&month=@data.Month">Cancel</a>
+                                    </div>
+                                </form>
+                            </td>
+                        </tr>
+                    }
+                }
+                <tr class="tower-multi__empty" data-ta-empty hidden><td colspan="4">No matching collector or tower.</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        @if (data.UnassignedTowerIds.Count > 0)
+        {
+            var unassigned = data.Towers.Where(t => data.UnassignedTowerIds.Contains(t.TowerId)).ToList();
+            <details class="tower-assign__unassigned">
+                <summary>@unassigned.Count tower(s) without a collector in @monthLabel</summary>
+                <ul class="tower-tags">@foreach (var t in unassigned) { <li class="tower-tag">@CollectionsDisplay.TowerLabel(t)</li> }</ul>
+            </details>
+        }
+
+        <details class="tower-assign__history">
+            <summary>Change history - @monthLabel (@Model.History.Count)</summary>
+            @if (Model.History.Count == 0) { <p class="receivables-meta">No changes recorded for this month.</p> }
+            else
+            {
+                <table class="receivables-table receivables-table--nested">
+                    <thead><tr><th>When (UTC)</th><th>Tower</th><th>Action</th><th>From</th><th>To</th><th>By</th></tr></thead>
+                    <tbody>
+                    @foreach (var h in Model.History)
+                    {
+                        <tr><td>@h.ChangedAtUtc.ToString("yyyy-MM-dd HH:mm")</td><td>@h.TowerCode</td><td>@h.Action</td><td>@(h.PreviousEmployeeName ?? "—")</td><td>@(h.NewEmployeeName ?? "—")</td><td>@h.ChangedByName</td></tr>
+                    }
+                    </tbody>
+                </table>
+            }
+        </details>
+    }
+</div>
+<script src="~/js/collections-tower-multi.js" asp-append-version="true"></script>
+<script src="~/js/collections-tower-assignments.js" asp-append-version="true"></script>

@@ -135,6 +135,7 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="OriginatingChannelId">The channel the ticket ENTERED the system on (its originating interaction's channel) — never changed by later interactions on other channels; null for tickets predating the interaction model. Populated on detail reads.</param>
 /// <param name="OriginatingChannelName">The originating channel's display name, resolved from channel configuration — still shown for a channel that has since been deactivated. Populated on detail reads.</param>
 /// <param name="ViewerActsAsInteractionHandler">True when the caller is a CS Agent Genesys reported as handling this ticket's interaction, belongs to its department and nobody else owns it: the server lets them Resolve, Close and Transfer it. Populated on detail reads; the UI uses it to show those actions.</param>
+/// <param name="CanAssignInCollections">True when THIS caller may assign / reassign this ticket as a member of the Collections team (the ticket is in Collections, the caller belongs to it and holds a Collections department role). Decided by the same <c>CollectionsTeam</c> rule <c>TicketAssignmentAppService</c> enforces. Populated on detail reads.</param>
 /// <param name="CanTakeOwnership">True when THIS caller may take ownership of this ticket right now - decided by the very same policy the <c>POST /ownership</c> endpoint applies (Call Center agent, ticket unassigned, active, human-handling, no pending approval), so the UI shows the action exactly when the API would accept it. Populated on detail reads.</param>
 /// <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
 /// <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
@@ -216,7 +217,8 @@ public sealed record TicketDetailDto(
     bool CanTakeOwnership = false,
     bool IsDefaultClassification = false,
     bool CanCorrectClassification = false,
-    string? ExternalCustomerName = null);
+    string? ExternalCustomerName = null,
+    bool CanAssignInCollections = false);
 
 public enum TicketQueryOutcome
 {
@@ -244,6 +246,8 @@ public sealed record AssignTicketRequestDto(Guid AssignedEmployeeId, byte[] RowV
 /// <param name="TargetDepartmentId">Required. Must be an active department, and not the ticket's current one.</param>
 /// <param name="Reason">Required. Why the ticket is being transferred.</param>
 /// <param name="RowVersion">Required. The <c>rowVersion</c> from the ticket you read. A stale value is answered with 409.</param>
+/// <param name="CollectionsTowerId">Required when the target is the Collections department (unless the ticket already carries a verified tower and unit): the tower, from the ticket customer's verified towers.</param>
+/// <param name="CollectionsUnitRef">Required with <paramref name="CollectionsTowerId"/>: the unit of that tower this request is about, as offered by the options endpoint (<c>crm:{id}</c> or <c>pact:{id}</c>).</param>
 /// <param name="AssignToEmployeeId">
 /// Optional. Transfer-and-assign: once the ticket is in the target
 /// department, assign it to this employee in the same operation. The employee
@@ -254,7 +258,9 @@ public sealed record AssignTicketRequestDto(Guid AssignedEmployeeId, byte[] RowV
 /// target department's rules decide.
 /// </param>
 /// <param name="ReasonCode">Optional structured reason (1=UnableToResolve, 2=NeedsEscalation, 3=WrongDepartment, 4=CustomerRequest, 6=Other). Omitted is recorded as Unspecified; <c>Reason</c> stays the required free text.</param>
-public sealed record TransferTicketRequestDto(int TargetDepartmentId, string Reason, byte[] RowVersion, Guid? AssignToEmployeeId = null, TicketTransferReason? ReasonCode = null);
+public sealed record TransferTicketRequestDto(
+    int TargetDepartmentId, string Reason, byte[] RowVersion, Guid? AssignToEmployeeId = null, TicketTransferReason? ReasonCode = null,
+    int? CollectionsTowerId = null, string? CollectionsUnitRef = null);
 
 public enum TicketMutationOutcome
 {
@@ -295,6 +301,15 @@ public enum TicketMutationOutcome
 
     /// <summary>Approved rule: Reopen requires the department that takes the reopened work on.</summary>
     TargetDepartmentRequired,
+
+    /// <summary>A move into Collections without both a Tower and a Unit (and the ticket carries no verified pair).</summary>
+    CollectionsTowerUnitRequired,
+
+    /// <summary>The Tower/Unit sent is not a verified unit of the ticket's customer.</summary>
+    CollectionsTowerUnitInvalid,
+
+    /// <summary>The customer's units could not be verified right now (CRM / tower mapping unavailable).</summary>
+    CollectionsTowerUnitUnavailable,
 
     /// <summary>Reassigning a ticket that already has a different owner needs an explicit transfer reason (Unable to Resolve, Needs Escalation, Wrong Department, Customer Request or Other). The first assignment out of the department queue needs none.</summary>
     TransferReasonRequired,
@@ -392,7 +407,9 @@ public sealed record CloseTicketRequestDto(byte[] RowVersion);
 /// <param name="Reason">Required. Why the ticket is being reopened — recorded on the status-history row, on the Reopened workflow event Ticket Details renders, and in the audit trail. Enforced by the application service, not only by model validation.</param>
 /// <param name="TargetDepartmentId">Required. The department that takes responsibility for the reopened work. Must exist and be active; may be the ticket's current department. The previous owner is cleared either way and the existing assignment automation re-runs against this department.</param>
 /// <param name="RowVersion">Required. The <c>rowVersion</c> from the ticket you read. A stale value is answered with 409 — including when a concurrent reopen already won the race.</param>
-public sealed record ReopenTicketRequestDto(string Reason, int TargetDepartmentId, byte[] RowVersion);
+/// <param name="CollectionsTowerId">Required when the target is the Collections department (unless the ticket already carries a verified tower and unit): the tower.</param>
+/// <param name="CollectionsUnitRef">Required with the tower: the unit of that tower this request is about, as offered by the options endpoint (<c>crm:{id}</c> or <c>pact:{id}</c>).</param>
+public sealed record ReopenTicketRequestDto(string Reason, int TargetDepartmentId, byte[] RowVersion, int? CollectionsTowerId = null, string? CollectionsUnitRef = null);
 
 // ---- Notes (MVP-API-Contracts.md §4.1/§4.2) ----
 

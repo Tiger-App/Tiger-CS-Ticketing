@@ -40,10 +40,11 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         using var context = CreateSqlServerContext();
         var migrations = context.GetService<IMigrationsAssembly>().Migrations.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList();
 
-        // AddUserPermissionOverrides (per-employee permission overrides) was added after these four and is deployed by its own script;
-        // the Production script for the four must stay exactly these, immediately before it.
-        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^1]);
-        Assert.Equal(FourPendingMigrations, migrations.SkipLast(1).TakeLast(4));
+        // AddUserPermissionOverrides (per-employee permission overrides) and AddCollectionsTowerAssignments (Collections tower assignments) were added after
+        // these four and are deployed by their own scripts; the Production script for the four must stay exactly these, immediately before them.
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^1]);
+        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^2]);
+        Assert.Equal(FourPendingMigrations, migrations.SkipLast(2).TakeLast(4));
     }
 
     [Fact]

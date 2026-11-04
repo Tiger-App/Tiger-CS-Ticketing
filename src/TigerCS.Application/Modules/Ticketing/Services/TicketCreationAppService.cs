@@ -68,7 +68,8 @@ public sealed class TicketCreationAppService(
     IWorkflowTemplateRepository workflowTemplateRepository,
     IServiceIdentityRegistry? serviceIdentities = null,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
-    DefaultClassificationService? defaultClassification = null)
+    DefaultClassificationService? defaultClassification = null,
+    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null)
 {
     /// <summary>Creates a ticket from an intake record. A CS Agent creating it by hand becomes its owner when eligible (see <paramref name="callerRoles"/>).</summary>
     /// <param name="callerEmployeeId">The creating employee.</param>
@@ -462,6 +463,12 @@ public sealed class TicketCreationAppService(
             {
                 await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
             }
+        }
+        else if (needsHuman
+            && collectionsRouting is not null
+            && (await collectionsRouting.RouteAsync(ticket, departmentEntry: true, fromCallCenter: false, now, correlationId, cancellationToken)).Handled)
+        {
+            // Created directly in Collections: the unit's tower decides (collector, or the Collections queue) - no rule and no CS Agent rotation.
         }
         else
         {

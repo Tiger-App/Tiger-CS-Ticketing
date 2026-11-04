@@ -47,6 +47,8 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
     public List<PactInstalmentRowDto> Rows { get; } = [];
     /// <summary>The tower catalogue the fake API serves (null = the two default towers 7 and 8).</summary>
     public List<CollectionsTowerDto>? TowerCatalogue { get; set; }
+    /// <summary>What GET api/collections/tower-assignments answers (null = an empty month the viewer may manage).</summary>
+    public TigerCS.Application.Modules.Collections.TowerAssignments.TowerAssignmentMonthDto? TowerMonth { get; set; }
 
     public IEnumerable<string> Calls(string path) => Requests.Where(r => r.Contains(path, StringComparison.Ordinal));
 
@@ -73,6 +75,10 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
         {
             case "/api/collections/receivables/towers":
                 return Json(TowerCatalogue ?? [new(7, "124", "Tower 124", 4, true), new(8, "127", "Faradis", 32, true)]);
+            case "/api/collections/tower-assignments":
+                return Json(TowerMonth ?? new TigerCS.Application.Modules.Collections.TowerAssignments.TowerAssignmentMonthDto(2026, 11, true, [], [], [], 0));
+            case "/api/collections/tower-assignments/history":
+                return Json(new List<TigerCS.Application.Modules.Collections.TowerAssignments.TowerAssignmentHistoryDto>());
             case "/api/collections/reconciliation":
                 return Json(Reconciliation ?? new TigerCS.Application.Modules.Collections.Reconciliation.ReconciliationOverviewDto(
                     new(false, "EvidenceNotRun", "No automated reconciliation has been run for Tiger Group Dubai and Tiger Group Sharjah.", null, 0, true, null), null, []));

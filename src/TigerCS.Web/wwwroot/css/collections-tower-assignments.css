@@ -1,0 +1,24 @@
+/* Collections > Tower assignments: one compact table, tags for towers, an inline editor. Inherits the receivables look. */
+.tower-assign__bar { align-items: flex-end; }
+.tower-assign__actions { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem 1rem; margin: .5rem 0; }
+.tower-assign__actions form { margin: 0; }
+.tower-assign__panel { padding: 0; overflow-x: auto; }
+.tower-assign__table td { vertical-align: top; }
+.tower-assign__table td.num { width: 4rem; }
+.tower-assign__edit { width: 5rem; text-align: right; white-space: nowrap; }
+.tower-assign__flag { margin-left: .4rem; padding: 0 .35rem; border-radius: 999px; font-size: .75em; background: var(--surface-muted, #eef0f3); color: var(--text-muted, #667085); }
+.tower-assign__table tr.is-editing > td { background: var(--surface-muted, #f7f8fa); }
+.tower-assign__editor > td { background: var(--surface-muted, #f7f8fa); }
+.tower-assign__editor-grid { display: flex; flex-wrap: wrap; gap: .75rem 1.5rem; align-items: flex-start; }
+.tower-assign__editor-grid .tower-multi { min-width: 18rem; }
+.tower-assign__tags { flex: 1 1 18rem; min-height: 2rem; display: flex; flex-wrap: wrap; gap: .3rem; align-content: flex-start; }
+.tower-assign__move { display: block; margin: .5rem 0; font-size: .9em; }
+.tower-assign__buttons { display: flex; gap: .5rem; align-items: center; }
+.tower-tags { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: .3rem; }
+.tower-tag { display: inline-flex; align-items: center; gap: .3rem; padding: .1rem .55rem; border-radius: 999px; font-size: .85em; background: var(--surface-muted, #eef0f3); border: 1px solid var(--border, #d0d5dd); }
+.tower-tag--draft { border-style: dashed; }
+.tower-tag__state { font-size: .8em; color: var(--text-muted, #667085); }
+.tower-tag button { all: unset; cursor: pointer; line-height: 1; padding: 0 .15rem; color: var(--text-muted, #667085); }
+.tower-tag button:hover, .tower-tag button:focus-visible { color: var(--danger, #b42318); }
+.tower-assign__unassigned, .tower-assign__history { margin-top: .75rem; }
+.tower-assign__unassigned summary, .tower-assign__history summary { cursor: pointer; }

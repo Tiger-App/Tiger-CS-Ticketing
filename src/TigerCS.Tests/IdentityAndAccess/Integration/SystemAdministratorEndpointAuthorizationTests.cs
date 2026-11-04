@@ -1148,6 +1148,32 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
+    public async Task TransferToCollections_WithoutTowerAndUnit_Returns422_AndTheTicketKeepsItsDepartment_ButOtherDepartmentsAreUnaffected()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+        var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
+        var collectionsId = await _factory.CreateDepartmentAsync("Collections " + Guid.NewGuid(), "COL");
+
+        var refused = await client.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/transfer", new TransferTicketRequestDto(collectionsId, "Payment follow-up", RowVersionOf(ticket)));
+        var afterwards = await (await client.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
+        Assert.Contains("Tower and a Unit", await refused.Content.ReadAsStringAsync());
+        Assert.Equal(ticket.CurrentDepartmentId, afterwards!.CurrentDepartmentId);          // unchanged
+
+        // A tower/unit the customer does not own is refused too (the ticket has no verified unit to match it against).
+        var invented = await client.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/transfer",
+            new TransferTicketRequestDto(collectionsId, "Payment follow-up", RowVersionOf(afterwards), CollectionsTowerId: 1, CollectionsUnitRef: "crm:1"));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, invented.StatusCode);
+
+        // The CRM-less lookup answers for the same ticket (the page's tower/unit choices), and says nothing is verified.
+        var options = await client.GetAsync($"/api/tickets/{ticket.TicketId}/collections-transfer-options");
+        Assert.Equal(HttpStatusCode.OK, options.StatusCode);
+    }
+
+    [Fact]
     public async Task ChangeTicketStatus_Returns200()
     {
         var (client, _) = await CreateAdministratorAsync();

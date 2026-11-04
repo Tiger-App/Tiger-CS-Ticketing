@@ -15,6 +15,7 @@ using TigerCS.Application.Modules.Collections;
 using TigerCS.Application.Modules.Collections.Abstractions;
 using TigerCS.Application.Modules.Collections.Review;
 using TigerCS.Application.Modules.Collections.Services;
+using TigerCS.Application.Modules.Collections.TowerAssignments;
 using TigerCS.Application.Modules.CrmDocuments;
 using TigerCS.Application.Modules.CrmDocuments.Abstractions;
 using TigerCS.Application.Modules.CrmDocuments.Services;
@@ -392,6 +393,18 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<RcvReceivablesSource>();
         services.AddScoped<IPactReceivablesSource>(sp => sp.GetRequiredService<RcvReceivablesSource>());
         services.AddScoped<ICollectionsTowerCatalog, SqlCollectionsTowerCatalog>();
+        // Monthly tower -> collector assignments, Collections ticket routing and the Collections assignment history.
+        services.AddScoped<ICollectionsTowerAssignmentRepository, CollectionsTowerAssignmentRepository>();
+        services.AddScoped<ITicketAssignmentHistoryRepository, TicketAssignmentHistoryRepository>();
+        services.AddScoped<ITicketCollectionsUnitRepository, TicketCollectionsUnitRepository>();
+        services.AddScoped<CollectionsTransferSelectionService>();
+        services.AddScoped<CollectionsTransferGuard>();
+        services.AddScoped<CollectionsTransferOptionsAppService>();
+        services.AddScoped<CollectionsTeam>();
+        services.AddScoped<CollectionsTicketTowerResolver>();
+        services.AddScoped<CollectionsTicketRoutingService>();
+        services.AddScoped<CollectionsTowerAssignmentAppService>();
+        services.AddScoped<TicketAssignmentHistoryAppService>();
         // CRM owners of each unit (bulk, local): loaded in the background, joined in SQL / read in bulk. Disabled until CRM publishes GetUnitOwners.
         services.Configure<CollectionsCrmOwnersOptions>(configuration.GetSection(CollectionsCrmOwnersOptions.SectionName));
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<CollectionsCrmOwnersOptions>>().Value);
