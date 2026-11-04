@@ -381,7 +381,13 @@
       if (target.tagName === "DETAILS") {
         target.setAttribute("open", "");
       }
-      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      // The action may sit inside the header's Actions menu: open every enclosing menu so the form is actually visible.
+      var enclosing = target.parentElement ? target.parentElement.closest("details") : null;
+      while (enclosing) {
+        enclosing.setAttribute("open", "");
+        enclosing = enclosing.parentElement ? enclosing.parentElement.closest("details") : null;
+      }
+      target.scrollIntoView({ behavior: "smooth", block: "nearest" });
       var focusable = target.querySelector("summary, select, textarea, input:not([type=hidden]), button");
       if (focusable) focusable.focus({ preventScroll: true });
     });

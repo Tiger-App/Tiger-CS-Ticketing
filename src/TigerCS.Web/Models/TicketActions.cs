@@ -318,6 +318,25 @@ public static class TicketActions
             || (c.HasRole(Roles.DepartmentHead) && c.BelongsToCurrentDepartment));
 
     /// <summary>
+    /// Mirrors <c>SlaFirstResponseAppService.IsAuthorizedAsync</c> (the "Record first response" action): the ticket's current owner, a
+    /// supervisory role (<see cref="SlaRoleSets.RecordFirstResponse"/>), or a Department Head of the ticket's own department - and never
+    /// a read-only viewer or someone denied <c>Tickets.Escalate</c> (the endpoint's permission). The page previously offered it to anyone
+    /// who could resolve or escalate, which includes non-owner agents the Api answers with 403.
+    /// </summary>
+    public static bool CanRecordFirstResponse(TicketActionContext? context)
+    {
+        if (context is not { } c || c.IsReadOnlyViewer || c.IsDenied(Permissions.TicketsEscalate))
+        {
+            return false;
+        }
+
+        return c.OverrideApplies
+            || c.IsCurrentOwner
+            || c.HasAnyRole(SlaRoleSets.RecordFirstResponse)
+            || (c.HasRole(Roles.DepartmentHead) && c.BelongsToCurrentDepartment);
+    }
+
+    /// <summary>
     /// Whether an Escalate control is worth rendering at all — true when the
     /// viewer could raise EITHER tier, since the control carries both.
     /// </summary>
@@ -376,6 +395,7 @@ public static class TicketActions
     /// </summary>
     public static bool CanRequestPriorityDowngrade(TicketActionContext? context) =>
         context is { } c
+        && !c.IsReadOnlyViewer   // every other write control is hidden from read-only roles, ownership or not; this one was not
         && (c.OverrideApplies
             || c.IsCurrentOwner
             || c.HasAnyRole(PriorityDowngradeAppService.CrossDepartmentRequesterRoles)

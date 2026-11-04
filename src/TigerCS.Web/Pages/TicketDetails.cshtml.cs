@@ -283,6 +283,11 @@ public sealed class TicketDetailsModel(
         }
     }
 
+    /// <summary>The Customer Summary band: who the customer is and how sure the ticket is about it. Null only when the ticket did not load.</summary>
+    public TicketCustomerSummary? CustomerSummary => Ticket is null
+        ? null
+        : TicketCustomerSummary.Build(Ticket, CustomerNameLabel, CustomerDisplayName is not null, CustomerVerificationLabel, CustomerPhone, CustomerProfileHref);
+
     private TicketGuidance? guidance;
 
     /// <summary>
@@ -305,9 +310,12 @@ public sealed class TicketDetailsModel(
         if (slaBreached && sla is not null)
         {
             var (kind, due) = sla.ResolutionBreached ? ("Resolution", sla.ResolutionDueAtUtc) : ("First-response", sla.FirstResponseDueAtUtc);
-            slaText = due is { } dueAt
-                ? $"{kind} SLA is overdue by {TicketDisplay.FormatDuration(now - dueAt)}."
-                : $"{kind} SLA has been breached.";
+            // A finished ticket's breach is history: "overdue by 3d" would keep growing after it was resolved.
+            slaText = t.TicketStatus is TicketNextAction.Resolved or TicketNextAction.Closed
+                ? $"The {kind.ToLowerInvariant()} SLA was missed."
+                : due is { } dueAt
+                    ? $"{kind} SLA is overdue by {TicketDisplay.FormatDuration(now - dueAt)}."
+                    : $"{kind} SLA has been breached.";
         }
 
         var clockRunning = sla?.Explanation is not { HasActivePeriod: false };
@@ -387,9 +395,9 @@ public sealed class TicketDetailsModel(
         ReopenTargets = [];
     }
 
-    /// <summary>The existing condition for the "Record first response" button: the clock is running, no human has replied, and the viewer may resolve or escalate.</summary>
+    /// <summary>The existing condition for the "Record first response" button: the clock is running, no human has replied, the ticket is not closed, and the viewer is who the Api allows (owner, supervisory role, Department Head of the department).</summary>
     public bool CanRecordFirstResponse =>
-        !IsReadOnlyAccess && Sla is { FirstHumanResponseAtUtc: null } sla && sla.Explanation is not { HasActivePeriod: false } && (CanResolve || CanEscalate);
+        !IsReadOnlyAccess && Ticket?.TicketStatus != "Closed" && Sla is { FirstHumanResponseAtUtc: null } sla && sla.Explanation is not { HasActivePeriod: false } && TicketActions.CanRecordFirstResponse(ActionContext);
 
     public CurrentUser? Viewer { get; private set; }
     public TicketNameResolver NameResolver => nameResolver;
@@ -1015,16 +1023,30 @@ public sealed class TicketDetailsModel(
         };
     }
 
-    /// <summary>The classified ticket's category name, from the active-category directory. Absent (null) rather than an id when it cannot be resolved.</summary>
+    /// <summary>Category names by id for this ticket and the customer's other tickets — so no category is ever shown as "#12".</summary>
+    public IReadOnlyDictionary<int, string> CategoryNames { get; private set; } = new Dictionary<int, string>();
+
+    /// <summary>A category's name for the history table; "Classified" (not an id) when the directory could not name it.</summary>
+    public string CategoryLabel(int? categoryId) =>
+        categoryId is not { } id ? "Unclassified" : CategoryNames.TryGetValue(id, out var name) ? name : "Classified";
+
+    /// <summary>The category names, from the active-category directory. Absent (null) rather than an id when one cannot be resolved.</summary>
     private async Task LoadCategoryNameAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
-        if (ticket.CategoryId is not { } categoryId || categoriesApiClient is null)
+        var needed = ticket.CategoryId is not null || (CustomerHistory?.Tickets.Any(r => r.CategoryId is not null) ?? false);
+        if (!needed || categoriesApiClient is null)
         {
             return;
         }
 
         var result = await categoriesApiClient.GetCategoriesAsync(null, cancellationToken);
-        CategoryName = result.IsSuccess ? result.Value?.FirstOrDefault(c => c.CategoryId == categoryId)?.Name : null;
+        if (!result.IsSuccess || result.Value is null)
+        {
+            return;
+        }
+
+        CategoryNames = result.Value.GroupBy(c => c.CategoryId).ToDictionary(g => g.Key, g => g.First().Name);
+        CategoryName = ticket.CategoryId is { } categoryId && CategoryNames.TryGetValue(categoryId, out var name) ? name : null;
     }
 
     private static string DescribeError(ApiOutcome outcome, string? detail) => outcome switch
