@@ -52,12 +52,12 @@ Backfill: `CsAgentBackfill.cs` (options, classifier, service), `CsAgentBackfillR
 | Excluded (never assigned) | Why |
 |---|---|
 | Closed, Resolved | not active |
-| Already has an owner | never redistributed; re-checked under the transaction |
-| Pending approval | the approval decides first |
-| Live AI conversation (no human requested) | stays AI-owned until a handoff |
-| A person already handled the interaction | business rule: that person owns it → manual review |
-| AI ended, no human need, never closed | business decision; opt in with `IncludeAiEndedWithoutHuman` |
+| Already has an owner | never redistributed (a manual / Supervisor assignment and an existing eligible CS Agent are preserved); re-checked under the transaction |
+| Pending approval | actively handled by the approval process |
+| Live AI conversation (no human requested, no human reply) | stays AI-owned until a handoff |
 | Younger than `MinTicketAgeMinutes` (3) | its own creation flow may still be assigning it |
+
+**Included (final rules).** A ticket whose Genesys-confirmed handling agent is an eligible Call Center CS Agent is given to THAT agent in place (`Source=ConfirmedHandler`; the rotation cursor does not move). If that person is not an eligible CS Agent (unmapped, deactivated, locked out, service account, not a CS Agent) it falls to the shared rotation (`Source=RoundRobin`). An AI conversation that ended without resolving or closing the ticket is assigned (`IncludeAiEndedWithoutHuman` now defaults to `true`). Department, Request Type, Status, Priority, SLA and history are never changed and no ticket is moved into the Call Center. Active tickets owned by a non-CS-Agent are not "unassigned": they are reported by section 4b of the diagnostic for a business decision, not touched.
 
 **Endpoints** (System Administrator; `Administration.Configuration.View` / `Edit`)
 - `GET /api/admin/cs-agent-backfill/preview?afterTicketId=0&limit=50` — read-only. Returns the pool size, the current cursor, eligible count, exclusion counts and reasons, eligible-per-department, and per ticket: number, status, current department, class and the **proposed CS Agent in the real rotation order**. Locks nothing, writes nothing, does not advance the cursor.
@@ -69,10 +69,19 @@ Backfill: `CsAgentBackfill.cs` (options, classifier, service), `CsAgentBackfillR
 
 **Execution instructions (for review — do not run before approval)**
 1. Run `Diagnose_TigerCS_ActiveTicketsMissingCsAgent_ReadOnly.sql` (read-only) and note the counts.
-2. `GET …/preview` repeatedly (`afterTicketId` = last ticket id of the previous page) and review the proposals and exclusions with the business.
+2. `GET …/preview` repeatedly (`afterTicketId` = last ticket id of the previous page) and review the proposals (`proposedSource` = ConfirmedHandler / RoundRobin) and exclusions with the business.
 3. `POST …/run` with `dryRun:true` for a few batches to confirm the numbers match the preview.
 4. After written approval: set `CsAgentBackfill:Enabled=true`, then `POST …/run` with `{"dryRun":false,"batchSize":25,"batchId":"<id>"}` for ONE batch; run `Verify_TigerCS_CsAgentBackfill_Batch_ReadOnly.sql` with that `BatchId`; continue batch by batch using `resumeAfterTicketId` until `backlogExhausted`.
-5. Set `CsAgentBackfill:Enabled=false` again and re-run the diagnostic: `BACKFILL_CANDIDATE` must be 0 and section 5 must return no rows. Remaining `HUMAN_HANDLED` / `AI_*` / `PENDING_APPROVAL` tickets are the intentional exclusions.
+5. Set `CsAgentBackfill:Enabled=false` again and re-run the diagnostic: `BACKFILL_CANDIDATE` must be 0 and section 5 must return no rows. Only `AI_IN_PROGRESS` and `PENDING_APPROVAL` tickets may remain: they are the intentional exclusions.
+
+## Final fix for remaining Unassigned tickets (second pass)
+
+New-ticket gaps closed (each has a regression test):
+- **Handoff / human follow-up on a ticket already in the Call Center.** No routing happens (already there), and the assignment lived inside the routing branch, so the ticket stayed unowned. `GenesysAgentHandoffAppService` and `GenesysTicketUpdateAppService` now ensure a CS Agent (confirmed answering agent first, otherwise the shared rotation) even when routing is declined.
+- **Unusable answering agent** (unmapped, deactivated, locked out, service account, not a CS Agent / Call Center member). `ApplyAnsweringAgentAsync` used to flag and leave the ticket unassigned ("never a substitute person"). It now flags AND deals the next shared-rotation CS Agent; an existing eligible CS Agent is preserved and the problem is still flagged. New outcome `AssignedByRoundRobinFallback`.
+- Backfill: confirmed handler honoured, AI-ended tickets included, `HumanHandledNeedsManualReview` retired.
+
+Unchanged and verified by existing tests: creation (all channels), manual creation, category / request-type routing, department transfer (owner preserved), reopen (previous agent, else rotation).
 
 ## Deployment and verification
 

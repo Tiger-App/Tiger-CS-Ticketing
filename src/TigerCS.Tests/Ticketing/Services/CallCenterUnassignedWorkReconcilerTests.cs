@@ -154,7 +154,7 @@ public class CallCenterUnassignedWorkReconcilerTests
     }
 
     [Fact]
-    public async Task UnusableAnsweringAgent_IsFlagged_NeverReplacedByRoundRobin()
+    public async Task UnusableAnsweringAgent_IsFlagged_AndTheSharedRotationGivesTheTicketACsAgent()
     {
         var env = new Env();
         var agents = env.AddCallCenterAgents(2);
@@ -163,23 +163,22 @@ public class CallCenterUnassignedWorkReconcilerTests
 
         var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
 
-        // The person who actually answered cannot take it: the ticket waits in the Call Center queue, flagged. It is NOT dealt to somebody else.
-        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, result.Outcome);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.DoesNotContain(agents, a => a == ticket.CurrentOwnerEmployeeId);
+        // The person who actually answered cannot take it: it is flagged for staff, and (final rule) dealt to the next CS Agent of the shared rotation.
+        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, result.Outcome);
+        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
+        Assert.NotEqual(notACallCenterMember, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
-    public async Task PhoneCallAnsweredByAnUnmappedAgent_IsFlagged_NeverRoundRobined()
+    public async Task PhoneCallAnsweredByAnUnmappedAgent_IsFlagged_AndGetsANextRotationCsAgent()
     {
         var env = new Env();
         var agents = env.AddCallCenterAgents(1);
         var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, PhonePickupByUnmappedAgent = true, UnmappedGenesysAgentId = "gen-x" });
 
-        // Same as live ingestion: a person picked up but cannot be identified, so the ticket is queued in the Call Center and flagged - not dealt to another agent.
-        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, (await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false)).Outcome);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.NotEqual(agents[0], ticket.CurrentOwnerEmployeeId);
+        // Same as live ingestion: a person picked up but cannot be identified, so the ticket is flagged and dealt to the next shared-rotation CS Agent.
+        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, (await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false)).Outcome);
+        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]

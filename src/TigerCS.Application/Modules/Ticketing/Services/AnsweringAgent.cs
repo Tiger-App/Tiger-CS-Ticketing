@@ -58,6 +58,9 @@ public enum AnswerAssignmentOutcome
     /// <summary>The answering agent cannot take the ticket: it is in the Call Center queue, unowned, flagged for manual assignment.</summary>
     QueuedForManualAssignment,
 
+    /// <summary>The answering agent cannot take the ticket: it is flagged for staff AND given to the next eligible CS Agent of the shared rotation (final business rule - never left unassigned).</summary>
+    AssignedByRoundRobinFallback,
+
     /// <summary>The same unusable answering agent was already flagged on this ticket: nothing new was written.</summary>
     AlreadyFlagged,
 

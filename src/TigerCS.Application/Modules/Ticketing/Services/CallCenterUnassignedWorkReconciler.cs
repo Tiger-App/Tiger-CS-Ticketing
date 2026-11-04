@@ -51,8 +51,8 @@ public enum ReconcileOutcome
     /// <summary>Human work, but no eligible Call Center agent (or no Call Center) - stays queued, reported, retried next run.</summary>
     NoEligibleAgent,
     /// <summary>
-    /// The person who actually received the interaction cannot be given the ticket (unmapped, not a CS Agent / Call Center member, deactivated ...): it waits in the
-    /// Call Center queue flagged for manual assignment. It is NEVER dealt to somebody else by Round Robin.
+    /// The person who actually received the interaction cannot be given the ticket (unmapped, not a CS Agent / Call Center member, deactivated ...) AND no other CS Agent
+    /// could be assigned either (empty pool): it waits flagged for manual assignment. With a pool the ticket is dealt by the shared rotation instead (AssignedRoundRobin).
     /// </summary>
     FlaggedForManualAssignment,
 
@@ -173,9 +173,15 @@ public sealed class CallCenterUnassignedWorkReconciler(
                     assigned = answer.AssignedEmployeeId;
                     outcome = ReconcileOutcome.AssignedToAnsweringAgent;
                 }
+                else if (answer.Outcome == AnswerAssignmentOutcome.AssignedByRoundRobinFallback)
+                {
+                    // The answering agent cannot take it: ApplyAnsweringAgentAsync flagged it AND dealt it to the next shared-rotation CS Agent.
+                    assigned = answer.AssignedEmployeeId;
+                    outcome = ReconcileOutcome.AssignedRoundRobin;
+                }
                 else
                 {
-                    // Not assigned to the actual agent: keep the ticket where ApplyAnsweringAgentAsync left it (flagged). No Round Robin fallback.
+                    // Not assigned (no eligible CS Agent at all, or a person already owns it): kept where ApplyAnsweringAgentAsync left it, flagged.
                     await unitOfWork.SaveChangesAsync(cancellationToken);
                     await transaction.CommitAsync(cancellationToken);
                     return new ReconcileResult(ticketId, classification.Class, ReconcileOutcome.FlaggedForManualAssignment);

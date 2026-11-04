@@ -737,8 +737,13 @@ public sealed class TicketAutoAssignmentService(
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedToAnsweringAgent, agentId, Wrote: true);
         }
 
-        // The answering agent cannot take it: keep it in the queue. Never a substitute person.
-        if (previousOwner is not null && !wrote)
+        // The answering agent cannot take it. Business rule (final): the ticket still needs a CS Agent, so it is flagged for staff AND given to
+        // the next eligible CS Agent of the shared rotation - it never sits unassigned. An EXISTING eligible CS Agent is preserved (no re-deal),
+        // but the problem is still flagged so the mapping / eligibility issue gets fixed.
+        var keepEligibleOwner = previousOwner is not null && !wrote
+            && await CheckAnsweringAgentAsync(previousOwner.Value, callCenter.DepartmentId, cancellationToken) == AnsweringAgentIssue.None;
+
+        if (previousOwner is not null && !wrote && !keepEligibleOwner)
         {
             currentAssignment?.MarkSuperseded();
             ticket.ReleaseOwner();
@@ -747,7 +752,7 @@ public sealed class TicketAutoAssignmentService(
                 actorEmployeeId: null, "Unassign", "Ticket", ticket.TicketId.ToString(),
                 beforeValue: previousOwner.ToString(),
                 afterValue: $"DepartmentQueue;DepartmentId={ticket.CurrentDepartmentId};Reason=Automatic pre-assignment released — the agent who answered "
-                    + $"({agent.GenesysUserId}) cannot take the ticket ({issue}); manual assignment required;Source={source}",
+                    + $"({agent.GenesysUserId}) cannot take the ticket ({issue}); it is re-dealt to the next CS Agent;Source={source}",
                 correlationId, cancellationToken);
         }
 
@@ -757,7 +762,11 @@ public sealed class TicketAutoAssignmentService(
                 e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note is not null && e.Note.Contains(marker, StringComparison.Ordinal));
         if (alreadyFlagged)
         {
-            return new AnswerAssignmentResult(AnswerAssignmentOutcome.AlreadyFlagged, Issue: issue, Wrote: wrote);
+            // Flagged earlier (e.g. no CS Agent was available then): try the shared rotation again; nothing new is flagged.
+            var retried = keepEligibleOwner ? null : await EnsureFallbackAgentAsync(ticket, nowUtc, correlationId, cancellationToken);
+            return retried is { } again
+                ? new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedByRoundRobinFallback, again, issue, Wrote: true)
+                : new AnswerAssignmentResult(AnswerAssignmentOutcome.AlreadyFlagged, Issue: issue, Wrote: wrote);
         }
 
         var note = $"Answered by Genesys agent {agent.GenesysUserId} — {Describe(issue)}. Left in the Call Center queue for manual assignment. [{marker}]";
@@ -777,7 +786,67 @@ public sealed class TicketAutoAssignmentService(
                 + $"GenesysUserId={agent.GenesysUserId};Issue={issue};Source={source}",
             correlationId, cancellationToken);
 
-        return new AnswerAssignmentResult(AnswerAssignmentOutcome.QueuedForManualAssignment, Issue: issue, Wrote: true);
+        if (keepEligibleOwner)
+        {
+            return new AnswerAssignmentResult(AnswerAssignmentOutcome.HumanOwnerKept, previousOwner, issue, "Existing eligible CS Agent preserved; the problem is flagged.", Wrote: true);
+        }
+
+        var fallbackAgent = await EnsureFallbackAgentAsync(ticket, nowUtc, correlationId, cancellationToken);
+        return fallbackAgent is { } assigned
+            ? new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedByRoundRobinFallback, assigned, issue, Wrote: true)
+            : new AnswerAssignmentResult(AnswerAssignmentOutcome.QueuedForManualAssignment, Issue: issue, Wrote: true);
+    }
+
+    /// <summary>Shared-rotation fallback for a ticket still without an owner; returns the agent, or null when none could be assigned (the failure is then recorded by the engine).</summary>
+    private async Task<Guid?> EnsureFallbackAgentAsync(Ticket ticket, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken)
+    {
+        if (ticket.CurrentOwnerEmployeeId is not null)
+        {
+            return null;
+        }
+
+        var result = await EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.CallCenterIntake, nowUtc, correlationId, cancellationToken);
+        return result.Outcome is AutoAssignmentOutcome.AssignedRoundRobin or AutoAssignmentOutcome.PreservedCsAgent ? result.AssignedEmployeeId : null;
+    }
+
+    /// <summary>
+    /// Backfill priority 2: the CS Agent Genesys confirmed as having HANDLED the interaction owns the ticket - assigned in place (no department
+    /// move, no cursor advance, as a system action). Returns null (nothing written) when that person is not an eligible Call Center CS Agent,
+    /// so the caller falls back to the shared rotation; AlreadyAssigned / NotApplicable when there is nothing to do.
+    /// </summary>
+    public async Task<AutoAssignmentResult?> AssignConfirmedHandlerAsync(
+        Ticket ticket, Guid handlerEmployeeId, AutoAssignmentTrigger trigger, DateTime nowUtc, Guid correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        if (ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed)
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.NotApplicable);
+        }
+
+        if (ticket.CurrentOwnerEmployeeId is { } existing)
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.AlreadyAssigned, existing);
+        }
+
+        if (await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
+            || await CheckAnsweringAgentAsync(handlerEmployeeId, callCenter.DepartmentId, cancellationToken) != AnsweringAgentIssue.None)
+        {
+            return null;
+        }
+
+        ticket.AssignTo(handlerEmployeeId);
+        (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken))?.MarkSuperseded();
+        await ticketAssignmentRepository.AddAsync(
+            new TicketAssignment(ticket.TicketId, handlerEmployeeId, ticket.CurrentDepartmentId, nowUtc, assigningActorEmployeeId: null),
+            cancellationToken);
+        await auditWriter.WriteAsync(
+            actorEmployeeId: null, "AutoAssign", "Ticket", ticket.TicketId.ToString(),
+            beforeValue: "Unassigned",
+            afterValue: $"AssignedEmployeeId={handlerEmployeeId};DepartmentId={ticket.CurrentDepartmentId};Mode=ConfirmedHandler;Trigger={trigger}",
+            correlationId, cancellationToken);
+        return new AutoAssignmentResult(AutoAssignmentOutcome.PreservedCsAgent, handlerEmployeeId);
     }
 
     /// <summary>
