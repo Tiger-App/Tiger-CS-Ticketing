@@ -67,6 +67,24 @@ public sealed class GenesysRequestTypeClassificationAppService(
         return routingService.ResolveAsync(requestType.RequestTypeId, requestType.Name, cancellationToken);
     }
 
+    /// <summary>
+    /// Null when a validated request type pairs with exactly one active category of its department (so classifying by it yields a complete
+    /// Category + Request Type), otherwise why it does not. A request type that cannot complete a classification takes the default
+    /// classification instead of leaving the ticket half classified.
+    /// </summary>
+    public async Task<string?> GetCategoryPairingGapAsync(RequestTypeResolution resolution, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(resolution);
+        if (!resolution.IsValid || resolution.RequestType is null)
+        {
+            return resolution.Detail ?? "the supplied request type cannot be used.";
+        }
+
+        return await routingService.ResolveCategoryIdAsync(resolution.RequestType, cancellationToken) is null
+            ? $"request type '{resolution.RequestType.Name}' has no unique matching category in its department."
+            : null;
+    }
+
     public async Task<GenesysClassificationResult> ClassifyAsync(
         Guid callerEmployeeId,
         long ticketId,

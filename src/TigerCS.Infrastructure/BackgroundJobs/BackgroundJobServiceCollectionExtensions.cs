@@ -38,6 +38,8 @@ public static class BackgroundJobServiceCollectionExtensions
         services.AddScoped<CallCenterUnassignedWorkJob>();
         // One-time CS Agent backfill: manual only (System Administrator endpoint), never scheduled; live runs need CsAgentBackfill:Enabled (default false).
         services.Configure<CsAgentBackfillOptions>(configuration.GetSection(CsAgentBackfillOptions.SectionName));
+        // Manual, admin-triggered only; a live run needs Enabled=true (default false). No hosted service runs it.
+        services.Configure<DefaultClassificationBackfillOptions>(configuration.GetSection(DefaultClassificationBackfillOptions.SectionName));
         services.AddSingleton<CsAgentBackfillRunner>();
         services.AddHostedService<CallCenterUnassignedWorkHostedService>();
 

@@ -66,6 +66,7 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// <param name="ExternalCustomerEmail">The verified external customer's own email as the source returned it (PACT's <c>customerEmail</c>) — a ticket-time display snapshot. Optional: null when the source holds no email.</param>
 /// <param name="RequestTypeId">Optional (Workflow/Automation phase 2): the configured Request Type this ticket follows. Must be an active request type of the department the ticket routes to; when present it drives the workflow capabilities and the automatic assignment rule.</param>
 /// <param name="AssignToDepartmentQueue">Optional. A CS Agent creating a ticket by hand is made its owner when they are eligible (an active member of the ticket's department) and no assignment rule or setting already decided; <c>true</c> is the agent explicitly choosing the Department Queue instead, and is respected. Ignored for every other caller and for Genesys-created tickets.</param>
+/// <param name="SkipDefaultClassification">Set only by the Genesys ingestion when it is about to classify the new ticket with a validated request type itself: the ticket is then created without the Customer Services / General fallback. Every other caller leaves it null - a ticket with no valid classification is created as Customer Services / General.</param>
 /// <param name="GenesysContext">Optional (Workflow/Automation phase 2): the Genesys-provided interaction context, persisted verbatim for traceability. Absent for Face-to-Face and every other locally-created interaction.</param>
 public sealed record CreateTicketRequestDto(
     long IntakeRecordId,
@@ -91,7 +92,8 @@ public sealed record CreateTicketRequestDto(
     int? RequestTypeId = null,
     GenesysIntegration.Dto.GenesysInteractionContextDto? GenesysContext = null,
     int? DepartmentId = null,
-    bool? AssignToDepartmentQueue = null);
+    bool? AssignToDepartmentQueue = null,
+    bool? SkipDefaultClassification = null);
 
 /// <summary>A newly created ticket (MVP-API-Contracts.md §3.1).</summary>
 /// <param name="TicketId">The ticket.</param>
@@ -214,7 +216,9 @@ public enum TicketCreationOutcome
     RequestTypeDepartmentMismatch,
 
     /// <summary>Workflow/Automation phase 2: a Genesys interaction context was supplied without its conversation id — the one field a Genesys-sourced context cannot lack, because it is the traceability link.</summary>
-    GenesysConversationIdRequired
+    GenesysConversationIdRequired,
+    /// <summary>A human-handled ticket cannot be given a valid General classification because its (valid) department has no usable General category / request type. Nothing was created; run EnsureDefaultGeneralClassification.sql.</summary>
+    DefaultClassificationNotConfigured
 }
 
 public sealed record TicketCreationResult(TicketCreationOutcome Outcome, TicketResponseDto? Response = null)

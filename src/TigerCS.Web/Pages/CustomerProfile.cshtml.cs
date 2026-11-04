@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TigerCS.Application.Modules.Collections.Dto;
@@ -85,9 +86,8 @@ public sealed class CustomerProfileModel(
 
     public string DisplayName =>
         Profile is null ? "Customer"
-        : !string.IsNullOrWhiteSpace(Profile.DisplayName) ? Profile.DisplayName
-        : CrmProfile?.FullNameEnglish ?? CrmProfile?.FullNameArabic
-        ?? (Profile.IdentityKind == "Phone" ? "Unnamed caller" : $"{CustomersModel.SourceLabel(Profile.VerificationSource)} customer");
+        : CustomerNameResolver.FirstValid(Profile.DisplayName, CrmProfile?.FullNameEnglish, CrmProfile?.FullNameArabic) is { } name ? name
+        : (Profile.IdentityKind == "Phone" ? "Unnamed caller" : $"{CustomersModel.SourceLabel(Profile.VerificationSource)} customer");
 
     /// <summary>
     /// The one number this customer is reached on: CRM's live record when

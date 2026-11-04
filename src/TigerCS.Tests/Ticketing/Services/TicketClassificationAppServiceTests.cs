@@ -218,7 +218,7 @@ public class TicketClassificationAppServiceTests
     // ---- What classification refuses ----
 
     [Fact]
-    public async Task ClassifyAsync_ATicketThatAlreadyHasACategory_IsRefused_ThePhase1ReclassificationSafeguard()
+    public async Task ClassifyAsync_ATicketThatAlreadyHasACategory_IsRefused_ToEveryoneExceptItsAssignedCsAgent()
     {
         var f = CreateService();
         var ticket = Ticket.CreateUnverified(
@@ -228,8 +228,9 @@ public class TicketClassificationAppServiceTests
         ticket.AssignTo(Guid.NewGuid());   // a CS Agent works only the tickets assigned to them
         var category = f.Categories.Seed(ticket.CurrentDepartmentId);
 
+        // Anyone but the CS Agent the ticket is assigned to (who may correct it - see DefaultClassificationHumanHandledTests) is refused.
         var result = await f.Service.ClassifyAsync(
-            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
+            Guid.NewGuid(), [Roles.SystemAdministrator], ticket.TicketId, Request(category.CategoryId));
 
         Assert.Equal(TicketMutationOutcome.AlreadyClassified, result.Outcome);
         Assert.Equal(7, ticket.CategoryId);

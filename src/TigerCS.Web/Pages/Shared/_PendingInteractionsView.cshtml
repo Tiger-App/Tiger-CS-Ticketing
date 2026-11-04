@@ -174,7 +174,7 @@
                                 <span class="badge badge-priority-none" title="No category or priority has been set yet">Unclassified</span>
                             }
                         </td>
-                        <td>@(h.CustomerName ?? "—")</td>
+                        <td>@(TigerCS.Application.Modules.Ticketing.CustomerNames.CustomerNameResolver.FirstValid(h.CustomerName) ?? "—")</td>
                         <td class="text-mono">@(string.IsNullOrWhiteSpace(h.CustomerPhone) ? "—" : h.CustomerPhone)</td>
                         <td>@(row.ChannelName ?? "—")</td>
                         <td>

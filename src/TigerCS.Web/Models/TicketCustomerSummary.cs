@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using TigerCS.Application.Modules.Ticketing.Dto;
 
 namespace TigerCS.Web.Models;
@@ -39,6 +40,8 @@ public enum CustomerLookupState
 /// <param name="StateCss">The badge colour key: verified, external or unverified.</param>
 /// <param name="Hint">One short sentence for the agent when the identity is not confirmed; null when it is.</param>
 /// <param name="ProfileHref">The Customer Profile for this customer, or null when there is nothing to open.</param>
+/// <param name="NameSource">Where the name came from. A <see cref="CustomerNameSource.Submitted"/> name is known but says nothing about a verified identity; the verification badge alone speaks to that.</param>
+/// <param name="NameNote">"Name as provided · not verified" beside a name nobody verified; null for a verified name or no name.</param>
 public sealed record TicketCustomerSummary(
     string Name,
     bool HasName,
@@ -49,10 +52,13 @@ public sealed record TicketCustomerSummary(
     string StateLabel,
     string StateCss,
     string? Hint,
-    string? ProfileHref)
+    string? ProfileHref,
+    CustomerNameSource NameSource = CustomerNameSource.None,
+    string? NameNote = null)
 {
     public static TicketCustomerSummary Build(
-        TicketDetailDto ticket, string name, bool hasName, string verificationLabel, string? phone, string? profileHref)
+        TicketDetailDto ticket, string name, bool hasName, string verificationLabel, string? phone, string? profileHref,
+        CustomerNameSource? nameSource = null)
     {
         var hasCrm = ticket.CrmBuyerUnitId is not null;
         var hasExternal = !hasCrm && !string.IsNullOrWhiteSpace(ticket.CustomerVerificationSource);
@@ -93,9 +99,13 @@ public sealed record TicketCustomerSummary(
             _ => "unverified"
         };
 
+        // A caller that does not say where the name came from gets the cautious reading: a name is "provided", never "verified".
+        var source = !hasName ? CustomerNameSource.None : nameSource ?? CustomerNameSource.Submitted;
+        var note = source == CustomerNameSource.Submitted ? "Name as provided · not verified" : null;
+
         return new TicketCustomerSummary(
             name, hasName, string.IsNullOrWhiteSpace(phone) ? null : phone.Trim(), projectUnit,
             state is CustomerLookupState.VerifiedCrm or CustomerLookupState.VerifiedExternal,
-            state, verificationLabel, css, hint, profileHref);
+            state, verificationLabel, css, hint, profileHref, source, note);
     }
 }

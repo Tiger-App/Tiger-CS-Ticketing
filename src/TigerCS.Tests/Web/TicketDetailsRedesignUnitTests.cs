@@ -2,6 +2,7 @@
 extern alias TigerCsWeb;
 
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCsWeb::TigerCS.Web.Models;
@@ -176,6 +177,35 @@ public sealed class TicketDetailsRedesignUnitTests
         Assert.False(s.HasName);
         Assert.Contains("not matched to a registered customer", s.Hint);
         Assert.Null(s.ProjectUnit);
+    }
+
+    [Fact]
+    public void SubmittedName_IsMarkedAsProvided_NotVerified()
+    {
+        var s = TicketCustomerSummary.Build(Ticket(), "Ahmed", true, "Unverified", "+9715", null, CustomerNameSource.Submitted);
+
+        Assert.Equal(CustomerNameSource.Submitted, s.NameSource);
+        Assert.Equal("Name as provided · not verified", s.NameNote);
+    }
+
+    [Theory]
+    [InlineData(CustomerNameSource.VerifiedCrm)]
+    [InlineData(CustomerNameSource.VerifiedExternal)]
+    public void VerifiedName_CarriesNoUnverifiedNote(CustomerNameSource source)
+    {
+        var s = TicketCustomerSummary.Build(Ticket(), "Mariam", true, "Verified via Tiger CRM", "+9715", null, source);
+
+        Assert.Equal(source, s.NameSource);
+        Assert.Null(s.NameNote);
+    }
+
+    [Fact]
+    public void NoName_HasNoSourceAndNoNote()
+    {
+        var s = TicketCustomerSummary.Build(Ticket(), "Unnamed caller", false, "Unverified", "+9715", null, CustomerNameSource.Submitted);
+
+        Assert.Equal(CustomerNameSource.None, s.NameSource);
+        Assert.Null(s.NameNote);
     }
 
     [Fact]

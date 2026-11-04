@@ -1080,6 +1080,21 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
+    public async Task DefaultClassificationBackfill_PreviewAndDryRun_Return200_AndALiveRunIsRefusedUnlessEnabled()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+        var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
+
+        var preview = await client.GetAsync("/api/admin/default-classification-backfill/preview?limit=5");
+        var live = await client.PostAsJsonAsync("/api/admin/default-classification-backfill/run", new { dryRun = false });   // DefaultClassificationBackfill:Enabled defaults to false
+
+        Assert.True(preview.StatusCode == HttpStatusCode.OK, await preview.Content.ReadAsStringAsync());
+        Assert.True(live.StatusCode == HttpStatusCode.Conflict, await live.Content.ReadAsStringAsync());   // a live run is refused unless explicitly enabled
+        var after = await client.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{ticket.TicketId}");
+        Assert.Equal(ticket.CategoryId, after!.CategoryId);   // nothing was written
+    }
+
+    [Fact]
     public async Task RetryCsAgentAssignment_Returns200_AndIsIdempotentForAnAlreadyAssignedTicket()
     {
         var (client, _) = await CreateAdministratorAsync();

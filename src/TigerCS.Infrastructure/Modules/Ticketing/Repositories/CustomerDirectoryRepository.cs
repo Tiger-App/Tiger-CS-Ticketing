@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using Microsoft.EntityFrameworkCore;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
@@ -248,7 +249,7 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             // ticket's conversation name only, as it always has.
             var namedTicket = g.LastNamedTicketId is { } namedId ? lastTickets.GetValueOrDefault(namedId) : null;
             var displayName = DisplayNameFor(last, snapshot)
-                ?? FirstNonEmpty(namedTicket?.CrmBuyerCustomerName, namedTicket?.ExternalCustomerName);
+                ?? CustomerNameResolver.Resolve(namedTicket?.CrmBuyerCustomerName, namedTicket?.ExternalCustomerName).Name;
 
             rows.Add(new CustomerDirectoryRowDto(
                 identity.Key,
@@ -394,9 +395,9 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         // every ticket this customer has, so a name captured once is not lost
         // because their most recent ticket happened not to carry one.
         var displayName = DisplayNameFor(last, snapshots.GetValueOrDefault(last.TicketId))
-            ?? tickets.Select(x => x.Ticket.CrmBuyerCustomerName).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n))
-            ?? tickets.Select(x => x.Ticket.ExternalCustomerName).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n))
-            ?? interactions.Select(i => i.CustomerName).FirstOrDefault(n => !string.IsNullOrWhiteSpace(n));
+            ?? CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.CrmBuyerCustomerName).ToArray())
+            ?? CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.ExternalCustomerName).ToArray())
+            ?? CustomerNameResolver.FirstValid(interactions.Select(i => i.CustomerName).ToArray());
 
         return new CustomerDirectoryProfileDto(
             identity.Key,
@@ -487,7 +488,7 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
     /// to show.
     /// </summary>
     private static string? DisplayNameFor(Ticket last, TicketSnapshot snapshot) =>
-        FirstNonEmpty(last.CrmBuyerCustomerName, last.ExternalCustomerName, snapshot.InteractionName, snapshot.SnapshotName);
+        CustomerNameResolver.Resolve(last.CrmBuyerCustomerName, last.ExternalCustomerName, snapshot.InteractionName, snapshot.SnapshotName).Name;
 
     private static string? FirstNonEmpty(params string?[] values) => values.FirstOrDefault(v => !string.IsNullOrWhiteSpace(v))?.Trim();
 }

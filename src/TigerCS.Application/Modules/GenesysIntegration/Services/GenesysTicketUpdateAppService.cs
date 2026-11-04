@@ -73,7 +73,8 @@ public sealed class GenesysTicketUpdateAppService(
     TicketAutoAssignmentService? autoAssignmentService = null,
     GenesysAnsweringAgentAssignmentService? answeringAgentAssignment = null,
     ITicketAssignmentRepository? ticketAssignmentRepository = null,
-    ITicketNoteRepository? ticketNoteRepository = null)
+    ITicketNoteRepository? ticketNoteRepository = null,
+    DefaultClassificationService? defaultClassification = null)
 {
     /// <summary>The exact closure reason recorded when the AI finishes the conversation.</summary>
     public const string ClosedByAiReason = "Closed by AI";
@@ -198,6 +199,27 @@ public sealed class GenesysTicketUpdateAppService(
             {
                 return GenesysTicketUpdateResult.Failure(failure, classification.Detail);
             }
+        }
+
+        // A ticket a person is now asked to handle (human follow-up, a handoff, or a connected agent) must carry a valid classification: a request
+        // type applied above wins; otherwise one that is still missing, partial or invalid takes the default. Classification only - the owner, the
+        // department, the priority, the SLA and the status are untouched, and a valid classification is never replaced.
+        if (defaultClassification is not null
+            && (request.HumanFollowUpRequired == true || request.Handoff is { Required: true } || NullIfBlank(request.Routing?.AgentId) is not null)
+            && await defaultClassification.EnsureClassifiedAsync(
+                ticket, "A person was asked to handle a ticket without a valid classification", callerEmployeeId, save: true, cancellationToken)
+                == DefaultClassificationApplyOutcome.ConfigurationMissing)
+        {
+            // Controlled configuration failure: the ticket is not handed to a person half classified, nothing is moved, and the error is audited.
+            var error = await defaultClassification.DescribeConfigurationGapAsync(ticket.OriginatingDepartmentId, cancellationToken)
+                ?? "the default classification is not configured";
+            await auditWriter.WriteAsync(
+                callerEmployeeId, DefaultClassificationAuditActions.ConfigurationError, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"Handling=Human;DepartmentId={ticket.OriginatingDepartmentId};Error={error};Action=Run EnsureDefaultGeneralClassification.sql",
+                Guid.NewGuid(), cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.DefaultClassificationNotConfigured, error);
         }
 
         // Live transcript first among the conversation facts: whoever picks the interaction up next (the handoff below may be what asks for
@@ -589,6 +611,25 @@ public sealed class GenesysTicketUpdateAppService(
         if (ticket.TicketStatus is not (TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer))
         {
             return (false, $"Not closed: the ticket is {ticket.TicketStatus}.");
+        }
+
+        // An AI-closed ticket must also carry a valid classification. One that arrives here without (created before the default existed, or while it
+        // was not configured) gets the default now - classification only, so no CS Agent is assigned and nothing else about the ticket changes.
+        if (defaultClassification is not null
+            && await defaultClassification.EnsureClassifiedAsync(
+                ticket, "Closed by AI without a valid classification", callerEmployeeId, save: true, cancellationToken)
+                == DefaultClassificationApplyOutcome.ConfigurationMissing)
+        {
+            // Never closed without a valid classification: the department's General is not configured. Audited, nothing else changes.
+            var error = await defaultClassification.DescribeConfigurationGapAsync(ticket.OriginatingDepartmentId, cancellationToken)
+                ?? "the default classification is not configured";
+            await auditWriter.WriteAsync(
+                callerEmployeeId, DefaultClassificationAuditActions.ConfigurationError, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"Handling=AI;DepartmentId={ticket.OriginatingDepartmentId};Error={error};Action=Run EnsureDefaultGeneralClassification.sql;Closed=false",
+                Guid.NewGuid(), cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            return (false, $"Not closed: the ticket has no valid classification and its department's General is not configured ({error})");
         }
 
         var automaticAssignment = preAssignedOwner is not null && ticketAssignmentRepository is not null

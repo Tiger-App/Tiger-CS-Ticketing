@@ -67,7 +67,8 @@ public sealed class TicketCreationAppService(
     TicketAutoAssignmentService autoAssignmentService,
     IWorkflowTemplateRepository workflowTemplateRepository,
     IServiceIdentityRegistry? serviceIdentities = null,
-    ITicketWorkflowEventRepository? workflowEventRepository = null)
+    ITicketWorkflowEventRepository? workflowEventRepository = null,
+    DefaultClassificationService? defaultClassification = null)
 {
     /// <summary>Creates a ticket from an intake record. A CS Agent creating it by hand becomes its owner when eligible (see <paramref name="callerRoles"/>).</summary>
     /// <param name="callerEmployeeId">The creating employee.</param>
@@ -173,27 +174,60 @@ public sealed class TicketCreationAppService(
         // ManualUnitNumber are accepted and stored as optional pass-through
         // fields whenever a caller does supply them.
 
-        var routing = await ResolveRoutingAsync(
-            request.CategoryId, request.DepartmentId, request.PriorityId, intakeRecord.DepartmentId,
-            allowUnclassifiedPriority: request.GenesysContext is not null, cancellationToken);
-        if (routing.Failure is { } routingFailure)
+        // Human work: a manual ticket, a Genesys inquiry that needs a person, or a call a person already answered. (See the Call Center comment below.)
+        var needsHuman = request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp || answeringAgent is not null;
+
+        // Default classification: a ticket with no classification that can be trusted - none at all, a partial or ambiguous one, or one
+        // that names a category / request type that is not usable - is created General / General within its own department (Customer Services'
+        // only when the department is unknown). A valid classification is never replaced, and Collections is out of scope. A valid department
+        // WITHOUT its own General is a configuration error: a human-handled ticket is then refused with an explicit, audited outcome (never
+        // created half classified, never moved to another department); an AI-handled one is created and the error is reported.
+        var decision = await TryResolveFallbackAsync(request, intakeRecord.DepartmentId, cancellationToken);
+        var fallback = decision.Choice;
+        var configurationError = decision.ConfigurationError;
+        if (configurationError is not null && needsHuman)
         {
-            return TicketCreationResult.Failure(routingFailure);
+            return await RefuseNotConfiguredAsync(callerEmployeeId, intakeRecord.IntakeRecordId, configurationError, cancellationToken);
         }
 
-        // Null exactly when the ticket is being created Unclassified — see
+        RoutingResolution routing;
+        RequestType? requestType = null;
+        WorkflowTemplate? workflowVersion = null;
+        if (fallback is not null)
+        {
+            var defaultPriority = await ResolveFallbackPriorityAsync(request.PriorityId, fallback.Classification, cancellationToken);
+            if (defaultPriority is null)
+            {
+                return TicketCreationResult.Failure(TicketCreationOutcome.PriorityNotFound);
+            }
+
+            routing = RoutingResolution.Succeeded(fallback.Classification.Category, defaultPriority, fallback.Classification.Department);
+            requestType = fallback.Classification.RequestType;
+            workflowVersion = fallback.Classification.PublishedWorkflow;
+        }
+        else
+        {
+            routing = await ResolveRoutingAsync(
+                request.CategoryId, request.DepartmentId, request.PriorityId, intakeRecord.DepartmentId,
+                allowUnclassifiedPriority: request.GenesysContext is not null, cancellationToken);
+            if (routing.Failure is { } routingFailure)
+            {
+                return TicketCreationResult.Failure(routingFailure);
+            }
+        }
+
+        // Null exactly when the ticket is being created Unclassified - see
         // ResolveRoutingAsync.
         var category = routing.Category;
         var priority = routing.Priority;
         var department = routing.Department!;
 
-        // Workflow/Automation phase 2 — optional request-type classification.
+        // Workflow/Automation phase 2 - optional request-type classification.
         // When supplied it must be an active request type of the department
         // the ticket routes to (request types are never offered across
         // departments); when absent, everything below behaves exactly as
         // before this phase.
-        RequestType? requestType = null;
-        if (request.RequestTypeId is { } requestTypeId)
+        if (fallback is null && request.RequestTypeId is { } requestTypeId)
         {
             requestType = await requestTypeRepository.GetByIdAsync(requestTypeId, cancellationToken);
             if (requestType is null || !requestType.IsActive)
@@ -212,19 +246,42 @@ public sealed class TicketCreationAppService(
             }
         }
 
-        // Administration / Workflow Designer phase — resolve the request
+        // Administration / Workflow Designer phase - resolve the request
         // type's currently Published workflow version NOW, so the ticket is
         // pinned to exactly the definition in force at creation. A request
         // type whose workflow has no published version cannot govern a new
         // ticket; that is a configuration error surfaced to the caller, never
         // a silently unpinned ticket.
-        WorkflowTemplate? workflowVersion = null;
-        if (requestType is not null)
+        if (fallback is null && requestType is not null)
         {
             workflowVersion = await workflowTemplateRepository.GetPublishedAsync(requestType.WorkflowId, cancellationToken);
             if (workflowVersion is null)
             {
                 return TicketCreationResult.Failure(TicketCreationOutcome.RequestTypeWorkflowNotPublished);
+            }
+        }
+
+        // A valid category with no request type keeps its category and is completed with that department's own General request type. Without
+        // one, a human-handled ticket is refused (never left without a valid request type); an AI-handled one is created and the gap reported.
+        string? requestTypeCompletion = null;
+        if (fallback is null && requestType is null && category is not null && defaultClassification is not null
+            && request.SkipDefaultClassification != true && request.RequestTypeId is null)
+        {
+            var own = await defaultClassification.ResolveForDepartmentAsync(department.DepartmentId, cancellationToken);
+            if (own.Value is { } ownGeneral)
+            {
+                requestType = ownGeneral.RequestType;
+                workflowVersion = ownGeneral.PublishedWorkflow;
+                requestTypeCompletion = $"RequestTypeId={requestType.RequestTypeId} (department General)";
+            }
+            else if (own.DepartmentKnown)
+            {
+                if (needsHuman)
+                {
+                    return await RefuseNotConfiguredAsync(callerEmployeeId, intakeRecord.IntakeRecordId, own.Detail!, cancellationToken);
+                }
+
+                configurationError = own.Detail;
             }
         }
 
@@ -240,7 +297,6 @@ public sealed class TicketCreationAppService(
         // the Call Center when a person is actually asked for (GenesysAgentHandoffAppService), so an AI-resolved ticket is never
         // routed there needlessly. No active Call Center department configured -> the previous behaviour, reported as a blocker.
         // A call a person already ANSWERED is human work by definition (answeringAgent is built server-side by the Genesys ingestion, never from the client).
-        var needsHuman = request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp || answeringAgent is not null;
         var callCenter = needsHuman ? await autoAssignmentService.ResolveCallCenterAsync(cancellationToken) : null;
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
@@ -262,15 +318,15 @@ public sealed class TicketCreationAppService(
                 : (unitReference, contactReference, hasCrmBuyerMatch, hasExternalVerification) switch
             {
                 (not null, not null, _, _) => Ticket.CreateVerified(
-                    ticketNumber, category.DepartmentId, unitReference!.UnitReferenceId, contactReference!.ContactReferenceId,
+                    ticketNumber, department.DepartmentId, unitReference!.UnitReferenceId, contactReference!.ContactReferenceId,
                     category.CategoryId, priority!.PriorityId, request.RequestSummary, now),
                 (_, _, true, _) => Ticket.CreateVerifiedFromCrmBuyer(
-                    ticketNumber, category.DepartmentId,
+                    ticketNumber, department.DepartmentId,
                     request.CrmBuyerCustomerId!.Value, request.CrmBuyerLeadId!.Value, request.CrmBuyerUnitId!.Value, request.CrmBuyerProjectId!.Value,
                     request.CrmBuyerCustomerName, request.CrmBuyerProjectName, request.CrmBuyerUnitNumber,
                     category.CategoryId, priority!.PriorityId, request.RequestSummary, now),
                 (_, _, _, true) => Ticket.CreateFromExternalLookup(
-                    ticketNumber, category.DepartmentId,
+                    ticketNumber, department.DepartmentId,
                     request.CustomerVerificationSource!, request.ExternalCustomerId, request.ExternalUnitId,
                     request.ManualProjectName, request.ManualUnitNumber,
                     category.CategoryId, priority!.PriorityId, request.RequestSummary, now,
@@ -280,7 +336,7 @@ public sealed class TicketCreationAppService(
                     // to show instead of "Pact customer".
                     request.ExternalCustomerName, request.ExternalCustomerEmail),
                 _ => Ticket.CreateUnverified(
-                    ticketNumber, category.DepartmentId, category.CategoryId, priority!.PriorityId, request.RequestSummary, now,
+                    ticketNumber, department.DepartmentId, category.CategoryId, priority!.PriorityId, request.RequestSummary, now,
                     request.ManualProjectName, request.ManualUnitNumber)
             };
 
@@ -411,8 +467,12 @@ public sealed class TicketCreationAppService(
         {
             // No Call Center first (an AI-handled Genesys inquiry, or no Call Center department is configured): the previous
             // behaviour — Department + Request Type resolve the configured rule; no rule leaves the department queue.
-            var automatic = await autoAssignmentService.ApplyAsync(
-                ticket, now, correlationId, AutoAssignmentTrigger.TicketCreated, cancellationToken);
+            // The fallback never assigns to a department employee: General has no assignment rule, and a rule configured for it later must
+            // not turn the safety net into automatic department routing. The CS Agent rotation below is what gives it an owner.
+            var automatic = fallback is not null
+                ? new AutoAssignmentResult(AutoAssignmentOutcome.NoRuleConfigured)
+                : await autoAssignmentService.ApplyAsync(
+                    ticket, now, correlationId, AutoAssignmentTrigger.TicketCreated, cancellationToken);
 
             if (request.GenesysContext is null
                 && request.AssignToDepartmentQueue != true
@@ -471,6 +531,35 @@ public sealed class TicketCreationAppService(
             beforeValue: null,
             afterValue: $"TicketNumber={ticket.TicketNumber};DepartmentId={ticket.CurrentDepartmentId};VerificationStatus={ticket.VerificationStatus}",
             correlationId, cancellationToken);
+
+        if (configurationError is not null)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, DefaultClassificationAuditActions.ConfigurationError, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"Handling=AI;DepartmentId={department.DepartmentId};Error={configurationError};Action=Run EnsureDefaultGeneralClassification.sql",
+                correlationId, cancellationToken);
+        }
+
+        if (requestTypeCompletion is not null)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, "ApplyDefaultClassification", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"Reason=a category was chosen without a request type;CategoryId={category!.CategoryId} (kept);RequestType={requestTypeCompletion}",
+                correlationId, cancellationToken);
+        }
+
+        if (fallback is not null)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, "ApplyDefaultClassification", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue:
+                    $"Default={DefaultClassificationService.DisplayLabel};CategoryId={fallback.Classification.Category.CategoryId};"
+                    + $"RequestTypeId={fallback.Classification.RequestType.RequestTypeId};Reason={fallback.Reason};DepartmentId={department.DepartmentId}",
+                correlationId, cancellationToken);
+        }
 
         await EnqueueTicketCreatedAsync(ticket, callerEmployeeId, correlationId, now, cancellationToken);
 
@@ -544,6 +633,129 @@ public sealed class TicketCreationAppService(
             afterValue: $"EventType={OutboxEventTypes.TicketCreated};TicketId={ticket.TicketId};Status=Pending",
             correlationId,
             cancellationToken);
+    }
+
+    /// <summary>The default classification chosen for a new ticket, and why.</summary>
+    private sealed record FallbackChoice(DefaultClassification Classification, string Reason);
+
+    /// <summary>The fallback to apply, or - for a valid department without its own General - the configuration error to report.</summary>
+    private sealed record FallbackDecision(FallbackChoice? Choice, string? ConfigurationError);
+
+    /// <summary>
+    /// Decides whether a new ticket takes the default classification. It does when nothing trustworthy classifies it: no category, a category
+    /// or request type that is unknown / inactive / unusable, or a category that contradicts the department the intake named. A valid
+    /// category (with a valid request type when one is given) is respected exactly as before. No choice is also the answer when the fallback is
+    /// not configured at all, the Genesys ingestion asked to skip it, or the ticket belongs to Collections. A valid department with no General of
+    /// its own yields a configuration error instead - never Customer Services' General as a stand-in.
+    /// </summary>
+    private async Task<FallbackDecision> TryResolveFallbackAsync(
+        CreateTicketRequestDto request, int? intakeDepartmentId, CancellationToken cancellationToken)
+    {
+        var none = new FallbackDecision(null, null);
+        if (defaultClassification is null || request.SkipDefaultClassification == true)
+        {
+            return none;
+        }
+
+        string? reason = null;
+        if (request.CategoryId is not { } categoryId)
+        {
+            reason = request.RequestTypeId is null
+                ? "no category was supplied"
+                : "a request type was supplied without a category (partial classification)";
+        }
+        else
+        {
+            var category = await categoryRepository.GetByIdAsync(categoryId, cancellationToken);
+            if (category is null || !category.IsActive)
+            {
+                reason = $"category {categoryId} is unknown or inactive";
+            }
+            else
+            {
+                var categoryDepartment = await departmentRepository.GetByIdAsync(category.DepartmentId, cancellationToken);
+                if (DefaultClassificationService.IsExcluded(categoryDepartment))
+                {
+                    return none;
+                }
+
+                if (categoryDepartment is null || !categoryDepartment.IsActive)
+                {
+                    reason = $"category {categoryId} routes to a missing or inactive department";
+                }
+                else if (intakeDepartmentId is { } intakeDepartment && intakeDepartment != category.DepartmentId)
+                {
+                    reason = $"category {categoryId} contradicts the department the intake named";
+                }
+                else if (request.RequestTypeId is { } requestTypeId)
+                {
+                    var rt = await requestTypeRepository.GetByIdAsync(requestTypeId, cancellationToken);
+                    if (rt is null || !rt.IsActive)
+                    {
+                        reason = $"request type {requestTypeId} is unknown or inactive";
+                    }
+                    else if (rt.DepartmentId != category.DepartmentId)
+                    {
+                        reason = $"request type {requestTypeId} does not belong to the category's department (ambiguous classification)";
+                    }
+                    else if (await workflowTemplateRepository.GetPublishedAsync(rt.WorkflowId, cancellationToken) is null)
+                    {
+                        reason = $"request type {requestTypeId} has no published workflow";
+                    }
+                }
+            }
+        }
+
+        if (reason is null)
+        {
+            return none;
+        }
+
+        // General / General within the department the caller (or AI) named - the request's, else the intake's. Collections is never classified here.
+        var hint = request.DepartmentId ?? intakeDepartmentId;
+        if (hint is { } hintId && DefaultClassificationService.IsExcluded(await departmentRepository.GetByIdAsync(hintId, cancellationToken)))
+        {
+            return none;
+        }
+
+        var resolution = await defaultClassification.ResolveForDepartmentAsync(hint, cancellationToken);
+        if (resolution.Value is { } value)
+        {
+            return new FallbackDecision(new FallbackChoice(value, reason), null);
+        }
+
+        return resolution.DepartmentKnown ? new FallbackDecision(null, resolution.Detail) : none;
+    }
+
+    /// <summary>
+    /// The controlled configuration failure for a human-handled ticket: nothing is created, the error is audited with what to run, and the caller
+    /// gets an explicit outcome (HTTP 409) - so a ticket is never persisted half classified or moved to another department, and the same request
+    /// succeeds as soon as the department's General is configured.
+    /// </summary>
+    private async Task<TicketCreationResult> RefuseNotConfiguredAsync(
+        Guid callerEmployeeId, long intakeRecordId, string error, CancellationToken cancellationToken)
+    {
+        await auditWriter.WriteAsync(
+            callerEmployeeId, DefaultClassificationAuditActions.ConfigurationError, "IntakeRecord", intakeRecordId.ToString(),
+            beforeValue: null,
+            afterValue: $"Handling=Human;Error={error};Action=Run EnsureDefaultGeneralClassification.sql;TicketCreated=false",
+            Guid.NewGuid(), cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+        return TicketCreationResult.Failure(TicketCreationOutcome.DefaultClassificationNotConfigured);
+    }
+
+    /// <summary>
+    /// The priority a fallback ticket starts with: the one the caller supplied when it exists (a Genesys default or an agent's choice),
+    /// otherwise the General request type's configured default. Null when neither resolves.
+    /// </summary>
+    private async Task<Priority?> ResolveFallbackPriorityAsync(byte? suppliedPriorityId, DefaultClassification classification, CancellationToken cancellationToken)
+    {
+        if (suppliedPriorityId is { } supplied && await priorityRepository.GetByIdAsync(supplied, cancellationToken) is { } suppliedPriority)
+        {
+            return suppliedPriority;
+        }
+
+        return await priorityRepository.GetByIdAsync(classification.DefaultPriorityId, cancellationToken);
     }
 
     /// <summary>
