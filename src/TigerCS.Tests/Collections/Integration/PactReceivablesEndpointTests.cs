@@ -187,7 +187,7 @@ public sealed class PactReceivablesEndpointTests
         public Task<PactInstalmentsPage> ReadInstalmentsAsync(PactInstalmentsRequest request, CancellationToken cancellationToken)
         {
             Request = request;
-            if (request.TowerId == 404) throw new PactReceivablesScopeException("The selected tower is not available. Choose a tower from the list.");
+            if (request.TowerId == 404 || request.TowerIds?.Contains(404) == true) throw new PactReceivablesScopeException("The selected tower is not available. Choose a tower from the list.");
             var now = DateTime.UtcNow;
             var company = new SnapshotCompanyStatusDto(4, "Tiger Group Dubai", true, now, now, "Succeeded", null, 0, 1, new DateOnly(2000, 1, 1), new DateOnly(2099, 12, 31), 0, 0m, 0, 0m, 0, 0, "Fresh", 0, false, null, null, true, false, 1);
             var status = new SnapshotStatusDto([company], [], 90, request.From, request.To, []);
@@ -226,5 +226,35 @@ public sealed class PactReceivablesEndpointTests
         var unavailable = await admin.GetAsync($"{url}?paymentStatus=partial");
         Assert.Equal(HttpStatusCode.BadRequest, unavailable.StatusCode);
         Assert.Contains("cannot be told apart", await unavailable.Content.ReadAsStringAsync());
+    }
+    [Fact]
+    public async Task InstalmentsEndpoint_AcceptsSeveralTowers_KeepsTheOldSingleTowerId_AndRejectsInvalidSelections()
+    {
+        var source = new InstalmentSource();
+        using var factory = new TigerCsApiFactory
+        {
+            ExtraConfiguration = new() { ["Collections:Enabled"] = "true", ["CollectionsSource:PactReceivables:Enabled"] = "true" },
+            ExtraServices = services => services.AddScoped<IPactReceivablesSource>(_ => source)
+        };
+        const string url = "/api/collections/receivables/instalments";
+        using var admin = await Client(factory, Roles.SystemAdministrator);
+
+        // Several towers: repeated towerIds, any order, duplicates collapsed; the source gets ONE request with the whole set.
+        var many = await admin.GetAsync($"{url}?towerIds=5&towerIds=3&towerIds=5");
+        Assert.Equal(HttpStatusCode.OK, many.StatusCode);
+        Assert.Equal(new[] { 3, 5 }, source.Request!.TowerIds); Assert.Null(source.Request.TowerId);
+        Assert.Equal(new[] { 3, 5 }, (await many.Content.ReadFromJsonAsync<PactInstalmentsPageDto>())!.TowerIds);
+        // The old single towerId keeps working, alone or together with towerIds.
+        await admin.GetAsync($"{url}?towerId=3");
+        Assert.Equal(3, source.Request.TowerId); Assert.Null(source.Request.TowerIds);
+        await admin.GetAsync($"{url}?towerId=3&towerIds=5");
+        Assert.Equal(new[] { 3, 5 }, source.Request.TowerIds); Assert.Null(source.Request.TowerId);
+        // No selection = all towers.
+        await admin.GetAsync(url);
+        Assert.Null(source.Request.TowerId); Assert.Null(source.Request.TowerIds);
+        // Invalid selections: an unknown tower anywhere in the set, a non-positive id, a value that is not a number.
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.GetAsync($"{url}?towerIds=3&towerIds=404")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.GetAsync($"{url}?towerIds=3&towerIds=0")).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.GetAsync($"{url}?towerIds=abc")).StatusCode);
     }
 }

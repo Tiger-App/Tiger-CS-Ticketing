@@ -37,14 +37,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public CollectionsCampaignPreviewDto? Report { get; private set; }
     public int TotalPages => Report is null ? 1 : Math.Max(1, (int)Math.Ceiling(Report.TotalCount / (double)Report.PageSize));
     /// <summary>Distinct, valid tower ids from repeated <c>towerId</c> values; blanks and junk are ignored (an empty result means All projects).</summary>
-    public static IReadOnlyList<int> ParseTowerIds(Microsoft.Extensions.Primitives.StringValues values) =>
-        values.SelectMany(v => (v ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-              .Select(v => int.TryParse(v, NumberStyles.Integer, CultureInfo.InvariantCulture, out var id) && id > 0 ? id : 0)
-              .Where(id => id > 0).Distinct().Order().ToList();
+    public static IReadOnlyList<int> ParseTowerIds(Microsoft.Extensions.Primitives.StringValues values) => TowerSelection.Parse(values);
 
     /// <summary>What is sent to the API: null for All projects (no tower chosen, or every listed tower chosen - the unrestricted, fastest read).</summary>
-    public IReadOnlyList<int>? EffectiveTowerIds =>
-        TowerIds.Count == 0 || (Towers.Count > 0 && Towers.All(t => TowerIds.Contains(t.TowerId))) ? null : TowerIds;
+    public IReadOnlyList<int>? EffectiveTowerIds => TowerSelection.Effective(TowerIds, Towers);
 
     /// <summary>One chosen tower travels as the established <c>towerId</c>; two or more as <c>towerIds</c>.</summary>
     private int? SingleTowerId => EffectiveTowerIds is { Count: 1 } one ? one[0] : null;

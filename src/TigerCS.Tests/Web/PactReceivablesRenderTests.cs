@@ -37,7 +37,8 @@ public sealed class PactReceivablesRenderTests
         Assert.Empty(api.Calls("/receivables/instalments"));                         // the shell made no data call
         Assert.Contains("data-results-loading", html);
         Assert.Contains("name=\"search\"", html); Assert.Contains("Customer name, mobile, tower or apartment", html);
-        Assert.Contains("<option value=\"7\" selected=\"selected\">124 - Tower 124</option>", html);
+        Assert.Matches("<input type=\"checkbox\" name=\"towerId\" value=\"7\" checked=\"checked\" />", html);   // the old single-tower URL ticks that tower in the shared multi-select
+        Assert.Contains("data-tower-multi", html);
         Assert.Contains("name=\"status\"", html); Assert.Contains("<option value=\"overdue\" selected=\"selected\">Overdue</option>", html);
         Assert.DoesNotContain("upcoming", html, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("name=\"month\"", html); Assert.Contains("<option value=\"\">All months</option>", html); Assert.Contains("name=\"year\"", html);

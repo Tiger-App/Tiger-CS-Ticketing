@@ -16,6 +16,10 @@ public static class TicketDisplay
     public static string UaeTime(DateTime utc) =>
         DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("d MMM yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " (UAE)";
 
+    /// <summary>UAE "d MMM HH:mm" - the year left out, for a dense sidebar value where the ticket's own age makes it obvious.</summary>
+    public static string UaeShort(DateTime utc) =>
+        DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("d MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+
     /// <summary>UAE (UTC+4, no daylight saving) "HH:mm" for a chat line.</summary>
     public static string UaeClock(DateTime utc) =>
         DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);

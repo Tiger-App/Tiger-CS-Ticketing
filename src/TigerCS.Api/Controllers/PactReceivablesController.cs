@@ -52,7 +52,8 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
     /// Instalment-level list from the local snapshot (never PACT): tower, due-date range (any range or a whole month), payment status, minimum outstanding amount.
     /// Totals and paging are computed over exactly the filtered instalments.
     /// </summary>
-    /// <param name="towerId">Optional tower; omit for all towers.</param>
+    /// <param name="towerId">Optional tower; omit for all towers. Still accepted so old links work; combined with <c>towerIds</c>.</param>
+    /// <param name="towerIds">Optional several towers (repeat the parameter: <c>towerIds=1&amp;towerIds=2</c>). An instalment is kept when it belongs to ANY of them (OR); filtering happens before totals and paging. Omit for all towers; an unknown id is a 400.</param>
     /// <param name="dateFrom">First due date included (default 1 January of the current year).</param>
     /// <param name="dateTo">Last due date included, whole day (default end of the current month).</param>
     /// <param name="paymentStatus"><c>outstanding</c> (default: remaining balance &gt; 0), <c>unpaid</c>, <c>partial</c>, <c>paid</c> or <c>all</c>.</param>
@@ -72,11 +73,11 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Instalments([FromQuery] int? towerId, [FromQuery] DateOnly? dateFrom, [FromQuery] DateOnly? dateTo, [FromQuery] string? paymentStatus,
-        [FromQuery] decimal? minAmount, [FromQuery] string? search, [FromQuery] int page = 1, [FromQuery] int pageSize = 25, [FromQuery] string? view = null, [FromQuery] string? dueMonth = null, [FromQuery] string? status = null, [FromQuery] decimal? minTotal = null, CancellationToken cancellationToken = default)
+        [FromQuery] decimal? minAmount, [FromQuery] string? search, [FromQuery] int page = 1, [FromQuery] int pageSize = 25, [FromQuery] string? view = null, [FromQuery] string? dueMonth = null, [FromQuery] string? status = null, [FromQuery] decimal? minTotal = null, CancellationToken cancellationToken = default, [FromQuery] int[]? towerIds = null)
     {
         var caller = Caller();
         if (caller is null) return Unauthorized();
-        var result = await instalments.ListAsync(caller, towerId, dateFrom, dateTo, paymentStatus, minAmount, search, page, pageSize, cancellationToken, view, dueMonth, status, minTotal);
+        var result = await instalments.ListAsync(caller, towerId, dateFrom, dateTo, paymentStatus, minAmount, search, page, pageSize, cancellationToken, view, dueMonth, status, minTotal, towerIds);
         return result.IsSuccess ? Ok(result.Value) : Failure(result.Outcome, result.Detail);
     }
 

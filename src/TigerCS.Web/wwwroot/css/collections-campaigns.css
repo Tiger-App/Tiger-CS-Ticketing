@@ -107,16 +107,3 @@
     .campaign-card__value { font-size: 1.25rem; }
     .campaign-actions .btn, .campaign-approve__actions .btn { min-height: 40px; }
 }
-
-/* Project / Tower multi-select (compact, same field look as the other filters) */
-.tower-multi { position: relative; }
-.tower-multi__box > summary { cursor: pointer; list-style: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tower-multi__box > summary::-webkit-details-marker { display: none; }
-.tower-multi__panel { position: absolute; z-index: 20; top: calc(100% + 4px); left: 0; min-width: 100%; width: max-content; max-width: 22rem; padding: .5rem; background: var(--surface, #fff); border: 1px solid var(--border, #d0d5dd); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, .12); }
-.tower-multi__search { width: 100%; margin-bottom: .4rem; }
-.tower-multi__actions { display: flex; gap: .4rem; margin-bottom: .4rem; }
-.tower-multi__list { list-style: none; margin: 0; padding: 0; max-height: 15rem; overflow-y: auto; }
-.tower-multi__list li { padding: .15rem 0; }
-.tower-multi__list li[hidden] { display: none; }
-.tower-multi__list label { display: flex; gap: .45rem; align-items: center; cursor: pointer; }
-.tower-multi__empty { color: var(--muted, #667085); font-size: .85rem; }

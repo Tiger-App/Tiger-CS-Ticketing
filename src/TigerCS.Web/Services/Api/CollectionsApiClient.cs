@@ -30,13 +30,14 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
 
     /// <summary>Instalment-level list from the local snapshot (the Receivables page).</summary>
     public Task<ApiResult<PactInstalmentsPageDto>> GetInstalmentsAsync(int? towerId, DateOnly? dateFrom, DateOnly? dateTo, string? paymentStatus, decimal? minAmount,
-        string? search, int page, CancellationToken cancellationToken, string? view = null, string? dueMonth = null, string? status = null, decimal? minTotal = null)
+        string? search, int page, CancellationToken cancellationToken, string? view = null, string? dueMonth = null, string? status = null, decimal? minTotal = null, IReadOnlyList<int>? towerIds = null)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         if (!string.IsNullOrWhiteSpace(view)) query["view"] = view;
         if (!string.IsNullOrWhiteSpace(status)) query["status"] = status;
         if (!string.IsNullOrWhiteSpace(dueMonth)) query["dueMonth"] = dueMonth;
         if (towerId is { } tower) query["towerId"] = Id(tower);
+        foreach (var id in towerIds ?? []) query.Add("towerIds", Id(id));
         if (dateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (dateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (!string.IsNullOrWhiteSpace(paymentStatus)) query["paymentStatus"] = paymentStatus;

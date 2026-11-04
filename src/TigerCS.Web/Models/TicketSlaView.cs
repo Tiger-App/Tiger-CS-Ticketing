@@ -45,19 +45,19 @@ public sealed record TicketSlaView(string Headline, string HeadlineCss, SlaClock
         if (sla.FirstHumanResponseAtUtc is { } answered)
         {
             return sla.FirstResponseBreached
-                ? new SlaClockView(name, $"Answered late, {TicketDisplay.UaeDateTime(answered)}", "breached")
-                : new SlaClockView(name, $"Met, answered {TicketDisplay.UaeDateTime(answered)}", "met");
+                ? new SlaClockView(name, $"Answered late, {TicketDisplay.UaeShort(answered)}", "breached")
+                : new SlaClockView(name, $"Met, answered {TicketDisplay.UaeShort(answered)}", "met");
         }
 
         if (sla.FirstResponseBreached)
         {
             return new SlaClockView(
                 name,
-                sla.FirstResponseDueAtUtc is { } missed ? $"Overdue since {TicketDisplay.UaeDateTime(missed)}" : "Overdue — no person has replied", "breached");
+                sla.FirstResponseDueAtUtc is { } missed ? $"Overdue since {TicketDisplay.UaeShort(missed)}" : "Overdue — no person has replied", "breached");
         }
 
         return new SlaClockView(
-            name, sla.FirstResponseDueAtUtc is { } due ? $"Awaiting a person's reply, due {TicketDisplay.UaeDateTime(due)}" : "Awaiting a person's reply", "running");
+            name, sla.FirstResponseDueAtUtc is { } due ? $"Awaiting a person's reply, due {TicketDisplay.UaeShort(due)}" : "Awaiting a person's reply", "running");
     }
 
     private static SlaClockView ResolutionClock(TicketSlaSummaryResponseDto sla, bool started, bool finished)
@@ -78,7 +78,7 @@ public sealed record TicketSlaView(string Headline, string HeadlineCss, SlaClock
         if (sla.ResolutionBreached)
         {
             return new SlaClockView(
-                name, sla.ResolutionDueAtUtc is { } missed ? $"Overdue since {TicketDisplay.UaeDateTime(missed)}" : "Overdue", "breached");
+                name, sla.ResolutionDueAtUtc is { } missed ? $"Overdue since {TicketDisplay.UaeShort(missed)}" : "Overdue", "breached");
         }
 
         if (sla.IsCurrentlyPaused)
@@ -87,6 +87,6 @@ public sealed record TicketSlaView(string Headline, string HeadlineCss, SlaClock
         }
 
         return new SlaClockView(
-            name, sla.ResolutionDueAtUtc is { } due ? $"Due {TicketDisplay.UaeDateTime(due)}" : "Running", "running");
+            name, sla.ResolutionDueAtUtc is { } due ? $"Due {TicketDisplay.UaeShort(due)}" : "Running", "running");
     }
 }

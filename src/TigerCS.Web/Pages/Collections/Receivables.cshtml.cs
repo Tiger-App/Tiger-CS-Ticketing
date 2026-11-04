@@ -37,7 +37,12 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
     public static readonly IReadOnlyList<(string Value, string Label)> StatusOptions =
         [("all", "Due + Overdue"), ("due", "Due"), ("overdue", "Overdue")];
 
-    public int? TowerId { get; private set; }
+    /// <summary>The chosen towers (distinct, ascending; an old single <c>?towerId=7</c> URL is simply one of them). Empty = All towers.</summary>
+    public IReadOnlyList<int> TowerIds { get; private set; } = [];
+    /// <summary>What is sent to the API: null for All towers (none chosen, or every listed tower chosen - the unrestricted read); one tower as <c>towerId</c>; two or more as <c>towerIds</c>.</summary>
+    public IReadOnlyList<int>? EffectiveTowerIds => TowerSelection.Effective(TowerIds, Towers);
+    private int? SingleTowerId => EffectiveTowerIds is { Count: 1 } one ? one[0] : null;
+    private IReadOnlyList<int>? ManyTowerIds => EffectiveTowerIds is { Count: > 1 } many ? many : null;
     /// <summary>Month and year of the instalments' DUE date; both empty = All months (historic overdue plus the whole current month). Narrows the results only: Due / Overdue stay classified against the current month.</summary>
     public int? Month { get; private set; }
     public int? Year { get; private set; }
@@ -66,9 +71,9 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
 
     public static readonly string[] MonthNames = CultureInfo.InvariantCulture.DateTimeFormat.MonthNames.Take(12).ToArray();
 
-    public async Task OnGetAsync(int? towerId, string? status, string? search, int? month = null, int? year = null, int page = 1, string? render = null, string? load = null, CancellationToken cancellationToken = default)
+    public async Task OnGetAsync(string? status, string? search, int? month = null, int? year = null, int page = 1, string? render = null, string? load = null, CancellationToken cancellationToken = default)
     {
-        Bind(towerId, status, search, month, year, page, load);
+        Bind(status, search, month, year, page, load);
         RenderFull = render == "full";
         // The shell never waits for data. The tower list is a small local read; results arrive through the Results handler (or render=full without JavaScript).
         var towers = await api.GetTowersAsync(cancellationToken);
@@ -78,10 +83,10 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
     }
 
     /// <summary>The results area only (HTML fragment).</summary>
-    public async Task<IActionResult> OnGetResultsAsync(int? towerId, string? status, string? search, int? month = null, int? year = null, int page = 1, string? load = null, CancellationToken cancellationToken = default)
+    public async Task<IActionResult> OnGetResultsAsync(string? status, string? search, int? month = null, int? year = null, int page = 1, string? load = null, CancellationToken cancellationToken = default)
     {
         var timer = Stopwatch.StartNew();
-        Bind(towerId, status, search, month, year, page, load);
+        Bind(status, search, month, year, page, load);
         await LoadReportAsync(cancellationToken);
         Response.Headers.CacheControl = "no-store";
         var t = Report?.Timings;
@@ -98,9 +103,9 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
         return new JsonResult(CollectionsDisplay.StatusPayload(result.IsSuccess ? result.Value : null));
     }
 
-    private void Bind(int? towerId, string? status, string? search, int? month, int? year, int page, string? load)
+    private void Bind(string? status, string? search, int? month, int? year, int page, string? load)
     {
-        TowerId = towerId;
+        TowerIds = TowerSelection.Parse(Request.Query["towerId"]);
         Status = StatusOptions.Any(o => o.Value == status?.Trim().ToLowerInvariant()) ? status!.Trim().ToLowerInvariant() : "all";
         Search = search?.Trim();
         MinTotal = ParseMinTotal(Request.Query);
@@ -111,8 +116,17 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
         LoadNotice = CollectionsDisplay.NoticeText(load) is { Length: > 0 } text ? text : null;
     }
 
+    /// <summary>The results request does not render the picker: the tower list is read only when several towers are chosen, so "every tower chosen" still means All towers.</summary>
+    private async Task EnsureTowersAsync(CancellationToken cancellationToken)
+    {
+        if (TowerIds.Count < 2 || Towers.Count > 0) return;
+        var towers = await api.GetTowersAsync(cancellationToken);
+        if (towers.IsSuccess && towers.Value is { } list) Towers = list;
+    }
+
     private async Task LoadReportAsync(CancellationToken cancellationToken)
     {
+        await EnsureTowersAsync(cancellationToken);
         // The dates are the instalments' DUE dates: the chosen month, or everything up to the end of the current month. Never from the next month on (neither Due nor
         // Overdue), and the Due / Overdue classification stays against the current Dubai month whatever month is chosen.
         var today = CollectionsDisplay.DubaiToday();
@@ -123,7 +137,7 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
             if (!CollectionsDueMonth.IsInScope(first, today)) { NothingDueYet = true; return; }
             (from, to) = (first, CollectionsDueMonth.ClampTo(last, today));
         }
-        var result = await api.GetInstalmentsAsync(TowerId, from, to, "outstanding", null, Search, PageNumber, cancellationToken, "units", null, Status == "all" ? null : Status, MinTotal);
+        var result = await api.GetInstalmentsAsync(SingleTowerId, from, to, "outstanding", null, Search, PageNumber, cancellationToken, "units", null, Status == "all" ? null : Status, MinTotal, ManyTowerIds);
         Outcome = result.Outcome;
         Error = result.Detail;
         Report = result.IsSuccess ? result.Value : null;
@@ -133,7 +147,7 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
     public string Query(int? page = null)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
-        if (TowerId is { } tower) query["towerId"] = tower.ToString(CultureInfo.InvariantCulture);
+        foreach (var tower in TowerIds) query.Add("towerId", tower.ToString(CultureInfo.InvariantCulture));   // the picker's own name: the selection survives status / month / year / minimum / search / page changes
         if (Status != "all") query["status"] = Status;
         if (!string.IsNullOrWhiteSpace(Search)) query["search"] = Search;
         if (Month is { } m && Year is { } y) { query["month"] = m.ToString(CultureInfo.InvariantCulture); query["year"] = y.ToString(CultureInfo.InvariantCulture); }

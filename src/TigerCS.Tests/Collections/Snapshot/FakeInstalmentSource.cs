@@ -80,13 +80,16 @@ public sealed class FakeInstalmentSource(DateTime nowUtc) : IPactReceivablesSour
     public Task<PactInstalmentsPage> ReadInstalmentsAsync(PactInstalmentsRequest request, CancellationToken cancellationToken)
     {
         Reads++; LastRequest = request;
-        int? scope = request.CompanyId; string? towerNumber = null;
-        if (request.TowerId is { } towerId)
+        int? scope = request.CompanyId;
+        // The chosen towers: TowerId plus TowerIds, one set (what the procedure does). Any unknown id invalidates the whole selection.
+        var chosen = new List<CollectionsTowerDto>();
+        foreach (var towerId in (request.TowerIds ?? []).Concat(request.TowerId is { } one ? new[] { one } : []).Distinct())
         {
             var tower = Towers.FirstOrDefault(t => t.TowerId == towerId);
             if (tower is null || (request.CompanyId is { } c && c != tower.CompanyId)) throw new PactReceivablesScopeException("The selected tower is not available. Choose a tower from the list.");
-            scope = tower.CompanyId; towerNumber = tower.TowerNumber;
+            chosen.Add(tower);
         }
+        if (chosen.Select(t => t.CompanyId).Distinct().ToList() is [var onlyCompany]) scope = onlyCompany;
         var loaded = Companies.Values.Where(c => scope is null || c.CompanyId == scope).ToList();
         var status = ReceivablesSnapshotComposer.BuildStatus(request.From, request.To, loaded, [], nowUtc, 90);
         var filter = request.PaymentFilter;
@@ -98,7 +101,7 @@ public sealed class FakeInstalmentSource(DateTime nowUtc) : IPactReceivablesSour
         // By unit (ClassifyByDay) classifies against the CALENDAR MONTH of AsOf (today): Overdue before its first day, Due inside it, nothing from the next month on (CollectionsDueMonth).
         var monthStart = request.ClassifyByDay ? CollectionsDueMonth.MonthStart(request.AsOf) : request.AsOf; var nextMonth = monthStart.AddMonths(1);
         var rows = Rows.Where(r => loaded.Any(c => c.CompanyId == r.Company && c.HasSnapshot) && r.UnitId > 0 && r.UnitCode.Trim() is not ("" or "0") && !r.UnitCode.Contains('*'))
-            .Where(r => towerNumber is null || CollectionsTowerNumber.Parse(r.UnitCode) == towerNumber)
+            .Where(r => chosen.Count == 0 || chosen.Any(t => t.CompanyId == r.Company && t.TowerNumber == CollectionsTowerNumber.Parse(r.UnitCode)))
             .Where(r => { var d = DateOnly.FromDateTime(r.Due); return d >= request.From && d <= request.To && (!request.ClassifyByDay || d < nextMonth); })
             .Where(r => filter switch
             {

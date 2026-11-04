@@ -393,6 +393,18 @@
     });
   });
 
+  // Keyboard access for tab-jump labels (they target a tab's radio input): focusable, announced as buttons, Enter/Space activate.
+  document.querySelectorAll("label.tab-jump").forEach(function (label) {
+    if (!label.hasAttribute("tabindex")) label.setAttribute("tabindex", "0");
+    label.setAttribute("role", "button");
+    label.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        label.click();
+      }
+    });
+  });
+
   // Ticket Details "Classify": the request type list follows the chosen category. Each request type option carries the
   // category it belongs under; only those are shown. A category with none classifies on its own (no request type).
   document.querySelectorAll("[data-classify-form]").forEach(function (form) {

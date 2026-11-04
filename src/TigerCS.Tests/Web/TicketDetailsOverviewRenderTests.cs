@@ -265,7 +265,9 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
         Assert.Contains("chat-msg chat-msg--human", conversation, StringComparison.Ordinal);
         Assert.Contains("<li class=\"chat-event\">", conversation, StringComparison.Ordinal);               // a system event, apart from the bubbles
         Assert.Contains("Customer disconnected", conversation, StringComparison.Ordinal);                 // the interaction's own end reason
-        Assert.Contains("&#x2B;971501234567", conversation, StringComparison.Ordinal);
+        // The ticket's own customer phone is stated once, in the page header; the interaction repeats it only when it differs.
+        Assert.Contains("&#x2B;971501234567", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<dt>Phone</dt>", conversation, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -303,8 +305,8 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
         int At(string marker) => html.IndexOf(marker, StringComparison.Ordinal);
         var order = new[]
         {
-            At("class=\"ticket-header\""), At("class=\"customer-strip\""), At(">Next step</div>"), At(">Request Details</div>"),
-            At("id=\"conversation-title\""), At("id=\"customer-satisfaction\""), At(">Latest Activity</div>"), At("id=\"additional-details\""),
+            At("class=\"tw-head\""), At("class=\"tw-next "), At("id=\"conversation-title\""), At(">Latest Activity</div>"),
+            At(">Request Details</div>"), At("id=\"customer-satisfaction\""), At("id=\"additional-details\""),
         };
         Assert.All(order, p => Assert.True(p >= 0));
         Assert.Equal(order.OrderBy(p => p), order);
