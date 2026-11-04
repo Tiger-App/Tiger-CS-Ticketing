@@ -582,8 +582,26 @@ public sealed class GenesysInquiryIngestionAppService(
                 return new CustomerLookupSummary($"Found(Ambiguous:{candidates.Count} customers share this number)", null);
             }
 
+            if (found)
+            {
+                return new CustomerLookupSummary("Found", candidates.FirstOrDefault());
+            }
+
+            // "NotFound" is an ANSWER: every source that was asked said there is no such customer. A source that could not be asked
+            // (CRM unavailable / timed out / errored, PACT or Tasleeh down) has said nothing, so the customer must not be recorded as
+            // unknown - the inquiry is annotated as an incomplete lookup, naming what failed, and the agent can look again.
+            var failedSources = new List<string>();
+            if (result.CrmStatus == "Failed")
+            {
+                failedSources.Add(result.CrmFailureKind is { Length: > 0 } kind ? $"Crm:{kind}" : "Crm");
+            }
+
+            failedSources.AddRange(result.ExternalSources.Where(s => s.Status == "Failed").Select(s => s.Source));
+
             return new CustomerLookupSummary(
-                found ? "Found" : $"NotFound(Crm={result.CrmStatus})",
+                failedSources.Count > 0
+                    ? $"LookupFailed({string.Join(",", failedSources)})"
+                    : $"NotFound(Crm={result.CrmStatus})",
                 candidates.FirstOrDefault());
         }
         catch (Exception ex)

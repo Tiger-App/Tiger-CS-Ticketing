@@ -583,4 +583,234 @@ public class SlaAndEscalationEndpointsTests : IClassFixture<TigerCsApiFactory>
         Assert.Equal("Breached", sla.SlaState);
         Assert.Equal("Level3", sla.EscalationLevel);
     }
+
+    // -----------------------------------------------------------------
+    // Escalation is refused on the server for a ticket the caller cannot act on
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// A CS Agent holds the cross-department "escalate" permission, but may only act on tickets assigned to them (or department work they are
+    /// responsible for). Escalating someone else's ticket is refused with 403 and changes nothing.
+    /// </summary>
+    [Fact]
+    public async Task CsAgent_EscalatingATicketAssignedToAnotherAgent_Returns403_AndChangesNothing()
+    {
+        var (ownerClient, _) = await CreateClientAsync(Roles.CsAgent);
+        var ticket = await CreateTicketAsync(ownerClient, (byte)PriorityLevel.High);
+        var (otherAgentClient, _) = await CreateClientAsync(Roles.CsAgent);
+
+        var response = await otherAgentClient.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/escalations",
+            new ManualEscalationRequestDto(2, "ManualFlag", "Not my ticket.", RowVersionOf(ticket)));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Empty(await _factory.GetEscalationsAsync(ticket.TicketId));
+        Assert.Equal("None", (await ReReadAsync(ownerClient, ticket.TicketId)).EscalationLevel);
+    }
+
+    [Fact]
+    public async Task CsAgent_EscalatingTheirOwnTicket_StillSucceeds()
+    {
+        var (client, _) = await CreateClientAsync(Roles.CsAgent);
+        var ticket = await CreateTicketAsync(client, (byte)PriorityLevel.High);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/escalations",
+            new ManualEscalationRequestDto(2, "ManualFlag", "Cannot resolve.", RowVersionOf(ticket)));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task DepartmentHead_EscalatingATicketOutsideTheirDepartment_Returns403()
+    {
+        var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
+        var ticket = await CreateTicketAsync(agentClient, (byte)PriorityLevel.High);
+        var otherDepartment = await _factory.CreateDepartmentAsync("Other " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        var (headClient, headId) = await CreateClientAsync(Roles.DepartmentHead);
+        await _factory.AssignPrimaryDepartmentAsync(headId, otherDepartment);
+
+        var response = await headClient.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/escalations",
+            new ManualEscalationRequestDto(2, "ManualFlag", null, RowVersionOf(ticket)));
+
+        Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        Assert.Empty(await _factory.GetEscalationsAsync(ticket.TicketId));
+    }
+
+    [Theory]
+    [InlineData(Roles.CsSupervisor)]
+    [InlineData(Roles.CsManager)]
+    [InlineData(Roles.GeneralManager)]
+    public async Task SupervisoryRoles_CanEscalateAnotherAgentsTicket(string role)
+    {
+        var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
+        var ticket = await CreateTicketAsync(agentClient, (byte)PriorityLevel.High);
+        var (supervisorClient, _) = await CreateClientAsync(role);
+
+        var response = await supervisorClient.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/escalations",
+            new ManualEscalationRequestDto(2, "ManualFlag", null, RowVersionOf(ticket)));
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+    }
+
+    // -----------------------------------------------------------------
+    // First response timestamp integrity
+    // -----------------------------------------------------------------
+
+    [Theory]
+    [InlineData("HumanAgentMessage")]
+    [InlineData("3")]
+    [InlineData("99")]
+    public async Task RecordingFirstResponse_WithASystemOnlyOrNumericSource_Returns400_AndRecordsNothing(string source)
+    {
+        var (client, _) = await CreateClientAsync(Roles.CsSupervisor);
+        var ticket = await CreateTicketAsync(client, (byte)PriorityLevel.High);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/sla/first-response",
+            new RecordFirstResponseRequestDto(source, null, RowVersionOf(ticket)));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var sla = await (await client.GetAsync($"/api/tickets/{ticket.TicketId}/sla")).Content.ReadFromJsonAsync<TicketSlaSummaryResponseDto>();
+        Assert.Null(sla!.FirstHumanResponseAtUtc);
+    }
+
+    [Fact]
+    public async Task RecordingFirstResponse_BackdatedFarBeforeTheTicketAsAGenesysCallAnswer_Returns400()
+    {
+        var (client, _) = await CreateClientAsync(Roles.CsSupervisor);
+        var ticket = await CreateTicketAsync(client, (byte)PriorityLevel.High);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/sla/first-response",
+            new RecordFirstResponseRequestDto("GenesysCallAnswer", DateTime.UtcNow.AddDays(-3), RowVersionOf(ticket)));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task RecordingFirstResponse_AuditsWhoRecordedItAndWhen_ForEachApiSource()
+    {
+        var (client, supervisorId) = await CreateClientAsync(Roles.CsSupervisor);
+        var manual = await CreateTicketAsync(client, (byte)PriorityLevel.High);
+        var call = await CreateTicketAsync(client, (byte)PriorityLevel.High);
+
+        var manualResponse = await client.PostAsJsonAsync(
+            $"/api/tickets/{manual.TicketId}/sla/first-response",
+            new RecordFirstResponseRequestDto("Manual", null, RowVersionOf(manual)));
+        var callResponse = await client.PostAsJsonAsync(
+            $"/api/tickets/{call.TicketId}/sla/first-response",
+            new RecordFirstResponseRequestDto("GenesysCallAnswer", DateTime.UtcNow.AddMinutes(-1), RowVersionOf(call)));
+
+        Assert.Equal(HttpStatusCode.OK, manualResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, callResponse.StatusCode);
+        foreach (var (ticket, source) in new[] { (manual, "Manual"), (call, "GenesysCallAnswer") })
+        {
+            var audit = Assert.Single(
+                await _factory.GetAuditEntriesAsync(ticket.TicketId.ToString()), a => a.Action == "RecordFirstResponse");
+            Assert.Equal(supervisorId, audit.ActorEmployeeId);
+            Assert.Contains($"\"source\":\"{source}\"", audit.AfterValue, StringComparison.Ordinal);
+            Assert.Contains("\"recordedAtUtc\"", audit.AfterValue, StringComparison.Ordinal);
+            Assert.Contains("\"backdatedMinutes\"", audit.AfterValue, StringComparison.Ordinal);
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // SLA state accuracy: what is persisted when a ticket is resolved
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// Drives a ticket through the real workflow to Resolved: a CS Manager takes it over and starts work, a Department Head of its department
+    /// resolves it. Returns the manager's client (who can still see it) and the resolved ticket.
+    /// </summary>
+    private async Task<(HttpClient ManagerClient, TicketDetailDto Resolved)> ResolveAsync(HttpClient agentClient, TicketDetailDto ticket)
+    {
+        var (managerClient, managerId) = await CreateClientAsync(Roles.CsManager);
+        await _factory.AssignPrimaryDepartmentAsync(managerId, ticket.CurrentDepartmentId);
+
+        var assigned = await (await managerClient.PostAsJsonAsync(
+                $"/api/tickets/{ticket.TicketId}/assignment",
+                new AssignTicketRequestDto(managerId, RowVersionOf(ticket), TicketTransferReason.NeedsEscalation, "Taken over by the manager.")))
+            .Content.ReadFromJsonAsync<TicketDetailDto>();
+        var inProgress = await (await managerClient.PostAsJsonAsync(
+                $"/api/tickets/{ticket.TicketId}/status", new ChangeStatusRequestDto("InProgress", RowVersionOf(assigned!))))
+            .Content.ReadFromJsonAsync<TicketDetailDto>();
+
+        var (headClient, headId) = await CreateClientAsync(Roles.DepartmentHead);
+        await _factory.AssignPrimaryDepartmentAsync(headId, ticket.CurrentDepartmentId);
+        var resolveResponse = await headClient.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/resolution",
+            new ResolveTicketRequestDto("Resolved", "Replaced the compressor.", null, null, RowVersionOf(inProgress!)));
+        Assert.Equal(HttpStatusCode.OK, resolveResponse.StatusCode);
+
+        return (managerClient, (await resolveResponse.Content.ReadFromJsonAsync<TicketDetailDto>())!);
+    }
+
+    private static async Task<TicketSlaSummaryResponseDto> GetSlaAsync(HttpClient client, long ticketId) =>
+        (await (await client.GetAsync($"/api/tickets/{ticketId}/sla")).Content.ReadFromJsonAsync<TicketSlaSummaryResponseDto>())!;
+
+    /// <summary>
+    /// The defect this pins: a ticket resolved inside both deadlines never became <c>Met</c> in the database, because the breach processor
+    /// looked for the just-added resolution with a database query that cannot see an unsaved row. The state stayed Running forever.
+    /// Ticket Details (the ticket DTO) and the SLA endpoint must agree.
+    /// </summary>
+    [Fact]
+    public async Task ResolvingWithinBothDeadlines_PersistsMet_AndEveryViewAgrees()
+    {
+        var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
+        var ticket = await CreateTicketAsync(agentClient, (byte)PriorityLevel.Critical);
+        var (supervisorClient, _) = await CreateClientAsync(Roles.CsSupervisor);
+        var fr = await supervisorClient.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/sla/first-response", new RecordFirstResponseRequestDto("Manual", null, RowVersionOf(ticket)));
+        Assert.Equal(HttpStatusCode.OK, fr.StatusCode);
+
+        var (managerClient, resolved) = await ResolveAsync(agentClient, await ReReadAsync(supervisorClient, ticket.TicketId));
+
+        var sla = await GetSlaAsync(managerClient, ticket.TicketId);
+        Assert.Equal("Met", sla.SlaState);
+        Assert.False(sla.FirstResponseBreached);
+        Assert.False(sla.ResolutionBreached);
+        Assert.Equal("Met", resolved.SlaState);
+        Assert.Equal("Met", (await ReReadAsync(managerClient, ticket.TicketId)).SlaState);
+        Assert.Equal("Met", (await _factory.GetTicketAsync(ticket.TicketId))!.SlaState.ToString());
+    }
+
+    /// <summary>A late resolution is still a breach, not Met - and only the Resolution clock is marked.</summary>
+    [Fact]
+    public async Task ResolvingAfterTheResolutionDeadline_IsBreached_AndOnlyTheResolutionClockIsMarked()
+    {
+        var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
+        var ticket = await CreateTicketAsync(agentClient, (byte)PriorityLevel.High);
+        var (supervisorClient, _) = await CreateClientAsync(Roles.CsSupervisor);
+        await supervisorClient.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/sla/first-response", new RecordFirstResponseRequestDto("Manual", null, RowVersionOf(ticket)));
+        await _factory.ForceSlaDueDatesAsync(ticket.TicketId, DateTime.UtcNow.AddHours(5), DateTime.UtcNow.AddMinutes(-5));
+
+        var (managerClient, resolved) = await ResolveAsync(agentClient, await ReReadAsync(supervisorClient, ticket.TicketId));
+
+        var sla = await GetSlaAsync(managerClient, ticket.TicketId);
+        Assert.Equal("Breached", sla.SlaState);
+        Assert.True(sla.ResolutionBreached);
+        Assert.False(sla.FirstResponseBreached);
+        Assert.Equal("Breached", resolved.SlaState);
+    }
+
+    /// <summary>The two clocks are independent: a missed First Response is not erased by an on-time resolution, and does not mark the Resolution clock.</summary>
+    [Fact]
+    public async Task AMissedFirstResponse_IsNotErasedByAnOnTimeResolution_AndTheResolutionClockStaysClean()
+    {
+        var (agentClient, _) = await CreateClientAsync(Roles.CsAgent);
+        var ticket = await CreateTicketAsync(agentClient, (byte)PriorityLevel.High);
+        await _factory.ForceSlaDueDatesAsync(ticket.TicketId, DateTime.UtcNow.AddMinutes(-30), DateTime.UtcNow.AddHours(8));
+        await _factory.RunDeadlineCheckAsync(ticket.TicketId, SlaDeadlineType.FirstResponse);
+
+        var (managerClient, _) = await ResolveAsync(agentClient, await ReReadAsync(agentClient, ticket.TicketId));
+
+        var sla = await GetSlaAsync(managerClient, ticket.TicketId);
+        Assert.Equal("Breached", sla.SlaState);
+        Assert.True(sla.FirstResponseBreached);
+        Assert.False(sla.ResolutionBreached);
+    }
 }

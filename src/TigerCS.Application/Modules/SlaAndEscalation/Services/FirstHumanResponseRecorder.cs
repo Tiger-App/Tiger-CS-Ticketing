@@ -108,13 +108,16 @@ public sealed class FirstHumanResponseRecorder(
             new TicketStatusHistory(
                 ticket.TicketId, TicketStatusDimension.SlaState, (byte)ticket.SlaState, (byte)ticket.SlaState,
                 actorEmployeeId, actorIsSystem,
-                note: $"First human response recorded ({source}) at {occurredAtUtc:O}.", correlationId, nowUtc),
+                note: $"First human response recorded ({source}) at {occurredAtUtc:O}; recorded in the system at {nowUtc:O}.", correlationId, nowUtc),
             cancellationToken);
 
         await auditWriter.WriteAsync(
             actorEmployeeId, "RecordFirstResponse", nameof(Ticket), ticket.TicketId.ToString(),
             beforeValue: "{\"firstHumanResponseAtUtc\":null}",
-            afterValue: $"{{\"firstHumanResponseAtUtc\":\"{occurredAtUtc:O}\",\"source\":\"{source}\"}}",
+            afterValue:
+                $"{{\"firstHumanResponseAtUtc\":\"{occurredAtUtc:O}\",\"source\":\"{source}\","
+                + $"\"recordedAtUtc\":\"{nowUtc:O}\",\"backdatedMinutes\":{BackdatedMinutes(occurredAtUtc, nowUtc)},"
+                + $"\"recordedBySystem\":{(actorIsSystem ? "true" : "false")}}}",
             correlationId, cancellationToken);
 
         // Finalizes the breach flag if the response landed late — and, if it
@@ -126,4 +129,12 @@ public sealed class FirstHumanResponseRecorder(
 
         return true;
     }
+
+    /// <summary>
+    /// How many whole minutes before the moment of recording the response is stated to have happened - 0 for a response recorded as it
+    /// happens. Written to the audit trail so a response entered after the fact (a call that took place outside the system) is visible as
+    /// such, whoever entered it; a timestamp from the future counts as 0.
+    /// </summary>
+    internal static int BackdatedMinutes(DateTime occurredAtUtc, DateTime recordedAtUtc) =>
+        occurredAtUtc >= recordedAtUtc ? 0 : (int)Math.Min(int.MaxValue, (recordedAtUtc - occurredAtUtc).TotalMinutes);
 }

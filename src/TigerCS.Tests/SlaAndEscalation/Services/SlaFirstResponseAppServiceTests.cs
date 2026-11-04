@@ -159,6 +159,186 @@ public class SlaFirstResponseAppServiceTests
     }
 
     // -----------------------------------------------------------------
+    // Timestamp integrity: which sources a person may name, and how far back
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// HumanAgentMessage means "the system saw a HumanAgent transcript line". It is recorded only by the Genesys conversation-end path,
+    /// so a person cannot stamp a hand-entered time with the system's own provenance.
+    /// </summary>
+    [Fact]
+    public async Task TheSystemOnlyHumanAgentMessageSource_IsRejectedFromTheApi_AndRecordsNothing()
+    {
+        var h = await CreateAsync(CreatedAt.AddMinutes(20));
+
+        var result = await h.Service.RecordAsync(
+            h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, Request(source: nameof(FirstResponseSource.HumanAgentMessage)));
+
+        Assert.Equal(SlaOperationOutcome.InvalidRequest, result.Outcome);
+        Assert.Null(h.Ticket.FirstHumanResponseAtUtc);
+        Assert.DoesNotContain(h.Sla.Audit.Entries, e => e.Action == "RecordFirstResponse");
+    }
+
+    /// <summary>Enum.TryParse accepts numbers, including ones that name no member - and the number that names the system-only source.</summary>
+    [Theory]
+    [InlineData("3")]
+    [InlineData("0")]
+    [InlineData("99")]
+    [InlineData("-1")]
+    [InlineData("")]
+    [InlineData("Manual,GenesysCallAnswer")]
+    public async Task ANumericOrMalformedSource_IsRejected(string source)
+    {
+        var h = await CreateAsync(CreatedAt.AddMinutes(20));
+
+        var result = await h.Service.RecordAsync(
+            h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, Request(source: source));
+
+        Assert.Equal(SlaOperationOutcome.InvalidRequest, result.Outcome);
+        Assert.Null(h.Ticket.FirstHumanResponseAtUtc);
+    }
+
+    [Theory]
+    [InlineData("Manual")]
+    [InlineData("manual")]
+    [InlineData("GenesysCallAnswer")]
+    public async Task TheSupportedApiSources_AreAccepted_CaseInsensitively(string source)
+    {
+        var h = await CreateAsync(CreatedAt.AddMinutes(20));
+
+        var result = await h.Service.RecordAsync(h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, Request(source: source));
+
+        Assert.Equal(SlaOperationOutcome.Success, result.Outcome);
+        Assert.Equal(CreatedAt.AddMinutes(20), h.Ticket.FirstHumanResponseAtUtc);
+    }
+
+    /// <summary>The Example E allowance is a bounded one: exactly at the limit is fine, a minute beyond it is not.</summary>
+    [Fact]
+    public async Task AGenesysCallAnswer_MayPrecedeCreationByTheAllowance_AndNoMore()
+    {
+        var atLimit = await CreateAsync(CreatedAt.AddMinutes(30));
+        var accepted = await atLimit.Service.RecordAsync(
+            atLimit.OwnerId, [Roles.CsAgent], atLimit.Ticket.TicketId,
+            Request(CreatedAt - SlaFirstResponseAppService.GenesysCallAnswerLeadAllowance, "GenesysCallAnswer"));
+
+        var beyond = await CreateAsync(CreatedAt.AddMinutes(30));
+        var rejected = await beyond.Service.RecordAsync(
+            beyond.OwnerId, [Roles.CsAgent], beyond.Ticket.TicketId,
+            Request(CreatedAt - SlaFirstResponseAppService.GenesysCallAnswerLeadAllowance - TimeSpan.FromMinutes(1), "GenesysCallAnswer"));
+
+        Assert.Equal(SlaOperationOutcome.Success, accepted.Outcome);
+        Assert.Equal(SlaOperationOutcome.InvalidRequest, rejected.Outcome);
+        Assert.Null(beyond.Ticket.FirstHumanResponseAtUtc);
+    }
+
+    /// <summary>
+    /// The manipulation this guards: the deadline has already passed, so the owner re-labels the response as a Genesys call answer and
+    /// places it days before the ticket existed to turn a miss into a hit. Refused; the breach is still decided on the real facts.
+    /// </summary>
+    [Fact]
+    public async Task ABackdatedGenesysCallAnswer_CannotBeUsedToEraseABreach()
+    {
+        var h = await CreateAsync(FirstResponseDue.AddHours(2));
+
+        var result = await h.Service.RecordAsync(
+            h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, Request(CreatedAt.AddDays(-10), "GenesysCallAnswer"));
+
+        Assert.Equal(SlaOperationOutcome.InvalidRequest, result.Outcome);
+        Assert.Null(h.Ticket.FirstHumanResponseAtUtc);
+        Assert.False((await h.Sla.SlaInstances.GetCurrentAsync(h.Ticket.TicketId))!.FirstResponseBreached);
+        Assert.DoesNotContain(h.Sla.Audit.Entries, e => e.Action == "RecordFirstResponse");
+    }
+
+    /// <summary>
+    /// Legitimate recording of a response that happened outside the system is kept exactly as sent - and made visible: the audit entry says
+    /// who recorded it, when it was recorded, and how long before that it is stated to have happened.
+    /// </summary>
+    [Fact]
+    public async Task AResponseGivenOutsideTheSystem_IsRecordedAsSent_AndTheAuditTrailShowsTheBackdating()
+    {
+        var recordedAt = CreatedAt.AddHours(3);
+        var h = await CreateAsync(recordedAt);
+        var happenedAt = CreatedAt.AddMinutes(10);
+
+        var result = await h.Service.RecordAsync(h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, Request(happenedAt));
+
+        Assert.Equal(SlaOperationOutcome.Success, result.Outcome);
+        Assert.Equal(happenedAt, h.Ticket.FirstHumanResponseAtUtc);
+
+        var audit = Assert.Single(h.Sla.Audit.Entries, e => e.Action == "RecordFirstResponse");
+        Assert.Equal(h.OwnerId, audit.ActorEmployeeId);
+        Assert.Contains($"\"firstHumanResponseAtUtc\":\"{happenedAt:O}\"", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains($"\"recordedAtUtc\":\"{recordedAt:O}\"", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains("\"backdatedMinutes\":170", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains("\"source\":\"Manual\"", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains("\"recordedBySystem\":false", audit.AfterValue, StringComparison.Ordinal);
+
+        var history = Assert.Single(h.Sla.StatusHistory.Added, e => e.Dimension == TicketStatusDimension.SlaState);
+        Assert.False(history.ActorIsSystem);
+        Assert.Contains(happenedAt.ToString("O"), history.Note, StringComparison.Ordinal);
+        Assert.Contains(recordedAt.ToString("O"), history.Note, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AResponseRecordedAsItHappens_IsAuditedAsNotBackdated()
+    {
+        var h = await CreateAsync(CreatedAt.AddMinutes(20));
+
+        await h.Service.RecordAsync(h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, Request());
+
+        var audit = Assert.Single(h.Sla.Audit.Entries, e => e.Action == "RecordFirstResponse");
+        Assert.Contains("\"backdatedMinutes\":0", audit.AfterValue, StringComparison.Ordinal);
+    }
+
+    // -----------------------------------------------------------------
+    // The system source: the first HumanAgent transcript line
+    // -----------------------------------------------------------------
+
+    /// <summary>
+    /// The Genesys conversation-end path records through the same recorder, as the system. It is the only caller that may use the
+    /// HumanAgentMessage source, and it is attributed and audited as such.
+    /// </summary>
+    [Fact]
+    public async Task TheSystemPath_RecordsAHumanAgentMessage_AttributedToTheSystem()
+    {
+        var h = await CreateAsync(CreatedAt.AddMinutes(40));
+        var integrationAccount = Guid.NewGuid();
+        var sentAt = CreatedAt.AddMinutes(12);
+
+        var recorded = await h.Sla.FirstHumanResponse.TryRecordAsync(
+            h.Ticket, sentAt, CreatedAt.AddMinutes(40), integrationAccount, actorIsSystem: true,
+            FirstResponseSource.HumanAgentMessage, Guid.NewGuid());
+
+        Assert.True(recorded);
+        Assert.Equal(sentAt, h.Ticket.FirstHumanResponseAtUtc);
+        var audit = Assert.Single(h.Sla.Audit.Entries, e => e.Action == "RecordFirstResponse");
+        Assert.Equal(integrationAccount, audit.ActorEmployeeId);
+        Assert.Contains("\"source\":\"HumanAgentMessage\"", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains("\"recordedBySystem\":true", audit.AfterValue, StringComparison.Ordinal);
+        Assert.True(Assert.Single(h.Sla.StatusHistory.Added, e => e.Dimension == TicketStatusDimension.SlaState).ActorIsSystem);
+    }
+
+    /// <summary>Whichever source arrives first wins; a later one - from any path - cannot move the contractual measurement.</summary>
+    [Theory]
+    [InlineData(FirstResponseSource.Manual, FirstResponseSource.HumanAgentMessage)]
+    [InlineData(FirstResponseSource.GenesysCallAnswer, FirstResponseSource.HumanAgentMessage)]
+    [InlineData(FirstResponseSource.HumanAgentMessage, FirstResponseSource.Manual)]
+    public async Task TheFirstRecordedSourceWins_AndALaterOneNeverOverwritesIt(FirstResponseSource first, FirstResponseSource second)
+    {
+        var h = await CreateAsync(CreatedAt.AddMinutes(40));
+        var firstAt = CreatedAt.AddMinutes(5);
+
+        Assert.True(await h.Sla.FirstHumanResponse.TryRecordAsync(
+            h.Ticket, firstAt, CreatedAt.AddMinutes(40), h.OwnerId, actorIsSystem: false, first, Guid.NewGuid()));
+        var again = await h.Sla.FirstHumanResponse.TryRecordAsync(
+            h.Ticket, CreatedAt.AddMinutes(1), CreatedAt.AddMinutes(41), h.OwnerId, actorIsSystem: true, second, Guid.NewGuid());
+
+        Assert.False(again);
+        Assert.Equal(firstAt, h.Ticket.FirstHumanResponseAtUtc);
+        Assert.Single(h.Sla.Audit.Entries, e => e.Action == "RecordFirstResponse");
+    }
+
+    // -----------------------------------------------------------------
     // Write-once (MVP-ERD.md §2.10, MVP-API-Contracts.md §5.2's 409)
     // -----------------------------------------------------------------
 

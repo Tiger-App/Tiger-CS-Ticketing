@@ -32,6 +32,25 @@ public sealed class SlaFirstResponseAppService(
     ITicketingUnitOfWork unitOfWork,
     TimeProvider timeProvider)
 {
+    /// <summary>
+    /// How far before the ticket's own creation a <see cref="FirstResponseSource.GenesysCallAnswer"/> may be placed. SLA-Architecture.md §16
+    /// Example E is a call answered "a moment" before the agent finished creating its ticket; it is not a licence to place the response
+    /// arbitrarily far back. Beyond this window the request is refused (400) rather than clamped, so a caller never believes a different
+    /// time was stored than the one sent.
+    /// </summary>
+    public static readonly TimeSpan GenesysCallAnswerLeadAllowance = TimeSpan.FromHours(1);
+
+    /// <summary>Tolerated clock skew for a response stamped slightly ahead of the server's clock. Anything later is a response that has not happened yet.</summary>
+    public static readonly TimeSpan FutureTolerance = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// The sources a person may name through the API. <see cref="FirstResponseSource.HumanAgentMessage"/> is deliberately absent: it
+    /// means "the system observed a HumanAgent transcript line" and is recorded only by the Genesys conversation-end path, so a caller
+    /// cannot label a hand-entered time with the system's own provenance.
+    /// </summary>
+    private static readonly IReadOnlySet<FirstResponseSource> ApiRecordableSources =
+        new HashSet<FirstResponseSource> { FirstResponseSource.Manual, FirstResponseSource.GenesysCallAnswer };
+
     public async Task<SlaOperationResult<TicketSlaSummaryResponseDto>> RecordAsync(
         Guid callerEmployeeId,
         IReadOnlyCollection<string> callerRoles,
@@ -47,7 +66,11 @@ public sealed class SlaFirstResponseAppService(
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.NotFound);
         }
 
-        if (!Enum.TryParse<FirstResponseSource>(request.Source, ignoreCase: true, out var source))
+        // Enum.TryParse also accepts numeric text ("99") and any integer as an undefined member, so the name must be a defined one,
+        // and it must be a source a person may record - not the system-only HumanAgentMessage.
+        if (!Enum.TryParse<FirstResponseSource>(request.Source, ignoreCase: true, out var source)
+            || !Enum.IsDefined(source)
+            || !ApiRecordableSources.Contains(source))
         {
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.InvalidRequest);
         }
@@ -72,11 +95,15 @@ public sealed class SlaFirstResponseAppService(
         var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
         var occurredAtUtc = request.OccurredAtUtc ?? nowUtc;
 
-        // A response cannot have happened in the future, and a person recording it by hand cannot place it before the
-        // ticket existed (that allowance is SLA-Architecture §16 Example E, for a Genesys call answer only). Without these
-        // bounds a caller could backdate the response to erase a breach.
-        if (occurredAtUtc > nowUtc.AddMinutes(5)
-            || (source == FirstResponseSource.Manual && occurredAtUtc < ticket.CreatedAtUtc))
+        // A response cannot have happened in the future, and a person recording it cannot place it before the ticket existed. The one
+        // allowance is SLA-Architecture §16 Example E - a Genesys call answered moments before its ticket was created - and even that
+        // is bounded (GenesysCallAnswerLeadAllowance). Without these bounds a caller could backdate the response to erase a breach.
+        // A response that genuinely happened outside the system is still recorded exactly as sent; it is made accountable, not blocked:
+        // the audit entry carries who recorded it, when it was recorded, and how far back it was placed.
+        var earliestAllowedUtc = source == FirstResponseSource.GenesysCallAnswer
+            ? ticket.CreatedAtUtc - GenesysCallAnswerLeadAllowance
+            : ticket.CreatedAtUtc;
+        if (occurredAtUtc > nowUtc + FutureTolerance || occurredAtUtc < earliestAllowedUtc)
         {
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.InvalidRequest);
         }

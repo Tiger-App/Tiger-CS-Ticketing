@@ -1,9 +1,11 @@
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
+using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.SlaAndEscalation.Abstractions;
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
+using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
@@ -41,7 +43,9 @@ public sealed class TicketEscalationAppService(
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ITicketInteractionHandlerRepository? handlerRepository = null,
+    IServiceIdentityRegistry? serviceIdentities = null)
 {
     public async Task<SlaOperationResult<TicketEscalationResponseDto>> EscalateAsync(
         Guid callerEmployeeId,
@@ -83,7 +87,13 @@ public sealed class TicketEscalationAppService(
             return SlaOperationResult<TicketEscalationResponseDto>.Failure(SlaOperationOutcome.EscalationLevelTriggerMismatch);
         }
 
-        if (!await IsAuthorizedAsync(callerEmployeeId, callerRoles, ticket, triggerType, cancellationToken))
+        // Two server-side checks, both before anything is written: the caller's ROLE may escalate (IsAuthorizedAsync), and the caller may
+        // act on THIS ticket (TicketVisibilityRule.PassesAgentScopeAsync - a restricted CS Agent needs full access to it). The API's
+        // RequireTicketAccess filter applies the second check in front of the controller; it is repeated here so the service never relies
+        // on its caller (a CS Agent's cross-department escalate right must not reach a ticket assigned to someone else).
+        if (!await IsAuthorizedAsync(callerEmployeeId, callerRoles, ticket, triggerType, cancellationToken)
+            || !await TicketVisibilityRule.PassesAgentScopeAsync(
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
         {
             return SlaOperationResult<TicketEscalationResponseDto>.Failure(SlaOperationOutcome.Forbidden);
         }

@@ -167,8 +167,8 @@ public sealed class CustomerProfileAppService(
         // already logs it masked alongside the underlying HTTP failure.
         logger.LogWarning(
             "Customer profile for ticket {TicketId} (CrmBuyerCustomerId {CrmBuyerCustomerId}) is {Status}: CRM Buyer lookup outcome "
-            + "{LookupOutcome}{CrmMessage}.",
-            ticketId, crmBuyerCustomerId, status, lookup.Outcome,
+            + "{LookupOutcome} ({FailureReason}){CrmMessage}.",
+            ticketId, crmBuyerCustomerId, status, lookup.Outcome, lookup.FailureReason?.ToString() ?? "n/a",
             string.IsNullOrWhiteSpace(lookup.Message) ? string.Empty : $" — \"{lookup.Message}\"");
         return Empty(crmBuyerCustomerId, status);
     }
