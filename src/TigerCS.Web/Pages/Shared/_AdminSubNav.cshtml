@@ -1,23 +1,42 @@
+@using TigerCS.Domain.Modules.IdentityAndAccess.Permissions
 @using TigerCS.Web.Pages.Admin
+@inject ViewerAccessService ViewerAccess
 @{
     // Rendered by the layout whenever the Administration nav item is active.
     // Each admin page names its own section via ViewData["AdminSection"]; the
     // modules, their routes and their accents come from AdminModules, so the
     // bar, the overview cards and every page header always agree.
     var section = ViewData["AdminSection"] as string ?? AdminModules.OverviewKey;
-    var isOverview = AdminModules.Find(section) is null;
+    var isTowers = section == "towerassignments";
+    var isOverview = AdminModules.Find(section) is null && !isTowers;
+    // The same decisions the primary navigation makes: the console's modules for the System Administrator, and Collections Tower
+    // Assignments for the Collections managers (a manager who is not an administrator sees only that one entry).
+    var currentUser = CurrentUser.FromPrincipal(User);
+    var access = await ViewerAccess.GetAsync();
+    var adminRole = AdministrationPolicy.AppliesTo(currentUser);
+    var canAdminister = access.CanReach(Permissions.AdminUsersView, adminRole) || access.CanReach(Permissions.AdminConfigurationView, adminRole);
+    var canManageTowers = access.CanReach(Permissions.CollectionsEdit, TowerAssignmentsPolicy.AppliesTo(currentUser));
 }
 <nav class="admin-subnav" aria-label="Administration sections">
     <div class="admin-subnav__inner">
         <div class="admin-subnav__track">
-            <a class="admin-subnav__link tone-brand @(isOverview ? "is-active" : "")" href="/Admin" aria-current="@(isOverview ? "page" : null)">
-                <span class="admin-subnav__dot" aria-hidden="true"></span>Overview
-            </a>
-            @foreach (var module in AdminModules.All)
+            @if (canAdminister)
             {
-                var isActive = module.Key == section;
-                <a class="admin-subnav__link @module.Tone @(isActive ? "is-active" : "")" href="@module.Href" aria-current="@(isActive ? "page" : null)">
-                    <span class="admin-subnav__dot" aria-hidden="true"></span>@module.Label
+                <a class="admin-subnav__link tone-brand @(isOverview ? "is-active" : "")" href="/Admin" aria-current="@(isOverview ? "page" : null)">
+                    <span class="admin-subnav__dot" aria-hidden="true"></span>Overview
+                </a>
+                @foreach (var module in AdminModules.All)
+                {
+                    var isActive = module.Key == section;
+                    <a class="admin-subnav__link @module.Tone @(isActive ? "is-active" : "")" href="@module.Href" aria-current="@(isActive ? "page" : null)">
+                        <span class="admin-subnav__dot" aria-hidden="true"></span>@module.Label
+                    </a>
+                }
+            }
+            @if (canManageTowers)
+            {
+                <a class="admin-subnav__link tone-brand @(isTowers ? "is-active" : "")" href="@TowerAssignmentsPolicy.Route" aria-current="@(isTowers ? "page" : null)">
+                    <span class="admin-subnav__dot" aria-hidden="true"></span>Collections Tower Assignments
                 </a>
             }
         </div>

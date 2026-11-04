@@ -33,6 +33,11 @@ builder.Services.AddRazorPages(options =>
     // CEO, System Administrator). Same principle as /Admin — the Api's
     // ReportsRead policy is the real protection.
     options.Conventions.AuthorizeFolder("/Reports", ReportsPolicy.Name);
+
+    // Administration -> Collections Tower Assignments: served at /Admin/CollectionsTowerAssignments but the page file lives in
+    // Pages/Collections, so the /Admin folder's System-Administrator-only rule does not apply to it. It has its own gate: the Collections
+    // managers and the System Administrator. The Api (CollectionsTeam.CanManageTowersAsync) is the real protection.
+    options.Conventions.AuthorizePage("/Collections/TowerAssignments", TowerAssignmentsPolicy.Name);
 });
 builder.Services.AddHttpContextAccessor();
 
@@ -130,6 +135,8 @@ builder.Services.AddAuthorization(options =>
         new ViewerPermissionRequirement([AdministrationPolicy.RequiredRole], Permissions.AdminUsersView, Permissions.AdminConfigurationView)));
     options.AddPolicy(ReportsPolicy.Name, policy => policy.RequireAuthenticatedUser().AddRequirements(
         new ViewerPermissionRequirement(ReportsPolicy.AllowedRoles, Permissions.ReportsView)));
+    options.AddPolicy(TowerAssignmentsPolicy.Name, policy => policy.RequireAuthenticatedUser().AddRequirements(
+        new ViewerPermissionRequirement(TowerAssignmentsPolicy.AllowedRoles, Permissions.CollectionsEdit)));
 });
 
 var app = builder.Build();

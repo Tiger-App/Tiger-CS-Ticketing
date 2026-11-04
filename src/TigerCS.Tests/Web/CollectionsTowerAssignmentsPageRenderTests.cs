@@ -4,8 +4,10 @@ extern alias TigerCsWeb;
 using System.Text.RegularExpressions;
 using TigerCS.Application.Modules.Collections.Dto;
 using TigerCS.Application.Modules.Collections.TowerAssignments;
+using TigerCS.Domain.Modules.IdentityAndAccess;
 using TowerPage = TigerCsWeb::TigerCS.Web.Pages.Collections.TowerAssignmentsModel;
 using WebOutcome = TigerCsWeb::TigerCS.Web.Services.Api.ApiOutcome;
+using TowerPolicy = TigerCsWeb::TigerCS.Web.Services.Auth.TowerAssignmentsPolicy;
 
 namespace TigerCS.Tests.Web;
 
@@ -54,7 +56,7 @@ public sealed class CollectionsTowerAssignmentsPageTests
         using var factory = CollectionsWebHost.Factory(new FakeCollectionsApi { TowerMonth = Month(canManage: true) });
         using var client = factory.CreateClient();
 
-        var html = System.Net.WebUtility.HtmlDecode(await (await client.GetAsync("/Collections/TowerAssignments?year=2026&month=11")).Content.ReadAsStringAsync());
+        var html = System.Net.WebUtility.HtmlDecode(await (await client.GetAsync("/Admin/CollectionsTowerAssignments?year=2026&month=11")).Content.ReadAsStringAsync());
 
         Assert.Equal(2, Regex.Matches(html, "data-ta-row").Count);                       // one row per Collections employee
         Assert.Contains("140 - Tiger Tower 140", html);
@@ -73,7 +75,7 @@ public sealed class CollectionsTowerAssignmentsPageTests
         using var factory = CollectionsWebHost.Factory(new FakeCollectionsApi { TowerMonth = Month(canManage: true) });
         using var client = factory.CreateClient();
 
-        var html = System.Net.WebUtility.HtmlDecode(await (await client.GetAsync($"/Collections/TowerAssignments?year=2026&month=11&edit={Alice}")).Content.ReadAsStringAsync());
+        var html = System.Net.WebUtility.HtmlDecode(await (await client.GetAsync($"/Admin/CollectionsTowerAssignments?year=2026&month=11&edit={Alice}")).Content.ReadAsStringAsync());
 
         Assert.Contains("data-ta-editor", html);
         Assert.Contains("data-tower-multi", html);
@@ -90,11 +92,31 @@ public sealed class CollectionsTowerAssignmentsPageTests
         using var factory = CollectionsWebHost.Factory(new FakeCollectionsApi { TowerMonth = Month(canManage: false) });
         using var client = factory.CreateClient();
 
-        var html = System.Net.WebUtility.HtmlDecode(await (await client.GetAsync($"/Collections/TowerAssignments?edit={Alice}")).Content.ReadAsStringAsync());
+        var html = System.Net.WebUtility.HtmlDecode(await (await client.GetAsync($"/Admin/CollectionsTowerAssignments?edit={Alice}")).Content.ReadAsStringAsync());
 
         Assert.Contains("View only", html);
         Assert.DoesNotContain("Copy from previous month", html);
         Assert.DoesNotContain("Edit</a>", html);
         Assert.DoesNotContain("data-ta-editor", html);                                    // even a hand-typed ?edit= opens nothing
+    }
+
+    [Fact]
+    public void TheWebGate_NamesTheManagersAndTheAdministrator_NotTheCollectionsTeam()
+    {
+        Assert.Equal("/Admin/CollectionsTowerAssignments", TowerPolicy.Route);
+        Assert.Equivalent(new[] { Roles.CsManager, Roles.DepartmentHead, Roles.SystemAdministrator }, TowerPolicy.AllowedRoles);
+        Assert.DoesNotContain(Roles.DepartmentEmployee, TowerPolicy.AllowedRoles);
+    }
+
+    [Theory]
+    [InlineData("Collections", "Receivables.cshtml")]
+    [InlineData("Collections", "Campaigns.cshtml")]
+    public void TheCollectionsPages_NoLongerLinkToTheAdministrationPage(string folder, string file)
+    {
+        var dir = AppContext.BaseDirectory;
+        while (dir is not null && !Directory.Exists(Path.Combine(dir, "src", "TigerCS.Web"))) dir = Path.GetDirectoryName(dir);
+        var text = File.ReadAllText(Path.Combine(dir!, "src", "TigerCS.Web", "Pages", folder, file));
+
+        Assert.DoesNotContain("TowerAssignments", text);
     }
 }
