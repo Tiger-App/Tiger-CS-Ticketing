@@ -57,4 +57,48 @@ public class RemainingUnassignedDiagnosticScriptTests
         Assert.Contains("h.Status IN (2, 3, 4)", sql, StringComparison.Ordinal);
         Assert.Contains("> th.Hours * 3600", sql, StringComparison.Ordinal);
     }
+
+    private static string RootScript(string name, [CallerFilePath] string here = "") =>
+        File.ReadAllText(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(here)!, "..", "..", "..", "..", name)));
+
+    private static readonly Regex WriteStatement = new(@"\b(INSERT\s+(INTO\s+)?(?!#)dbo\.|UPDATE\s+(?!#)\w*\.?\w+\s+SET|DELETE\s+FROM|MERGE\s|TRUNCATE\s|ALTER\s|DROP\s+(TABLE|INDEX|PROCEDURE|VIEW)\s+(?!#)|CREATE\s+(TABLE|INDEX|PROCEDURE|VIEW)\s+(?!#)|EXEC(UTE)?\s)", RegexOptions.IgnoreCase);
+
+    [Fact]
+    public void ThePhoneTicketDiagnostic_IsReadOnly_AndNamesTheExampleTicketAndEveryRootCause()
+    {
+        var raw = RootScript("Diagnose_TigerCS_PROD_PhoneTicketUnassigned_ReadOnly.sql");
+        var sql = Regex.Replace(raw, @"/\*.*?\*/|--[^\r\n]*", string.Empty, RegexOptions.Singleline);
+
+        Assert.DoesNotMatch(WriteStatement, sql);
+        Assert.Contains("READ UNCOMMITTED", sql, StringComparison.Ordinal);
+        Assert.Contains("DB_NAME() <> @ExpectedDb", sql, StringComparison.Ordinal);
+        Assert.Contains("TG-ACC-20261104-0005", sql, StringComparison.Ordinal);
+        foreach (var cls in new[]
+        {
+            "PHONE_NO_AGENT_NO_HUMAN_FLAG", "PHONE_AGENT_ID_NOT_MAPPED", "PHONE_AGENT_MAPPED_NOT_ELIGIBLE", "HUMAN_NOT_IN_CALL_CENTER",
+            "HUMAN_IN_CC_EMPTY_POOL", "HUMAN_IN_CC_POOL_AVAILABLE",
+        })
+        {
+            Assert.Contains($"'{cls}'", sql, StringComparison.Ordinal);
+        }
+
+        // No customer identity is ever selected.
+        Assert.DoesNotMatch(new Regex(@"\b(i\.)?(CustomerPhone|CustomerName|CustomerEmail)\b", RegexOptions.IgnoreCase), sql);
+    }
+
+    [Fact]
+    public void TheShortThresholdDiagnostic_IsReadOnly_AndComparesFifteenThirtySixtyAndOneTwentyMinutes()
+    {
+        var raw = RootScript("Diagnose_TigerCS_PROD_StaleAiThreshold_15m_30m_1h_2h_ReadOnly.sql");
+        var sql = Regex.Replace(raw, @"/\*.*?\*/|--[^\r\n]*", string.Empty, RegexOptions.Singleline);
+
+        Assert.DoesNotMatch(WriteStatement, sql);
+        Assert.Contains("READ UNCOMMITTED", sql, StringComparison.Ordinal);
+        Assert.Contains("DB_NAME() <> @ExpectedDb", sql, StringComparison.Ordinal);
+        Assert.Contains("(15), (30), (60), (120)", sql, StringComparison.Ordinal);
+        // Same protections as the application: pending approvals out, open handoffs and human evidence always eligible, "more than" the threshold.
+        Assert.Contains("ap.Status = 1", sql, StringComparison.Ordinal);
+        Assert.Contains("h.Status IN (2, 3, 4)", sql, StringComparison.Ordinal);
+        Assert.Contains("> th.Minutes * 60", sql, StringComparison.Ordinal);
+    }
 }
