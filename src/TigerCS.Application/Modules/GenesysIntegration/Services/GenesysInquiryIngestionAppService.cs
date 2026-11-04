@@ -172,11 +172,13 @@ public sealed class GenesysInquiryIngestionAppService(
             if (fallbackReason is not null)
             {
                 fallback = availableFallback;
-                // The department the AI named keeps the ticket (General / General there); only a ticket with no usable department, or one whose
-                // department has no General of its own, is placed in Customer Services.
-                if (department is null || department.DepartmentId != fallback.Department.DepartmentId)
+                // The department the AI named keeps the ticket: General / General there, or - when it has no usable General of its own - Customer
+                // Services' General classification with the department unchanged and the gap reported. Only a ticket with no valid department
+                // is placed in Customer Services.
+                var placed = fallback.TicketDepartment;
+                if (department is null || department.DepartmentId != placed.DepartmentId)
                 {
-                    (department, departmentSource) = (fallback.Department, GenesysDepartmentSource.DefaultClassification);
+                    (department, departmentSource) = (placed, GenesysDepartmentSource.DefaultClassification);
                 }
             }
         }
@@ -410,6 +412,7 @@ public sealed class GenesysInquiryIngestionAppService(
                 + $"QueueId={inquiry.QueueId ?? "(none)"};QueueName={inquiry.QueueName ?? "(none)"};"
                 + $"CustomerLookup={lookup.Status};Classification={(fallback is null ? "Unclassified" : "Default")};"
                 + $"DefaultClassification={(fallback is null ? "(not applied)" : $"{DefaultClassificationService.DisplayLabel} because {fallbackReason}")};"
+                + $"DefaultClassificationConfigurationIssue={fallback?.ConfigurationIssue ?? "(none)"};"
                 + $"DefaultPriority={(defaultPriority is null ? "(none: not configured or not found)" : $"{defaultPriority.Name}({defaultPriority.PriorityId})")};"
                 + $"AgentMapping={DescribeAgentMapping(inquiry.AgentId, agent)};"
                 + $"ServiceRequestId={serviceRequestId ?? "(none)"};HumanFollowUpRequired={inquiry.HumanFollowUpRequired == true};HumanSignal={humanSignal};"
@@ -420,7 +423,7 @@ public sealed class GenesysInquiryIngestionAppService(
 
         var classification = fallback is not null
             ? new GenesysClassificationResult(
-                GenesysClassificationOutcome.Classified, fallback.RequestType.RequestTypeId, fallback.RequestType.Name, fallback.Department.DepartmentId,
+                GenesysClassificationOutcome.Classified, fallback.RequestType.RequestTypeId, fallback.RequestType.Name, fallback.TicketDepartment.DepartmentId,
                 Detail: $"Default classification {DefaultClassificationService.DisplayLabel} applied because {fallbackReason}")
             : requestTypeRejected is not null
                 ? GenesysRequestTypeClassificationAppService.AwaitClassification(

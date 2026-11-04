@@ -154,6 +154,32 @@ public sealed class TicketDetailsClassifyControlTests
     }
 
     [Fact]
+    public async Task TheAssignedCsAgent_IsOfferedReclassify_OnAValidClassification_WithEveryDepartmentsChoices_AndTheCurrentRequestTypeIsNotLocked()
+    {
+        var categories = new[] { new CategoryDto(11, "Handover", DepartmentId, "Leasing"), new CategoryDto(12, "Billing", 99, "Accounting") };
+        var types = new[] { new RequestTypeOptionDto(17, "Handover", DepartmentId, 3, true), new RequestTypeOptionDto(19, "Billing", 99, 3, true) };
+        var ticket = Ticket(categoryId: 11, requestTypeId: 17) with { CanCorrectClassification = true };
+        var (model, _) = Build(ticket, categories, types, Roles.CsAgent);
+
+        await model.OnGetAsync(1, null, CancellationToken.None);
+
+        Assert.True(model.CanClassify);
+        Assert.False(model.Classify.RequestTypeAlreadySet);
+        Assert.Equal(["Accounting \u2013 Billing", "Leasing \u2013 Handover"], model.ClassifyOptions.Categories.Select(c => c.Name));
+        Assert.True(model.ClassifyOptions.Allows(12, 19));                    // a department correction offers that department's request types
+    }
+
+    [Fact]
+    public async Task AnotherEmployee_IsNotOfferedReclassify_OnAValidClassification()
+    {
+        var (model, _) = Build(Ticket(categoryId: 11, requestTypeId: 17), Roles.CsAgent);
+
+        await model.OnGetAsync(1, null, CancellationToken.None);
+
+        Assert.False(model.CanClassify);
+    }
+
+    [Fact]
     public async Task AReadOnlyRole_IsNotOfferedReclassify_OnTheDefaultClassification()
     {
         var ticket = Ticket(categoryId: 10, requestTypeId: 16) with { IsDefaultClassification = true };

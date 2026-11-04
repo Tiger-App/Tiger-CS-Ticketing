@@ -102,7 +102,7 @@ public class DefaultClassificationAiScenarioTests
     }
 
     [Fact]
-    public async Task AValidDepartmentWithoutItsOwnGeneral_UsesCustomerServicesGeneral_NothingIsCreated()
+    public async Task AValidDepartmentWithoutItsOwnGeneral_KeepsItsDepartment_UsesCustomerServicesGeneral_NothingIsCreated()
     {
         var w = Build();
         var categories = (await w.F.Categories.ListAsync(false, null)).Count;
@@ -111,8 +111,10 @@ public class DefaultClassificationAiScenarioTests
 
         Assert.Equal(w.CsGeneral.CategoryId, ticket.CategoryId);
         Assert.Equal(w.CsGeneralType.RequestTypeId, ticket.RequestTypeId);
-        Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(w.Handover.DepartmentId, ticket.CurrentDepartmentId);   // never moved because its General is not configured
         Assert.Equal(categories, (await w.F.Categories.ListAsync(false, null)).Count);
+        Assert.Equal(TigerCS.Application.Modules.Ticketing.Services.TicketClassificationState.Valid,
+            await w.F.DefaultClassification.AssessAsync(ticket.CategoryId, ticket.RequestTypeId));
     }
 
     // ---- 2. no valid department: Customer Services ----
@@ -320,6 +322,7 @@ public class DefaultClassificationAiScenarioTests
         var ticket = await IngestAsync(w, "conv-dup-dept", w.Leasing.DepartmentId);
 
         Assert.Equal(w.CsGeneral.CategoryId, ticket.CategoryId);
+        Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);   // the department is kept; the duplicate is a configuration issue to report
         Assert.Equal(categories, (await w.F.Categories.ListAsync(false, null)).Count);
         Assert.Equal(types, (await w.F.RequestTypes.ListAsync(null, true)).Count);
     }
@@ -389,7 +392,7 @@ public class DefaultClassificationAiScenarioTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(category.CategoryId, ticket.CategoryId);
-        Assert.Null(ticket.RequestTypeId);
+        Assert.Equal(w.LeasingGeneralType.RequestTypeId, ticket.RequestTypeId);   // no type chosen: the department's General request type stays, never a gap
         Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
     }
 

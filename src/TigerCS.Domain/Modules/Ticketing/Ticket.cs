@@ -702,7 +702,7 @@ public class Ticket
     /// only guards that the ticket is open. The request type and its pinned workflow are replaced together (or cleared together when the
     /// agent classified by category alone). Priority, SLA and ownership are the caller's concern and untouched here.
     /// </summary>
-    public void ReplaceDefaultClassification(int categoryId, int? requestTypeId, int? workflowTemplateId)
+    public void ReplaceClassification(int categoryId, int? requestTypeId, int? workflowTemplateId)
     {
         EnsureNotClosed();
         if ((requestTypeId is null) != (workflowTemplateId is null))

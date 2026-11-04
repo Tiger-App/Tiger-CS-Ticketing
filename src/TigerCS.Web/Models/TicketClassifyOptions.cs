@@ -96,6 +96,32 @@ public sealed record TicketClassifyOptions(
             options.Count == 0 ? ClassifyAvailability.NoCategories : ClassifyAvailability.Available, options, unreachable);
     }
 
+    /// <summary>
+    /// The options for correcting a ticket's Department as well as its Category and Request Type: every department's categories (each with its own
+    /// request types, paired within its department), labelled "Department - Category" when more than one department is offered.
+    /// </summary>
+    public static TicketClassifyOptions BuildAcrossDepartments(
+        IEnumerable<CategoryDto> categories, IEnumerable<RequestTypeOptionDto> requestTypes)
+    {
+        var all = categories.ToList();
+        var types = requestTypes.ToList();
+        var groups = all.GroupBy(c => c.DepartmentId).OrderBy(g => g.First().DepartmentName, StringComparer.OrdinalIgnoreCase).ToList();
+        var options = new List<ClassifyCategoryOption>();
+        var unreachable = new List<ClassifyRequestTypeOption>();
+        foreach (var group in groups)
+        {
+            var built = Build(group.Key, group, types);
+            var label = group.First().DepartmentName;
+            options.AddRange(groups.Count > 1
+                ? built.Categories.Select(c => c with { Name = $"{label} \u2013 {c.Name}" })
+                : built.Categories);
+            unreachable.AddRange(built.UnreachableRequestTypes);
+        }
+
+        return new TicketClassifyOptions(
+            options.Count == 0 ? ClassifyAvailability.NoCategories : ClassifyAvailability.Available, options, unreachable);
+    }
+
     private static bool SameName(string left, string right) =>
         string.Equals(left.Trim(), right.Trim(), StringComparison.OrdinalIgnoreCase);
 }

@@ -180,6 +180,14 @@ public sealed class TicketQueryAppService(
                 currentResolution?.ClosedForCustomerInactivity == true)
         };
 
+        detail = detail with
+        {
+            CanCorrectClassification = ticket.TicketStatus != TicketStatus.Closed
+                && accessLevel == TicketAccessLevel.Full
+                && ticket.CurrentOwnerEmployeeId == callerEmployeeId
+                && callerRoles.Contains(TigerCS.Domain.Modules.IdentityAndAccess.Roles.CsAgent)
+        };
+
         // Whether the stored category + request type ARE the default classification (resolved from configuration, not from names on the ticket).
         if (defaultClassification is not null)
         {

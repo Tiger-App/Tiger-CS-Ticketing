@@ -10,8 +10,22 @@ using TigerCS.Domain.Modules.WorkflowConfiguration;
 namespace TigerCS.Application.Modules.Ticketing.Services;
 
 /// <summary>The approved default classification, resolved from configuration: Customer Services / General / General plus its published workflow.</summary>
-public sealed record DefaultClassification(Department Department, Category Category, RequestType RequestType, WorkflowTemplate PublishedWorkflow)
+/// <param name="Department">The department whose General classification is used.</param>
+/// <param name="Category">That department's General category.</param>
+/// <param name="RequestType">That department's General request type.</param>
+/// <param name="PublishedWorkflow">The request type's published workflow version.</param>
+/// <param name="PlacementDepartment">
+/// Set when the ticket's own (valid) department has no usable General of its own and Customer Services' General stands in: the ticket STAYS in this
+/// department and only the classification is Customer Services / General. Null when the classification's department is also the ticket's.
+/// </param>
+/// <param name="ConfigurationIssue">Why the department's own General could not be used (missing, duplicated, unpublished) - to be reported, not hidden.</param>
+public sealed record DefaultClassification(
+    Department Department, Category Category, RequestType RequestType, WorkflowTemplate PublishedWorkflow,
+    Department? PlacementDepartment = null, string? ConfigurationIssue = null)
 {
+    /// <summary>The department the ticket belongs in: its own when it keeps it, otherwise the classification's.</summary>
+    public Department TicketDepartment => PlacementDepartment ?? Department;
+
     /// <summary>The priority the General request type is configured with - used only when a brand-new ticket needs one and the caller supplied none.</summary>
     public byte DefaultPriorityId => RequestType.DefaultPriorityId;
 }
@@ -151,17 +165,27 @@ public sealed class DefaultClassificationService(
     /// <summary>
     /// The default classification for a ticket whose department is <paramref name="departmentId"/>: <b>General / General within that department</b>
     /// when it is a usable department (active, not Collections) that has exactly one active General category and one General request type with a
-    /// Published workflow - otherwise (no department, an invalid one, or one without its General records) Customer Services / General. Never creates
-    /// anything and never chooses between duplicates.
+    /// Published workflow. When the department is valid but has no usable General, the ticket <b>keeps that department</b> and takes Customer
+    /// Services' General classification, with the gap reported in <see cref="DefaultClassification.ConfigurationIssue"/> (a department is never
+    /// changed because configuration is missing). With no valid department it is Customer Services / General. Never creates anything and never
+    /// chooses between duplicates.
     /// </summary>
     public async Task<DefaultClassificationResolution> ResolveForDepartmentAsync(int? departmentId, CancellationToken cancellationToken = default)
     {
         if (departmentId is { } id
             && await departmentRepository.GetByIdAsync(id, cancellationToken) is { IsActive: true } department
-            && !IsExcluded(department)
-            && (await ResolveInAsync(department, cancellationToken)) is { IsAvailable: true } own)
+            && !IsExcluded(department))
         {
-            return own;
+            var own = await ResolveInAsync(department, cancellationToken);
+            if (own.IsAvailable)
+            {
+                return own;
+            }
+
+            var standIn = await ResolveAsync(cancellationToken);
+            return standIn.Value is { } cs && cs.Department.DepartmentId != department.DepartmentId
+                ? DefaultClassificationResolution.Available(cs with { PlacementDepartment = department, ConfigurationIssue = $"{department.Code}: {own.Detail}" })
+                : standIn;
         }
 
         return await ResolveAsync(cancellationToken);
@@ -331,7 +355,7 @@ public sealed class DefaultClassificationService(
             beforeValue: before,
             afterValue:
                 $"CategoryId={fallback.Category.CategoryId};RequestTypeId={fallback.RequestType.RequestTypeId};Default={fallback.Department.Code}/{CategoryName};"
-                + $"State={state};Reason={reason};DepartmentId={ticket.CurrentDepartmentId} (unchanged);Owner={ticket.CurrentOwnerEmployeeId?.ToString() ?? "(none)"} (unchanged)",
+                + $"State={state};Reason={reason};ConfigurationIssue={fallback.ConfigurationIssue ?? "(none)"};DepartmentId={ticket.CurrentDepartmentId} (unchanged);Owner={ticket.CurrentOwnerEmployeeId?.ToString() ?? "(none)"} (unchanged)",
             Guid.NewGuid(), cancellationToken);
 
         if (save)

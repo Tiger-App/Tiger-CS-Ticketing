@@ -201,6 +201,16 @@ public sealed class GenesysTicketUpdateAppService(
             }
         }
 
+        // A ticket a person is now asked to handle (human follow-up, a handoff, or a connected agent) must carry a valid classification: a request
+        // type applied above wins; otherwise one that is still missing, partial or invalid takes the default. Classification only - the owner, the
+        // department, the priority, the SLA and the status are untouched, and a valid classification is never replaced.
+        if (defaultClassification is not null
+            && (request.HumanFollowUpRequired == true || request.Handoff is { Required: true } || NullIfBlank(request.Routing?.AgentId) is not null))
+        {
+            await defaultClassification.EnsureClassifiedAsync(
+                ticket, "A person was asked to handle a ticket without a valid classification", callerEmployeeId, save: true, cancellationToken);
+        }
+
         // Live transcript first among the conversation facts: whoever picks the interaction up next (the handoff below may be what asks for
         // them) finds everything said so far already stored, and a human line in it is what satisfies First Response.
         var transcriptCount = (int?)null;

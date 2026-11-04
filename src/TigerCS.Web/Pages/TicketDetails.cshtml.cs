@@ -580,13 +580,16 @@ public sealed class TicketDetailsModel(
         if (ticketResult.IsSuccess && ticketResult.Value is { } ticketToClassify
             && categoriesApiClient is not null && requestTypesApiClient is not null)
         {
-            var categoriesTask = categoriesApiClient.GetCategoriesAsync(ticketToClassify.CurrentDepartmentId, cancellationToken);
-            var requestTypesTask = requestTypesApiClient.GetOptionsAsync(ticketToClassify.CurrentDepartmentId, cancellationToken);
+            var across = ticketToClassify.IsDefaultClassification || ticketToClassify.CanCorrectClassification;
+            var categoriesTask = categoriesApiClient.GetCategoriesAsync(across ? null : ticketToClassify.CurrentDepartmentId, cancellationToken);
+            var requestTypesTask = requestTypesApiClient.GetOptionsAsync(across ? null : ticketToClassify.CurrentDepartmentId, cancellationToken);
             await Task.WhenAll(categoriesTask, requestTypesTask);
             if (categoriesTask.Result.IsSuccess && requestTypesTask.Result.IsSuccess)
             {
-                var options = TicketClassifyOptions.Build(
-                    ticketToClassify.CurrentDepartmentId, categoriesTask.Result.Value ?? [], requestTypesTask.Result.Value ?? []);
+                var options = across
+                    ? TicketClassifyOptions.BuildAcrossDepartments(categoriesTask.Result.Value ?? [], requestTypesTask.Result.Value ?? [])
+                    : TicketClassifyOptions.Build(
+                        ticketToClassify.CurrentDepartmentId, categoriesTask.Result.Value ?? [], requestTypesTask.Result.Value ?? []);
                 if (!Classify.RequestTypeAlreadySet)
                 {
                     if (options.CategoryNeedsRequestType(Classify.CategoryId) && Classify.RequestTypeId < 1)
@@ -976,7 +979,7 @@ public sealed class TicketDetailsModel(
     {
         CanClassify =
             categoriesApiClient is not null && requestTypesApiClient is not null
-            && (ticket.CategoryId is null || ticket.IsDefaultClassification)
+            && (ticket.CategoryId is null || ticket.IsDefaultClassification || ticket.CanCorrectClassification)
             && !string.Equals(ticket.TicketStatus, nameof(TicketStatus.Closed), StringComparison.Ordinal)
             && Viewer is not null
             && !TigerCS.Domain.Modules.IdentityAndAccess.Roles.IsReadOnlyCaller(Viewer.Roles);
@@ -985,16 +988,21 @@ public sealed class TicketDetailsModel(
             return;
         }
 
-        var categoriesTask = categoriesApiClient!.GetCategoriesAsync(ticket.CurrentDepartmentId, cancellationToken);
-        var requestTypesTask = requestTypesApiClient!.GetOptionsAsync(ticket.CurrentDepartmentId, cancellationToken);
+        // Replacing a default or correcting a classification can also correct the DEPARTMENT, so every department's choices are offered; a first
+        // classification stays within the ticket's own department.
+        var acrossDepartments = ticket.IsDefaultClassification || ticket.CanCorrectClassification;
+        var categoriesTask = categoriesApiClient!.GetCategoriesAsync(acrossDepartments ? null : ticket.CurrentDepartmentId, cancellationToken);
+        var requestTypesTask = requestTypesApiClient!.GetOptionsAsync(acrossDepartments ? null : ticket.CurrentDepartmentId, cancellationToken);
         await Task.WhenAll(categoriesTask, requestTypesTask);
 
         ClassifyOptionsUnavailable = !categoriesTask.Result.IsSuccess || !requestTypesTask.Result.IsSuccess;
-        ClassifyCategories = categoriesTask.Result.Value?.Where(c => c.DepartmentId == ticket.CurrentDepartmentId).ToList() ?? [];
-        ClassifyRequestTypes = requestTypesTask.Result.Value?.Where(r => r.DepartmentId == ticket.CurrentDepartmentId && r.HasPublishedWorkflow).ToList() ?? [];
+        ClassifyCategories = categoriesTask.Result.Value?.Where(c => acrossDepartments || c.DepartmentId == ticket.CurrentDepartmentId).ToList() ?? [];
+        ClassifyRequestTypes = requestTypesTask.Result.Value?.Where(r => (acrossDepartments || r.DepartmentId == ticket.CurrentDepartmentId) && r.HasPublishedWorkflow).ToList() ?? [];
         ClassifyOptions = ClassifyOptionsUnavailable
             ? TicketClassifyOptions.Failed
-            : TicketClassifyOptions.Build(ticket.CurrentDepartmentId, ClassifyCategories, ClassifyRequestTypes);
+            : acrossDepartments
+                ? TicketClassifyOptions.BuildAcrossDepartments(ClassifyCategories, ClassifyRequestTypes)
+                : TicketClassifyOptions.Build(ticket.CurrentDepartmentId, ClassifyCategories, ClassifyRequestTypes);
         ClassifyNotice = ClassifyNotice.For(
             ClassifyOptions,
             TicketDisplay.AssignedDepartmentLabel(ticket.CurrentDepartmentId, nameResolver.TryGetDepartmentName(ticket.CurrentDepartmentId)),
@@ -1015,7 +1023,7 @@ public sealed class TicketDetailsModel(
             CategoryId = defaultCategory?.CategoryId ?? 0,
             PriorityId = current,
             RequestTypeId = defaultCategory?.RequestTypes.FirstOrDefault()?.RequestTypeId ?? 0,
-            RequestTypeAlreadySet = ticket.RequestTypeId is not null && !ticket.IsDefaultClassification,
+            RequestTypeAlreadySet = ticket.RequestTypeId is not null && !ticket.IsDefaultClassification && !ticket.CanCorrectClassification,
         };
     }
 

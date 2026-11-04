@@ -90,3 +90,24 @@ tickets, Collections exclusion, and the backfill preview / dry run / live run.
 * Human-handled tickets are still Call Center first, with the Genesys-confirmed agent or the next CS Agent of the sequential Round-Robin - never a
   department employee through a rule on General.
 * Duplicates are never created or chosen between: a department with more than one General falls back to Customer Services.
+
+## Human-handled tickets (final rule)
+
+Every human-handled ticket has an eligible CS Agent (the existing Call Center-first / confirmed-agent / sequential Round-Robin rules, flagged for a
+manual assignment when nobody is eligible) **and** a valid Department, Category and Request Type:
+
+* A known department and request type are preserved. A missing category or request type becomes **General within the same department**; a category
+  chosen without a request type keeps the category and gets that department's General request type.
+* An unknown department becomes Customer Services / General / General.
+* **A valid department is never changed because its own General is missing.** The ticket stays in its department, takes Customer Services' General
+  classification as a safe stand-in, and the gap is recorded as `ConfigurationIssue=<DEPT>: ...` on the `ApplyDefaultClassification` and Genesys
+  ingestion audit entries (also listed by the read-only diagnostic). Run `EnsureDefaultGeneralClassification.sql` to remove the gap.
+* A ticket that becomes human-handled later (human follow-up, handoff, a connected agent) and still has no valid classification is classified at that
+  moment - classification only; owner, department, priority, SLA and status are untouched.
+* **The assigned CS Agent can review and correct Department, Category and Request Type** through the classification action (Ticket Details shows
+  *Reclassify* with every department's choices). Choosing a category of another department transfers the ticket there. A correction that names no
+  request type keeps the current one when it still fits, else uses the target department's General request type.
+* A reclassification keeps the assigned CS Agent, status, priority and the **running SLA clock/period** (its due dates are not re-timed), and only
+  appends to the audit trail (`ReclassifyTicket`, plus a transfer entry when the department changes). Only the assigned agent (or a ticket on the
+  default classification, for any authorized employee) can replace a classification; closed tickets and read-only roles cannot.
+* AI-closed tickets require a valid classification but never a CS Agent.

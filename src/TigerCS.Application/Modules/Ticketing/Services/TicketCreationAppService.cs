@@ -191,7 +191,7 @@ public sealed class TicketCreationAppService(
                 return TicketCreationResult.Failure(TicketCreationOutcome.PriorityNotFound);
             }
 
-            routing = RoutingResolution.Succeeded(fallback.Classification.Category, defaultPriority, fallback.Classification.Department);
+            routing = RoutingResolution.Succeeded(fallback.Classification.Category, defaultPriority, fallback.Classification.TicketDepartment);
             requestType = fallback.Classification.RequestType;
             workflowVersion = fallback.Classification.PublishedWorkflow;
         }
@@ -251,6 +251,25 @@ public sealed class TicketCreationAppService(
             }
         }
 
+        // A valid category with no request type is completed with that department's own General request type (the agent's category is never
+        // replaced). Without a General of its own the request type stays empty and the gap is audited below.
+        string? requestTypeCompletion = null;
+        if (fallback is null && requestType is null && category is not null && defaultClassification is not null
+            && request.SkipDefaultClassification != true && request.RequestTypeId is null)
+        {
+            var own = await defaultClassification.ResolveForDepartmentAsync(department.DepartmentId, cancellationToken);
+            if (own.Value is { } ownGeneral && ownGeneral.Department.DepartmentId == department.DepartmentId && ownGeneral.PlacementDepartment is null)
+            {
+                requestType = ownGeneral.RequestType;
+                workflowVersion = ownGeneral.PublishedWorkflow;
+                requestTypeCompletion = $"RequestTypeId={requestType.RequestTypeId} (department General)";
+            }
+            else
+            {
+                requestTypeCompletion = $"none ({own.Detail ?? "department has no usable General request type"})";
+            }
+        }
+
         if (request.GenesysContext is { } genesysContext && string.IsNullOrWhiteSpace(genesysContext.ConversationId))
         {
             return TicketCreationResult.Failure(TicketCreationOutcome.GenesysConversationIdRequired);
@@ -285,15 +304,15 @@ public sealed class TicketCreationAppService(
                 : (unitReference, contactReference, hasCrmBuyerMatch, hasExternalVerification) switch
             {
                 (not null, not null, _, _) => Ticket.CreateVerified(
-                    ticketNumber, category.DepartmentId, unitReference!.UnitReferenceId, contactReference!.ContactReferenceId,
+                    ticketNumber, department.DepartmentId, unitReference!.UnitReferenceId, contactReference!.ContactReferenceId,
                     category.CategoryId, priority!.PriorityId, request.RequestSummary, now),
                 (_, _, true, _) => Ticket.CreateVerifiedFromCrmBuyer(
-                    ticketNumber, category.DepartmentId,
+                    ticketNumber, department.DepartmentId,
                     request.CrmBuyerCustomerId!.Value, request.CrmBuyerLeadId!.Value, request.CrmBuyerUnitId!.Value, request.CrmBuyerProjectId!.Value,
                     request.CrmBuyerCustomerName, request.CrmBuyerProjectName, request.CrmBuyerUnitNumber,
                     category.CategoryId, priority!.PriorityId, request.RequestSummary, now),
                 (_, _, _, true) => Ticket.CreateFromExternalLookup(
-                    ticketNumber, category.DepartmentId,
+                    ticketNumber, department.DepartmentId,
                     request.CustomerVerificationSource!, request.ExternalCustomerId, request.ExternalUnitId,
                     request.ManualProjectName, request.ManualUnitNumber,
                     category.CategoryId, priority!.PriorityId, request.RequestSummary, now,
@@ -303,7 +322,7 @@ public sealed class TicketCreationAppService(
                     // to show instead of "Pact customer".
                     request.ExternalCustomerName, request.ExternalCustomerEmail),
                 _ => Ticket.CreateUnverified(
-                    ticketNumber, category.DepartmentId, category.CategoryId, priority!.PriorityId, request.RequestSummary, now,
+                    ticketNumber, department.DepartmentId, category.CategoryId, priority!.PriorityId, request.RequestSummary, now,
                     request.ManualProjectName, request.ManualUnitNumber)
             };
 
@@ -499,6 +518,15 @@ public sealed class TicketCreationAppService(
             afterValue: $"TicketNumber={ticket.TicketNumber};DepartmentId={ticket.CurrentDepartmentId};VerificationStatus={ticket.VerificationStatus}",
             correlationId, cancellationToken);
 
+        if (requestTypeCompletion is not null)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, "ApplyDefaultClassification", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"Reason=a category was chosen without a request type;CategoryId={category!.CategoryId} (kept);RequestType={requestTypeCompletion}",
+                correlationId, cancellationToken);
+        }
+
         if (fallback is not null)
         {
             await auditWriter.WriteAsync(
@@ -506,7 +534,8 @@ public sealed class TicketCreationAppService(
                 beforeValue: null,
                 afterValue:
                     $"Default={DefaultClassificationService.DisplayLabel};CategoryId={fallback.Classification.Category.CategoryId};"
-                    + $"RequestTypeId={fallback.Classification.RequestType.RequestTypeId};Reason={fallback.Reason}",
+                    + $"RequestTypeId={fallback.Classification.RequestType.RequestTypeId};Reason={fallback.Reason};DepartmentId={department.DepartmentId} (kept);"
+                    + $"ConfigurationIssue={fallback.Classification.ConfigurationIssue ?? "(none)"}",
                 correlationId, cancellationToken);
         }
 

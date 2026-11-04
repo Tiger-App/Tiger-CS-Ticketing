@@ -243,7 +243,7 @@ else
                                from, the form is replaced by the reason and the existing administrative path: Classify is never offered
                                as something to do while it cannot be completed. *@
                             <details class="disclosure" id="action-classify" data-action="classify" open="@(Model.OpenSection == "classify" ? "open" : null)">
-                                <summary class="btn @(Model.ClassifyNotice is null ? "btn-gold " : "")btn-sm@(Model.ClassifyNotice is null ? Rec("classify") : "")">@(t.IsDefaultClassification ? "Reclassify" : "Classify")@(Model.ClassifyNotice is null ? "" : " (not available)")</summary>
+                                <summary class="btn @(Model.ClassifyNotice is null ? "btn-gold " : "")btn-sm@(Model.ClassifyNotice is null ? Rec("classify") : "")">@(t.IsDefaultClassification || t.CanCorrectClassification ? "Reclassify" : "Classify")@(Model.ClassifyNotice is null ? "" : " (not available)")</summary>
                                 <div class="disclosure__panel">
                                     @if (Model.ClassifyNotice is { } classifyNotice)
                                     {

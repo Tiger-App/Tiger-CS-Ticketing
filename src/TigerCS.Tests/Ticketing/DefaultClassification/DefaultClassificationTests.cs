@@ -106,9 +106,11 @@ public class DefaultClassificationTests
         var (ticket, result) = await IngestAsync(w, "conv-missing", channel);
 
         AssertIsDefault(w, ticket);
-        // The fallback names its own department; the arrival department was only a hint.
-        Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);
+        // A valid department is never changed because its General is missing: Leasing keeps the ticket, Customer Services' General classifies it,
+        // and the configuration gap is reported on the integration audit entry.
+        Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(w.Leasing.DepartmentId, ticket.OriginatingDepartmentId);
+        Assert.Contains("DefaultClassificationConfigurationIssue=LCS:", w.F.Audit.Entries.Single(e => e.Action == "GenesysInquiryIngested").AfterValue!, StringComparison.Ordinal);
         Assert.Equal("Classified", result.Classification!.Status);
         Assert.Equal("General", result.Classification.RequestTypeName);
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "ApplyDefaultClassification" && e.EntityId == ticket.TicketId.ToString());
@@ -148,7 +150,7 @@ public class DefaultClassificationTests
         var ticket = Assert.Single(w.F.Tickets.All);
         AssertIsDefault(w, ticket);
         Assert.Equal((byte)PriorityLevel.High, ticket.PriorityId);
-        Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);   // the department named is kept
     }
 
     // ---- Invalid, ambiguous and partial classification ----
@@ -503,7 +505,7 @@ public class DefaultClassificationTests
         var (ticket, _) = await IngestAsync(w, "conv-transfer");
         var agent = Guid.NewGuid();
         ticket.AssignTo(agent);
-        Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);
 
         var result = await w.F.Classification.ClassifyAsync(
             agent, [Roles.CsAgent], ticket.TicketId,
@@ -511,7 +513,7 @@ public class DefaultClassificationTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);       // history of where it started is untouched
+        Assert.Equal(w.Leasing.DepartmentId, ticket.OriginatingDepartmentId); // history of where it started is untouched
         Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);                    // a department transfer through classification keeps the CS Agent
     }
 
@@ -535,11 +537,10 @@ public class DefaultClassificationTests
     {
         var w = Build();
         var (ticket, _) = await IngestAsync(w, "conv-already", requestType: new GenesysRequestTypeDto(w.FinanceType.RequestTypeId));
-        var agent = Guid.NewGuid();
-        ticket.AssignTo(agent);
+        ticket.AssignTo(Guid.NewGuid());
 
-        var result = await w.F.Classification.ClassifyAsync(
-            agent, [Roles.CsAgent], ticket.TicketId,
+        var result = await w.F.Classification.ClassifyAsync(   // not the assigned agent
+            Guid.NewGuid(), [Roles.SystemAdministrator], ticket.TicketId,
             Reclassify(w.General.CategoryId, ticket.PriorityId!.Value, w.GeneralType.RequestTypeId));
 
         Assert.Equal(TicketMutationOutcome.AlreadyClassified, result.Outcome);
@@ -630,7 +631,7 @@ public class DefaultClassificationTests
 
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
         AssertIsDefault(w, ticket);
-        Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);
+        Assert.Equal(w.Leasing.DepartmentId, ticket.OriginatingDepartmentId);
     }
 
     // ---- Detail flag for the UI ----
