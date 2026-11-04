@@ -533,26 +533,38 @@ else
             <h1 class="tw-head__title">@t.RequestSummary</h1>
 
             <div class="tw-head__people">
+                @* Customer: a small labelled grid (who · phone · unit), not one long line; the verification state sits with the name. *@
                 <div class="tw-who">
-                    <span class="tw-avatar" aria-hidden="true">@(customer.HasName ? TicketDisplay.Initials(customer.Name) : "?")</span>
-                    @if (customer.ProfileHref is { } whoProfile)
-                    {
-                        <a class="tw-who__name" href="@whoProfile">@customer.Name</a>
-                    }
-                    else
-                    {
-                        <span class="tw-who__name@(customer.HasName ? "" : " is-muted")">@customer.Name</span>
-                    }
-                    <span class="tw-who__fact tw-who__phone">@(customer.Phone ?? "No phone recorded")</span>
+                    <div class="tw-fact tw-fact--name">
+                        <span class="tw-fact__k">Customer</span>
+                        <span class="tw-fact__v">
+                            <span class="tw-avatar" aria-hidden="true">@(customer.HasName ? TicketDisplay.Initials(customer.Name) : "?")</span>
+                            @if (customer.ProfileHref is { } whoProfile)
+                            {
+                                <a class="tw-who__name" href="@whoProfile">@customer.Name</a>
+                            }
+                            else
+                            {
+                                <span class="tw-who__name@(customer.HasName ? "" : " is-muted")">@customer.Name</span>
+                            }
+                            <span class="tw-verif tw-verif--@customer.StateCss">@customer.StateLabel</span>
+                        </span>
+                    </div>
+                    <div class="tw-fact">
+                        <span class="tw-fact__k">Phone</span>
+                        <span class="tw-fact__v tw-who__phone">@(customer.Phone ?? "No phone recorded")</span>
+                    </div>
                     @if (customer.ProjectUnit is not null)
                     {
-                        <span class="tw-who__fact">@customer.ProjectUnit@if (!customer.UnitIsConfirmed) { <span class="tw-muted"> (typed in)</span> }</span>
+                        <div class="tw-fact">
+                            <span class="tw-fact__k">Project / Unit</span>
+                            <span class="tw-fact__v">@customer.ProjectUnit@if (!customer.UnitIsConfirmed) { <span class="tw-muted"> (typed in)</span> }</span>
+                        </div>
                     }
-                    <span class="tw-verif tw-verif--@customer.StateCss">@customer.StateLabel</span>
                 </div>
                 <div class="tw-owner">
-                    <span><strong>Assigned To:</strong> @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
-                    <span><strong>Assigned Department:</strong> @TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
+                    <span class="tw-fact"><strong>Assigned To:</strong> @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
+                    <span class="tw-fact"><strong>Assigned Department:</strong> @TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
                 </div>
             </div>
 
