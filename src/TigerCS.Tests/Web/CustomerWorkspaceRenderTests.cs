@@ -261,18 +261,18 @@ public sealed class CustomerWorkspaceRenderTests : IDisposable
     {
         var html = await Ok(await Client().GetAsync("/Tickets/5"));
 
-        // The customer band: name links to the profile, the action too, carrying the ticket back; phone, unit and how it was verified are stated.
-        var strip = html[html.IndexOf("class=\"customer-strip\"", StringComparison.Ordinal)..];
-        strip = strip[..strip.IndexOf("</section>", StringComparison.Ordinal)];
-        Assert.Contains("<a class=\"customer-strip__name\" href=\"/Customers/crm%3A9001?fromTicket=5\">Mariam Al Falasi</a>", strip, StringComparison.Ordinal);
-        Assert.Contains("href=\"/Customers/crm%3A9001?fromTicket=5\">Customer profile</a>", strip, StringComparison.Ordinal);
-        Assert.Contains("<dt>Phone</dt><dd class=\"text-mono\">&#x2B;971501234567</dd>", strip, StringComparison.Ordinal);
-        Assert.Contains("Verified via Tiger CRM", strip, StringComparison.Ordinal);
-        Assert.Contains("<dt>Project / unit</dt><dd>T-1204 &#xB7; Tiger Tower</dd>", strip, StringComparison.Ordinal);
+        // The identity line in the header: name links to the profile (carrying the ticket back); phone, unit and how it was verified are stated.
+        var who = html[html.IndexOf("class=\"tw-who\"", StringComparison.Ordinal)..];
+        who = who[..who.IndexOf("</header>", StringComparison.Ordinal)];
+        Assert.Contains("<a class=\"tw-who__name\" href=\"/Customers/crm%3A9001?fromTicket=5\">Mariam Al Falasi</a>", who, StringComparison.Ordinal);
+        Assert.Contains("&#x2B;971501234567", who, StringComparison.Ordinal);
+        Assert.Contains("Verified via Tiger CRM", who, StringComparison.Ordinal);
+        Assert.Contains("T-1204 &#xB7; Tiger Tower", who, StringComparison.Ordinal);
+        Assert.Contains("href=\"/Customers/crm%3A9001?fromTicket=5\">Customer profile</a>", html, StringComparison.Ordinal);
 
-        // Overview | Activity | Customer | Approvals, Overview selected. The conversation lives in the Overview now,
+        // Conversation | Activity | Customer | Approvals, Conversation selected. The conversation lives in the Overview now,
         // so there is no separate Interactions tab.
-        foreach (var label in new[] { ">Overview</label>", ">Activity <span", ">Customer", ">Approvals" })
+        foreach (var label in new[] { ">Conversation</label>", ">Activity <span", ">Customer", ">Approvals" })
         {
             Assert.Contains(label, html, StringComparison.Ordinal);
         }

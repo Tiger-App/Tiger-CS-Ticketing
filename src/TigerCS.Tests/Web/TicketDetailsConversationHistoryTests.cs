@@ -54,13 +54,13 @@ public sealed class TicketDetailsConversationHistoryTests
         int At(string marker) => html.IndexOf(marker, StringComparison.Ordinal);
         var order = new[]
         {
-            At("class=\"ticket-header\""),
-            At("class=\"customer-strip\""),
-            At(">Next step</div>"),
-            At("<div class=\"facts-section__title\">Request Details</div>"),
+            At("class=\"tw-head\""),
+            At("class=\"tw-next "),
             At("_TicketConversationHistory"),
-            At("id=\"customer-satisfaction\""),
             At("<div class=\"facts-section__title\">Latest Activity</div>"),
+            At(">Request Details</div>"),
+            At("id=\"customer-satisfaction\""),
+            At("id=\"additional-details\""),
         };
 
         Assert.All(order, position => Assert.True(position >= 0));
