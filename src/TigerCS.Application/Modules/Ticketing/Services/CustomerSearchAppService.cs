@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Logging;
 using TigerCS.Application.Modules.CustomerVerification.CrmIntegration;
 using TigerCS.Application.Modules.CustomerVerification.Services;
 using TigerCS.Application.Modules.Ticketing.Dto;
@@ -24,12 +25,13 @@ namespace TigerCS.Application.Modules.Ticketing.Services;
 /// </summary>
 public sealed class CustomerSearchAppService(
     CrmBuyerLookupAppService crmBuyerLookupAppService,
-    CustomerLookupAppService customerLookupAppService)
+    CustomerLookupAppService customerLookupAppService,
+    ILogger<CustomerSearchAppService>? logger = null)
 {
     public async Task<CustomerSearchResultDto> SearchByPhoneAsync(
         string phoneNumber, CancellationToken cancellationToken = default)
     {
-        var crmTask = crmBuyerLookupAppService.GetBuyerByPhoneAsync(phoneNumber, cancellationToken);
+        var crmTask = LookUpCrmAsync(phoneNumber, cancellationToken);
         var externalTask = customerLookupAppService.SearchExternalSourcesByPhoneAsync(phoneNumber, cancellationToken);
 
         await Task.WhenAll(crmTask, externalTask);
@@ -52,6 +54,23 @@ public sealed class CustomerSearchAppService(
             crmStatus == "Failed" ? FailureKindName(crmResult) : null);
     }
 
+    /// <summary>
+    /// The CRM leg, isolated: an unexpected fault in it is reported as a failed CRM lookup (kind Error) next to whatever PACT/Tasleeh
+    /// returned, instead of aborting the whole search - and never as "no customer". Only the exception type is logged.
+    /// </summary>
+    private async Task<CrmBuyerLookupResult> LookUpCrmAsync(string phoneNumber, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await crmBuyerLookupAppService.GetBuyerByPhoneAsync(phoneNumber, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger?.LogError("Customer search: the CRM lookup failed unexpectedly ({ExceptionType}).", ex.GetType().Name);
+            return CrmBuyerLookupResult.Unavailable("CRM lookup failed unexpectedly.", CrmLookupFailureKind.UnexpectedError);
+        }
+    }
+
     /// <summary>The failure, in words that cannot be mistaken for "not found". Falls back to the outcome when a gateway gave no kind.</summary>
     internal static string FailureKindName(CrmBuyerLookupResult result) => result.FailureKind switch
     {
@@ -61,6 +80,7 @@ public sealed class CustomerSearchAppService(
         CrmLookupFailureKind.RejectedRequest => "Rejected",
         CrmLookupFailureKind.UnexpectedStatus => "UnexpectedStatus",
         CrmLookupFailureKind.MalformedResponse => "InvalidResponse",
+        CrmLookupFailureKind.UnexpectedError => "Error",
         _ => result.Outcome switch
         {
             CrmBuyerLookupOutcome.Unauthorized => "Misconfigured",

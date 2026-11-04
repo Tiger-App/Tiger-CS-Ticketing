@@ -84,6 +84,15 @@ public sealed class CrmBuyerHttpGateway(
             logger.LogWarning(ex, "CRM GetBuyerByPhone could not be reached for {MaskedPhoneNumber}.", Mask(phoneNumber));
             return CrmBuyerLookupResult.Unavailable("CRM could not be reached.", CrmLookupFailureKind.Unreachable);
         }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Anything else unexpected still comes back as a classified failure: an unhandled fault here would surface as a 500 to every
+            // caller and, in the customer search, discard the PACT/Tasleeh results. Only the exception TYPE is logged - its message is not
+            // ours to vouch for as free of customer data.
+            logger.LogError(
+                "CRM GetBuyerByPhone failed unexpectedly ({ExceptionType}) for {MaskedPhoneNumber}.", ex.GetType().Name, Mask(phoneNumber));
+            return CrmBuyerLookupResult.Unavailable("CRM lookup failed unexpectedly.", CrmLookupFailureKind.UnexpectedError);
+        }
 
         using (response)
         {

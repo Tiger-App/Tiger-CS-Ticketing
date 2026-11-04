@@ -30,9 +30,17 @@ public sealed class SlaFirstResponseAppService(
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     FirstHumanResponseRecorder firstHumanResponseRecorder,
     ITicketingUnitOfWork unitOfWork,
-    TimeProvider timeProvider,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    TimeProvider timeProvider)
 {
+    /// <summary>
+    /// How far before the ticket's creation a <see cref="FirstResponseSource.GenesysCallAnswer"/> may be placed. SLA-Architecture §16
+    /// Example E is a call answered "a moment" before its ticket was created; it is not a licence to place the response arbitrarily far
+    /// back. Beyond the window the request is refused (never clamped). The value is NOT restricted to a service identity: the
+    /// record-first-response route is not an integration route (a service identity is refused there by the platform policy), so that
+    /// restriction would make the approved DTO value unreachable for everyone.
+    /// </summary>
+    public static readonly TimeSpan GenesysCallAnswerLeadAllowance = TimeSpan.FromHours(1);
+
     public async Task<SlaOperationResult<TicketSlaSummaryResponseDto>> RecordAsync(
         Guid callerEmployeeId,
         IReadOnlyCollection<string> callerRoles,
@@ -64,14 +72,6 @@ public sealed class SlaFirstResponseAppService(
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.Forbidden);
         }
 
-        // A Genesys call answer is a system observation (SLA-Architecture §16 Example E may predate the ticket). A person must not label
-        // their own entry with it: that is how the creation-time bound below would be bypassed and the audit trail mislabelled. People
-        // record what happened outside the system as Manual.
-        if (source == FirstResponseSource.GenesysCallAnswer && serviceIdentities?.IsServiceIdentity(callerEmployeeId) != true)
-        {
-            return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.Forbidden);
-        }
-
         // Closed-ticket immutability, rejected before any transaction or
         // write — the same ordering TicketLifecycleAppService uses.
         if (ticket.TicketStatus == TicketStatus.Closed)
@@ -91,7 +91,9 @@ public sealed class SlaFirstResponseAppService(
         // ticket existed (that allowance is SLA-Architecture §16 Example E, for a Genesys call answer only). Without these
         // bounds a caller could backdate the response to erase a breach.
         if (occurredAtUtc > nowUtc.AddMinutes(5)
-            || (source == FirstResponseSource.Manual && occurredAtUtc < ticket.CreatedAtUtc))
+            || occurredAtUtc < (source == FirstResponseSource.GenesysCallAnswer
+                ? ticket.CreatedAtUtc - GenesysCallAnswerLeadAllowance
+                : ticket.CreatedAtUtc))
         {
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.InvalidRequest);
         }

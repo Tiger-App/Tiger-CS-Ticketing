@@ -23,16 +23,9 @@ public class FirstResponseIntegrityTests
         public override DateTimeOffset GetUtcNow() => new(utcNow, TimeSpan.Zero);
     }
 
-    private sealed class Registry(params Guid[] ids) : IServiceIdentityRegistry
-    {
-        public bool IsServiceIdentity(Guid employeeId) => ids.Contains(employeeId);
-
-        public IReadOnlyCollection<Guid> ServiceIdentityIds => ids;
-    }
-
     private sealed record Harness(SlaServiceFixture Sla, SlaFirstResponseAppService Service, Ticket Ticket, Guid OwnerId, TicketSlaInstance Period);
 
-    private static async Task<Harness> CreateAsync(bool ownerIsServiceIdentity = false)
+    private static async Task<Harness> CreateAsync()
     {
         var sla = new SlaServiceFixture(timeProvider: new Clock(Now));
         var ticket = Ticket.CreateVerified(
@@ -45,8 +38,7 @@ public class FirstResponseIntegrityTests
         await sla.SlaInstances.AddAsync(period);
 
         var service = new SlaFirstResponseAppService(
-            sla.Tickets, sla.SlaInstances, sla.DepartmentAssignments, sla.FirstHumanResponse, sla.UnitOfWork, new Clock(Now),
-            new Registry(ownerIsServiceIdentity ? [owner] : []));
+            sla.Tickets, sla.SlaInstances, sla.DepartmentAssignments, sla.FirstHumanResponse, sla.UnitOfWork, new Clock(Now));
         return new Harness(sla, service, ticket, owner, period);
     }
 
@@ -109,30 +101,44 @@ public class FirstResponseIntegrityTests
 
     // ----- the other sources are not a back door ------------------------------------------------------------------------------------
 
+    /// <summary>SLA-Architecture §16 Example E: a call answered moments before its ticket existed still satisfies the SLA, for an authorized recorder.</summary>
     [Theory]
     [InlineData("GenesysCallAnswer")]
     [InlineData("2")]
-    public async Task GenesysCallAnswer_ByAPerson_IsForbidden_SoItCannotBypassTheCreationBound(string source)
+    public async Task GenesysCallAnswer_MayPrecedeCreationByTheBoundedAllowance(string source)
     {
         var h = await CreateAsync();
 
-        var result = await Record(h, source, CreatedAt.AddMinutes(-30));   // backdated to before the ticket, to erase the breach
+        var result = await Record(h, source, CreatedAt.AddMinutes(-2));
 
-        Assert.Equal(SlaOperationOutcome.Forbidden, result.Outcome);
+        Assert.Equal(SlaOperationOutcome.Success, result.Outcome);
+        Assert.Equal(CreatedAt.AddMinutes(-2), h.Ticket.FirstHumanResponseAtUtc);
+        Assert.False(h.Period.FirstResponseBreached);
+    }
+
+    /// <summary>The allowance is bounded: backdating a "call answer" far before the ticket (to erase a breach) is refused, and writes nothing.</summary>
+    [Theory]
+    [InlineData(61)]
+    [InlineData(60 * 24 * 10)]
+    public async Task GenesysCallAnswer_BeyondTheAllowance_IsRejected_AndRecordsNothing(int minutesBeforeCreation)
+    {
+        var h = await CreateAsync();
+
+        var result = await Record(h, "GenesysCallAnswer", CreatedAt.AddMinutes(-minutesBeforeCreation));
+
+        Assert.Equal(SlaOperationOutcome.InvalidRequest, result.Outcome);
         AssertNothingRecorded(h);
         Assert.Empty(h.Sla.Audit.Entries);
     }
 
     [Fact]
-    public async Task GenesysCallAnswer_ByTheIntegrationAccount_KeepsTheExampleEAllowance()
+    public async Task GenesysCallAnswer_ExactlyAtTheAllowance_IsAccepted()
     {
-        // SLA-Architecture §16 Example E: a call answered before its ticket existed. Only the configured service identity may claim it.
-        var h = await CreateAsync(ownerIsServiceIdentity: true);
+        var h = await CreateAsync();
 
-        var result = await Record(h, "GenesysCallAnswer", CreatedAt.AddMinutes(-2));
+        var result = await Record(h, "GenesysCallAnswer", CreatedAt - SlaFirstResponseAppService.GenesysCallAnswerLeadAllowance);
 
         Assert.Equal(SlaOperationOutcome.Success, result.Outcome);
-        Assert.Equal(CreatedAt.AddMinutes(-2), h.Ticket.FirstHumanResponseAtUtc);
     }
 
     [Theory]
@@ -140,7 +146,7 @@ public class FirstResponseIntegrityTests
     [InlineData("3")]
     public async Task HumanAgentMessage_IsObservedBySystemFromTheTranscript_NotClaimableThroughTheApi(string source)
     {
-        var h = await CreateAsync(ownerIsServiceIdentity: true);
+        var h = await CreateAsync();
 
         Assert.Equal(SlaOperationOutcome.InvalidRequest, (await Record(h, source, CreatedAt.AddMinutes(-5))).Outcome);
         AssertNothingRecorded(h);

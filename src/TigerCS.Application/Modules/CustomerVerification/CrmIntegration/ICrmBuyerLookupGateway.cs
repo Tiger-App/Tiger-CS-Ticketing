@@ -105,7 +105,10 @@ public enum CrmLookupFailureKind
     UnexpectedStatus,
 
     /// <summary>CRM answered 200 with a body that does not parse as the documented contract, or <c>success:false</c>.</summary>
-    MalformedResponse
+    MalformedResponse,
+
+    /// <summary>Any other unexpected fault while calling CRM. Only the exception type is ever recorded - never its message.</summary>
+    UnexpectedError
 }
 
 /// <summary>
