@@ -1063,6 +1063,12 @@ public class TicketsController(
             detail: "RequestTypeId did not resolve to an active request type.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
 
+        TicketCreationOutcome.DefaultClassificationNotConfigured => Problem(
+            type: "https://tigercs.internal/problems/default-classification-not-configured",
+            title: "The department's General classification is not configured",
+            detail: "This department has no usable General category / request type, so a human-handled ticket cannot be given a valid request type. Nothing was created. Choose a category and request type, or ask an administrator to run EnsureDefaultGeneralClassification.sql.",
+            statusCode: StatusCodes.Status409Conflict),
+
         TicketCreationOutcome.RequestTypeWorkflowNotPublished => Problem(
             type: "https://tigercs.internal/problems/request-type-workflow-not-published",
             title: "Request type workflow is not published",
@@ -1250,6 +1256,12 @@ public class TicketsController(
             title: "Pending reason required",
             detail: "Moving a ticket to PendingCustomer requires a PendingReason.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.DefaultClassificationNotConfigured => Problem(
+            type: "https://tigercs.internal/problems/default-classification-not-configured",
+            title: "The department's General classification is not configured",
+            detail: "No request type was chosen and the target department has no usable General request type. Nothing was changed. Choose a request type, or ask an administrator to run EnsureDefaultGeneralClassification.sql.",
+            statusCode: StatusCodes.Status409Conflict),
 
         TicketMutationOutcome.NotAllowedForRequestType => Problem(
             type: "https://tigercs.internal/problems/not-allowed-for-request-type",

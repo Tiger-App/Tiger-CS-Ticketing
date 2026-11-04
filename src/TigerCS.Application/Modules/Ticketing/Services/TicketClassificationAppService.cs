@@ -218,6 +218,13 @@ public sealed class TicketClassificationAppService(
             }
         }
 
+        // A replacement always ends with a valid request type: the one chosen, the current one when it still fits, or the target department's own
+        // General. When none exists that is a configuration error - nothing is changed.
+        if (replacing && requestType is null)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.DefaultClassificationNotConfigured);
+        }
+
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var correlationId = Guid.NewGuid();
 
@@ -251,7 +258,8 @@ public sealed class TicketClassificationAppService(
                     ticket.Classify(category.CategoryId, alreadyHas);
                 }
 
-                if (request.PriorityId < alreadyHas)
+                // A reclassification never changes priority (so it can never re-time the running SLA); a priority change has its own flow.
+                if (!replacing && request.PriorityId < alreadyHas)
                 {
                     ticket.ChangePriority(request.PriorityId);
                 }

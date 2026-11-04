@@ -55,6 +55,7 @@ public class DefaultClassificationBackfillTests
         var leasing = f.Departments.AddDepartment("Leasing Customer Services", "LCS");
         var collections = f.Departments.AddDepartment("Collections", "COL");
         var (_, general, generalType) = f.SeedDefaultClassification(cs);
+        f.SeedGeneral(leasing);   // every active department has its own General
         var leasingCategory = f.Categories.Seed(leasing.DepartmentId, "Leasing Inquiry");
         var template = f.WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: 400));
         var leasingType = f.RequestTypes.Add(new RequestType(
@@ -67,7 +68,7 @@ public class DefaultClassificationBackfillTests
             Backfill = new DefaultClassificationBackfillService(new FakeBackfillRepository(f.Tickets), f.DefaultClassification)
         };
 
-        w.Unclassified = await AddAsync(w, Ticket.CreateUnclassified("TG-LCS-1", leasing.DepartmentId, "no classification", Now, defaultPriorityId: 3));
+        w.Unclassified = await AddAsync(w, Ticket.CreateUnclassified("TG-CS-1", cs.DepartmentId, "no classification", Now, defaultPriorityId: 3));
         w.Unclassified.AssignTo(Guid.NewGuid());
 
         w.Valid = await AddAsync(w, Ticket.CreateUnverified("TG-LCS-2", leasing.DepartmentId, leasingCategory.CategoryId, 2, "valid", Now));
@@ -75,10 +76,10 @@ public class DefaultClassificationBackfillTests
 
         w.CategoryOnly = await AddAsync(w, Ticket.CreateUnverified("TG-LCS-3", leasing.DepartmentId, leasingCategory.CategoryId, 3, "category only", Now));
 
-        w.RequestTypeOnly = await AddAsync(w, Ticket.CreateUnclassified("TG-LCS-4", leasing.DepartmentId, "type only", Now, defaultPriorityId: 3));
+        w.RequestTypeOnly = await AddAsync(w, Ticket.CreateUnclassified("TG-CS-4", cs.DepartmentId, "type only", Now, defaultPriorityId: 3));
         w.RequestTypeOnly.ClassifyRequestType(leasingType.RequestTypeId);
 
-        w.Dangling = await AddAsync(w, Ticket.CreateUnverified("TG-LCS-5", leasing.DepartmentId, 888888, 3, "dangling category", Now));
+        w.Dangling = await AddAsync(w, Ticket.CreateUnverified("TG-CS-5", cs.DepartmentId, 888888, 3, "dangling category", Now));
         w.Dangling.ClassifyRequestType(777777);
 
         w.CollectionsTicket = await AddAsync(w, Ticket.CreateUnclassified("TG-COL-6", collections.DepartmentId, "collections", Now, defaultPriorityId: 3));
@@ -86,7 +87,7 @@ public class DefaultClassificationBackfillTests
         w.AlreadyDefault = await AddAsync(w, Ticket.CreateUnverified("TG-CS-7", cs.DepartmentId, general.CategoryId, 3, "default", Now));
         w.AlreadyDefault.ClassifyRequestType(generalType.RequestTypeId);
 
-        w.ClosedUnclassified = await AddAsync(w, Ticket.CreateUnclassified("TG-LCS-8", leasing.DepartmentId, "old closed", Now, defaultPriorityId: 3));
+        w.ClosedUnclassified = await AddAsync(w, Ticket.CreateUnclassified("TG-CS-8", cs.DepartmentId, "old closed", Now, defaultPriorityId: 3));
         w.ClosedUnclassified.AssignTo(Guid.NewGuid());
         w.ClosedUnclassified.ChangeStatus(TicketStatus.InProgress);
         w.ClosedUnclassified.Resolve(ResolutionOutcome.Resolved, null);
@@ -236,8 +237,9 @@ public class DefaultClassificationBackfillTests
         var run = await w.Backfill.RunAsync(0, 100, dryRun: false, Options(enabled: true, includeCategoryOnly: true));
 
         Assert.Equal(5, run.Applied);
-        Assert.Equal(w.General.CategoryId, w.CategoryOnly.CategoryId);
-        Assert.Equal(w.GeneralType.RequestTypeId, w.CategoryOnly.RequestTypeId);
+        var leasingGeneral = (await w.F.Categories.ListAsync(true, w.Leasing.DepartmentId)).Single(c => c.Name == "General");
+        Assert.Equal(leasingGeneral.CategoryId, w.CategoryOnly.CategoryId);   // General within the ticket's own department
+        Assert.NotNull(w.CategoryOnly.RequestTypeId);
     }
 
     [Fact]
@@ -252,6 +254,24 @@ public class DefaultClassificationBackfillTests
         Assert.False(first.BacklogExhausted);
         Assert.Equal(5, second.Examined);
         Assert.True(second.BacklogExhausted);
+    }
+
+    [Fact]
+    public async Task ATicketInADepartmentWithoutGeneral_IsReportedAsAConfigurationError_NeverGivenCustomerServicesGeneral()
+    {
+        var w = await BuildAsync();
+        var handover = w.F.Departments.AddDepartment("Handover", "HO");   // active, no General of its own
+        var stranded = await AddAsync(w, Ticket.CreateUnclassified("TG-HO-9", handover.DepartmentId, "no general here", Now, defaultPriorityId: 3));
+
+        var preview = await w.Backfill.PreviewAsync(0, 100, Options());
+        var run = await w.Backfill.RunAsync(0, 100, dryRun: false, Options(enabled: true));
+
+        Assert.Equal(DefaultClassificationBackfillClass.DepartmentGeneralMissing, Row(preview, stranded).Class);
+        Assert.Equal(1, preview.Exclusions["DepartmentGeneralMissing"]);
+        Assert.Null(stranded.CategoryId);
+        Assert.Null(stranded.RequestTypeId);
+        Assert.Equal(handover.DepartmentId, stranded.CurrentDepartmentId);
+        Assert.Equal(4, run.Applied);   // the others are still done
     }
 
     // ---- The classifier is the single source of the decision ----

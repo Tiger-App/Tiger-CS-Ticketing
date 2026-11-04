@@ -9,23 +9,16 @@ using TigerCS.Domain.Modules.WorkflowConfiguration;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
 
-/// <summary>The approved default classification, resolved from configuration: Customer Services / General / General plus its published workflow.</summary>
-/// <param name="Department">The department whose General classification is used.</param>
-/// <param name="Category">That department's General category.</param>
-/// <param name="RequestType">That department's General request type.</param>
-/// <param name="PublishedWorkflow">The request type's published workflow version.</param>
-/// <param name="PlacementDepartment">
-/// Set when the ticket's own (valid) department has no usable General of its own and Customer Services' General stands in: the ticket STAYS in this
-/// department and only the classification is Customer Services / General. Null when the classification's department is also the ticket's.
-/// </param>
-/// <param name="ConfigurationIssue">Why the department's own General could not be used (missing, duplicated, unpublished) - to be reported, not hidden.</param>
-public sealed record DefaultClassification(
-    Department Department, Category Category, RequestType RequestType, WorkflowTemplate PublishedWorkflow,
-    Department? PlacementDepartment = null, string? ConfigurationIssue = null)
+/// <summary>Audit action names written by the default-classification rules.</summary>
+public static class DefaultClassificationAuditActions
 {
-    /// <summary>The department the ticket belongs in: its own when it keeps it, otherwise the classification's.</summary>
-    public Department TicketDepartment => PlacementDepartment ?? Department;
+    /// <summary>A valid department has no usable General configuration: the ticket was refused (human-handled) or created and flagged (AI-handled).</summary>
+    public const string ConfigurationError = "DefaultClassificationConfigurationError";
+}
 
+/// <summary>The approved default classification, resolved from configuration: Customer Services / General / General plus its published workflow.</summary>
+public sealed record DefaultClassification(Department Department, Category Category, RequestType RequestType, WorkflowTemplate PublishedWorkflow)
+{
     /// <summary>The priority the General request type is configured with - used only when a brand-new ticket needs one and the caller supplied none.</summary>
     public byte DefaultPriorityId => RequestType.DefaultPriorityId;
 }
@@ -44,13 +37,23 @@ public enum DefaultClassificationGap
 }
 
 /// <summary>The default classification, or the precise configuration gap that prevents it.</summary>
-public sealed record DefaultClassificationResolution(DefaultClassification? Value, DefaultClassificationGap Gap, string? Detail)
+/// <param name="Value">The resolved default classification, or null.</param>
+/// <param name="Gap">What is missing when <paramref name="Value"/> is null.</param>
+/// <param name="Detail">A human-readable description of the gap.</param>
+/// <param name="DepartmentKnown">
+/// True when the ticket's department IS valid (active, not Collections) but its own General configuration is missing, duplicated or unpublished.
+/// That is a <b>configuration error</b> to report and fix - the department is never swapped for Customer Services'.
+/// </param>
+public sealed record DefaultClassificationResolution(DefaultClassification? Value, DefaultClassificationGap Gap, string? Detail, bool DepartmentKnown = false)
 {
     public bool IsAvailable => Value is not null;
 
     public static DefaultClassificationResolution Available(DefaultClassification value) => new(value, DefaultClassificationGap.None, null);
 
     public static DefaultClassificationResolution Unavailable(DefaultClassificationGap gap, string detail) => new(null, gap, detail);
+
+    public DefaultClassificationResolution ForKnownDepartment(string departmentCode) =>
+        this with { DepartmentKnown = true, Detail = $"Department {departmentCode} has no usable General configuration: {Detail}" };
 }
 
 /// <summary>How well a ticket's stored classification stands up. Anything other than <see cref="Valid"/> is a candidate for the fallback.</summary>
@@ -87,8 +90,11 @@ public enum DefaultClassificationApplyOutcome
     /// <summary>The ticket is outside the fallback's scope (Collections): nothing was changed.</summary>
     Excluded,
 
-    /// <summary>The fallback is not configured: nothing was changed.</summary>
+    /// <summary>The ticket's (valid) department has no usable General while the rule is configured: a configuration ERROR. Nothing was changed; callers refuse or report.</summary>
     ConfigurationMissing,
+
+    /// <summary>The default classification is not configured anywhere yet (Customer Services' General does not exist): the rule is not enforced and nothing was changed.</summary>
+    NotEnforced,
 
     TicketNotFound
 }
@@ -163,12 +169,11 @@ public sealed class DefaultClassificationService(
     }
 
     /// <summary>
-    /// The default classification for a ticket whose department is <paramref name="departmentId"/>: <b>General / General within that department</b>
-    /// when it is a usable department (active, not Collections) that has exactly one active General category and one General request type with a
-    /// Published workflow. When the department is valid but has no usable General, the ticket <b>keeps that department</b> and takes Customer
-    /// Services' General classification, with the gap reported in <see cref="DefaultClassification.ConfigurationIssue"/> (a department is never
-    /// changed because configuration is missing). With no valid department it is Customer Services / General. Never creates anything and never
-    /// chooses between duplicates.
+    /// The default classification for a ticket whose department is <paramref name="departmentId"/>: <b>that department's own General / General</b>
+    /// (exactly one active General category and one General request type with a Published workflow). Customer Services' General is used ONLY when
+    /// the department is unknown (none, missing, inactive). A valid department without a usable General of its own is a configuration error
+    /// (<see cref="DefaultClassificationResolution.DepartmentKnown"/>): the result is unavailable, never a cross-department stand-in, and the
+    /// ticket is never moved. Never creates anything and never chooses between duplicates.
     /// </summary>
     public async Task<DefaultClassificationResolution> ResolveForDepartmentAsync(int? departmentId, CancellationToken cancellationToken = default)
     {
@@ -182,14 +187,17 @@ public sealed class DefaultClassificationService(
                 return own;
             }
 
-            var standIn = await ResolveAsync(cancellationToken);
-            return standIn.Value is { } cs && cs.Department.DepartmentId != department.DepartmentId
-                ? DefaultClassificationResolution.Available(cs with { PlacementDepartment = department, ConfigurationIssue = $"{department.Code}: {own.Detail}" })
-                : standIn;
+            // The rule is switched on by its configuration: only once Customer Services' General exists (the setup script has run) is a department
+            // without its own General a configuration ERROR. Before that nothing is enforced and every path keeps its previous behaviour.
+            return (await ResolveAsync(cancellationToken)).IsAvailable ? own.ForKnownDepartment(department.Code) : own;
         }
 
         return await ResolveAsync(cancellationToken);
     }
+
+    /// <summary>Why a department's General cannot be used (empty when it can) - for audit entries and error responses.</summary>
+    public async Task<string?> DescribeConfigurationGapAsync(int? departmentId, CancellationToken cancellationToken = default) =>
+        (await ResolveForDepartmentAsync(departmentId, cancellationToken)) is { IsAvailable: false } gap ? gap.Detail : null;
 
     private async Task<DefaultClassificationResolution> ResolveInAsync(Department department, CancellationToken cancellationToken)
     {
@@ -332,7 +340,7 @@ public sealed class DefaultClassificationService(
         var resolution = await ResolveForDepartmentAsync(ticket.OriginatingDepartmentId, cancellationToken);
         if (resolution.Value is not { } fallback)
         {
-            return DefaultClassificationApplyOutcome.ConfigurationMissing;
+            return resolution.DepartmentKnown ? DefaultClassificationApplyOutcome.ConfigurationMissing : DefaultClassificationApplyOutcome.NotEnforced;
         }
 
         if (await IsCollectionsTicketAsync(ticket, cancellationToken))
@@ -355,7 +363,7 @@ public sealed class DefaultClassificationService(
             beforeValue: before,
             afterValue:
                 $"CategoryId={fallback.Category.CategoryId};RequestTypeId={fallback.RequestType.RequestTypeId};Default={fallback.Department.Code}/{CategoryName};"
-                + $"State={state};Reason={reason};ConfigurationIssue={fallback.ConfigurationIssue ?? "(none)"};DepartmentId={ticket.CurrentDepartmentId} (unchanged);Owner={ticket.CurrentOwnerEmployeeId?.ToString() ?? "(none)"} (unchanged)",
+                + $"State={state};Reason={reason};DepartmentId={ticket.CurrentDepartmentId} (unchanged);Owner={ticket.CurrentOwnerEmployeeId?.ToString() ?? "(none)"} (unchanged)",
             Guid.NewGuid(), cancellationToken);
 
         if (save)

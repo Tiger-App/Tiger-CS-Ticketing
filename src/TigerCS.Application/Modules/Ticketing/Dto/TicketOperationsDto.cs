@@ -349,7 +349,10 @@ public enum TicketMutationOutcome
     ClaimBlockedByActiveAiConversation,
 
     /// <summary>Take Ownership: the ticket has a pending approval and stays with its approvers.</summary>
-    ClaimBlockedByPendingApproval
+    ClaimBlockedByPendingApproval,
+
+    /// <summary>The classification cannot be completed with a valid request type because the target department has no usable General request type. Nothing was changed; run EnsureDefaultGeneralClassification.sql.</summary>
+    DefaultClassificationNotConfigured
 }
 
 public sealed record TicketMutationResult(TicketMutationOutcome Outcome, TicketDetailDto? Response = null)

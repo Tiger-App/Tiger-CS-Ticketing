@@ -124,20 +124,64 @@ public class DefaultClassificationHumanHandledTests
     }
 
     [Fact]
-    public async Task AValidDepartmentWithoutItsGeneral_IsNeverChanged_TheGapIsReported_AndTheTicketIsStillValidAndAssigned()
+    public async Task AHumanHandledInquiryInADepartmentWithoutGeneral_IsRefusedWithAControlledError_NothingIsCreatedOrMoved()
     {
         var w = Build();
+        var tickets = w.F.Tickets.All.Count;
+        var intakes = w.F.IntakeRecords.All.Count;
 
-        var t = await IngestAsync(w, "conv-no-general", w.Handover.DepartmentId);
+        var result = await w.F.Ingestion.IngestAsync(
+            ServiceAccount, new GenesysInquiryDto("conv-no-general", GenesysChannel.Phone, CustomerPhone: Phone, DepartmentId: w.Handover.DepartmentId, HumanFollowUpRequired: true));
 
-        Assert.Equal(w.Handover.DepartmentId, t.OriginatingDepartmentId);           // department kept
-        Assert.Equal(w.CsGeneral.CategoryId, t.CategoryId);                         // safe stand-in classification
-        Assert.NotNull(t.RequestTypeId);
-        Assert.NotNull(t.CurrentOwnerEmployeeId);                                   // and the CS Agent rules still apply
+        Assert.Equal(GenesysIngestionOutcome.DefaultClassificationNotConfigured, result.Outcome);
+        Assert.Contains("HO", result.Detail, StringComparison.Ordinal);
+        Assert.Equal(tickets, w.F.Tickets.All.Count);                               // no half-classified ticket persisted
+        Assert.Equal(intakes, w.F.IntakeRecords.All.Count);
+        var audit = Assert.Single(w.F.Audit.Entries, e => e.Action == "DefaultClassificationConfigurationError");
+        Assert.Contains("TicketCreated=false", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains("EnsureDefaultGeneralClassification.sql", audit.AfterValue, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OnceTheDepartmentsGeneralIsConfigured_TheSameInquiryIsAccepted_InItsOwnDepartment()
+    {
+        var w = Build();
+        var refused = await w.F.Ingestion.IngestAsync(
+            ServiceAccount, new GenesysInquiryDto("conv-retry", GenesysChannel.Phone, CustomerPhone: Phone, DepartmentId: w.Handover.DepartmentId, HumanFollowUpRequired: true));
+        Assert.Equal(GenesysIngestionOutcome.DefaultClassificationNotConfigured, refused.Outcome);
+
+        var (general, type) = w.F.SeedGeneral(w.Handover);   // EnsureDefaultGeneralClassification.sql
+        var t = await IngestAsync(w, "conv-retry", w.Handover.DepartmentId);
+
+        Assert.Equal(general.CategoryId, t.CategoryId);
+        Assert.Equal(type.RequestTypeId, t.RequestTypeId);
+        Assert.Equal(w.Handover.DepartmentId, t.OriginatingDepartmentId);
+        Assert.NotNull(t.CurrentOwnerEmployeeId);
         await AssertValidAsync(w, t);
-        var issue = w.F.Audit.Entries.Single(e => e.Action == "ApplyDefaultClassification").AfterValue!;
-        Assert.Contains("ConfigurationIssue=HO:", issue, StringComparison.Ordinal);
-        Assert.Contains("DepartmentId=" + w.Handover.DepartmentId + " (kept)", issue, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ManualCreation_InADepartmentWithoutGeneral_IsRefused_WhenNoRequestTypeCanBeSet()
+    {
+        var w = Build();
+        var category = w.F.Categories.Seed(w.Handover.DepartmentId, "Handover Question");   // a valid category, but the department has no General request type
+        var employee = Guid.NewGuid();
+        var intake = new IntakeRecord(WellKnownChannels.FaceToFaceKiosk, "+971500000077", w.Handover.DepartmentId, false, null, null, employee, DateTime.UtcNow);
+        await w.F.IntakeRecords.AddAsync(intake);
+
+        var noRequestType = await w.F.ManualTicketCreation.CreateAsync(
+            employee, new CreateTicketRequestDto(intake.IntakeRecordId, null, null, category.CategoryId, (byte)PriorityLevel.Medium, "Walk-in"));
+        var noCategory = await w.F.ManualTicketCreation.CreateAsync(
+            employee, new CreateTicketRequestDto(intake.IntakeRecordId, null, null, null, (byte)PriorityLevel.Medium, "Walk-in", DepartmentId: w.Handover.DepartmentId));
+        var withType = await w.F.ManualTicketCreation.CreateAsync(
+            employee, new CreateTicketRequestDto(intake.IntakeRecordId, null, null, w.HandoverCategory.CategoryId, (byte)PriorityLevel.Medium, "Walk-in", RequestTypeId: w.HandoverType.RequestTypeId));
+
+        Assert.Equal(TicketCreationOutcome.DefaultClassificationNotConfigured, noRequestType.Outcome);
+        Assert.Equal(TicketCreationOutcome.DefaultClassificationNotConfigured, noCategory.Outcome);
+        Assert.Equal(TicketCreationOutcome.Success, withType.Outcome);          // an explicit, valid category + request type needs no General
+        var t = Assert.Single(w.F.Tickets.All);
+        Assert.Equal(w.HandoverType.RequestTypeId, t.RequestTypeId);
+        Assert.Equal(2, w.F.Audit.Entries.Count(e => e.Action == "DefaultClassificationConfigurationError"));
     }
 
     [Fact]
@@ -159,8 +203,7 @@ public class DefaultClassificationHumanHandledTests
         await AssertValidAsync(w, t);
     }
 
-    [Fact]
-    public async Task ALegacyTicketWhoseHumanFollowUpIsRequested_GetsAValidClassification_WithoutLosingItsDepartmentOrAgent()
+    private static async Task<(GenesysServiceFixture F, Department Leasing, Ticket Ticket, Guid Agent)> LegacyTicketAsync()
     {
         // Created while nothing was configured: legacy Unclassified.
         var f = new GenesysServiceFixture(callCenterFirst: true);
@@ -172,14 +215,38 @@ public class DefaultClassificationHumanHandledTests
         var ticket = f.Tickets.All.Single(t => t.TicketId == created.Ticket!.TicketId);
         Assert.Null(ticket.CategoryId);
         f.SeedDefaultClassification();
+        return (f, leasing, ticket, agent);
+    }
 
-        await f.TicketUpdate.UpdateAsync(ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto("conv-legacy-h", HumanFollowUpRequired: true));
+    [Fact]
+    public async Task ALegacyTicketWhoseHumanFollowUpIsRequested_GetsItsDepartmentsGeneral_WithoutLosingItsDepartmentOrAgent()
+    {
+        var (f, leasing, ticket, agent) = await LegacyTicketAsync();
+        var (general, type) = f.SeedGeneral(leasing);
 
-        Assert.NotNull(ticket.CategoryId);
-        Assert.NotNull(ticket.RequestTypeId);
+        var update = await f.TicketUpdate.UpdateAsync(ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto("conv-legacy-h", HumanFollowUpRequired: true));
+
+        Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
+        Assert.Equal(general.CategoryId, ticket.CategoryId);
+        Assert.Equal(type.RequestTypeId, ticket.RequestTypeId);
         Assert.Equal(leasing.DepartmentId, ticket.OriginatingDepartmentId);
         Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
         Assert.Equal(TicketClassificationState.Valid, await f.DefaultClassification.AssessAsync(ticket.CategoryId, ticket.RequestTypeId));
+    }
+
+    [Fact]
+    public async Task ALegacyTicketWhoseHumanFollowUpIsRequested_InADepartmentWithoutGeneral_IsNotHandedToAPerson_AndTheErrorIsAudited()
+    {
+        var (f, leasing, ticket, _) = await LegacyTicketAsync();
+
+        var update = await f.TicketUpdate.UpdateAsync(ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto("conv-legacy-h", HumanFollowUpRequired: true));
+
+        Assert.Equal(GenesysTicketUpdateOutcome.DefaultClassificationNotConfigured, update.Outcome);
+        Assert.Null(ticket.CategoryId);                                   // not pretended valid
+        Assert.Null(ticket.RequestTypeId);
+        Assert.Equal(leasing.DepartmentId, ticket.CurrentDepartmentId);   // not moved
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(f.Audit.Entries, e => e.Action == "DefaultClassificationConfigurationError" && e.AfterValue!.Contains("Handling=Human", StringComparison.Ordinal));
     }
 
     // ---- the assigned CS Agent reviews and corrects ----
@@ -247,6 +314,55 @@ public class DefaultClassificationHumanHandledTests
     }
 
     [Fact]
+    public async Task AReclassification_PreservesTheExistingSlaDeadlines_EvenWhenAMoreUrgentPriorityIsSent_AndNeverRestartsTheClock()
+    {
+        var w = Build();
+        var t = await IngestAsync(w, "conv-sla", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var other = w.F.Categories.Seed(w.Handover.DepartmentId, "Other");
+        var period = Assert.Single(w.F.Sla.SlaInstances.All);
+        var (start, firstResponseDue, resolutionDue, priority) = (period.PeriodStartAtUtc, period.FirstResponseDueAtUtc, period.ResolutionDueAtUtc, t.PriorityId);
+
+        var result = await w.F.Classification.ClassifyAsync(
+            t.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], t.TicketId, Correct(other.CategoryId, (byte)PriorityLevel.Critical));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Same(period, Assert.Single(w.F.Sla.SlaInstances.All));
+        Assert.Equal((start, firstResponseDue, resolutionDue), (period.PeriodStartAtUtc, period.FirstResponseDueAtUtc, period.ResolutionDueAtUtc));
+        Assert.Null(period.PeriodEndAtUtc);
+        Assert.Equal(priority, t.PriorityId);                                 // priority has its own flow
+        Assert.Equal(SlaState.Running, t.SlaState);
+    }
+
+    [Fact]
+    public async Task ACorrectionToADepartmentWithoutAGeneralRequestType_AndNoRequestTypeNamed_IsRefused_NothingChanges()
+    {
+        var w = Build();
+        var t = await IngestAsync(w, "conv-correct-no-config", w.Leasing.DepartmentId, type: null);   // Leasing General
+        var agent = t.CurrentOwnerEmployeeId!.Value;
+        var targetCategory = w.F.Categories.Seed(w.Handover.DepartmentId, "Handover Question");     // Handover has no General request type
+        var before = (t.CategoryId, t.RequestTypeId, t.CurrentDepartmentId, t.CurrentOwnerEmployeeId);
+
+        var result = await w.F.Classification.ClassifyAsync(agent, [Roles.CsAgent], t.TicketId, Correct(targetCategory.CategoryId, t.PriorityId!.Value));
+
+        Assert.Equal(TicketMutationOutcome.DefaultClassificationNotConfigured, result.Outcome);
+        Assert.Equal(before, (t.CategoryId, t.RequestTypeId, t.CurrentDepartmentId, t.CurrentOwnerEmployeeId));
+    }
+
+    [Fact]
+    public async Task APartialClassification_RequestTypeButNoCategory_IsRepairedWithTheDepartmentsGeneral_NotLeftHalfClassified()
+    {
+        var w = Build();
+        var template = w.F.WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: 603));
+        var orphan = w.F.RequestTypes.Add(new RequestType(w.Leasing.DepartmentId, "Orphan Type", template.WorkflowId, (byte)PriorityLevel.Medium, false, true, true, true));
+
+        var t = await IngestAsync(w, "conv-partial", w.Leasing.DepartmentId, type: new GenesysRequestTypeDto(orphan.RequestTypeId));
+
+        Assert.Equal(w.LeasingGeneral.CategoryId, t.CategoryId);                // same department's General, not the orphan type
+        Assert.Equal(w.LeasingGeneralType.RequestTypeId, t.RequestTypeId);
+        await AssertValidAsync(w, t);
+    }
+
+    [Fact]
     public async Task OnlyTheAssignedAgentMayCorrectAValidClassification()
     {
         var w = Build();
@@ -299,7 +415,7 @@ public class DefaultClassificationHumanHandledTests
     // ---- AI-closed: valid classification, no CS Agent ----
 
     [Fact]
-    public async Task AnAiClosedTicketInADepartmentWithoutGeneral_IsClassifiedWithoutMovingOrAssigning()
+    public async Task AnAiClosedTicket_GetsItsDepartmentsGeneral_WithoutMovingOrAssigning()
     {
         var f = new GenesysServiceFixture(callCenterFirst: true);
         var handover = f.Departments.AddDepartment("Handover", "HO");
@@ -309,11 +425,13 @@ public class DefaultClassificationHumanHandledTests
             ServiceAccount, new GenesysInquiryDto("conv-ai-ho", GenesysChannel.WebsiteChat, CustomerPhone: Phone, DepartmentId: handover.DepartmentId, HumanFollowUpRequired: false));
         var ticket = f.Tickets.All.Single(t => t.TicketId == created.Ticket!.TicketId);
         f.SeedDefaultClassification();
+        var (general, _) = f.SeedGeneral(handover);
 
         await f.TicketUpdate.UpdateAsync(ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto("conv-ai-ho", ClosedByAi: true));
 
         Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
         Assert.Equal(handover.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(general.CategoryId, ticket.CategoryId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Equal(TicketClassificationState.Valid, await f.DefaultClassification.AssessAsync(ticket.CategoryId, ticket.RequestTypeId));
     }

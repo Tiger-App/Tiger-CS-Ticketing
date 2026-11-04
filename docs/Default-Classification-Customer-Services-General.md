@@ -5,7 +5,8 @@ classification that can be trusted is classified:
 
 1. **General / General within the department the AI (or caller) named**, when that is a valid, active, non-Collections department that has its own
    General category and General request type (published workflow);
-2. otherwise - no valid department, or a department without its own General - **Customer Services (CS) / General / General**.
+2. otherwise - no valid department - **Customer Services (CS) / General / General**. (A valid department without its own General is a configuration
+   error, see below - never a Customer Services stand-in.)
 
 It is never left `Unclassified` / `Not yet classified`. A valid, compatible classification supplied by the AI is preserved.
 
@@ -22,11 +23,11 @@ and the live backfill is switched off (`DefaultClassificationBackfill:Enabled=fa
 | Category and request type from different departments (ambiguous) | Fallback | Fallback |
 | Genesys request type that is unknown, inactive, ambiguous by name, has no published workflow, or has no unique matching category | Fallback (was HTTP 422 / Unclassified) | n/a |
 | Valid category + valid request type | **unchanged** | **unchanged** |
-| Valid category, no request type | unchanged (the agent chose the category) | reported, **left alone** unless the approved run sets `IncludeCategoryOnly` |
+| Valid category, no request type | category kept; the department's General request type is added | reported, **left alone** unless the approved run sets `IncludeCategoryOnly` |
 | Collections department (`COL`) | **out of scope, never touched** | **never touched** |
 
-If Customer Services / General is not configured (or is duplicated / has no published workflow) every path keeps its previous behaviour and
-nothing is created at runtime. `DefaultClassificationService.ResolveAsync` reports the exact gap.
+If Customer Services / General is not configured at all (the setup script has not run) every path keeps its previous behaviour; nothing is ever
+created at runtime. `DefaultClassificationService.ResolveAsync` reports the exact gap.
 
 ## Where it is applied (one service, `DefaultClassificationService`)
 
@@ -89,25 +90,33 @@ tickets, Collections exclusion, and the backfill preview / dry run / live run.
   was unconfigured) gets the default at that moment - classification only, no assignment, no department move.
 * Human-handled tickets are still Call Center first, with the Genesys-confirmed agent or the next CS Agent of the sequential Round-Robin - never a
   department employee through a rule on General.
-* Duplicates are never created or chosen between: a department with more than one General falls back to Customer Services.
+* Duplicates are never created or chosen between: a department with more than one General is a configuration error (see below).
 
-## Human-handled tickets (final rule)
+## Final rules: per-department General, configuration errors, no stand-ins
 
-Every human-handled ticket has an eligible CS Agent (the existing Call Center-first / confirmed-agent / sequential Round-Robin rules, flagged for a
-manual assignment when nobody is eligible) **and** a valid Department, Category and Request Type:
+1. **Every active department has its own General category and General request type with a published workflow** (Collections is out of scope and
+   never gets one). `EnsureDefaultGeneralClassification.sql` (idempotent, dry-run by default) creates what is missing.
+2. **Customer Services' General is never a cross-department stand-in.** It classifies a ticket only when the department is unknown (none, missing,
+   inactive).
+3. **A valid department without a usable General is a configuration error**, not a reason to move the ticket: it is audited as
+   `DefaultClassificationConfigurationError` (with what to run) and listed by the diagnostic. The rule switches on once Customer Services' General
+   exists (i.e. after the setup script ran); before that every path keeps its previous behaviour.
+4. **Controlled configuration-failure workflow.** Nothing is persisted half classified or presented as valid:
+   * human-handled Genesys inquiry -> refused with HTTP **409** `default-classification-not-configured` (nothing created, nothing moved; the same
+     delivery succeeds after the script ran, because ingestion is idempotent by conversation);
+   * manual / API ticket that needs a General it cannot get (no category, or a category with no request type) -> the same 409; an explicit valid
+     category + request type needs no General and is accepted;
+   * a ticket that becomes human-handled later (human follow-up, handoff, connected agent) -> the update answers 409, the ticket is not handed over;
+   * AI-handled inquiry -> created (the customer is not lost), left unclassified in its department, error audited against the ticket;
+   * AI close -> refused with a "Not closed: ... General is not configured" note until the department is configured (never closed unclassified);
+   * reclassification that names no request type and has none to keep -> 409, nothing changed.
+5. **Existing valid Category and Request Type are preserved whenever compatible.** A category chosen without a request type keeps the category and
+   gets the department's General request type; a request type without a category (partial) becomes the department's General / General.
+6. **Reclassification** (the assigned CS Agent, or any authorized employee on a default-classified ticket) keeps the assigned CS Agent, status,
+   priority and **the running SLA period and deadlines** (priority has its own flow, so a reclassification never re-times the SLA), and only appends
+   to the audit trail. A correction that names no request type keeps the current one when it still fits, otherwise the target department's General.
+7. **AI-closed tickets** require a valid classification and never receive a CS Agent.
 
-* A known department and request type are preserved. A missing category or request type becomes **General within the same department**; a category
-  chosen without a request type keeps the category and gets that department's General request type.
-* An unknown department becomes Customer Services / General / General.
-* **A valid department is never changed because its own General is missing.** The ticket stays in its department, takes Customer Services' General
-  classification as a safe stand-in, and the gap is recorded as `ConfigurationIssue=<DEPT>: ...` on the `ApplyDefaultClassification` and Genesys
-  ingestion audit entries (also listed by the read-only diagnostic). Run `EnsureDefaultGeneralClassification.sql` to remove the gap.
-* A ticket that becomes human-handled later (human follow-up, handoff, a connected agent) and still has no valid classification is classified at that
-  moment - classification only; owner, department, priority, SLA and status are untouched.
-* **The assigned CS Agent can review and correct Department, Category and Request Type** through the classification action (Ticket Details shows
-  *Reclassify* with every department's choices). Choosing a category of another department transfers the ticket there. A correction that names no
-  request type keeps the current one when it still fits, else uses the target department's General request type.
-* A reclassification keeps the assigned CS Agent, status, priority and the **running SLA clock/period** (its due dates are not re-timed), and only
-  appends to the audit trail (`ReclassifyTicket`, plus a transfer entry when the department changes). Only the assigned agent (or a ticket on the
-  default classification, for any authorized employee) can replace a classification; closed tickets and read-only roles cannot.
-* AI-closed tickets require a valid classification but never a CS Agent.
+Human-handled tickets keep the existing ownership rules (Call Center first, Genesys-confirmed agent, sequential Round-Robin; flagged for manual
+assignment when nobody is eligible). The historical backfill reports tickets whose department lacks a General as `DepartmentGeneralMissing` and
+changes nothing for them.

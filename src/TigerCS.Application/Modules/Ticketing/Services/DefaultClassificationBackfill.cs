@@ -42,7 +42,10 @@ public enum DefaultClassificationBackfillClass
     CategoryOnlyKept,
 
     /// <summary>Belongs to Collections: out of scope, never touched.</summary>
-    ExcludedCollections
+    ExcludedCollections,
+
+    /// <summary>The ticket's department has no usable General of its own (a configuration error): nothing is applied - never Customer Services' as a stand-in. Run EnsureDefaultGeneralClassification.sql first.</summary>
+    DepartmentGeneralMissing
 }
 
 public static class DefaultClassificationBackfillClassifier
@@ -185,6 +188,12 @@ public sealed class DefaultClassificationBackfillService(
         var isDefault = await defaultClassification.IsDefaultAsync(ticket.CategoryId, ticket.RequestTypeId, cancellationToken);
         var klass = DefaultClassificationBackfillClassifier.Decide(
             state, await defaultClassification.IsCollectionsTicketAsync(ticket, cancellationToken), isDefault, options);
+        if (klass == DefaultClassificationBackfillClass.Candidate
+            && !(await defaultClassification.ResolveForDepartmentAsync(ticket.OriginatingDepartmentId, cancellationToken)).IsAvailable)
+        {
+            klass = DefaultClassificationBackfillClass.DepartmentGeneralMissing;
+        }
+
         return new DefaultClassificationBackfillRow(
             ticket.TicketId, ticket.TicketNumber, ticket.TicketStatus, ticket.CurrentDepartmentId, state, klass, ticket.CurrentOwnerEmployeeId,
             klass == DefaultClassificationBackfillClass.Candidate ? candidateResult : $"Skipped:{klass}");

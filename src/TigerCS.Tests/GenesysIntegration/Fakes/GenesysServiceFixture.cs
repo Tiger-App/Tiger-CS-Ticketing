@@ -378,6 +378,19 @@ public sealed class GenesysServiceFixture
         return (department, category, requestType);
     }
 
+    private int _nextGeneralWorkflowId = 9200;
+
+    /// <summary>The department's OWN General category and General request type (published workflow, no assignment rule) - what the setup script creates for every active department.</summary>
+    public (Category Category, RequestType RequestType) SeedGeneral(Department department)
+    {
+        var category = Categories.Seed(department.DepartmentId, "General");
+        var template = WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: _nextGeneralWorkflowId++));
+        var requestType = RequestTypes.Add(new RequestType(
+            department.DepartmentId, "General", template.WorkflowId, (byte)PriorityLevel.Medium,
+            allowAgentPriorityChange: false, allowPendingCustomer: true, allowPendingInternal: true, allowReopen: true));
+        return (category, requestType);
+    }
+
     /// <summary>
     /// Maps a Genesys User ID to a Ticketing user for a test — the same
     /// administrative act UAT performs with the documented UPDATE statement.

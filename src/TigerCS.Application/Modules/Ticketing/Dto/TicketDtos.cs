@@ -216,7 +216,9 @@ public enum TicketCreationOutcome
     RequestTypeDepartmentMismatch,
 
     /// <summary>Workflow/Automation phase 2: a Genesys interaction context was supplied without its conversation id — the one field a Genesys-sourced context cannot lack, because it is the traceability link.</summary>
-    GenesysConversationIdRequired
+    GenesysConversationIdRequired,
+    /// <summary>A human-handled ticket cannot be given a valid General classification because its (valid) department has no usable General category / request type. Nothing was created; run EnsureDefaultGeneralClassification.sql.</summary>
+    DefaultClassificationNotConfigured
 }
 
 public sealed record TicketCreationResult(TicketCreationOutcome Outcome, TicketResponseDto? Response = null)

@@ -102,19 +102,21 @@ public class DefaultClassificationAiScenarioTests
     }
 
     [Fact]
-    public async Task AValidDepartmentWithoutItsOwnGeneral_KeepsItsDepartment_UsesCustomerServicesGeneral_NothingIsCreated()
+    public async Task AnAiHandledTicketInADepartmentWithoutItsGeneral_IsNotMoved_NorClassifiedByCustomerServices_AndTheErrorIsReported()
     {
         var w = Build();
         var categories = (await w.F.Categories.ListAsync(false, null)).Count;
 
-        var ticket = await IngestAsync(w, "conv-no-own-general", w.Handover.DepartmentId);
+        var ticket = await IngestAsync(w, "conv-no-own-general", w.Handover.DepartmentId, humanFollowUp: false);
 
-        Assert.Equal(w.CsGeneral.CategoryId, ticket.CategoryId);
-        Assert.Equal(w.CsGeneralType.RequestTypeId, ticket.RequestTypeId);
-        Assert.Equal(w.Handover.DepartmentId, ticket.CurrentDepartmentId);   // never moved because its General is not configured
-        Assert.Equal(categories, (await w.F.Categories.ListAsync(false, null)).Count);
-        Assert.Equal(TigerCS.Application.Modules.Ticketing.Services.TicketClassificationState.Valid,
-            await w.F.DefaultClassification.AssessAsync(ticket.CategoryId, ticket.RequestTypeId));
+        Assert.Equal(w.Handover.DepartmentId, ticket.CurrentDepartmentId);           // never moved
+        Assert.Null(ticket.CategoryId);                                              // and never given Customer Services' General
+        Assert.Null(ticket.RequestTypeId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        var error = Assert.Single(w.F.Audit.Entries, e => e.Action == "DefaultClassificationConfigurationError");
+        Assert.Contains("HO", error.AfterValue!, StringComparison.Ordinal);
+        Assert.Contains("EnsureDefaultGeneralClassification.sql", error.AfterValue!, StringComparison.Ordinal);
+        Assert.Equal(categories, (await w.F.Categories.ListAsync(false, null)).Count);   // nothing is created at runtime
     }
 
     // ---- 2. no valid department: Customer Services ----
@@ -233,10 +235,9 @@ public class DefaultClassificationAiScenarioTests
         Assert.DoesNotContain(w.F.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
     }
 
-    [Fact]
-    public async Task AnAiClosedTicketThatWasCreatedUnclassified_GetsTheDefaultAtClosure_WithoutAnAgent()
+    private static async Task<(GenesysServiceFixture F, Department Leasing, Ticket Ticket)> LegacyAiTicketAsync()
     {
-        // Created while the default was not configured (or before it existed): legacy "Unclassified".
+        // Created while nothing was configured: legacy "Unclassified".
         var f = new GenesysServiceFixture(callCenterFirst: true);
         var leasing = f.Departments.AddDepartment("Leasing Customer Services", "LCS");
         var agent = Guid.NewGuid();
@@ -245,9 +246,16 @@ public class DefaultClassificationAiScenarioTests
             ServiceAccount, new GenesysInquiryDto("conv-legacy", GenesysChannel.WebsiteChat, CustomerPhone: Phone, DepartmentId: leasing.DepartmentId, HumanFollowUpRequired: false));
         var ticket = f.Tickets.All.Single(t => t.TicketId == created.Ticket!.TicketId);
         Assert.Null(ticket.CategoryId);
+        return (f, leasing, ticket);
+    }
 
-        // The default is configured later; the AI then finishes the conversation.
-        var (cs, general, type) = f.SeedDefaultClassification();
+    [Fact]
+    public async Task AnAiClosedTicketThatWasCreatedUnclassified_GetsTheDepartmentsGeneralAtClosure_WithoutAnAgent()
+    {
+        var (f, leasing, ticket) = await LegacyAiTicketAsync();
+        f.SeedDefaultClassification();
+        var (general, type) = f.SeedGeneral(leasing);   // the setup script has run
+
         var closed = await f.TicketUpdate.UpdateAsync(ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto("conv-legacy", ClosedByAi: true));
 
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, closed.Outcome);
@@ -256,6 +264,22 @@ public class DefaultClassificationAiScenarioTests
         Assert.Equal(type.RequestTypeId, ticket.RequestTypeId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Equal(leasing.DepartmentId, ticket.CurrentDepartmentId);   // classification only: the department is not moved
+    }
+
+    [Fact]
+    public async Task AnAiCloseIsRefused_WhenTheDepartmentHasNoGeneral_NothingIsChanged_AndTheErrorIsAudited()
+    {
+        var (f, leasing, ticket) = await LegacyAiTicketAsync();
+        f.SeedDefaultClassification();   // Customer Services is configured, Leasing is not
+
+        var closed = await f.TicketUpdate.UpdateAsync(ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto("conv-legacy", ClosedByAi: true));
+
+        Assert.False(closed.ClosedByAi);
+        Assert.Contains("General is not configured", closed.ClosedByAiNote, StringComparison.Ordinal);
+        Assert.NotEqual(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Null(ticket.CategoryId);                                    // not given Customer Services' General
+        Assert.Equal(leasing.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Contains(f.Audit.Entries, e => e.Action == "DefaultClassificationConfigurationError" && e.AfterValue!.Contains("Closed=false", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -312,17 +336,20 @@ public class DefaultClassificationAiScenarioTests
     // ---- 7. no duplicates, no overwriting ----
 
     [Fact]
-    public async Task ADepartmentWithDuplicateGeneralRecords_FallsBackToCustomerServices_AndCreatesNothing()
+    public async Task ADepartmentWithDuplicateGeneralRecords_IsAConfigurationError_NeverGuessedBetween_AndCreatesNothing()
     {
         var w = Build();
         w.F.Categories.Seed(w.Leasing.DepartmentId, "General");   // a second General in Leasing
         var categories = (await w.F.Categories.ListAsync(false, null)).Count;
         var types = (await w.F.RequestTypes.ListAsync(null, true)).Count;
 
-        var ticket = await IngestAsync(w, "conv-dup-dept", w.Leasing.DepartmentId);
+        var ai = await IngestAsync(w, "conv-dup-dept", w.Leasing.DepartmentId, humanFollowUp: false);
+        var human = await w.F.Ingestion.IngestAsync(
+            ServiceAccount, new GenesysInquiryDto("conv-dup-human", GenesysChannel.Phone, CustomerPhone: Phone, DepartmentId: w.Leasing.DepartmentId, HumanFollowUpRequired: true));
 
-        Assert.Equal(w.CsGeneral.CategoryId, ticket.CategoryId);
-        Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);   // the department is kept; the duplicate is a configuration issue to report
+        Assert.Null(ai.CategoryId);
+        Assert.Equal(w.Leasing.DepartmentId, ai.CurrentDepartmentId);
+        Assert.Equal(GenesysIngestionOutcome.DefaultClassificationNotConfigured, human.Outcome);
         Assert.Equal(categories, (await w.F.Categories.ListAsync(false, null)).Count);
         Assert.Equal(types, (await w.F.RequestTypes.ListAsync(null, true)).Count);
     }
