@@ -8,7 +8,8 @@
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
 </head>
 <body>
-    @{ var compactShell = ViewData["CompactShell"] is true; }
+    @* One shell for every page: brand · navigation · search · account in a single row. A page opts out with CompactShell = false. *@
+    @{ var compactShell = ViewData["CompactShell"] is not false; ViewData["CompactShell"] = compactShell; }
     @await Html.PartialAsync("_Header")
     @if (!compactShell)
     {

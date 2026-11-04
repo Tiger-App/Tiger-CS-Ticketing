@@ -71,7 +71,7 @@
 /* Metric card: label + Info icon on top, the value pinned to the bottom, so cards in a row are the same height and their figures line up even when a label wraps */
 .campaign-card { display: flex; flex-direction: column; justify-content: space-between; min-width: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: 8px; gap: var(--space-2); }
 .campaign-card__label { display: block; font-size: var(--text-sm); color: var(--color-text-secondary); }
-.campaign-card__value { margin-top: auto; font-size: 1.5rem; line-height: 1.2; overflow-wrap: anywhere; }
+.campaign-card__value { margin-top: auto; font-size: 22px; line-height: 1.2; overflow-wrap: anywhere; }
 .campaign-card--blocked { border-color: var(--color-warning, #b45309); }
 .campaign-details { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: 8px; }
 .campaign-details > div { min-width: 0; }
@@ -104,6 +104,6 @@
     .campaign-status__row { grid-template-columns: minmax(0, 1fr); }
     .campaign-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
     .campaign-card { padding: var(--space-3); }
-    .campaign-card__value { font-size: 1.25rem; }
+    .campaign-card__value { font-size: 20px; }
     .campaign-actions .btn, .campaign-approve__actions .btn { min-height: 40px; }
 }

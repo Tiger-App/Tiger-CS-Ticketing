@@ -1,7 +1,7 @@
 /* Public customer review page — Tiger Properties branding (gold #C1A562). Same-origin CSS only: the Web app's CSP forbids inline styles. */
 :root {
-    --review-gold: #EFDCB4;
-    --review-gold-dark: #EFDCB4;
+    --review-gold: #E7B95E;   /* --tiger-gold: this page does not load site.css */
+    --review-gold-dark: #7A5206;
     --review-ink: #1f2933;
     --review-muted: #6b6552;
     --review-line: #e4e0d3;
@@ -12,8 +12,8 @@
 .review-card { box-sizing: border-box; width: 100%; max-width: 650px; margin: 24px 12px; padding: 28px 32px 32px; background: #fff; border: 2px solid var(--review-gold); text-align: center; }
 .review-logo { display: block; margin: 0 auto 18px; height: auto; }
 .review-card h1 { margin: 0 0 12px; font-size: 24px; line-height: 32px; }
-.review-sub { margin: 0 0 14px; font-size: 15px; line-height: 24px; color: var(--review-muted); }
-.review-error { margin: 0 0 14px; padding: 10px 12px; background: #fdf1f0; border: 1px solid #e3b4af; color: #8b2d24; font-size: 14px; }
+.review-sub { margin: 0 0 14px; font-size: 14px; line-height: 24px; color: var(--review-muted); }
+.review-error { margin: 0 0 14px; padding: 10px 12px; background: #fdf1f0; border: 1px solid #e3b4af; color: #8b2d24; font-size: 13px; }
 
 /* Radio stars: markup is 5..1 so the highlight can use sibling selectors, row-reverse puts them back in 1..5 order. */
 .review-stars { display: flex; flex-direction: row-reverse; justify-content: center; margin: 8px 0 18px; padding: 0; border: 0; }
@@ -22,9 +22,9 @@
 .review-stars label:hover, .review-stars label:hover ~ label, .review-stars input:checked ~ label { color: var(--review-gold); }
 .review-stars input:focus-visible + label { outline: 2px solid var(--review-gold-dark); outline-offset: 2px; }
 
-.review-comment-label { display: block; margin: 0 0 6px; text-align: left; font-size: 14px; color: var(--review-muted); }
-.review-card textarea { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid var(--review-line); font: inherit; font-size: 15px; resize: vertical; }
-.review-button { margin-top: 18px; padding: 12px 28px; border: 1px solid var(--review-gold); background: var(--review-gold); color: #3a2b06; font: inherit; font-size: 16px; font-weight: bold; cursor: pointer; }
+.review-comment-label { display: block; margin: 0 0 6px; text-align: left; font-size: 13px; color: var(--review-muted); }
+.review-card textarea { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid var(--review-line); font: inherit; font-size: 14px; resize: vertical; }
+.review-button { margin-top: 18px; padding: 12px 28px; border: 1px solid var(--review-gold); background: var(--review-gold); color: #3a2b06; font: inherit; font-size: 15px; font-weight: bold; cursor: pointer; }
 .review-button:hover { background: #b39551; }
 
 .review-visually-hidden { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
