@@ -1186,10 +1186,14 @@ else
                 }
             }
         </section>
-        @if (customer.Hint is not null || Model.CustomerHistory is not null || customer.ProfileHref is not null)
+        @if (customer.Hint is not null || customer.NameNote is not null || Model.CustomerHistory is not null || customer.ProfileHref is not null)
         {
         <section class="tw-sec tw-cust" aria-label="Customer">
             <div class="facts-section__title" role="heading" aria-level="2">Customer</div>
+            @if (customer.NameNote is { } customerNameNote)
+            {
+                <p class="tw-note">@customerNameNote</p>
+            }
             @if (customer.Hint is { } customerHint)
             {
                 <p class="tw-note">@customerHint</p>
@@ -1288,7 +1292,8 @@ else
         @if (hasCrmBuyer)
         {
             @* The customer is a linked record, never static text. *@
-            <div class="facts-row"><dt>Customer</dt><dd>@if (Model.CustomerProfileHref is { } factsProfileHref && t.CrmBuyerCustomerName is not null) { <a class="ticket-id-link" href="@factsProfileHref">@t.CrmBuyerCustomerName</a> } else { @(t.CrmBuyerCustomerName ?? "—") }</dd></div>
+            var factsCrmName = TigerCS.Application.Modules.Notifications.Services.CustomerNameValidator.Sanitize(t.CrmBuyerCustomerName);
+                            <div class="facts-row"><dt>Customer</dt><dd>@if (Model.CustomerProfileHref is { } factsProfileHref && factsCrmName is not null) { <a class="ticket-id-link" href="@factsProfileHref">@factsCrmName</a> } else { @(factsCrmName ?? "—") }</dd></div>
             <div class="facts-row"><dt>Project</dt><dd>@(t.CrmBuyerProjectName ?? "—")</dd></div>
             <div class="facts-row"><dt>Unit Number</dt><dd>@(t.CrmBuyerUnitNumber ?? "—")</dd></div>
             <div class="facts-row"><dt>CRM Unit ID</dt><dd class="id-fallback">#@t.CrmBuyerUnitId</dd></div>

@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using System.Globalization;
 using TigerCS.Domain.Audit;
 using TigerCS.Domain.Modules.Ticketing;
@@ -257,7 +258,7 @@ public static class TicketActivityTimelineBuilder
                 started ? "AI conversation started" : "Conversation started",
                 "Conversation",
                 started ? TimelineActorTypes.Ai : TimelineActorTypes.Customer,
-                started ? "AI virtual agent" : (interaction.CustomerName ?? "Customer"),
+                started ? "AI virtual agent" : (CustomerNameResolver.FirstValid(interaction.CustomerName) ?? "Customer"),
                 $"{(isGenesys ? "Genesys" : "Entered in TigerCS")}: {label}{(interaction.Direction is { } d ? $", {d}" : string.Empty)}"
                 + (interaction.GenesysQueueName is { } q ? $", queue {q}" : string.Empty) + ".",
                 SourceInteraction, rank: 1, timeNote: startNote, interactionId: id));
@@ -288,7 +289,7 @@ public static class TicketActivityTimelineBuilder
                 var last = customerMessages[^1];
                 entries.Add(Make(
                     last.SentAtUtc, "CustomerLastMessage", "Last customer message", "Conversation", TimelineActorTypes.Customer,
-                    last.SenderName ?? interaction.CustomerName ?? "Customer",
+                    last.SenderName ?? CustomerNameResolver.FirstValid(interaction.CustomerName) ?? "Customer",
                     $"Last of {customerMessages.Count} customer message(s) in {label}.",
                     SourceTranscript, interactionId: id));
             }
@@ -354,7 +355,7 @@ public static class TicketActivityTimelineBuilder
 
         if (r.Contains("customer", StringComparison.Ordinal) || r.Contains("client", StringComparison.Ordinal))
         {
-            return (TimelineActorTypes.Customer, interaction.CustomerName ?? "Customer", true);
+            return (TimelineActorTypes.Customer, CustomerNameResolver.FirstValid(interaction.CustomerName) ?? "Customer", true);
         }
 
         if (r.Contains("timeout", StringComparison.Ordinal) || r.Contains("inactiv", StringComparison.Ordinal) || r.Contains("system", StringComparison.Ordinal))
@@ -411,7 +412,7 @@ public static class TicketActivityTimelineBuilder
 
             var (requestName, requestActorType, requestActor) = handoff.Trigger switch
             {
-                HandoffTrigger.CustomerRequestedHuman => ("Customer requested human assistance", TimelineActorTypes.Customer, interaction?.CustomerName ?? "Customer"),
+                HandoffTrigger.CustomerRequestedHuman => ("Customer requested human assistance", TimelineActorTypes.Customer, CustomerNameResolver.FirstValid(interaction?.CustomerName) ?? "Customer"),
                 HandoffTrigger.AiEscalated => ("AI escalated to a human agent", TimelineActorTypes.Ai, "AI virtual agent"),
                 HandoffTrigger.AiConnectionLost => ("AI connection lost — human requested", TimelineActorTypes.Ai, "AI virtual agent"),
                 HandoffTrigger.RoutingDecision => ("Human assistance requested by routing rule", TimelineActorTypes.System, "Genesys routing"),

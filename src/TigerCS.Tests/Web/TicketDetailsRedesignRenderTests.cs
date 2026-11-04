@@ -204,6 +204,69 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.DoesNotContain("NOT_REGISTERED", strip);
     }
 
+    // ---------------------------------------------------------------- customer name resolution
+
+    [Fact]
+    public async Task SubmittedFormName_IsShown_AndSaidToBeUnverified()
+    {
+        var strip = Strip(await Page(213));
+
+        Assert.Contains("Ahmed Hassan", strip);
+        Assert.DoesNotContain("Unnamed caller", strip);
+        Assert.DoesNotContain("Verified via", strip);
+        Assert.Contains("Name as provided", strip);
+    }
+
+    [Fact]
+    public async Task ExternallyVerifiedTicket_ShowsTheSourcesCustomerName_NotAGenericSourceLabel()
+    {
+        var strip = Strip(await Page(214));
+
+        Assert.Contains("Omar Saleh", strip);
+        Assert.DoesNotContain("Pact customer", strip);
+        Assert.Contains("Verified via PACT", strip);
+        Assert.DoesNotContain("Name as provided", strip);
+    }
+
+    [Fact]
+    public async Task PlaceholderSubmittedName_IsUnnamedCaller_NeverThePlaceholder()
+    {
+        var strip = Strip(await Page(215));
+
+        Assert.Contains("Unnamed caller", strip);
+        Assert.DoesNotContain("NOT_REGISTERED", strip);
+    }
+
+    [Fact]
+    public async Task CrmVerifiedName_WinsOverTheSubmittedName_AndIsMarkedVerified()
+    {
+        var strip = Strip(await Page(216));
+
+        Assert.Contains("Mariam Al Falasi", strip);
+        Assert.DoesNotContain("Typed By Customer", strip);
+        Assert.Contains("Verified via Tiger CRM", strip);
+        Assert.DoesNotContain("Name as provided", strip);
+    }
+
+    [Fact]
+    public async Task FailedCrmLookup_DoesNotHideTheSubmittedName()
+    {
+        var strip = Strip(await Page(217));
+
+        Assert.Contains("Sara Khalid", strip);
+        Assert.Contains("Pending CRM Verification", strip);
+        Assert.Contains("Name as provided", strip);
+    }
+
+    [Fact]
+    public async Task PlaceholderCrmSnapshot_DoesNotOverwriteTheSubmittedName()
+    {
+        var strip = Strip(await Page(218));
+
+        Assert.Contains("Huda Nasser", strip);
+        Assert.DoesNotContain("NOT_REGISTERED", strip);
+    }
+
     [Fact]
     public async Task ResolvedTicket_SlaStopped_OwnerlessIsNotAnAssignmentFailure_AndCloseIsTheNextStep()
     {
@@ -364,13 +427,14 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         private static TicketDetailDto T(
             long id, string status = "InProgress", Guid? owner = null, int? category = 1, byte? priority = 3, string verification = "Unverified",
             string summary = "Handover documents", int reopens = 0, bool crm = false, bool classified = true, bool reopenEligible = false,
-            string sla = "Running", byte? outcome = null) =>
+            string sla = "Running", byte? outcome = null, string? source = null, string? externalName = null, string? crmName = null) =>
             new(id, $"TG-CS-{id}", CustomerService, CustomerService, owner, null, null, category, priority, status, verification, "None", sla, outcome, null,
                 summary, reopens, Now.AddHours(-3), Row,
                 CrmBuyerCustomerId: crm ? 9001 : null, CrmBuyerUnitId: crm ? 41 : null, CrmBuyerProjectId: crm ? 7 : null,
-                CrmBuyerCustomerName: crm ? "Mariam Al Falasi" : null, CrmBuyerProjectName: crm ? "Tiger Tower" : null, CrmBuyerUnitNumber: crm ? "T-1204" : null,
+                CrmBuyerCustomerName: crm ? "Mariam Al Falasi" : crmName, CrmBuyerProjectName: crm ? "Tiger Tower" : null, CrmBuyerUnitNumber: crm ? "T-1204" : null,
                 RequestTypeId: classified ? 10 : null, RequestTypeName: classified ? "Complaint Handling" : null, IsClassified: classified,
-                IsReopenEligible: reopenEligible, OriginatingChannelId: 1, OriginatingChannelName: "Website chat");
+                IsReopenEligible: reopenEligible, OriginatingChannelId: 1, OriginatingChannelName: "Website chat",
+                CustomerVerificationSource: source, ExternalCustomerId: source is null ? null : "T-77", ExternalCustomerName: externalName);
 
         private static TicketDetailDto? Detail(long id) => id switch
         {
@@ -386,6 +450,12 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
             210 => T(210, owner: ViewerId, reopens: 1, sla: "Breached"),
             211 => T(211, "PendingCustomer", owner: ViewerId, sla: "Paused"),
             212 => T(212, owner: Someone),
+            213 => T(213, "Open", owner: Someone, summary: "Website chat form"),
+            214 => T(214, "Open", owner: Someone, verification: "Verified", source: "Pact", externalName: "Omar Saleh"),
+            215 => T(215, "Open", owner: Someone, summary: "Website chat form"),
+            216 => T(216, "Open", owner: Someone, crm: true, verification: "Verified"),
+            217 => T(217, "Open", owner: Someone, verification: "PendingCrmVerification"),
+            218 => T(218, "Open", owner: Someone, crmName: "NOT_REGISTERED"),
             _ => null,
         };
 
@@ -419,6 +489,11 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
                 204 => [Chat("+971501112222", null, "Ai")],
                 205 => [Chat("+971501234567", "Mariam Al Falasi", "Human", agent: "Layla Hassan", queue: "Sales Support", end: start.AddMinutes(12),
                     handoff: new AgentHandoffSummaryDto(5, "Completed", "ContinueChat", "Wants the snag list.", start.AddMinutes(2), ViewerId, "agent-1", start.AddMinutes(11), "Sent.", "CustomerRequestedHuman"))],
+                213 => [Chat("+971507770001", "Ahmed Hassan", "Human")],
+                215 => [Chat("+971507770002", "NOT_REGISTERED", "Human")],
+                216 => [Chat("+971507770003", "Typed By Customer", "Human")],
+                217 => [Chat("+971507770004", "Sara Khalid", "Human")],
+                218 => [Chat("+971507770005", "Huda Nasser", "Human")],
                 206 => [Chat("+971509998888", "Omar", "Human", agent: "Layla Hassan", channel: "Phone", messages: [])],
                 _ => [],
             };

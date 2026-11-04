@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Web.Models;
@@ -130,7 +131,7 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
 
     /// <summary>The customer's display name, or an honest placeholder naming the identity we do have — never a raw id dressed as a name.</summary>
     public static string NameOrPlaceholder(CustomerDirectoryRowDto row) =>
-        !string.IsNullOrWhiteSpace(row.DisplayName) ? row.DisplayName
+        CustomerNameResolver.FirstValid(row.DisplayName) is { } name ? name
         : row.IdentityKind == "Phone" ? "Unnamed caller"
         : $"{SourceLabel(row.VerificationSource)} customer";
 }

@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.Ticketing;
@@ -176,6 +177,9 @@ public sealed class CustomerHistoryAppService(
 
             return CustomerHistoryResult.Success(
                 await ToDtoAsync("ExternalVerified", crmBuyerCustomerId: null, phoneNumberSnapshot: null, externalResult,
+                    // The verified customer's own name, snapshotted on the ticket - without it an externally verified
+                    // customer reads as "Pact customer" although the ticket holds their name.
+                    ticket.ExternalCustomerName,
                     externalSource: anchorSource, externalCustomerId: anchorExternalId, cancellationToken: cancellationToken));
         }
 
@@ -262,7 +266,9 @@ public sealed class CustomerHistoryAppService(
             verificationType,
             crmBuyerCustomerId,
             phoneNumberSnapshot,
-            customerDisplayName ?? result.Tickets.Select(t => t.CrmBuyerCustomerName).FirstOrDefault(name => name is not null),
+            // A real name only: a placeholder snapshot ("NOT_REGISTERED") is neither shown nor allowed to stand in for a name.
+            CustomerNameResolver.FirstValid(customerDisplayName)
+                ?? CustomerNameResolver.FirstValid(result.Tickets.Select(t => t.CrmBuyerCustomerName).ToArray()),
             result.TotalCount,
             result.OpenCount,
             result.ClosedCount,
