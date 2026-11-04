@@ -120,7 +120,7 @@ public sealed class DefaultClassificationService(
     public static bool IsExcluded(Department? department) =>
         department is not null && string.Equals(department.Code?.Trim(), CollectionsDepartmentCode, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Finds Customer Services / General, reusing the existing records. Never creates anything.</summary>
+    /// <summary>Finds Customer Services / General (the last-resort default), reusing the existing records. Never creates anything.</summary>
     public async Task<DefaultClassificationResolution> ResolveAsync(CancellationToken cancellationToken = default)
     {
         var departments = await departmentRepository.ListAsync(activeOnly: true, cancellationToken);
@@ -145,8 +145,30 @@ public sealed class DefaultClassificationService(
                 DefaultClassificationGap.DepartmentAmbiguous, "More than one active department matches Customer Services.");
         }
 
-        var department = byCode[0];
+        return await ResolveInAsync(byCode[0], cancellationToken);
+    }
 
+    /// <summary>
+    /// The default classification for a ticket whose department is <paramref name="departmentId"/>: <b>General / General within that department</b>
+    /// when it is a usable department (active, not Collections) that has exactly one active General category and one General request type with a
+    /// Published workflow - otherwise (no department, an invalid one, or one without its General records) Customer Services / General. Never creates
+    /// anything and never chooses between duplicates.
+    /// </summary>
+    public async Task<DefaultClassificationResolution> ResolveForDepartmentAsync(int? departmentId, CancellationToken cancellationToken = default)
+    {
+        if (departmentId is { } id
+            && await departmentRepository.GetByIdAsync(id, cancellationToken) is { IsActive: true } department
+            && !IsExcluded(department)
+            && (await ResolveInAsync(department, cancellationToken)) is { IsAvailable: true } own)
+        {
+            return own;
+        }
+
+        return await ResolveAsync(cancellationToken);
+    }
+
+    private async Task<DefaultClassificationResolution> ResolveInAsync(Department department, CancellationToken cancellationToken)
+    {
         var categories = (await categoryRepository.ListAsync(activeOnly: true, department.DepartmentId, cancellationToken))
             .Where(c => string.Equals(c.Name?.Trim(), CategoryName, StringComparison.OrdinalIgnoreCase))
             .ToList();
@@ -187,16 +209,23 @@ public sealed class DefaultClassificationService(
         return DefaultClassificationResolution.Available(new DefaultClassification(department, categories[0], requestTypes[0], workflow));
     }
 
-    /// <summary>True when the stored ids ARE the fallback (Customer Services / General / General).</summary>
+    /// <summary>
+    /// True when the stored ids ARE a General / General pair of one department (Customer Services' or any department's own) - read from the
+    /// stored ids, never from a name on the ticket.
+    /// </summary>
     public async Task<bool> IsDefaultAsync(int? categoryId, int? requestTypeId, CancellationToken cancellationToken = default)
     {
-        if (categoryId is null || requestTypeId is null)
+        if (categoryId is not { } cid || requestTypeId is not { } rid)
         {
             return false;
         }
 
-        var resolution = await ResolveAsync(cancellationToken);
-        return resolution.Value is { } d && d.Category.CategoryId == categoryId && d.RequestType.RequestTypeId == requestTypeId;
+        var category = await categoryRepository.GetByIdAsync(cid, cancellationToken);
+        var requestType = await requestTypeRepository.GetByIdAsync(rid, cancellationToken);
+        return category is not null && requestType is not null
+            && category.DepartmentId == requestType.DepartmentId
+            && string.Equals(category.Name?.Trim(), CategoryName, StringComparison.OrdinalIgnoreCase)
+            && string.Equals(requestType.Name?.Trim(), RequestTypeName, StringComparison.OrdinalIgnoreCase);
     }
 
     /// <summary>
@@ -275,7 +304,8 @@ public sealed class DefaultClassificationService(
             throw new InvalidOperationException("EnsureClassifiedAsync needs the unit of work and audit writer.");
         }
 
-        var resolution = await ResolveAsync(cancellationToken);
+        // The department the ticket ARRIVED in decides: General / General there when it has its own, otherwise Customer Services.
+        var resolution = await ResolveForDepartmentAsync(ticket.OriginatingDepartmentId, cancellationToken);
         if (resolution.Value is not { } fallback)
         {
             return DefaultClassificationApplyOutcome.ConfigurationMissing;
@@ -287,8 +317,7 @@ public sealed class DefaultClassificationService(
         }
 
         var state = await AssessAsync(ticket.CategoryId, ticket.RequestTypeId, cancellationToken);
-        if (state == TicketClassificationState.Valid
-            || (ticket.CategoryId == fallback.Category.CategoryId && ticket.RequestTypeId == fallback.RequestType.RequestTypeId))
+        if (state == TicketClassificationState.Valid || await IsDefaultAsync(ticket.CategoryId, ticket.RequestTypeId, cancellationToken))
         {
             return DefaultClassificationApplyOutcome.NotNeeded;
         }
@@ -301,7 +330,7 @@ public sealed class DefaultClassificationService(
             actorEmployeeId, "ApplyDefaultClassification", "Ticket", ticket.TicketId.ToString(),
             beforeValue: before,
             afterValue:
-                $"CategoryId={fallback.Category.CategoryId};RequestTypeId={fallback.RequestType.RequestTypeId};Default={DisplayLabel};"
+                $"CategoryId={fallback.Category.CategoryId};RequestTypeId={fallback.RequestType.RequestTypeId};Default={fallback.Department.Code}/{CategoryName};"
                 + $"State={state};Reason={reason};DepartmentId={ticket.CurrentDepartmentId} (unchanged);Owner={ticket.CurrentOwnerEmployeeId?.ToString() ?? "(none)"} (unchanged)",
             Guid.NewGuid(), cancellationToken);
 

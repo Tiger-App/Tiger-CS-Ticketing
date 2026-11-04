@@ -182,7 +182,7 @@ public sealed class DefaultClassificationBackfillService(
         CancellationToken cancellationToken)
     {
         var state = await defaultClassification.AssessAsync(ticket.CategoryId, ticket.RequestTypeId, cancellationToken);
-        var isDefault = resolution.Value is { } d && ticket.CategoryId == d.Category.CategoryId && ticket.RequestTypeId == d.RequestType.RequestTypeId;
+        var isDefault = await defaultClassification.IsDefaultAsync(ticket.CategoryId, ticket.RequestTypeId, cancellationToken);
         var klass = DefaultClassificationBackfillClassifier.Decide(
             state, await defaultClassification.IsCollectionsTicketAsync(ticket, cancellationToken), isDefault, options);
         return new DefaultClassificationBackfillRow(

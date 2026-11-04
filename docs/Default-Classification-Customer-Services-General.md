@@ -1,7 +1,13 @@
 # Default classification: Customer Services / General
 
-**Rule.** Every ticket has a valid classification. A ticket with no classification that can be trusted is classified
-**Department: Customer Services, Category: General, Request type: General**. It is never left `Unclassified` / `Not yet classified`.
+**Rule.** Every ticket - AI-created, AI-handled, AI-resolved, AI-closed and manual alike - has a valid classification. A ticket with no
+classification that can be trusted is classified:
+
+1. **General / General within the department the AI (or caller) named**, when that is a valid, active, non-Collections department that has its own
+   General category and General request type (published workflow);
+2. otherwise - no valid department, or a department without its own General - **Customer Services (CS) / General / General**.
+
+It is never left `Unclassified` / `Not yet classified`. A valid, compatible classification supplied by the AI is preserved.
 
 Nothing in this change runs against Production by itself: the configuration script, the backfill and the diagnostic are all manual,
 and the live backfill is switched off (`DefaultClassificationBackfill:Enabled=false`) in every shipped configuration.
@@ -49,15 +55,16 @@ reads **Reclassify**; read-only roles do not get it. The queue layout is unchang
 
 ## Configuration (migration requirements)
 
-No EF migration and no schema change. Each environment needs the three records once:
+No EF migration and no schema change. Each environment needs a General category + General request type (published workflow `<CODE>-GEN-001`) in
+**Customer Services (required)** and in every other active department except Collections, once:
 
 ```bash
 sqlcmd -S <server> -d <database> -U <user> -P <password> -C -b -I -i EnsureDefaultGeneralClassification.sql
 ```
 
-`EnsureDefaultGeneralClassification.sql` is idempotent and dry-run by default (`@CommitChanges = 0`). It reuses an existing `General` category /
-request type of department `CS`, never creates the department, never duplicates, and stops with an error on duplicates, a missing department, a
-General request type without a published workflow, or a workflow-code clash. The same logic is `GeneralFallbackImporter` (C#, used by tests).
+`EnsureDefaultGeneralClassification.sql` is idempotent and dry-run by default (`@CommitChanges = 0`). It reuses existing `General` rows,
+never creates a department, never duplicates and never gives Collections a General. A department with duplicates, an unpublished General workflow or a
+workflow-code clash is reported and skipped (for CS the script stops with an error). The same logic is `GeneralFallbackImporter.ImportAllAsync` (C#, used by tests).
 
 ## Existing tickets (read-only first, separately approved backfill)
 
@@ -74,3 +81,12 @@ General request type without a published workflow, or a workflow-code clash. The
 cover: missing / invalid / ambiguous / partial classification, valid classifications unchanged, all six Genesys channels plus manual creation,
 Genesys updates and reclassification, department transfers, CS Agent ownership and the sequential rotation, duplicate prevention, AI-closed
 tickets, Collections exclusion, and the backfill preview / dry run / live run.
+
+## AI scenarios
+
+* AI-handled tickets (no human requested) are classified at creation and get **no** CS Agent; the rotation does not advance.
+* An AI-**closed** ticket keeps its classification when closed; one that arrives at closure with none (created before the default existed or while it
+  was unconfigured) gets the default at that moment - classification only, no assignment, no department move.
+* Human-handled tickets are still Call Center first, with the Genesys-confirmed agent or the next CS Agent of the sequential Round-Robin - never a
+  department employee through a rule on General.
+* Duplicates are never created or chosen between: a department with more than one General falls back to Customer Services.

@@ -73,7 +73,8 @@ public sealed class GenesysTicketUpdateAppService(
     TicketAutoAssignmentService? autoAssignmentService = null,
     GenesysAnsweringAgentAssignmentService? answeringAgentAssignment = null,
     ITicketAssignmentRepository? ticketAssignmentRepository = null,
-    ITicketNoteRepository? ticketNoteRepository = null)
+    ITicketNoteRepository? ticketNoteRepository = null,
+    DefaultClassificationService? defaultClassification = null)
 {
     /// <summary>The exact closure reason recorded when the AI finishes the conversation.</summary>
     public const string ClosedByAiReason = "Closed by AI";
@@ -589,6 +590,13 @@ public sealed class GenesysTicketUpdateAppService(
         if (ticket.TicketStatus is not (TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer))
         {
             return (false, $"Not closed: the ticket is {ticket.TicketStatus}.");
+        }
+
+        // An AI-closed ticket must also carry a valid classification. One that arrives here without (created before the default existed, or while it
+        // was not configured) gets the default now - classification only, so no CS Agent is assigned and nothing else about the ticket changes.
+        if (defaultClassification is not null)
+        {
+            await defaultClassification.EnsureClassifiedAsync(ticket, "Closed by AI without a valid classification", callerEmployeeId, save: true, cancellationToken);
         }
 
         var automaticAssignment = preAssignedOwner is not null && ticketAssignmentRepository is not null

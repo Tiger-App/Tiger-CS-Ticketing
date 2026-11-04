@@ -164,7 +164,7 @@ public sealed class GenesysInquiryIngestionAppService(
         DefaultClassification? fallback = null;
         string? fallbackReason = null;
         if (defaultClassification is not null && !DefaultClassificationService.IsExcluded(department)
-            && (await defaultClassification.ResolveAsync(cancellationToken)).Value is { } availableFallback)
+            && (await defaultClassification.ResolveForDepartmentAsync(department?.DepartmentId, cancellationToken)).Value is { } availableFallback)
         {
             fallbackReason = inquiry.RequestType is not { IsSupplied: true }
                 ? "no request type was supplied."
@@ -172,7 +172,12 @@ public sealed class GenesysInquiryIngestionAppService(
             if (fallbackReason is not null)
             {
                 fallback = availableFallback;
-                (department, departmentSource) = (fallback.Department, GenesysDepartmentSource.DefaultClassification);
+                // The department the AI named keeps the ticket (General / General there); only a ticket with no usable department, or one whose
+                // department has no General of its own, is placed in Customer Services.
+                if (department is null || department.DepartmentId != fallback.Department.DepartmentId)
+                {
+                    (department, departmentSource) = (fallback.Department, GenesysDepartmentSource.DefaultClassification);
+                }
             }
         }
 

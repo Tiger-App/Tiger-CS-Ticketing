@@ -335,7 +335,8 @@ public sealed class GenesysServiceFixture
             autoAssignmentService: callCenterFirst ? autoAssignment : null,
             answeringAgentAssignment: AnsweringAgents,
             ticketAssignmentRepository: TicketAssignments,
-            ticketNoteRepository: TicketNotes);
+            ticketNoteRepository: TicketNotes,
+            defaultClassification: DefaultClassification);
 
         InactivityClose = new ChatbotInactivityCloseAppService(
             Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock, Audit);

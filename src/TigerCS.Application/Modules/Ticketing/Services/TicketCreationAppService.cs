@@ -662,7 +662,15 @@ public sealed class TicketCreationAppService(
             return null;
         }
 
-        var resolution = await defaultClassification.ResolveAsync(cancellationToken);
+        // General / General within the department the caller (or AI) named - the request's, else the intake's - when that department has its
+        // own; otherwise Customer Services. Collections is never classified here.
+        var hint = request.DepartmentId ?? intakeDepartmentId;
+        if (hint is { } hintId && DefaultClassificationService.IsExcluded(await departmentRepository.GetByIdAsync(hintId, cancellationToken)))
+        {
+            return null;
+        }
+
+        var resolution = await defaultClassification.ResolveForDepartmentAsync(hint, cancellationToken);
         return resolution.Value is { } value ? new FallbackChoice(value, reason) : null;
     }
 

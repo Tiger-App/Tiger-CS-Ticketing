@@ -54,15 +54,48 @@ public static class GeneralFallbackImporter
 {
     public const string DepartmentCode = "CS";
     public const string Name = "General";
-    public const string WorkflowCode = "CS-GEN-001";
 
-    public static async Task<GeneralFallbackImportResult> ImportAsync(
+    /// <summary>Collections is out of scope of the default classification: it never gets a General.</summary>
+    public const string ExcludedDepartmentCode = "COL";
+
+    public static string WorkflowCodeFor(string departmentCode) => $"{departmentCode}-GEN-001";
+
+    /// <summary>
+    /// General / General for EVERY active department except Collections (so an AI-named department is classified General within itself), plus the
+    /// Customer Services default. One result per department, in code order; each is independently idempotent.
+    /// </summary>
+    public static async Task<IReadOnlyList<(string DepartmentCode, GeneralFallbackImportResult Result)>> ImportAllAsync(
         TigerCsDbContext dbContext, DateTime utcNow, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(dbContext);
+        var codes = await dbContext.Departments.AsNoTracking()
+            .Where(d => d.IsActive && d.Code != ExcludedDepartmentCode)
+            .Select(d => d.Code).OrderBy(c => c).ToListAsync(cancellationToken);
+        var results = new List<(string, GeneralFallbackImportResult)>();
+        foreach (var code in codes)
+        {
+            results.Add((code, await ImportAsync(dbContext, utcNow, code, cancellationToken)));
+        }
 
+        return results;
+    }
+
+    public static Task<GeneralFallbackImportResult> ImportAsync(
+        TigerCsDbContext dbContext, DateTime utcNow, CancellationToken cancellationToken = default) =>
+        ImportAsync(dbContext, utcNow, DepartmentCode, cancellationToken);
+
+    public static async Task<GeneralFallbackImportResult> ImportAsync(
+        TigerCsDbContext dbContext, DateTime utcNow, string departmentCode, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(dbContext);
+        if (string.Equals(departmentCode, ExcludedDepartmentCode, StringComparison.OrdinalIgnoreCase))
+        {
+            return new GeneralFallbackImportResult(GeneralFallbackImportOutcome.DepartmentMissing, null, null, false, false);
+        }
+
+        var workflowCode = WorkflowCodeFor(departmentCode);
         var department = await dbContext.Departments.AsNoTracking()
-            .FirstOrDefaultAsync(d => d.Code == DepartmentCode, cancellationToken);
+            .FirstOrDefaultAsync(d => d.Code == departmentCode, cancellationToken);
         if (department is null)
         {
             return new GeneralFallbackImportResult(GeneralFallbackImportOutcome.DepartmentMissing, null, null, false, false);
@@ -90,8 +123,8 @@ public static class GeneralFallbackImporter
                     GeneralFallbackImportOutcome.ExistingWorkflowNotPublished, categories.SingleOrDefault()?.CategoryId, existingType.RequestTypeId, false, false);
             }
         }
-        else if (await dbContext.Workflows.AnyAsync(w => w.Code == WorkflowCode, cancellationToken)
-            || await dbContext.WorkflowTemplates.AnyAsync(t => t.Code == WorkflowCode, cancellationToken))
+        else if (await dbContext.Workflows.AnyAsync(w => w.Code == workflowCode, cancellationToken)
+            || await dbContext.WorkflowTemplates.AnyAsync(t => t.Code == workflowCode, cancellationToken))
         {
             return new GeneralFallbackImportResult(GeneralFallbackImportOutcome.SkippedCodeInUse, categories.SingleOrDefault()?.CategoryId, null, false, false);
         }
@@ -111,19 +144,19 @@ public static class GeneralFallbackImporter
         var requestTypeCreated = false;
         if (existingType is null)
         {
-            var workflowName = $"{WorkflowCode} {Name}";
-            const string description = "Default classification: Customer Services / General. CS Queue → Agent → Review → Resolve → Close. Used when a ticket has no valid classification.";
-            var workflow = new Workflow(WorkflowCode, workflowName, description, utcNow);
+            var workflowName = $"{workflowCode} {Name}";
+            string description = $"Default classification: {department.Name} / General. {department.Code} Queue → Agent → Review → Resolve → Close. Used when a ticket has no valid classification.";
+            var workflow = new Workflow(workflowCode, workflowName, description, utcNow);
             dbContext.Workflows.Add(workflow);
             await dbContext.SaveChangesAsync(cancellationToken);
 
             var version = new WorkflowTemplate(
-                workflow.WorkflowId, versionNumber: 1, WorkflowCode, workflowName, description,
+                workflow.WorkflowId, versionNumber: 1, workflowCode, workflowName, description,
                 allowsPendingCustomer: false, allowsPendingInternal: false, requiresApproval: false,
                 utcNow, createdByEmployeeId: null);
             byte sequence = 1;
             version.AddStep(sequence++, "Ticket Created", WorkflowStepKind.Created, false, null);
-            version.AddStep(sequence++, "CS Queue", WorkflowStepKind.Assigned, false, null);
+            version.AddStep(sequence++, $"{department.Code} Queue", WorkflowStepKind.Assigned, false, null);
             version.AddStep(sequence++, "Agent", WorkflowStepKind.Assigned, false, null);
             version.AddStep(sequence++, "Review", WorkflowStepKind.InProgress, false, null);
             version.AddStep(sequence++, "Resolve", WorkflowStepKind.Resolved, false, null);

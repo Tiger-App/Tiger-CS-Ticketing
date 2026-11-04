@@ -44,6 +44,13 @@ SELECT d.[DepartmentId], d.[Code], d.[Name], d.[IsActive],
          WHERE r.[DepartmentId] = d.[DepartmentId] AND r.[Name] = N'General' AND r.[IsActive] = 1) AS PublishedGeneralWorkflowVersions
 FROM [Departments] d WHERE d.[Code] = N'CS';
 
+-- 1b. Per-department General (an AI-named department is classified General / General WITHIN itself when it has its own; otherwise Customer Services).
+SELECT d.[Code], d.[Name],
+       (SELECT COUNT(*) FROM [Categories] c WHERE c.[DepartmentId] = d.[DepartmentId] AND c.[Name] = N'General' AND c.[IsActive] = 1) AS ActiveGeneralCategories,
+       (SELECT COUNT(*) FROM [RequestTypes] r JOIN [WorkflowTemplates] t ON t.[WorkflowId] = r.[WorkflowId] AND t.[Status] = 2
+         WHERE r.[DepartmentId] = d.[DepartmentId] AND r.[Name] = N'General' AND r.[IsActive] = 1) AS GeneralRequestTypesWithPublishedWorkflow
+FROM [Departments] d WHERE d.[IsActive] = 1 AND d.[Code] <> N'COL' ORDER BY d.[Code];
+
 DECLARE @Col int = (SELECT [DepartmentId] FROM [Departments] WHERE [Code] = N'COL');
 
 -- State of every ticket's stored classification -------------------------------------------------------------------------------------------
