@@ -771,12 +771,13 @@ public sealed class CustomerDocumentsEndpointTests : IDisposable
     public async Task ADepartmentEmployeeWhoCanSeeTheCustomer_IsNotGrantedSending()
     {
         var admin = await ClientAsync();
-        var departmentId = await CreateCrmCustomerTicketAsync(admin);
         var (username, password, employeeId) = await _factory.SeedEmployeeAsync(Roles.DepartmentEmployee);
-        await _factory.AssignDepartmentAsync(employeeId, departmentId); // visibility via membership, not via the grant
         var client = _factory.CreateClient();
         var login = await (await client.PostAsJsonAsync("/api/auth/login", new LoginRequestDto(username, password))).Content.ReadFromJsonAsync<LoginResponseDto>();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.AccessToken);
+        // The customer is visible through a ticket ASSIGNED to the employee (an employee's visibility is assignment-only), not via the send grant.
+        var departmentId = await CreateCrmCustomerTicketAsync(admin, assignedTo: client);
+        await _factory.AssignDepartmentAsync(employeeId, departmentId);
 
         var list = await JsonAsync(await client.GetAsync($"/api/customers/{Key}/documents?crmLeadId=12345"));
         var send = await client.SendAsync(Send(Key, new { crmLeadId = 12345, documentType = "Contract", recordId = "5001" }, NewKey()));

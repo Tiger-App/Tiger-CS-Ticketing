@@ -272,13 +272,16 @@ public sealed class GenesysScreenPopEndpointsTests(ScreenPopHostFixture hosts) :
     // ---- Authorization is unchanged by Screen Pop ----
 
     [Fact]
-    public async Task ScreenPopSession_IsStillBoundByDepartmentVisibility()
+    public async Task ScreenPopSession_IsStillBoundByTicketVisibility()
     {
         var (service, _) = await SignInAsync();
-        var (genesysUserId, _, ownDepartment) = await MappedAgentAsync();
+        var (genesysUserId, agentUserId, ownDepartment) = await MappedAgentAsync();
         var otherDepartment = await Api.CreateDepartmentAsync("Other Dept " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
         var (ownTicket, _, _) = await IngestAsync(service, ownDepartment);
         var (otherTicket, _, _) = await IngestAsync(service, otherDepartment);
+        var (unassignedSameDepartmentTicket, _, _) = await IngestAsync(service, ownDepartment);
+        // A Department Employee sees only tickets assigned to them (the Genesys answer assigns the agent who takes the conversation).
+        await Api.AssignOwnerAsync(ownTicket, agentUserId);
 
         // The launch lands on a ticket in a department the agent does not
         // belong to — the landing is where the browser goes, not a grant.
@@ -292,6 +295,9 @@ public sealed class GenesysScreenPopEndpointsTests(ScreenPopHostFixture hosts) :
         var other = await asAgent.GetAsync($"/api/tickets/{otherTicket}");
         Assert.Contains(other.StatusCode, new[] { HttpStatusCode.Forbidden, HttpStatusCode.NotFound });
 
+        var sameDepartmentUnassigned = await asAgent.GetAsync($"/api/tickets/{unassignedSameDepartmentTicket}");
+        Assert.Contains(sameDepartmentUnassigned.StatusCode, new[] { HttpStatusCode.Forbidden, HttpStatusCode.NotFound });
+
         var own = await asAgent.GetAsync($"/api/tickets/{ownTicket}");
         Assert.Equal(HttpStatusCode.OK, own.StatusCode);
     }
@@ -302,8 +308,9 @@ public sealed class GenesysScreenPopEndpointsTests(ScreenPopHostFixture hosts) :
     public async Task FreshBrowser_WithNoCookies_OpensTheLaunchUrl_AndLandsOnTheTicketSignedIn()
     {
         var (service, _) = await SignInAsync();
-        var (genesysUserId, _, departmentId) = await MappedAgentAsync();
+        var (genesysUserId, agentUserId, departmentId) = await MappedAgentAsync();
         var (ticketId, ticketNumber, conversationId) = await IngestAsync(service, departmentId);
+        await Api.AssignOwnerAsync(ticketId, agentUserId);   // the answering agent owns the ticket they are popped onto
         var issued = await IssueAsync(service, new GenesysScreenPopRequest(genesysUserId, conversationId));
 
         using var browser = hosts.NewBrowser();

@@ -705,7 +705,7 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
-    public async Task ADepartmentTransfer_KeepsTheResponsibleCsAgentAsOwner_DepartmentStaffWorkIt_AndTheAgentNeverTakesOwnershipAgain()
+    public async Task ADepartmentTransfer_KeepsTheResponsibleCsAgentAsOwner_UnassignedDepartmentStaffCannotSeeIt_AndTheAgentNeverTakesOwnershipAgain()
     {
         var own = await DepartmentAsync();
         var (agent, agentId) = await ClientAsync(departmentId: own);
@@ -730,9 +730,14 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
 
-        // Department staff do their authorized work without replacing the responsible CS Agent.
+        // A receiving-department employee the ticket is NOT assigned to has no access at all (assignment-only visibility): not the detail,
+        // not the notes, not a note of their own, not the list. Transferring without naming an assignee does not hand the ticket to the
+        // department's staff; the responsible CS Agent stays the owner.
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(worker, ticket.TicketId));
+        Assert.Equal(HttpStatusCode.Forbidden, (await worker.GetAsync($"/api/tickets/{ticket.TicketId}/notes")).StatusCode);
         var note = await worker.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/notes", new CreateNoteRequestDto("Looking into it."));
-        Assert.Equal(HttpStatusCode.Created, note.StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, note.StatusCode);
+        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(worker));
         Assert.Equal(agentId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
 
         // An explicit manager reassignment is still the only way the agent changes (and it still needs a reason).

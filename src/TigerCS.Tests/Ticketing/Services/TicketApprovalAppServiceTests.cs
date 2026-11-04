@@ -108,7 +108,7 @@ public class TicketApprovalAppServiceTests
     /// the test writes the same row Close itself writes.
     /// </summary>
     private static async Task<Ticket> SeedClosedReopenableTicketAsync(
-        Fixture f, double closedDaysAgo = 1, bool allowReopen = true, ResolutionOutcome outcome = ResolutionOutcome.Resolved)
+        Fixture f, double closedDaysAgo = 1, bool allowReopen = true, ResolutionOutcome outcome = ResolutionOutcome.Resolved, Guid? owner = null)
     {
         var template = f.WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: 300));
         var requestType = f.RequestTypes.Add(new RequestType(
@@ -123,7 +123,7 @@ public class TicketApprovalAppServiceTests
             (byte)PriorityLevel.Medium, "Reopen me", Now.AddDays(-30));
         await f.Tickets.AddAsync(ticket);
         ticket.ClassifyRequestType(requestType.RequestTypeId);
-        ticket.AssignTo(Guid.NewGuid());
+        ticket.AssignTo(owner ?? Guid.NewGuid());
         ticket.ChangeStatus(TicketStatus.InProgress);
         ticket.Resolve(outcome, duplicateOfTicketId: null);
         ticket.Close();
@@ -273,14 +273,20 @@ public class TicketApprovalAppServiceTests
     public async Task ReopenApproval_IsOfferedToAnEligibleRequester()
     {
         var f = CreateService(Now);
-        var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
+        var colleague = SeedDepartmentMember(f, CollectionsDepartmentId);
+        // An employee sees (and so can act on) only the tickets assigned to them: the requester is the ticket's assignee.
+        var ticket = await SeedClosedReopenableTicketAsync(f, owner: requester);
 
         var view = await f.Service.GetApprovalsViewAsync(requester, [Roles.DepartmentEmployee], ticket.TicketId);
 
         var offered = Assert.Single(view.Response!.RequestableApprovals);
         Assert.Equal(nameof(ApprovalType.ReopenApproval), offered.ApprovalType);
         Assert.True(offered.CallerCanRequest);
+
+        // A department colleague the ticket is not assigned to cannot open its approvals view.
+        var colleagueView = await f.Service.GetApprovalsViewAsync(colleague, [Roles.DepartmentEmployee], ticket.TicketId);
+        Assert.Equal(TigerCS.Application.Modules.Ticketing.Dto.TicketQueryOutcome.Forbidden, colleagueView.Outcome);
     }
 
     // ---- The Closed carve-out is narrow ----

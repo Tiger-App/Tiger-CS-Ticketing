@@ -11,7 +11,8 @@ public sealed record CustomerDirectoryQuery(
     bool OpenOnly,
     int Page,
     int PageSize,
-    Guid? AgentScopeEmployeeId = null);
+    Guid? AgentScopeEmployeeId = null,
+    Guid? OwnerVisibilityEmployeeId = null);
 
 public sealed record CustomerDirectoryPage(IReadOnlyList<CustomerDirectoryRowDto> Items, int TotalCount);
 
@@ -28,5 +29,5 @@ public interface ICustomerDirectoryRepository
     /// <summary>Everything persisted about one identity within the visible departments, or null when no visible ticket carries it.</summary>
     Task<CustomerDirectoryProfileDto?> GetProfileAsync(
         CustomerIdentity identity, IReadOnlyCollection<int>? visibleDepartmentIds, CancellationToken cancellationToken = default,
-        Guid? agentScopeEmployeeId = null);
+        Guid? agentScopeEmployeeId = null, Guid? ownerEmployeeId = null);
 }

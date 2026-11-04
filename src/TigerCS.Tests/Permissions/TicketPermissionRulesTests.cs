@@ -133,7 +133,7 @@ public class TicketPermissionRulesTests : LifecycleIntegrationTestBase, IClassFi
     }
 
     [Fact]
-    public async Task A_close_grant_works_inside_the_holders_department_and_not_outside_it()
+    public async Task A_close_grant_never_widens_visibility_to_a_colleagues_ticket_inside_or_outside_the_department()
     {
         var s = await AssignedTicketAsync();
         var resolved = await ResolveAsync(s.Worker, s.Ticket.TicketId, s.RowVersion);
@@ -150,14 +150,19 @@ public class TicketPermissionRulesTests : LifecycleIntegrationTestBase, IClassFi
         await SetOverrideAsync(colleagueId, P.TicketsClose, PermissionEffect.Grant);
         await SetOverrideAsync(outsiderId, P.TicketsClose, PermissionEffect.Grant);
 
+        // Employees see only tickets assigned to them: a permission grant is an action right, never a visibility grant, so it is
+        // inert on a colleague's ticket whether the colleague shares the department or not.
         Assert.Equal(HttpStatusCode.Forbidden, (await CloseAsync(outsider, s.Ticket.TicketId, version)).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await CloseAsync(colleague, s.Ticket.TicketId, version)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await CloseAsync(colleague, s.Ticket.TicketId, version)).StatusCode);
+
+        // The assignee (once the grant exists) can still close their own ticket.
+        Assert.Equal(HttpStatusCode.OK, (await CloseAsync(s.Worker, s.Ticket.TicketId, version)).StatusCode);
     }
 
     // ---- Transfer ----
 
     [Fact]
-    public async Task Transfer_is_blocked_by_a_denial_and_a_grant_is_scoped_to_the_holders_department()
+    public async Task Transfer_is_blocked_by_a_denial_and_a_grant_reaches_only_a_ticket_assigned_to_the_holder()
     {
         var s = await AssignedTicketAsync();
         var target = await _factory.CreateDepartmentAsync("Target " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
@@ -176,14 +181,25 @@ public class TicketPermissionRulesTests : LifecycleIntegrationTestBase, IClassFi
         Assert.Equal(HttpStatusCode.Forbidden,
             (await outsider.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(s.RowVersion))).StatusCode);
 
-        // A member of the department with the grant may transfer; without the grant they may not.
+        // A colleague in the ticket's department who is not its assignee is refused even WITH the grant (a grant never widens visibility).
         var (member, memberId) = await CreateClientAsync(Roles.DepartmentEmployee);
         await _factory.AssignPrimaryDepartmentAsync(memberId, s.DepartmentId);
         Assert.Equal(HttpStatusCode.Forbidden,
             (await member.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(s.RowVersion))).StatusCode);
         await SetOverrideAsync(memberId, P.TicketsTransfer, PermissionEffect.Grant);
-        Assert.Equal(HttpStatusCode.OK,
+        Assert.Equal(HttpStatusCode.Forbidden,
             (await member.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(s.RowVersion))).StatusCode);
+
+        // The assignee with the grant may transfer; without it they may not.
+        var (assignee, assigneeId) = await CreateClientAsync(Roles.DepartmentEmployee);
+        await _factory.AssignPrimaryDepartmentAsync(assigneeId, s.DepartmentId);
+        await _factory.AssignOwnerAsync(s.Ticket.TicketId, assigneeId);
+        var current = (await assignee.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{s.Ticket.TicketId}"))!.RowVersion;
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await assignee.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(current))).StatusCode);
+        await SetOverrideAsync(assigneeId, P.TicketsTransfer, PermissionEffect.Grant);
+        Assert.Equal(HttpStatusCode.OK,
+            (await assignee.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(current))).StatusCode);
     }
 
     // ---- My Tickets ----

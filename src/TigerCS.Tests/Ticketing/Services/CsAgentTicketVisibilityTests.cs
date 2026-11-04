@@ -313,19 +313,48 @@ public class CsAgentTicketVisibilityTests
     }
 
     [Fact]
-    public async Task ADepartmentEmployee_IsStillScopedToTheirDepartments_AndNothingElse()
+    public async Task ADepartmentEmployee_SeesOnlyTicketsAssignedToThem_NotTheirDepartmentsTickets()
     {
         var f = CreateService();
         var employee = Guid.NewGuid();
         MemberOf(f, employee, Facilities);
-        await SeedAsync(f, CustomerService);
-        var inMine = await SeedAsync(f, Facilities);
+        await SeedAsync(f, CustomerService);                                    // another department, unassigned
+        await SeedAsync(f, Facilities);                                         // their department, unassigned
+        await SeedAsync(f, Facilities, assignedTo: Guid.NewGuid());             // their department, a colleague's
+        var mine = await SeedAsync(f, Facilities, assignedTo: employee);        // theirs
+        var mineElsewhere = await SeedAsync(f, CustomerService, assignedTo: employee);   // theirs, in a department they do not belong to
 
-        Assert.Equal([inMine.TicketId], await QueueIdsAsync(f, employee, Roles.DepartmentEmployee));
+        Assert.Equal(new[] { mine.TicketId, mineElsewhere.TicketId }.Order(), await QueueIdsAsync(f, employee, Roles.DepartmentEmployee));
     }
 
     [Fact]
-    public async Task AnAgentWhoIsAlsoADepartmentEmployee_KeepsThatRolesDepartmentView_PlusTheirOwnTickets()
+    public async Task ADepartmentHead_KeepsTheirDepartmentView_PlusTheirOwnTickets()
+    {
+        var f = CreateService();
+        var head = Guid.NewGuid();
+        MemberOf(f, head, Facilities);
+        var inMyDepartment = await SeedAsync(f, Facilities);
+        var assignedToMe = await SeedAsync(f, CustomerService, assignedTo: head);
+        await SeedAsync(f, CustomerService);   // neither
+
+        Assert.Equal(new[] { inMyDepartment.TicketId, assignedToMe.TicketId }.Order(), await QueueIdsAsync(f, head, Roles.DepartmentHead));
+    }
+
+    [Fact]
+    public async Task AnAgentWhoIsAlsoADepartmentEmployee_GetsNoDepartmentView_OnlyTheirOwnTickets()
+    {
+        var f = CreateService();
+        var person = Guid.NewGuid();
+        MemberOf(f, person, Facilities);
+        await SeedAsync(f, Facilities);   // department membership as an Employee grants nothing
+        var assignedToMe = await SeedAsync(f, CustomerService, assignedTo: person);
+        await SeedAsync(f, CustomerService); // neither
+
+        Assert.Equal([assignedToMe.TicketId], await QueueIdsAsync(f, person, Roles.CsAgent, Roles.DepartmentEmployee));
+    }
+
+    [Fact]
+    public async Task AnAgentWhoIsAlsoADepartmentHead_KeepsThatRolesDepartmentView_PlusTheirOwnTickets()
     {
         var f = CreateService();
         var person = Guid.NewGuid();
@@ -335,8 +364,8 @@ public class CsAgentTicketVisibilityTests
         await SeedAsync(f, CustomerService); // neither
 
         Assert.Equal(
-            [inMyDepartment.TicketId, assignedToMe.TicketId],
-            await QueueIdsAsync(f, person, Roles.CsAgent, Roles.DepartmentEmployee));
+            new[] { inMyDepartment.TicketId, assignedToMe.TicketId }.Order(),
+            await QueueIdsAsync(f, person, Roles.CsAgent, Roles.DepartmentHead));
     }
 
     [Fact]

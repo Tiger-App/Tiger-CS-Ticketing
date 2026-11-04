@@ -440,10 +440,16 @@ public class ReadOnlyRolesAndServiceIdentityEndpointTests : IClassFixture<ReadOn
     }
 
     [Fact]
-    public async Task DepartmentEmployee_InTheTicketsDepartment_CanReadAndNote()
+    public async Task DepartmentEmployee_AssignedTheTicket_CanReadAndNote_AColleagueOfTheDepartmentCannot()
     {
         var ticket = await CreateTicketAsync();
-        var (member, _) = await ClientForAsync(Roles.DepartmentEmployee, ticket.CurrentDepartmentId);
+        var (colleague, _) = await ClientForAsync(Roles.DepartmentEmployee, ticket.CurrentDepartmentId);
+        Assert.Equal(HttpStatusCode.Forbidden, (await colleague.GetAsync($"/api/tickets/{ticket.TicketId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await colleague.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/notes", new CreateNoteRequestDto("Nope"))).StatusCode);
+
+        var (member, memberId) = await ClientForAsync(Roles.DepartmentEmployee, ticket.CurrentDepartmentId);
+        await _factory.AssignOwnerAsync(ticket.TicketId, memberId);
 
         Assert.Equal(HttpStatusCode.OK, (await member.GetAsync($"/api/tickets/{ticket.TicketId}")).StatusCode);
         Assert.Equal(HttpStatusCode.Created,
