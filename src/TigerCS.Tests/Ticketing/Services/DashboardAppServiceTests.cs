@@ -67,21 +67,26 @@ public class DashboardAppServiceTests
     }
 
     [Fact]
-    public async Task GetSummaryAsync_DepartmentEmployee_SeesOnlyTheirOwnDepartmentsNumbers()
+    public async Task GetSummaryAsync_DepartmentEmployee_CountsOnlyTicketsAssignedToThem_WhateverTheirDepartment()
     {
         var f = CreateService();
         var caller = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(caller, 2, true, DateTime.UtcNow, null));
+        // Assigned to the employee: one in their own department and one that now sits in ANOTHER department (e.g. after a transfer).
+        await SeedTicketAsync(f.Tickets, departmentId: 2, owner: caller);
+        await SeedTicketAsync(f.Tickets, departmentId: 9, priorityId: (byte)PriorityLevel.Critical, owner: caller);
+        // Not theirs: a colleague's ticket and an unassigned one in their own department, and another department's ticket.
+        await SeedTicketAsync(f.Tickets, departmentId: 2, owner: Guid.NewGuid());
         await SeedTicketAsync(f.Tickets, departmentId: 2);
-        await SeedTicketAsync(f.Tickets, departmentId: 2, priorityId: (byte)PriorityLevel.Critical);
-        await SeedTicketAsync(f.Tickets, departmentId: 9);
         await SeedTicketAsync(f.Tickets, departmentId: 9, priorityId: (byte)PriorityLevel.Critical);
 
         var result = await f.Service.GetSummaryAsync(caller, [Roles.DepartmentEmployee]);
 
         Assert.Equal(2, result.OpenTickets);
         Assert.Equal(1, result.CriticalOrHigh);
-        Assert.All(result.AttentionTickets, t => Assert.Equal(2, t.CurrentDepartmentId));
+        Assert.Equal(0, result.Unassigned);   // department-queue work is not theirs to see
+        Assert.Equal(2, result.MyTickets);
+        Assert.All(result.AttentionTickets, t => Assert.Equal(caller, t.CurrentOwnerEmployeeId));
     }
 
     [Fact]

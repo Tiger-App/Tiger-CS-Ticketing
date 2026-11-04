@@ -676,19 +676,31 @@ public sealed class CustomerDirectorySqliteTests : IDisposable
     }
 
     [Fact]
-    public async Task List_AndProfile_NeverReachBeyondTheCallersVisibleDepartments()
+    public async Task List_AndProfile_ForADepartmentEmployee_ReachOnlyCustomersOfTicketsAssignedToThem()
     {
         using (var context = _db.CreateContext())
         {
-            AddCrmTicket(context, 9008, "Collections Customer", "T-3", departmentId: _db.CollectionsId);
-            AddCrmTicket(context, 9009, "Registration Customer", "T-4", departmentId: _db.RegistrationId);
+            AddCrmTicket(context, 9008, "Collections Customer", "T-3", departmentId: _db.CollectionsId);   // another department, not theirs
+            var assigned = AddCrmTicket(context, 9009, "Registration Customer", "T-4", departmentId: _db.RegistrationId);
+            AddCrmTicket(context, 9012, "Unassigned Registration Customer", "T-5", departmentId: _db.RegistrationId);   // own department, unassigned
+            var colleagues = AddCrmTicket(context, 9014, "Colleague Customer", "T-7", departmentId: _db.RegistrationId);
+            var elsewhere = AddCrmTicket(context, 9013, "Assigned Elsewhere", "T-6", departmentId: _db.CollectionsId);
+            assigned.AssignTo(_db.RegistrationEmployeeId);
+            elsewhere.AssignTo(_db.RegistrationEmployeeId);   // assigned to them although it sits in another department
+            colleagues.AssignTo(_db.LifecycleWorkerId);
+            context.SaveChanges();
         }
 
-        var registrationOnly = await ListAsync(roles: [Roles.DepartmentEmployee], caller: _db.RegistrationEmployeeId);
-        Assert.Equal(["crm:9009"], registrationOnly.Items.Select(r => r.CustomerKey).ToArray());
+        var mine = await ListAsync(roles: [Roles.DepartmentEmployee], caller: _db.RegistrationEmployeeId);
+        Assert.Equal(["crm:9009", "crm:9013"], mine.Items.Select(r => r.CustomerKey).Order().ToArray());
 
-        var hidden = await ProfileAsync("crm:9008", roles: [Roles.DepartmentEmployee], caller: _db.RegistrationEmployeeId);
-        Assert.Equal(CustomerDirectoryProfileOutcome.NotFound, hidden.Outcome);
+        Assert.Equal(CustomerDirectoryProfileOutcome.Success, (await ProfileAsync("crm:9013", roles: [Roles.DepartmentEmployee], caller: _db.RegistrationEmployeeId)).Outcome);
+        foreach (var hiddenKey in new[] { "crm:9008", "crm:9012", "crm:9014" })
+        {
+            var hidden = await ProfileAsync(hiddenKey, roles: [Roles.DepartmentEmployee], caller: _db.RegistrationEmployeeId);
+            Assert.Equal(CustomerDirectoryProfileOutcome.NotFound, hidden.Outcome);
+        }
+
         Assert.Equal(CustomerDirectoryProfileOutcome.Success, (await ProfileAsync("crm:9008")).Outcome);
     }
 

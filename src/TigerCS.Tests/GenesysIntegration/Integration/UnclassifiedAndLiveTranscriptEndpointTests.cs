@@ -24,7 +24,10 @@ public sealed class UnclassifiedAndLiveTranscriptEndpointTests : IDisposable
 
     public void Dispose() => factory.Dispose();
 
-    private async Task<HttpClient> ClientAsync(string role, int? departmentId = null)
+    private async Task<HttpClient> ClientAsync(string role, int? departmentId = null) =>
+        (await EmployeeClientAsync(role, departmentId)).Client;
+
+    private async Task<(HttpClient Client, Guid EmployeeId)> EmployeeClientAsync(string role, int? departmentId = null)
     {
         var (username, password, employeeId) = await factory.SeedEmployeeAsync(role);
         if (departmentId is { } department)
@@ -36,7 +39,7 @@ public sealed class UnclassifiedAndLiveTranscriptEndpointTests : IDisposable
         var login = await (await client.PostAsJsonAsync("/api/auth/login", new LoginRequestDto(username, password)))
             .Content.ReadFromJsonAsync<LoginResponseDto>();
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.AccessToken);
-        return client;
+        return (client, employeeId);
     }
 
     private async Task<GenesysInquiryAcceptedResponse> CreateTicketAsync(HttpClient genesys, int departmentId, string conversationId, int? requestTypeId = null)
@@ -148,14 +151,17 @@ public sealed class UnclassifiedAndLiveTranscriptEndpointTests : IDisposable
         var classifiedA = await CreateTicketAsync(genesys, deptA, Guid.NewGuid().ToString(), requestTypeA);
         var unclassifiedB = await CreateTicketAsync(genesys, deptB, Guid.NewGuid().ToString());
 
-        var memberOfA = await ClientAsync(Roles.DepartmentEmployee, deptA);
+        // A department employee sees only tickets ASSIGNED to them (not the department's queue): assign them the unclassified and the classified one.
+        var (memberOfA, memberOfAId) = await EmployeeClientAsync(Roles.DepartmentEmployee, deptA);
+        await factory.AssignOwnerAsync(unclassifiedA.TicketId, memberOfAId);
+        await factory.AssignOwnerAsync(classifiedA.TicketId, memberOfAId);
         var filtered = await memberOfA.GetFromJsonAsync<TicketListResultDto>("/api/tickets?unclassified=true&pageSize=100");
         var unfiltered = await memberOfA.GetFromJsonAsync<TicketListResultDto>("/api/tickets?pageSize=100");
 
         var ids = filtered!.Items.Select(t => t.TicketId).ToList();
         Assert.Contains(unclassifiedA.TicketId, ids);
         Assert.DoesNotContain(classifiedA.TicketId, ids);          // has a request type
-        Assert.DoesNotContain(unclassifiedB.TicketId, ids);        // another department: the existing visibility rule still applies
+        Assert.DoesNotContain(unclassifiedB.TicketId, ids);        // not assigned to them (another department): never visible
         Assert.Contains(classifiedA.TicketId, unfiltered!.Items.Select(t => t.TicketId));
 
         using var scope = factory.Services.CreateScope();
@@ -164,7 +170,7 @@ public sealed class UnclassifiedAndLiveTranscriptEndpointTests : IDisposable
     }
 
     [Fact]
-    public async Task AnAuthorizedDepartmentMember_ClassifiesFromTicketDetails_AndAnOutsiderCannot()
+    public async Task AnAssignedDepartmentEmployee_ClassifiesFromTicketDetails_AndAnOutsiderCannot()
     {
         await factory.SeedPrioritiesAsync();
         var deptA = await factory.CreateDepartmentAsync("Classify A " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
@@ -175,7 +181,8 @@ public sealed class UnclassifiedAndLiveTranscriptEndpointTests : IDisposable
         var ticket = await CreateTicketAsync(genesys, deptA, Guid.NewGuid().ToString());
 
         var outsider = await ClientAsync(Roles.DepartmentEmployee, deptB);
-        var member = await ClientAsync(Roles.DepartmentEmployee, deptA);
+        var (member, memberId) = await EmployeeClientAsync(Roles.DepartmentEmployee, deptA);
+        await factory.AssignOwnerAsync(ticket.TicketId, memberId);   // classification from Ticket Details needs the ticket to be theirs
         var detail = await member.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{ticket.TicketId}");
         var request = new ClassifyTicketRequestDto(categoryId, detail!.PriorityId!.Value, requestTypeId, Convert.FromBase64String(detail.RowVersion));
 

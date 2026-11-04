@@ -195,9 +195,14 @@ public sealed class FakeTicketRepository : ITicketRepository
     /// Mirrors <c>TicketQueryFilters.VisibleTo</c>: department scope for everyone; for a restricted CS Agent, assigned-to-me OR a department
     /// employee holds it and I am its responsible CS Agent OR a department their other role grants. Creating or handling grants nothing.
     /// </summary>
-    private bool IsVisible(Ticket t, IReadOnlyCollection<int>? departmentIds, Guid? agentEmployeeId, bool includeCreated = true, bool createdOnly = false) =>
+    private bool IsVisible(
+        Ticket t, IReadOnlyCollection<int>? departmentIds, Guid? agentEmployeeId, bool includeCreated = true, bool createdOnly = false,
+        Guid? ownerEmployeeId = null) =>
         agentEmployeeId is not { } agentId
+            // A department-scoped caller (departmentIds not null) also always sees the tickets assigned to them; an empty scope (a regular
+            // Department Employee) therefore sees exactly their own tickets.
             ? departmentIds is null || departmentIds.Contains(t.CurrentDepartmentId)
+                || (ownerEmployeeId is { } ownerId && t.CurrentOwnerEmployeeId == ownerId)
             : createdOnly
             ? t.CreatedByEmployeeId == agentId
             : t.CurrentOwnerEmployeeId == agentId
@@ -228,7 +233,7 @@ public sealed class FakeTicketRepository : ITicketRepository
     {
         var filtered = _tickets.Values.AsEnumerable();
 
-        filtered = filtered.Where(t => IsVisible(t, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope));
+        filtered = filtered.Where(t => IsVisible(t, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.OwnerVisibilityEmployeeId));
 
         if (query.CreatedByEmployeeId is { } createdBy)
         {
@@ -348,7 +353,7 @@ public sealed class FakeTicketRepository : ITicketRepository
             return Task.FromResult(new CustomerHistoryQueryResult([], 0, 0, 0));
         }
 
-        filtered = filtered.Where(t => IsVisible(t, query.VisibleDepartmentIds, query.AgentScopeEmployeeId));
+        filtered = filtered.Where(t => IsVisible(t, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, ownerEmployeeId: query.OwnerVisibilityEmployeeId));
 
         if (query.ExcludeTicketId is { } excludeTicketId)
         {
@@ -383,7 +388,7 @@ public sealed class FakeTicketRepository : ITicketRepository
         DashboardSnapshotQuery query, CancellationToken cancellationToken = default)
     {
         var visible = _tickets.Values.AsEnumerable();
-        visible = visible.Where(t => IsVisible(t, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope));
+        visible = visible.Where(t => IsVisible(t, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.CallerEmployeeId));
 
         var visibleList = visible.ToList();
         var active = visibleList

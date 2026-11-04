@@ -24,7 +24,8 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
         filtered = filtered.VisibleTo(
             dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope,
             ownerEmployeeId: query.OwnerVisibilityEmployeeId, includeClaimable: query.IncludeClaimable,
-            inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
+            inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock),
+            includeGenesysIntake: query.IncludeGenesysIntake);
 
         if (query.DepartmentId is { } departmentId)
         {
@@ -249,7 +250,7 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
         }
 
         filtered = filtered.VisibleTo(
-            dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId,
+            dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, ownerEmployeeId: query.OwnerVisibilityEmployeeId,
             inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
 
         if (query.ExcludeTicketId is { } excludeTicketId)
@@ -292,7 +293,7 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
         DashboardSnapshotQuery query, CancellationToken cancellationToken = default)
     {
         var visible = dbContext.Tickets.AsQueryable().VisibleTo(dbContext, query.VisibleDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.CallerEmployeeId,
-            inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
+            inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock), includeGenesysIntake: query.IncludeGenesysIntake);
 
         // Same "active" set as TicketQueryFilters.Active, legacy
         // PendingThirdParty included — see its remark for why.

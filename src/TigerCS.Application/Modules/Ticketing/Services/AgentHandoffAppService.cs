@@ -521,7 +521,10 @@ public sealed class AgentHandoffAppService(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, TicketAgentHandoff handoff, CancellationToken cancellationToken,
         bool allowClaimException = false)
     {
-        if (!ticketQueryAppService.IsRestrictedAgent(callerEmployeeId, callerRoles))
+        // A regular Department Employee is assignment-only too: they may act on the work item of a ticket assigned to them, and have no
+        // department-level view of work items (nor the agent claim route below).
+        var assignmentOnlyEmployee = TicketVisibilityRule.IsAssignmentOnlyEmployee(callerRoles);
+        if (!assignmentOnlyEmployee && !ticketQueryAppService.IsRestrictedAgent(callerEmployeeId, callerRoles))
         {
             return await ticketQueryAppService.CanViewDepartmentAsync(callerEmployeeId, callerRoles, handoff.DepartmentId, cancellationToken);
         }
@@ -533,9 +536,22 @@ public sealed class AgentHandoffAppService(
             return true;
         }
 
-        return allowClaimException
-            && handoff.ResolvedAtUtc is null
-            && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, handoff.DepartmentId, cancellationToken);
+        if (!allowClaimException || assignmentOnlyEmployee || handoff.ResolvedAtUtc is not null)
+        {
+            return false;
+        }
+
+        // A member of the work item's department, or of the ticket's CURRENT department (the approved route: transfer first, then a member of
+        // the new current department accepts). Membership here is only the claim route; AcceptAsync still requires membership of the ticket's
+        // current department before anything is assigned.
+        if (await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, handoff.DepartmentId, cancellationToken))
+        {
+            return true;
+        }
+
+        var ticket = await ticketRepository.GetByIdAsync(handoff.TicketId, cancellationToken);
+        return ticket is not null
+            && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken);
     }
 
     /// <summary>The departments the caller belongs to — where a restricted CS Agent may claim waiting work.</summary>

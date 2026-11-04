@@ -425,7 +425,6 @@ public sealed class DashboardOverviewTests : IDisposable
     }
 
     [Theory]
-    [InlineData(Roles.DepartmentEmployee)]
     [InlineData(Roles.DepartmentHead)]
     [InlineData(Roles.ReportingUser)]
     public async Task DepartmentScopedRoles_SeeOnlyTheirOwnMemberships(string role)
@@ -444,6 +443,26 @@ public sealed class DashboardOverviewTests : IDisposable
         Assert.Equal(0, nobody.Kpis.OpenTickets);
         Assert.Empty(nobody.VolumeByDepartment);
         Assert.Empty(nobody.FilterOptions.Departments);
+    }
+
+    [Fact]
+    public async Task ADepartmentEmployee_DashboardCountsOnlyTicketsAssignedToThem_NotTheirDepartmentsQueue()
+    {
+        using (var context = _db.CreateContext())
+        {
+            _db.AddTicket(context, _db.CollectionsId);                                              // own department, unassigned
+            _db.AddTicket(context, _db.CollectionsId, owner: _db.LifecycleWorkerId);                // own department, a colleague's
+            _db.AddTicket(context, _db.CustomerServiceId, owner: _db.CollectionsHeadId);            // another department, assigned to the caller
+            _db.AddTicket(context, _db.RegistrationId);                                             // another department, unassigned
+        }
+
+        var mine = await OverviewAsync(_db.CollectionsHeadId, [Roles.DepartmentEmployee]);
+        var nobody = await OverviewAsync(Guid.NewGuid(), [Roles.DepartmentEmployee]);
+
+        Assert.Equal(1, mine.Kpis.OpenTickets);
+        Assert.Equal(1, mine.Kpis.MyTickets);
+        Assert.Equal(0, mine.Kpis.InDepartmentQueue);   // the department's unassigned queue is not an employee's to see
+        Assert.Equal(0, nobody.Kpis.OpenTickets);
     }
 
     [Fact]

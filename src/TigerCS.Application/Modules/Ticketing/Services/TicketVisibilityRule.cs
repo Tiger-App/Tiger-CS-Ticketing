@@ -19,7 +19,8 @@ namespace TigerCS.Application.Modules.Ticketing.Services;
 /// ticket, see <see cref="CanFollowDepartmentWorkAsync"/>) so they can follow up and close them. Never a ticket assigned to another CS Agent,
 /// never an unassigned one (except the explicitly authorized Take Ownership pool, <see cref="TicketClaimPolicy"/>), and never because they once
 /// created or handled it;</item>
-/// <item>everyone else sees only departments they are actually assigned to.</item>
+/// <item>a <b>Department Employee</b> (<see cref="IsAssignmentOnlyEmployee"/>) sees only the tickets currently assigned to them, in any department;</item>
+/// <item>everyone else (Department Head, Reporting User…) sees only departments they are actually assigned to.</item>
 /// </list>
 ///
 /// <para>
@@ -81,14 +82,28 @@ public static class TicketVisibilityRule
     }
 
     /// <summary>
-    /// A restricted CS Agent who ALSO holds a department role (Department Employee / Head) keeps that role's own department scope —
-    /// it is granted by the other role, not by CS Agent. CS Agent alone grants nothing by department.
+    /// A restricted CS Agent who ALSO holds the <b>Department Head</b> role keeps that role's own department scope — it is granted by the other
+    /// role, not by CS Agent. CS Agent alone grants nothing by department, and neither does <b>Department Employee</b>: an employee sees
+    /// only tickets assigned to them (<see cref="IsAssignmentOnlyEmployee"/>).
     /// </summary>
     public static bool HoldsDepartmentRole(IReadOnlyCollection<string> callerRoles)
     {
         ArgumentNullException.ThrowIfNull(callerRoles);
+        return callerRoles.Contains(Roles.DepartmentHead, StringComparer.Ordinal);
+    }
+
+    /// <summary>
+    /// True for a regular employee whose ticket visibility is <b>assignment-only</b>: they hold Department Employee and no other role at all.
+    /// They see exactly the tickets currently assigned to them, whatever department those sit in, and never a ticket merely because it is in a
+    /// department they belong to or is assigned to a colleague. Anyone holding any other role (Department Head, a CS-layer or executive role,
+    /// Reporting User, a read-only role…) keeps that role's existing scope unchanged. The set-based form is <c>TicketQueryFilters.VisibleTo</c>
+    /// called with an empty department set and the caller as owner.
+    /// </summary>
+    public static bool IsAssignmentOnlyEmployee(IReadOnlyCollection<string> callerRoles)
+    {
+        ArgumentNullException.ThrowIfNull(callerRoles);
         return callerRoles.Contains(Roles.DepartmentEmployee, StringComparer.Ordinal)
-            || callerRoles.Contains(Roles.DepartmentHead, StringComparer.Ordinal);
+            && callerRoles.All(role => string.Equals(role, Roles.DepartmentEmployee, StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -108,7 +123,7 @@ public static class TicketVisibilityRule
         || await CanModifyTicketAsync(
             userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken);
 
-    /// <summary>Department-level visibility. A restricted CS Agent has none from CS Agent itself — their access is per ticket (<see cref="CanViewTicketAsync"/>), so this fails closed for them.</summary>
+    /// <summary>Department-level visibility. A restricted CS Agent has none from CS Agent itself, and an assignment-only employee has none at all — their access is per ticket (<see cref="CanViewTicketAsync"/>), so this fails closed for them.</summary>
     public static Task<bool> CanViewDepartmentAsync(
         IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
         Guid callerEmployeeId,
@@ -120,7 +135,10 @@ public static class TicketVisibilityRule
         ArgumentNullException.ThrowIfNull(userDepartmentAssignmentRepository);
 
         return AuthorizationGate.EvaluateAsync(callerRoles, async () =>
-            IsGenesysIntegration(callerRoles, callerEmployeeId, serviceIdentities)
+            // An assignment-only employee has no department-level view at all: their access is per ticket (the one assigned to them).
+            IsAssignmentOnlyEmployee(callerRoles)
+                ? false
+                : IsGenesysIntegration(callerRoles, callerEmployeeId, serviceIdentities)
                 ? HoldsDepartmentRole(callerRoles)
                     && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, departmentId, cancellationToken)
                 : IsRestrictedCsAgent(callerRoles, callerEmployeeId, serviceIdentities)

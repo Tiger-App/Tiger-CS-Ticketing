@@ -7,7 +7,8 @@ namespace TigerCS.Tests.Ticketing.Dashboard;
 
 /// <summary>
 /// My Tickets: an employee sees EVERY ticket currently assigned to them — in the ticket list, the "mine" filter, the dashboard counts and the
-/// ticket detail — whatever department it originated in or sits in now, and never another employee's ticket outside their own scope.
+/// ticket detail — whatever department it originated in or sits in now, and never another employee's ticket, or an unassigned one, merely
+/// because it sits in a department they belong to (a regular Department Employee's visibility is assignment-only).
 /// Real SQL (SQLite) so the set-based visibility predicate is exercised, not just the per-ticket rule.
 /// </summary>
 public sealed class MyTicketsVisibilityTests : IDisposable
@@ -43,8 +44,8 @@ public sealed class MyTicketsVisibilityTests : IDisposable
         var listed = await ListedAsync(_db.RegistrationEmployeeId);
 
         Assert.Contains(mine, listed);
-        Assert.Contains(ownDepartment, listed);        // their own department's queue is unchanged
-        Assert.DoesNotContain(someoneElses, listed);   // never someone else's ticket outside their scope
+        Assert.DoesNotContain(ownDepartment, listed);  // their own department's unassigned queue is NOT theirs to see
+        Assert.DoesNotContain(someoneElses, listed);   // never someone else's ticket
     }
 
     [Fact]

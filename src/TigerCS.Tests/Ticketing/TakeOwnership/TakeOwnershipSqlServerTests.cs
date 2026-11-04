@@ -203,10 +203,19 @@ public sealed class TakeOwnershipSqlServerTests : IDisposable
             Assert.True(expected == await pool.GetStatusAsync(id), $"{name}: expected {expected}");
         }
 
-        // 2. the pool is a separate, explicit view: the personal list never holds it, "available to take" holds exactly the Available ones
+        // 2. the pool is a separate, explicit view: "available to take" holds exactly the Available ones, while the personal list holds only
+        //    the Genesys-originated part of it (the CS intake / classification queue) - never the manual, non-Genesys pool.
         var expectedIds = shapes.Values.Where(s => s.Expected == TicketClaimStatus.Available).Select(s => s.Id).Order().ToArray();
+        var genesysOriginated = new[]
+        {
+            "AI conversation, human requested", "AI conversation, ended", "AI conversation, closed for inactivity",
+            "AI conversation, taken by an agent", "open human handoff on a live AI conversation"
+        };
+        var intakeIds = genesysOriginated.Select(name => shapes[name].Id).Order().ToArray();
+        var nonIntakeIds = expectedIds.Except(intakeIds).ToArray();
         var listed = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 200));
-        Assert.Empty(listed.Items.Select(i => i.TicketId).Intersect(expectedIds));
+        Assert.Equal(intakeIds, listed.Items.Select(i => i.TicketId).Intersect(expectedIds).Order());
+        Assert.Empty(listed.Items.Select(i => i.TicketId).Intersect(nonIntakeIds));
         Assert.Equal(listed.Items.Count, listed.TotalCount);
 
         var available = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 200, AvailableToTake: true));
@@ -214,7 +223,7 @@ public sealed class TakeOwnershipSqlServerTests : IDisposable
 
         // 3. department filters narrow the personal list; they do not bring the pool back
         var ccFilter = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(seed.CallCenterId, null, null, null, null, null, null, null, null, 1, 200));
-        Assert.Empty(ccFilter.Items.Select(i => i.TicketId).Intersect(expectedIds));
+        Assert.Empty(ccFilter.Items.Select(i => i.TicketId).Intersect(nonIntakeIds));
         var accountingFilter = await query.GetQueueAsync(me, Agent, new TicketListRequestDto(seed.AccountingId, null, null, null, null, null, null, null, null, 1, 200));
         Assert.All(accountingFilter.Items, i => Assert.Equal(seed.AccountingId, i.CurrentDepartmentId));
         Assert.DoesNotContain(accountingFilter.Items, i => shapes["already in the call center queue"].Id == i.TicketId);

@@ -38,20 +38,27 @@ public class TicketQueryAppServiceTests
     }
 
     [Fact]
-    public async Task GetQueueAsync_DepartmentEmployee_OnlySeesOwnDepartmentTickets()
+    public async Task GetQueueAsync_DepartmentEmployee_OnlySeesTicketsAssignedToThem_InAnyDepartment()
     {
         var f = CreateService();
         var employeeId = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(employeeId, 2, true, DateTime.UtcNow, null));
-        await SeedTicketAsync(f.Tickets, 2);
-        await SeedTicketAsync(f.Tickets, 3);
+        var own = await SeedTicketAsync(f.Tickets, 2);
+        own.AssignTo(employeeId);
+        var ownElsewhere = await SeedTicketAsync(f.Tickets, 3);   // assigned to them but in ANOTHER department: still theirs
+        ownElsewhere.AssignTo(employeeId);
+        var colleagues = await SeedTicketAsync(f.Tickets, 2);     // same department, assigned to a colleague: not theirs
+        colleagues.AssignTo(Guid.NewGuid());
+        await SeedTicketAsync(f.Tickets, 2);                      // same department, unassigned: not theirs
+        await SeedTicketAsync(f.Tickets, 3);                      // other department, unassigned: not theirs
 
         var result = await f.Service.GetQueueAsync(
             employeeId, [Roles.DepartmentEmployee],
             new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 50));
 
-        Assert.Single(result.Items);
-        Assert.Equal(2, result.Items[0].CurrentDepartmentId);
+        Assert.Equal(
+            new[] { own.TicketId, ownElsewhere.TicketId }.Order(),
+            result.Items.Select(i => i.TicketId).Order());
     }
 
     [Fact]

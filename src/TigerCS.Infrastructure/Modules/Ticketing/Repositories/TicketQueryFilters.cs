@@ -38,7 +38,7 @@ internal static class TicketQueryFilters
     public static IQueryable<Ticket> VisibleTo(
         this IQueryable<Ticket> tickets, TigerCsDbContext dbContext, IReadOnlyCollection<int>? departmentIds, Guid? agentEmployeeId,
         bool createdOnly = false, Guid? ownerEmployeeId = null, bool includeClaimable = false,
-        DateTime? inactivityReopenCutoffUtc = null)
+        DateTime? inactivityReopenCutoffUtc = null, bool includeGenesysIntake = false)
     {
         if (agentEmployeeId is not { } agentId)
         {
@@ -101,7 +101,15 @@ internal static class TicketQueryFilters
 
         // Call Center agents also SEE (read-only) the unassigned human-handling tickets they may take ownership of. This only widens the
         // list for a caller the application service has already proven eligible; the same predicate gates the Take Ownership action.
-        return tickets.Where(includeClaimable ? visible.OrElse(AvailableToTake(dbContext)) : visible);
+        // The CS intake / classification queue: an eligible Call Center agent also sees (read-only, until they take ownership) the UNASSIGNED
+        // tickets that ENTERED THROUGH GENESYS. It is the claimable pool narrowed to Genesys-originated work, so tickets from unrelated
+        // workflows (manual, portal, other integrations) are not added. includeClaimable (the explicit "Available to take" view) is the wider pool.
+        if (includeClaimable)
+        {
+            return tickets.Where(visible.OrElse(AvailableToTake(dbContext)));
+        }
+
+        return tickets.Where(includeGenesysIntake ? visible.OrElse(GenesysIntake(dbContext)) : visible);
     }
 
     /// <summary>
@@ -130,6 +138,18 @@ internal static class TicketQueryFilters
             && t.CurrentOwnerEmployeeId == null
             && !dbContext.TicketAssignments.Any(a => a.TicketId == t.TicketId && a.IsCurrent);
         return core.AndAlso(notPending).AndAlso(notAi);
+    }
+
+    /// <summary>
+    /// A Genesys-originated ticket waiting in the CS intake / classification queue: it is <see cref="AvailableToTake"/> (active, unowned, no
+    /// current assignment, no pending approval, no active AI conversation) AND its originating interaction came from Genesys. Using
+    /// <see cref="AvailableToTake"/> keeps "visible in the intake queue" and "claimable" identical, so what is listed is exactly what can be taken.
+    /// </summary>
+    public static Expression<Func<Ticket, bool>> GenesysIntake(TigerCsDbContext dbContext)
+    {
+        Expression<Func<Ticket, bool>> fromGenesys = t => dbContext.TicketInteractions.Any(i =>
+            i.TicketId == t.TicketId && i.IsOriginatingInteraction && i.Source == InteractionContextSource.Genesys);
+        return AvailableToTake(dbContext).AndAlso(fromGenesys);
     }
 
     /// <summary>The ticket has an approval waiting for a decision (<c>TicketApprovals.Status = Pending</c>).</summary>

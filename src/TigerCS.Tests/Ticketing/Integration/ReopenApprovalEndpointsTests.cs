@@ -53,6 +53,9 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
     /// lifecycle, so the closure moment the reopen window is measured from is
     /// the one Close itself wrote.
     /// </summary>
+    /// <summary>The Department Employee the last seeded closed ticket is assigned to (an employee sees only tickets assigned to them).</summary>
+    private HttpClient? _assignee;
+
     private async Task<(long TicketId, int DepartmentId, string ClosedRowVersion)> SeedClosedTicketAsync(
         HttpClient csClient, bool allowReopen = true)
     {
@@ -81,18 +84,13 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
 
         var workerClient = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
         var headClient = await ClientForAsync(Roles.DepartmentHead, departmentId);
-        var (_, _, workerId) = await _factory.SeedEmployeeAsync(Roles.DepartmentEmployee);
-        await _factory.AssignPrimaryDepartmentAsync(workerId, departmentId);
+        var workerId = TigerCsApiFactory.UserIdOf(workerClient);
+        _assignee = workerClient;   // the Department Employee the ticket is assigned to: the only employee who can see it
 
         var afterAssign = await (await headClient.PostAsJsonAsync(
                 $"/api/tickets/{ticketId}/assignment",
                 new AssignTicketRequestDto(workerId, Convert.FromBase64String(created.RowVersion))))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
-
-        // The assigned worker drives it; a second Department Employee client
-        // exists so the requester below is provably NOT the ticket's owner.
-        var ownerClient = _factory.CreateClient();
-        ownerClient.DefaultRequestHeaders.Authorization = workerClient.DefaultRequestHeaders.Authorization;
 
         var afterStatus = await (await headClient.PostAsJsonAsync(
                 $"/api/tickets/{ticketId}/status",
@@ -119,9 +117,12 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
         var agentClient = await ClientForAsync(Roles.CsAgent);
         var (ticketId, departmentId, closedRowVersion) = await SeedClosedTicketAsync(agentClient);
 
-        // 1. A Department Employee of the ticket's department — with no direct
-        //    Reopen and no ownership of this ticket — raises the request.
-        var requesterClient = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
+        // 1. The Department Employee the (closed) ticket is assigned to — with no direct Reopen — raises the request. A department
+        //    colleague the ticket is NOT assigned to cannot even open it (assignment-only visibility), so cannot ask.
+        var requesterClient = _assignee!;
+        var colleagueClient = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
+        Assert.Equal(HttpStatusCode.Forbidden, (await colleagueClient.GetAsync($"/api/tickets/{ticketId}/approvals")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await colleagueClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest())).StatusCode);
         var offered = await (await requesterClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
             .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
         var requestable = Assert.Single(offered!.RequestableApprovals);
@@ -242,14 +243,14 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
     {
         var agentClient = await ClientForAsync(Roles.CsAgent);
         var (ticketId, departmentId, _) = await SeedClosedTicketAsync(agentClient);
-        var requesterClient = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
+        var requesterClient = _assignee!;
 
         var blank = await requesterClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest("   "));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, blank.StatusCode);
 
         // A request type that forbids Reopen offers no Reopen Approval either.
         var (forbiddenTicketId, forbiddenDepartmentId, _) = await SeedClosedTicketAsync(agentClient, allowReopen: false);
-        var forbiddenRequester = await ClientForAsync(Roles.DepartmentEmployee, forbiddenDepartmentId);
+        var forbiddenRequester = _assignee!;
         var refused = await forbiddenRequester.PostAsJsonAsync($"/api/tickets/{forbiddenTicketId}/approvals", ReopenRequest());
         Assert.Equal(HttpStatusCode.UnprocessableEntity, refused.StatusCode);
 
@@ -264,7 +265,7 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
         var agentClient = await ClientForAsync(Roles.CsAgent);
         var (ticketId, departmentId, closedRowVersion) = await SeedClosedTicketAsync(agentClient);
 
-        var requesterClient = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
+        var requesterClient = _assignee!;
         var approval = await (await requesterClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest()))
             .Content.ReadFromJsonAsync<TicketApprovalDto>();
 

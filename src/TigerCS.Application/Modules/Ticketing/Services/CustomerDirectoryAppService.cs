@@ -39,7 +39,8 @@ public sealed class CustomerDirectoryAppService(
                 request.OpenOnly,
                 page,
                 pageSize,
-                ticketQueryAppService.ResolveAgentScope(callerEmployeeId, callerRoles)),
+                ticketQueryAppService.ResolveAgentScope(callerEmployeeId, callerRoles),
+                callerEmployeeId),
             cancellationToken);
 
         return new CustomerDirectoryListResultDto(result.Items, result.TotalCount, page, pageSize);
@@ -58,7 +59,8 @@ public sealed class CustomerDirectoryAppService(
 
         var visibleDepartmentIds = await ticketQueryAppService.ResolveVisibleDepartmentIdsAsync(callerEmployeeId, callerRoles, cancellationToken);
         var profile = await repository.GetProfileAsync(
-            identity, visibleDepartmentIds, cancellationToken, ticketQueryAppService.ResolveAgentScope(callerEmployeeId, callerRoles));
+            identity, visibleDepartmentIds, cancellationToken, ticketQueryAppService.ResolveAgentScope(callerEmployeeId, callerRoles),
+            callerEmployeeId);
 
         return profile is null
             ? CustomerDirectoryProfileResult.Failure(CustomerDirectoryProfileOutcome.NotFound)

@@ -79,7 +79,8 @@ public sealed record TicketQuery(
     Guid? OwnerVisibilityEmployeeId = null,
     bool IncludeClaimable = false,
     bool AvailableToTakeOnly = false,
-    bool DepartmentFilterIncludesClaimable = false);
+    bool DepartmentFilterIncludesClaimable = false,
+    bool IncludeGenesysIntake = false);
 
 public sealed record TicketQueryResult(IReadOnlyList<Ticket> Items, int TotalCount);
 
@@ -129,7 +130,8 @@ public sealed record CustomerHistoryQuery(
     string? UnitNumber = null,
     bool OrderActiveFirst = false,
     bool IncludeLinkedExternalIdentity = false,
-    Guid? AgentScopeEmployeeId = null);
+    Guid? AgentScopeEmployeeId = null,
+    Guid? OwnerVisibilityEmployeeId = null);
 
 /// <summary>
 /// <see cref="Tickets"/> is the newest-first page (bounded by
@@ -159,6 +161,7 @@ public sealed record CustomerHistoryQueryResult(
 /// <param name="AttentionLimit">Maximum attention rows to return.</param>
 /// <param name="AgentScopeEmployeeId">Set only for a restricted CS Agent: every count and attention row is limited to tickets assigned to, or handled on Genesys by, that employee (plus <paramref name="VisibleDepartmentIds"/>, empty for a CS Agent).</param>
 /// <param name="CreatedOnlyScope">The Genesys integration account: with <paramref name="AgentScopeEmployeeId"/>, only tickets that employee created.</param>
+/// <param name="IncludeGenesysIntake">An eligible Call Center CS Agent: also include the unassigned Genesys-originated tickets of the CS intake / classification queue (<c>TicketQueryFilters.GenesysIntake</c>).</param>
 public sealed record DashboardSnapshotQuery(
     IReadOnlyCollection<int>? VisibleDepartmentIds,
     Guid CallerEmployeeId,
@@ -167,7 +170,8 @@ public sealed record DashboardSnapshotQuery(
     TimeSpan AtRiskWindow,
     int AttentionLimit,
     Guid? AgentScopeEmployeeId = null,
-    bool CreatedOnlyScope = false);
+    bool CreatedOnlyScope = false,
+    bool IncludeGenesysIntake = false);
 
 /// <summary>One "requiring attention" row: the ticket plus its current SLA period's pending resolution deadline (null when no current period or the resolution clock already breached).</summary>
 public sealed record DashboardAttentionTicket(Ticket Ticket, DateTime? SlaDueAtUtc);
