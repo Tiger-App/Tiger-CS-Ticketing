@@ -2341,6 +2341,7 @@ a.ticket-header__customer-name:hover { text-decoration: underline; }
 a.customer-strip__name { color: var(--color-info); }
 a.customer-strip__name:hover { text-decoration: underline; }
 .customer-strip__name.is-muted { color: var(--color-text-secondary); font-weight: 600; }
+.customer-strip__name-note { margin: 2px 0 0; font-size: 12px; color: var(--color-text-secondary); }
 .customer-strip__hint { margin: 2px 0 0; font-size: 13px; color: var(--color-text-secondary); }
 .customer-strip__facts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-5); margin: 0; font-size: 14px; }
 .customer-strip__facts dt { font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-secondary); }

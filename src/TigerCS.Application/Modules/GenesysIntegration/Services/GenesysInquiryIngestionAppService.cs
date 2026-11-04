@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Abstractions;
@@ -343,7 +344,10 @@ public sealed class GenesysInquiryIngestionAppService(
                 AgentName: inquiry.AgentName,
                 InteractionStartedAtUtc: inquiry.StartedAtUtc,
                 Direction: inquiry.Direction,
-                CustomerName: inquiry.CustomerName ?? lookup.CustomerName,
+                // The name the channel collected wins - but only when it is a real name. A placeholder the flow sent for an
+                // unregistered caller ("NOT_REGISTERED") must not shut out a valid name the lookup found; the raw value is kept
+                // only when nothing better exists, so the audit trail still shows what was sent (display layers treat it as no name).
+                CustomerName: CustomerNameResolver.FirstValid(inquiry.CustomerName, lookup.CustomerName) ?? inquiry.CustomerName,
                 CustomerEmail: inquiry.CustomerEmail,
                 ServiceRequestId: serviceRequestId,
                 RequiresHumanFollowUp: humanSignal != GenesysHumanSignal.None));

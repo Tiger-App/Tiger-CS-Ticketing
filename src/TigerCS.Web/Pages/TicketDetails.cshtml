@@ -589,6 +589,10 @@ else
                     }
                     <span class="badge badge-source-@customer.StateCss">@customer.StateLabel</span>
                 </div>
+                @if (customer.NameNote is { } customerNameNote)
+                {
+                    <p class="customer-strip__name-note">@customerNameNote</p>
+                }
                 @if (customer.Hint is { } customerHint)
                 {
                     <p class="customer-strip__hint">@customerHint</p>
@@ -901,8 +905,9 @@ else
                         </div>
                         @if (hasCrmBuyer)
                         {
-                            @* The customer is a linked record, never static text. *@
-                            <div class="facts-row"><dt>Customer</dt><dd>@if (Model.CustomerProfileHref is { } factsProfileHref && t.CrmBuyerCustomerName is not null) { <a class="ticket-id-link" href="@factsProfileHref">@t.CrmBuyerCustomerName</a> } else { @(t.CrmBuyerCustomerName ?? "—") }</dd></div>
+                            @* The customer is a linked record, never static text. A placeholder snapshot ("NOT_REGISTERED") is not a name. *@
+                            var factsCrmName = TigerCS.Application.Modules.Notifications.Services.CustomerNameValidator.Sanitize(t.CrmBuyerCustomerName);
+                            <div class="facts-row"><dt>Customer</dt><dd>@if (Model.CustomerProfileHref is { } factsProfileHref && factsCrmName is not null) { <a class="ticket-id-link" href="@factsProfileHref">@factsCrmName</a> } else { @(factsCrmName ?? "—") }</dd></div>
                             <div class="facts-row"><dt>Project</dt><dd>@(t.CrmBuyerProjectName ?? "—")</dd></div>
                             <div class="facts-row"><dt>Unit Number</dt><dd>@(t.CrmBuyerUnitNumber ?? "—")</dd></div>
                             <div class="facts-row"><dt>CRM Unit ID</dt><dd class="id-fallback">#@t.CrmBuyerUnitId</dd></div>
