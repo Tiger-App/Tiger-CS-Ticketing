@@ -60,7 +60,7 @@ The mechanism already exists and is kept: **Take Ownership** (`POST api/tickets/
 
 ## 7. Test results
 
-`dotnet test src/TigerCS.Tests` → **7,428 passed, 0 failed, 90 skipped** (the skipped tests are the pre-existing SQL Server / Hangfire / real-DB suites that need infrastructure this environment does not have, so e.g. `TakeOwnershipSqlServerTests` were **not** run here — run them in CI before merging).
+`dotnet test src/TigerCS.Tests` → **7,428 passed, 0 failed, 90 skipped** (the skipped tests are the SQL Server suites this environment cannot run; CI ran them and caught one assertion in `TakeOwnershipSqlServerTests` that encoded the old "personal list never holds the pool" rule, now updated to "holds only the Genesys-originated part").
 
 New: `AssignmentBasedVisibilityEndpointsTests` (18, real HTTP pipeline) and `GenesysIntakeSqliteTests` (2, real SQL): own ticket; own ticket from another department; colleague's and unassigned tickets (list/detail/search/totals/department queue); direct access by id on 13 read and 9 write endpoints; dashboard counts; Closed tab; reassignment and transfer; CS Manager/System Administrator/Supervisor/GM see all; Department Head and Reporting User unchanged; a permission Grant never widens visibility; Genesys intake (eligible agent sees unassigned Genesys work in the default Queue, read-only; manual/other-department/active-AI/assigned/closed excluded; leaves the queue once assigned or taken; employees and ineligible agents never see it). Existing Genesys service-account (`TicketVisibilityByRoleTests`, `ReadOnlyRolesAndServiceIdentityEndpointTests`), Supervisor and reporting tests pass unchanged.
 A mutation check (disabling `IsAssignmentOnlyEmployee`) makes 9 of the new tests fail.
