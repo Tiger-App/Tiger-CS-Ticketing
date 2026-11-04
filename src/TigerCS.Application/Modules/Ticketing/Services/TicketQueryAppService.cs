@@ -33,7 +33,8 @@ public sealed class TicketQueryAppService(
     IServiceIdentityRegistry? serviceIdentities = null,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
     IEmployeeRepository? employeeRepository = null,
-    TicketClaimPolicy? claimPolicy = null)
+    TicketClaimPolicy? claimPolicy = null,
+    DefaultClassificationService? defaultClassification = null)
 {
     /// <summary>Whether the caller may use the supervisor escalation-review filter (<c>escalated=true</c>).</summary>
     public static bool CanReviewEscalations(IReadOnlyCollection<string> callerRoles) =>
@@ -178,6 +179,20 @@ public sealed class TicketQueryAppService(
                 ticket.TicketStatus, ticket.ResolutionOutcome, closedAt, timeProvider.GetUtcNow().UtcDateTime,
                 currentResolution?.ClosedForCustomerInactivity == true)
         };
+
+        detail = detail with
+        {
+            CanCorrectClassification = ticket.TicketStatus != TicketStatus.Closed
+                && accessLevel == TicketAccessLevel.Full
+                && ticket.CurrentOwnerEmployeeId == callerEmployeeId
+                && callerRoles.Contains(TigerCS.Domain.Modules.IdentityAndAccess.Roles.CsAgent)
+        };
+
+        // Whether the stored category + request type ARE the default classification (resolved from configuration, not from names on the ticket).
+        if (defaultClassification is not null)
+        {
+            detail = detail with { IsDefaultClassification = await defaultClassification.IsDefaultAsync(ticket.CategoryId, ticket.RequestTypeId, cancellationToken) };
+        }
 
         // Derived, never stored: the ticket's handoff state IS the state of
         // its one outstanding TicketAgentHandoff, read at the moment of the

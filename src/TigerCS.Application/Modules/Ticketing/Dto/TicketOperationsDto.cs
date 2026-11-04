@@ -138,6 +138,8 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="CanTakeOwnership">True when THIS caller may take ownership of this ticket right now - decided by the very same policy the <c>POST /ownership</c> endpoint applies (Call Center agent, ticket unassigned, active, human-handling, no pending approval), so the UI shows the action exactly when the API would accept it. Populated on detail reads.</param>
 /// <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
 /// <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
+/// <param name="IsDefaultClassification">True when the ticket carries the approved default classification (Customer Services / General / General) - read from the stored category and request type, never inferred from a name. The UI shows "Customer Services / General" and keeps Reclassify available.</param>
+/// <param name="CanCorrectClassification">True when the caller is the CS Agent this ticket is assigned to and it is not closed: they may review and correct its Department, Category and Request Type through the classification action (the owner, SLA, status and history are preserved).</param>
 /// <param name="IsClassified">False while the ticket has no Category yet — an inquiry captured before anyone read the request. The UI shows "Unclassified" and offers the classify action rather than rendering a missing category.</param>
 /// <param name="FirstHandledByEmployeeId">The first mapped Genesys agent who handled the originating interaction; null for non-Genesys tickets and when no agent was recorded. Never changes after it is set, and is separate from <c>CurrentOwnerEmployeeId</c>.</param>
 /// <param name="ResolvedByEmployeeId">Who recorded the current resolution; null until resolved (and for system closures this is the system actor on the resolution row).</param>
@@ -212,6 +214,8 @@ public sealed record TicketDetailDto(
     string? FirstHandledByName = null,
     string? ResolvedByName = null,
     bool CanTakeOwnership = false,
+    bool IsDefaultClassification = false,
+    bool CanCorrectClassification = false,
     string? ExternalCustomerName = null);
 
 public enum TicketQueryOutcome
@@ -347,7 +351,10 @@ public enum TicketMutationOutcome
     ClaimBlockedByActiveAiConversation,
 
     /// <summary>Take Ownership: the ticket has a pending approval and stays with its approvers.</summary>
-    ClaimBlockedByPendingApproval
+    ClaimBlockedByPendingApproval,
+
+    /// <summary>The classification cannot be completed with a valid request type because the target department has no usable General request type. Nothing was changed; run EnsureDefaultGeneralClassification.sql.</summary>
+    DefaultClassificationNotConfigured
 }
 
 public sealed record TicketMutationResult(TicketMutationOutcome Outcome, TicketDetailDto? Response = null)

@@ -241,7 +241,7 @@ else
                                from, the form is replaced by the reason and the existing administrative path: Classify is never offered
                                as something to do while it cannot be completed. *@
                             <details class="disclosure" id="action-classify" data-action="classify" open="@(Model.OpenSection == "classify" ? "open" : null)">
-                                <summary class="btn btn-sm@(Model.ClassifyNotice is null ? Rec("classify") : "")">Classify@(Model.ClassifyNotice is null ? "" : " (not available)")</summary>
+                                <summary class="btn btn-sm@(Model.ClassifyNotice is null ? Rec("classify") : "")">@(t.IsDefaultClassification || t.CanCorrectClassification ? "Reclassify" : "Classify")@(Model.ClassifyNotice is null ? "" : " (not available)")</summary>
                                 <div class="disclosure__panel">
                                     @if (Model.ClassifyNotice is { } classifyNotice)
                                     {
@@ -706,8 +706,17 @@ else
                             <div class="facts-section__title">Request Details</div>
                             <dl class="request-facts">
                                 @* An unclassified ticket says so plainly — a real state, not missing data. Categories are shown by name, never by id. *@
-                                <div class="facts-row"><dt>Category</dt><dd>@(t.CategoryId is null ? "Not yet classified" : Model.CategoryName ?? "Classified")</dd></div>
-                                <div class="facts-row"><dt>Request type</dt><dd>@(t.RequestTypeName ?? "Not yet classified")</dd></div>
+                                @* The approved default (a department's own General) is a real, stored classification - shown as such, and replaceable through Reclassify. *@
+                                @if (t.IsDefaultClassification)
+                                {
+                                    <div class="facts-row"><dt>Category</dt><dd>@(Model.CategoryName ?? TigerCS.Application.Modules.Ticketing.Services.DefaultClassificationService.CategoryName)</dd></div>
+                                    <div class="facts-row"><dt>Request type</dt><dd>@(t.RequestTypeName ?? TigerCS.Application.Modules.Ticketing.Services.DefaultClassificationService.RequestTypeName)</dd></div>
+                                }
+                                else
+                                {
+                                    <div class="facts-row"><dt>Category</dt><dd>@(t.CategoryId is null ? "Not yet classified" : Model.CategoryName ?? "Classified")</dd></div>
+                                    <div class="facts-row"><dt>Request type</dt><dd>@(t.RequestTypeName ?? (t.CategoryId is null ? "Not yet classified" : "Not specified"))</dd></div>
+                                }
                                 @if (t.OriginatingChannelId is not null)
                                 {
                                     @* The channel the ticket ENTERED on, resolved from channel configuration by id (still named once deactivated). *@

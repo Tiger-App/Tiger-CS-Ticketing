@@ -177,6 +177,13 @@ public class GenesysController(
                     + " No ticket was created. Omit requestType to create the ticket for human classification, or send a valid one.",
                 statusCode: StatusCodes.Status422UnprocessableEntity),
 
+            GenesysIngestionOutcome.DefaultClassificationNotConfigured => Problem(
+                type: "https://tigercs.internal/problems/default-classification-not-configured",
+                title: "The department's General classification is not configured",
+                detail: (result.Detail ?? "The department has no usable General category / request type.")
+                    + " No ticket was created and nothing was moved. Run EnsureDefaultGeneralClassification.sql; redelivering the same inquiry then succeeds.",
+                statusCode: StatusCodes.Status409Conflict),
+
             GenesysIngestionOutcome.ChannelNotConfigured => Problem(
                 type: "https://tigercs.internal/problems/genesys-channel-not-configured",
                 title: "The inquiry's channel is not configured",
@@ -314,6 +321,13 @@ public class GenesysController(
                 title: "The request type cannot be used",
                 detail: result.Detail,
                 statusCode: StatusCodes.Status422UnprocessableEntity),
+
+            GenesysTicketUpdateOutcome.DefaultClassificationNotConfigured => Problem(
+                type: "https://tigercs.internal/problems/default-classification-not-configured",
+                title: "The department's General classification is not configured",
+                detail: (result.Detail ?? "The department has no usable General category / request type.")
+                    + " The ticket was not handed to a person without a valid classification. Run EnsureDefaultGeneralClassification.sql and resend.",
+                statusCode: StatusCodes.Status409Conflict),
 
             GenesysTicketUpdateOutcome.RequestTypeConflict => Problem(
                 type: "https://tigercs.internal/problems/genesys-request-type-conflict",

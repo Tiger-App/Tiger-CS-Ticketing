@@ -191,7 +191,10 @@ public enum GenesysTicketUpdateOutcome
     TicketClosed,
 
     /// <summary>The ticket changed underneath the classification; nothing was applied, retry.</summary>
-    ConcurrencyConflict
+    ConcurrencyConflict,
+
+    /// <summary>A person was asked to handle a ticket that has no valid classification and whose (valid) department has no usable General. The error is audited; run <c>EnsureDefaultGeneralClassification.sql</c> and resend.</summary>
+    DefaultClassificationNotConfigured
 }
 
 /// <summary>

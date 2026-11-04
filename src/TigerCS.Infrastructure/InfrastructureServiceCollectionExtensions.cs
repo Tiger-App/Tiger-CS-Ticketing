@@ -219,6 +219,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ITicketingUnitOfWork, TicketingUnitOfWork>();
         services.AddScoped<IntakeRecordAppService>();
         services.AddScoped<CustomerLookupAppService>();
+        // The approved default classification (Customer Services / General): resolved from configuration, never created at runtime.
+        services.AddScoped<DefaultClassificationService>();
+        services.AddScoped<IDefaultClassificationBackfillRepository, DefaultClassificationBackfillRepository>();
+        services.AddScoped<DefaultClassificationBackfillService>();
         services.AddScoped<TicketCreationAppService>();
         services.AddScoped<TicketQueryAppService>();
         services.AddScoped<TicketAssignmentAppService>();
