@@ -38,4 +38,23 @@ public class RemainingUnassignedDiagnosticScriptTests
         Assert.Contains("TG-REG-20261102-0026", sql, StringComparison.Ordinal);
         Assert.Contains("TG-ACC-20261102-0023", sql, StringComparison.Ordinal);
     }
+
+    private static string StaleAiScript([CallerFilePath] string here = "") =>
+        File.ReadAllText(Path.GetFullPath(Path.Combine(Path.GetDirectoryName(here)!, "..", "..", "..", "..", "Diagnose_TigerCS_PROD_StaleAiBackfill_12_24_48_ReadOnly.sql")));
+
+    [Fact]
+    public void TheStaleAiDiagnostic_IsReadOnly_AndComparesTwelveTwentyFourAndFortyEightHours()
+    {
+        var raw = StaleAiScript();
+        var sql = Regex.Replace(raw, @"/\*.*?\*/|--[^\r\n]*", string.Empty, RegexOptions.Singleline);
+
+        Assert.DoesNotMatch(new Regex(@"\b(INSERT\s+(INTO\s+)?(?!#)dbo\.|UPDATE\s+(?!#)\w*\.?\w+\s+SET|DELETE\s+FROM|MERGE\s|TRUNCATE\s|ALTER\s|DROP\s+(TABLE|INDEX|PROCEDURE|VIEW)\s+(?!#)|CREATE\s+(TABLE|INDEX|PROCEDURE|VIEW)\s+(?!#)|EXEC(UTE)?\s)", RegexOptions.IgnoreCase), sql);
+        Assert.Contains("READ UNCOMMITTED", sql, StringComparison.Ordinal);
+        Assert.Contains("DB_NAME() <> @ExpectedDb", sql, StringComparison.Ordinal);
+        Assert.Contains("FROM (VALUES (12), (24), (48)) th(Hours)", sql, StringComparison.Ordinal);
+        // Same protections as the application: pending approvals out, open handoffs and human evidence always eligible, "more than" the threshold.
+        Assert.Contains("ap.Status = 1", sql, StringComparison.Ordinal);
+        Assert.Contains("h.Status IN (2, 3, 4)", sql, StringComparison.Ordinal);
+        Assert.Contains("> th.Hours * 3600", sql, StringComparison.Ordinal);
+    }
 }
