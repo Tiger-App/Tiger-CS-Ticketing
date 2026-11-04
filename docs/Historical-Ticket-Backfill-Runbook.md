@@ -1,6 +1,6 @@
 # Historical ticket backfill — classification and CS Agent assignment
 
-Script: `Backfill_TigerCS_PUBLISHED_ClassificationAndAssignment.sql` (default `@DryRun = 1`, database guard `@ExpectedDb`).
+Script: `Backfill_TigerCS_PUBLISHED_ClassificationAndAssignment.sql` (default `@DryRun = 1`, database guard `@ExpectedDb = TigerCS_Ticketing_Prod`, confirmed).
 **Not executed by the application, CI or any scheduler. Production only after written approval.**
 
 ## Rules reused (no new business rule)
@@ -23,7 +23,7 @@ Script: `Backfill_TigerCS_PUBLISHED_ClassificationAndAssignment.sql` (default `@
 
 Closed and Resolved tickets can be re-classified (a label only) but are never assigned or reopened.
 
-## Decisions to confirm at review
+## Decisions (approved)
 
 1. **Department is not changed.** Only an explicit transfer / request-type routing event moves a department in the existing workflow; report 9b lists mismatches for review.
 2. **A valid department with no usable General of its own** is reported (`DEPT_GENERAL_MISSING`) and left alone — run `EnsureDefaultGeneralClassification.sql` first. It is never swapped for Customer Services'.
@@ -33,7 +33,9 @@ Closed and Resolved tickets can be re-classified (a label only) but are never as
 ## Run
 
 1. Backup, or restore a copy. 2. Run with defaults: a real transaction that performs every write and check, prints reports 1–10, then **rolls back**.
-3. Review: 1 (counts), 2 (configuration), 3–4 (classification), 5–7 (assignment), 8 (all `PASS`), 9 (review only), 10 (modification log).
+3. Review: 1 and 1b (counts, 1b by Open / InProgress / Pending / Resolved / Closed), 2 (configuration), 3–4 (classification), 5–7 (assignment), 8 (all `PASS`), 9 (review only), 10 (modification log).
 4. After sign-off: copy `ClassificationToApply` / `AssignmentToApply` into `@ApprovedClassificationCount` / `@ApprovedAssignmentCount`, settle the service-account gate, set `@DryRun = 0`. A changed count aborts the run.
 
 **Rerun:** safe. Fixed tickets no longer match a candidate rule; unfixable ones are reported again. **Rollback:** each `ApplyDefaultClassification` audit row holds the previous category / request type / workflow template; each assignment is a superseded + new `TicketAssignments` pair under `CorrelationId = BatchId`; the batch row holds the cursor pre-image. No rollback script is shipped yet.
+
+**Run the dry run on a restored copy of Production, not on the live server:** it takes row locks (the Call Center rotation cursor, agent rows, planned tickets) inside its transaction before rolling back.

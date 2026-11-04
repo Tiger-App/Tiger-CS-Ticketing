@@ -1,7 +1,7 @@
 /*
 ================================================================================
  Backfill_TigerCS_PUBLISHED_ClassificationAndAssignment.sql
- Database : TigerCS_Ticketing_Published   (edit @ExpectedDb for another database; Production only after written approval)
+ Database : TigerCS_Ticketing_Prod   (guarded by @ExpectedDb). Dry run on a RESTORED COPY first; the live run needs explicit written approval.
 
  Applies the CURRENT classification and assignment rules to HISTORICAL tickets. It introduces NO new rule: every decision below is a set-based
  transcription of an existing application service, named next to the block that uses it.
@@ -62,7 +62,7 @@ SET LOCK_TIMEOUT 20000;
 
 -- ------------------------------------------------ PARAMETERS ----------------------------------------------------------------
 DECLARE @DryRun                       bit              = 1;      -- 1 = everything, then ROLL BACK (default).  0 = COMMIT.
-DECLARE @ExpectedDb                   sysname          = N'TigerCS_Ticketing_Published';
+DECLARE @ExpectedDb                   sysname          = N'TigerCS_Ticketing_Prod';   -- confirmed Production name; the guard below refuses any other database
 DECLARE @RunClassification            bit              = 1;      -- phase switches (both on by default)
 DECLARE @RunAssignment                bit              = 1;
 DECLARE @IncludeCategoryOnly          bit              = 0;      -- DefaultClassificationBackfillOptions.IncludeCategoryOnly (default off)
@@ -536,12 +536,24 @@ PRINT CASE WHEN @DryRun = 1 THEN N'DRY RUN - every write and check was performed
 -- ======================================================================================================================
 -- REPORTS (read from table variables, so a dry run shows exactly what it would have written)
 -- ======================================================================================================================
--- 1. Run summary and the commit gates
+-- 1. Run summary and the commit gates (1b below: the same counts by ticket status)
 SELECT CASE WHEN @DryRun = 1 THEN 'DRY RUN (rolled back)' ELSE 'COMMITTED' END AS Mode, DB_NAME() AS [Database], @BatchId AS BatchId,
        @ClsApply AS ClassificationToApply, @ClsGap AS ClassificationBlockedByConfiguration,
        @AsgApply AS AssignmentToApply, @AsgHandler AS AssignmentToConfirmedHandler, @AsgRotation AS AssignmentToSharedRotation, @AsgNoAgent AS AssignmentBlockedNoAgent,
        @N AS EligibleCsAgents, @Cursor AS RotationCursorBefore, ISNULL(@LastAgent, @Cursor) AS RotationCursorAfter,
        (SELECT COUNT(*) FROM @Check WHERE Result = 'FAIL') AS FailedChecks;
+
+-- 1b. Counts by status (1 Open, 2 InProgress, 3 PendingCustomer, 4 PendingThirdParty, 5 Resolved, 6 Closed)
+SELECT x.Category, CASE x.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' WHEN 3 THEN 'PendingCustomer' WHEN 4 THEN 'PendingThirdParty'
+                                       WHEN 5 THEN 'Resolved' WHEN 6 THEN 'Closed' END AS Status, COUNT(*) AS Tickets
+FROM (
+    SELECT 'A. Classification correction (will change)' AS Category, TicketStatus FROM @Cls WHERE Decision = 'APPLY'
+    UNION ALL SELECT 'B. Assignment (will change)', TicketStatus FROM @Asg WHERE AgentId IS NOT NULL
+    UNION ALL SELECT 'C. Manual review: classification blocked (department has no usable General / CS General)', TicketStatus FROM @Cls WHERE Decision IN ('DEPT_GENERAL_MISSING', 'CONFIG_MISSING_CS')
+    UNION ALL SELECT 'C. Manual review: assignment blocked (no eligible CS Agent / assignment disabled)', TicketStatus FROM @Asg WHERE Class IN ('NO_ELIGIBLE_AGENT', 'ASSIGNMENT_DISABLED')
+    UNION ALL SELECT 'D. Left alone: category-only classification', TicketStatus FROM @Cls WHERE Decision = 'CATEGORY_ONLY_KEPT'
+    UNION ALL SELECT 'D. Left alone: unowned but held back (' + Class + ')', TicketStatus FROM @Asg WHERE AgentId IS NULL AND Class IN ('PENDING_APPROVAL', 'ACTIVE_AI', 'TOO_NEW', 'AI_ENDED_NO_HUMAN', 'COLLECTIONS')
+) x GROUP BY x.Category, x.TicketStatus ORDER BY x.Category, x.TicketStatus;
 
 -- 2. Configuration: Customer Services default and every department's own General
 SELECT Code AS Department, CASE WHEN Gap IS NULL THEN 'OK' ELSE Gap END AS GeneralConfiguration, CategoryId, RequestTypeId, WorkflowTemplateId,
