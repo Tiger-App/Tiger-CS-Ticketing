@@ -659,7 +659,10 @@ public class TicketLifecycleAppServiceTests
         var member = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(
             member, ticket.CurrentDepartmentId, isPrimary: true, now.AddYears(-1), assignedByEmployeeId: null));
+        // A Department Head of the department has the department-level view; a Department Employee has none (assignment-only visibility).
         Assert.True(await TicketVisibilityRule.CanViewDepartmentAsync(
+            f.DepartmentAssignments, member, [Roles.DepartmentHead], ticket.CurrentDepartmentId));
+        Assert.False(await TicketVisibilityRule.CanViewDepartmentAsync(
             f.DepartmentAssignments, member, [Roles.DepartmentEmployee], ticket.CurrentDepartmentId));
     }
 

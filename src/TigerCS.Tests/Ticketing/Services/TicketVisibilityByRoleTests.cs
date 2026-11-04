@@ -256,10 +256,16 @@ public class TicketVisibilityByRoleTests
         var humanAgent = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(employee, Facilities, true, DateTime.UtcNow, null));
 
-        // Department Employee: their own department only — a Genesys ticket in it is visible only because of the department.
+        // Department Employee: only tickets assigned to them — their department's tickets (a Genesys one included) are not theirs.
+        Assert.Empty(await QueueIdsAsync(f, employee, Roles.DepartmentEmployee));
+        Assert.Equal(TicketQueryOutcome.Forbidden, (await f.Query.GetDetailAsync(employee, [Roles.DepartmentEmployee], manual.TicketId)).Outcome);
+
+        // Department Head: unchanged — their own department's tickets (the approved department-management view).
+        var head = Guid.NewGuid();
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(head, Facilities, true, DateTime.UtcNow, null));
         Assert.Equal(
             new[] { reassigned.TicketId, manual.TicketId }.Order().ToArray(),
-            await QueueIdsAsync(f, employee, Roles.DepartmentEmployee));
+            await QueueIdsAsync(f, head, Roles.DepartmentHead));
 
         // Human CS Agent: assigned/handled/created only — Genesys-created tickets are not theirs.
         Assert.Empty(await QueueIdsAsync(f, humanAgent, Roles.CsAgent));

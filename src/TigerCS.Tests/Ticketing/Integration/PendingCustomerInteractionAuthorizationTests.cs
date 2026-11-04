@@ -165,15 +165,18 @@ public class PendingCustomerInteractionAuthorizationTests(TigerCsApiFactory fact
     }
 
     [Fact]
-    public async Task DepartmentEmployeeOfTheTicketsDepartment_CanActOnTheWork()
+    public async Task DepartmentEmployeeAssignedTheTicket_CanActOnTheWork_AButAColleagueOfTheSameDepartmentCannot()
     {
-        // Not a CS-layer role: this one reaches the work purely through
-        // department membership, which is the other half of the visibility
-        // rule the controller now relies on.
+        // Not a CS-layer role: a Department Employee reaches the work only through the ticket assigned to them (assignment-only
+        // visibility), never through department membership.
         var (genesys, _) = await ClientForAsync(Roles.CsAgent);
-        var (_, handoffId, departmentId) = await WaitingInteractionAsync(genesys);
+        var (ticketId, handoffId, departmentId) = await WaitingInteractionAsync(genesys);
+
+        var (colleague, _) = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
+        Assert.Equal(HttpStatusCode.Forbidden, (await colleague.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { })).StatusCode);
 
         var (worker, workerId) = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
+        await OwnAsync(ticketId, workerId);
 
         var started = await worker.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { });
 

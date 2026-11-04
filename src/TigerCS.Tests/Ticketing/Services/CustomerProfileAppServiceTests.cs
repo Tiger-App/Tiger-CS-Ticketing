@@ -367,17 +367,33 @@ public class CustomerProfileAppServiceTests
     }
 
     [Fact]
-    public async Task GetForTicketAsync_DepartmentEmployeeInScope_Returns200()
+    public async Task GetForTicketAsync_DepartmentEmployeeAssignedTheTicket_Returns200()
     {
         var f = CreateService();
         var employeeId = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(employeeId, 2, true, DateTime.UtcNow, null));
         var ticket = await SeedCrmBuyerTicketAsync(f.Tickets, f.IntakeRecords, 2, 493575, "+971501234567");
+        ticket.AssignTo(employeeId);
         f.CrmGateway.Returns(CrmBuyerLookupResult.Success([Buyer(493575, Unit(101, "2508", "Nobles Tower"))]));
 
         var result = await f.Service.GetForTicketAsync(employeeId, [Roles.DepartmentEmployee], ticket.TicketId);
 
         Assert.Equal(CustomerProfileOutcome.Success, result.Outcome);
         Assert.Equal("Found", result.Response!.Status);
+    }
+
+    [Fact]
+    public async Task GetForTicketAsync_DepartmentEmployee_CannotReadTheCustomerOfAColleaguesTicket_OrAnUnassignedOne_DoesNotCallCrm()
+    {
+        var f = CreateService();
+        var employeeId = Guid.NewGuid();
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(employeeId, 2, true, DateTime.UtcNow, null));
+        var colleagues = await SeedCrmBuyerTicketAsync(f.Tickets, f.IntakeRecords, 2, 493575, "+971501234567");
+        colleagues.AssignTo(Guid.NewGuid());
+        var unassigned = await SeedCrmBuyerTicketAsync(f.Tickets, f.IntakeRecords, 2, 493575, "+971501234567");
+
+        Assert.Equal(CustomerProfileOutcome.Forbidden, (await f.Service.GetForTicketAsync(employeeId, [Roles.DepartmentEmployee], colleagues.TicketId)).Outcome);
+        Assert.Equal(CustomerProfileOutcome.Forbidden, (await f.Service.GetForTicketAsync(employeeId, [Roles.DepartmentEmployee], unassigned.TicketId)).Outcome);
+        Assert.Equal(0, f.CrmGateway.CallCount);
     }
 }

@@ -193,9 +193,13 @@ public class UnauthorizedRolesStillDeniedTests : IClassFixture<TigerCsApiFactory
         var (client, employeeId) = await CreateClientAsync(Roles.DepartmentEmployee);
         await _factory.AssignPrimaryDepartmentAsync(employeeId, ticket.CurrentDepartmentId);
 
-        var rowVersion = Convert.FromBase64String(ticket.RowVersion);
+        // Department membership alone shows an employee nothing: the ticket is not theirs until it is assigned to them.
+        Assert.Equal(HttpStatusCode.Forbidden, (await client.GetAsync($"/api/tickets/{ticket.TicketId}")).StatusCode);
+        await _factory.AssignOwnerAsync(ticket.TicketId, employeeId);
+        var detail = await client.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{ticket.TicketId}");
+        var rowVersion = Convert.FromBase64String(detail!.RowVersion);
 
-        // Visible (own department) — but no assignment capability at all,
+        // Visible (assigned to them) — but no assignment capability at all,
         // not even self-claim, and never Transfer or Close.
         Assert.Equal(HttpStatusCode.OK, (await client.GetAsync($"/api/tickets/{ticket.TicketId}")).StatusCode);
 
@@ -203,7 +207,9 @@ public class UnauthorizedRolesStillDeniedTests : IClassFixture<TigerCsApiFactory
             $"/api/tickets/{ticket.TicketId}/assignment", new AssignTicketRequestDto(employeeId, rowVersion))).StatusCode);
         Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync(
             $"/api/tickets/{ticket.TicketId}/transfer", new TransferTicketRequestDto(ticket.CurrentDepartmentId + 1, "n/a", rowVersion))).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, (await client.PostAsJsonAsync(
+        // Close: only the ticket's current owner may close it (the existing ownership rule), and only once it is resolved - an unresolved
+        // ticket is a 409, never a role-based close for the employee.
+        Assert.Equal(HttpStatusCode.Conflict, (await client.PostAsJsonAsync(
             $"/api/tickets/{ticket.TicketId}/close", new CloseTicketRequestDto(rowVersion))).StatusCode);
     }
 

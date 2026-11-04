@@ -278,6 +278,14 @@ public class TicketEscalationAppServiceTests
 
         var inside = await CreateAsync();
         AssignTo(inside.Sla, outsider, TicketDepartmentId);
+        if (role == Roles.DepartmentEmployee)
+        {
+            // A Department Employee acts only on tickets assigned to them (department membership alone shows them nothing).
+            var unassignedColleagueView = await inside.Service.EscalateAsync(outsider, [role], inside.Ticket.TicketId, Request());
+            Assert.Equal(SlaOperationOutcome.Forbidden, unassignedColleagueView.Outcome);
+            inside.Ticket.AssignTo(outsider);
+        }
+
         var permitted = await inside.Service.EscalateAsync(outsider, [role], inside.Ticket.TicketId, Request());
 
         var outside = await CreateAsync();

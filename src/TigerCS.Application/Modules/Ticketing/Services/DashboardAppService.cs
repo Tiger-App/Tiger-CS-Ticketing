@@ -76,7 +76,8 @@ public sealed class DashboardAppService(
                 AtRiskWindow,
                 AttentionLimit,
                 agentScope,
-                ticketQueryAppService.IsGenesysIntegration(callerEmployeeId, callerRoles)),
+                ticketQueryAppService.IsGenesysIntegration(callerEmployeeId, callerRoles),
+                await ticketQueryAppService.SeesGenesysIntakeAsync(callerEmployeeId, callerRoles, cancellationToken)),
             cancellationToken);
 
         return new DashboardSummaryDto(
@@ -144,7 +145,8 @@ public sealed class DashboardAppService(
             AgentScopeEmployeeId: agentScope,
             DepartmentId: request.DepartmentId,
             CreatedOnlyScope: ticketQueryAppService.IsGenesysIntegration(callerEmployeeId, callerRoles),
-            OwnerVisibilityEmployeeId: callerEmployeeId);
+            OwnerVisibilityEmployeeId: callerEmployeeId,
+            IncludeGenesysIntake: await ticketQueryAppService.SeesGenesysIntakeAsync(callerEmployeeId, callerRoles, cancellationToken));
 
         var snapshot = await dashboardQueryRepository.GetOverviewAsync(query, cancellationToken);
 
