@@ -1,7 +1,7 @@
 @{
     var currentUser = CurrentUser.FromPrincipal(User);
     // CompactShell: pages that want the one-row header (brand · navigation · search · account), e.g. Ticket Details.
-    var compact = ViewData["CompactShell"] is true;
+    var compact = ViewData["CompactShell"] is not false;
 }
 <header class="app-header@(compact ? " app-header--shell" : "")">
     <a class="app-header__brand" href="/Dashboard" aria-label="Tiger Ticketing home">

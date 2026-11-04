@@ -9,7 +9,7 @@
 .tower-multi__list li { padding: .15rem 0; }
 .tower-multi__list li[hidden] { display: none; }
 .tower-multi__list label { display: flex; gap: .45rem; align-items: center; cursor: pointer; }
-.tower-multi__empty { color: var(--muted, #667085); font-size: .85rem; }
+.tower-multi__empty { color: var(--muted, #667085); font-size: 13px; }
 
 /* Phones: the filter fields stack full width; the dropdown panel fills the field and never runs past the screen edge. */
 @media (max-width: 640px) {
