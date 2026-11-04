@@ -350,6 +350,7 @@ else
                                                 <span class="field-hint">No other active department is available to transfer to.</span>
                                             }
                                         </div>
+                                        <partial name="_CollectionsTowerUnit" model="@(new TigerCS.Web.Models.CollectionsTowerUnitFields("transfer", "Transfer", "#Transfer_TargetDepartmentId", Model.CollectionsDepartmentIds, t.TicketId))" />
                                         <div class="field-group">
                                             <label class="field-label" asp-for="Transfer.ReasonCode">Why is it being transferred?</label>
                                             <select class="field-select" asp-for="Transfer.ReasonCode">
@@ -540,6 +541,7 @@ else
                                                     asp-items="@(new SelectList(Model.ReopenTargets, nameof(DepartmentDto.DepartmentId), nameof(DepartmentDto.Name)))"></select>
                                             <span class="field-hint">Who takes this on. Keep the current department or hand it to another — either way the previous assignee is cleared and the ticket is re-assigned automatically, or waits in that department's queue.</span>
                                         </div>
+                                        <partial name="_CollectionsTowerUnit" model="@(new TigerCS.Web.Models.CollectionsTowerUnitFields("reopen", "Reopen", "#Reopen_TargetDepartmentId", Model.CollectionsDepartmentIds, t.TicketId))" />
                                         <div class="field-group">
                                             <label class="field-label" asp-for="Reopen.Reason">Reason</label>
                                             <textarea class="form-control" asp-for="Reopen.Reason" rows="2" required placeholder="Why is this ticket being reopened?"></textarea>
@@ -600,6 +602,32 @@ else
                         <div class="tw-fact__body">
                             <span class="tw-fact__k">Assigned To</span>
                             <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
+                            @if (Model.CanAssignInCollections && !isClosed)
+                            {
+                                <details class="tw-assign" data-collections-assign data-post-url="@Url.Page("TicketDetails", "CollectionsAssign", new { id = t.TicketId })">
+                                    <summary class="btn btn-sm">@(t.CurrentOwnerEmployeeId is null ? "Assign" : "Reassign")</summary>
+                                    <form method="post" asp-page-handler="CollectionsAssign" asp-route-id="@t.TicketId" class="tw-assign__panel">
+                                        <input type="hidden" asp-for="CollectionsAssign.RowVersionBase64" data-assign-rowversion />
+                                        <p class="tw-assign__current">Current: <strong data-assign-current>@(t.CurrentOwnerEmployeeId is null ? "No one assigned" : Model.OwnerName ?? "Assigned")</strong></p>
+                                        <input type="search" class="field-input" placeholder="Search Collections team" autocomplete="off" aria-label="Search Collections team" data-assign-search />
+                                        <select class="field-select" asp-for="CollectionsAssign.EmployeeId" size="6" aria-label="Collections team member" data-assign-select>
+                                            @foreach (var member in Model.AssignableEmployees.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase))
+                                            {
+                                                <option value="@member.EmployeeId" selected="@(member.EmployeeId == t.CurrentOwnerEmployeeId)" disabled="@(member.EmployeeId == t.CurrentOwnerEmployeeId)">@member.DisplayName@(member.EmployeeId == t.CurrentOwnerEmployeeId ? " (current)" : "")</option>
+                                            }
+                                        </select>
+                                        @if (Model.AssignableEmployees.Count == 0)
+                                        {
+                                            <span class="field-hint">@(Model.AssignableEmployeesOutcome == ApiOutcome.Success ? "No active members found in Collections." : "The Collections team could not be loaded. Reload the page.")</span>
+                                        }
+                                        <input type="text" class="field-input" asp-for="CollectionsAssign.Reason" maxlength="500" placeholder="Reason (optional)" autocomplete="off" aria-label="Reason (optional)" />
+                                        <div class="tw-assign__buttons">
+                                            <button type="submit" class="btn btn-gold btn-sm">Save</button>
+                                            <span class="tw-assign__status" role="status" data-assign-status></span>
+                                        </div>
+                                    </form>
+                                </details>
+                            }
                             <span class="tw-fact__sub"><span class="visually-hidden">Assigned Department: </span>@TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
                         </div>
                     </div>
@@ -756,6 +784,30 @@ else
                 @* ---- Activity: the timeline, notes, escalations ---- *@
                 <div class="tab-panel" id="panel-activity">
                     <div class="detail-layout">
+                        @if (Model.AssignmentHistory.Count > 0 || Model.CanAssignInCollections)
+                        {
+                            <div class="facts-panel facts-panel--flat" data-assignment-history-panel>
+                                <div class="facts-section__title">Assignment history <span class="timeline-zone">All times in @TicketDisplay.ActivityTimeZoneLabel</span></div>
+                                <p class="field-hint" data-assignment-history-empty hidden="@(Model.AssignmentHistory.Count > 0)">No assignment recorded yet.</p>
+                                <table class="assign-history" data-assignment-history hidden="@(Model.AssignmentHistory.Count == 0)">
+                                    <thead><tr><th>When</th><th>Type</th><th>From</th><th>To</th><th>By</th><th>Tower / unit</th><th>Reason</th></tr></thead>
+                                    <tbody>
+                                    @foreach (var h in Model.AssignmentHistory.OrderByDescending(h => h.ChangedAtUtc))
+                                    {
+                                        <tr>
+                                            <td>@TicketDisplay.DubaiTimestamp(h.ChangedAtUtc)</td>
+                                            <td>@h.Type</td>
+                                            <td>@(h.PreviousEmployeeName ?? "No one")</td>
+                                            <td>@h.NewEmployeeName</td>
+                                            <td>@h.ChangedByName</td>
+                                            <td>@(h.TowerCode is null && h.UnitNumber is null ? "—" : string.Join(" / ", new[] { h.TowerCode, h.UnitNumber }.Where(x => !string.IsNullOrWhiteSpace(x))))</td>
+                                            <td>@(h.Reason ?? "—")</td>
+                                        </tr>
+                                    }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
                         <div class="facts-panel facts-panel--flat">
                             <div class="facts-section__title">Timeline <span class="timeline-zone">All times in @TicketDisplay.ActivityTimeZoneLabel</span></div>
                             @if (Model.ActivityTimelineUnavailable)
@@ -1420,4 +1472,6 @@ else
         </aside>
         </div>
     </div>
+    <script src="~/js/ticket-collections-assign.js" asp-append-version="true"></script>
+    <script src="~/js/ticket-collections-tower-unit.js" asp-append-version="true"></script>
 }

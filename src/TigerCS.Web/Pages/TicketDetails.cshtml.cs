@@ -38,7 +38,8 @@ public sealed class TicketDetailsModel(
     UsersApiClient usersApiClient,
     TicketNameResolver nameResolver,
     CategoriesApiClient? categoriesApiClient = null,
-    RequestTypesApiClient? requestTypesApiClient = null) : PageModel
+    RequestTypesApiClient? requestTypesApiClient = null,
+    Microsoft.Extensions.Configuration.IConfiguration? configuration = null) : PageModel
 {
     public long TicketId { get; private set; }
 
@@ -420,6 +421,19 @@ public sealed class TicketDetailsModel(
     public string? ActionSuccess { get; set; }
 
     [BindProperty] public AssignInput Assign { get; set; } = new();
+    [BindProperty] public CollectionsAssignInput CollectionsAssign { get; set; } = new();
+
+    /// <summary>Whether the inline Assign / Reassign control beside "Assigned To" is offered: a Collections ticket the viewer may assign (the server's own answer, <c>TicketDetailDto.CanAssignInCollections</c>).</summary>
+    /// <summary>The Collections department(s) among the departments the Transfer and Reopen forms offer (matched by the configured code, never by name): moving there needs a Tower and a Unit.</summary>
+    public string CollectionsDepartmentIds => string.Join(',',
+        TransferTargets.Concat(ReopenTargets)
+            .Where(d => string.Equals(d.Code, configuration?["Collections:CollectionsDepartmentCode"] ?? "COL", StringComparison.OrdinalIgnoreCase))
+            .Select(d => d.DepartmentId).Distinct());
+
+    public bool CanAssignInCollections => Ticket is { CanAssignInCollections: true } && !IsReadOnlyAccess;
+
+    /// <summary>Every assignment event of the ticket (automatic and manual), oldest first. Empty for tickets without one.</summary>
+    public IReadOnlyList<TicketAssignmentHistoryItemDto> AssignmentHistory { get; private set; } = [];
     [BindProperty] public TransferInput Transfer { get; set; } = new();
     [BindProperty] public ClassifyInput Classify { get; set; } = new();
 
@@ -526,6 +540,69 @@ public sealed class TicketDetailsModel(
         return await HandleMutationAsync(transferred, "assign", "Ticket transferred and assigned.", cancellationToken);
     }
 
+    /// <summary>
+    /// The inline Assign / Reassign beside "Assigned To" on a Collections ticket. With script it answers JSON (the page updates in place); without, it redirects like every other action.
+    /// The Api decides who may do it (Collections team, manager, CS Manager) and whether the target is an active Collections employee; this only relays the choice.
+    /// </summary>
+    public async Task<IActionResult> OnPostCollectionsAssignAsync(long id, CancellationToken cancellationToken)
+    {
+        TicketId = id;
+        var wantsJson = string.Equals(Request.Headers["X-Requested-With"], "fetch", StringComparison.Ordinal);
+        string? failure = null;
+        ApiResult<TicketDetailDto>? result = null;
+        if (!Guid.TryParse(CollectionsAssign.EmployeeId, out var employeeId) || employeeId == Guid.Empty)
+        {
+            failure = "Choose who to assign the ticket to.";
+        }
+        else if (!TryDecodeRowVersion(CollectionsAssign.RowVersionBase64, out var rowVersion))
+        {
+            failure = "Could not read the ticket's current version. Reload the page and try again.";
+        }
+        else
+        {
+            var reason = string.IsNullOrWhiteSpace(CollectionsAssign.Reason) ? null : CollectionsAssign.Reason.Trim();
+            result = await ticketsApiClient.AssignAsync(id, new AssignTicketRequestDto(employeeId, rowVersion, null, reason), cancellationToken);
+            if (!result.IsSuccess)
+            {
+                failure = result.Outcome == ApiOutcome.UnprocessableEntity && result.Detail is null
+                    ? "That person cannot be assigned: choose an active member of the Collections team."
+                    : DescribeError(result.Outcome, result.Detail);
+            }
+        }
+
+        if (wantsJson)
+        {
+            if (failure is not null || result?.Value is not { } updated)
+            {
+                return new JsonResult(new { ok = false, message = failure ?? "The assignment could not be saved." });
+            }
+
+            var ownerName = updated.CurrentOwnerEmployeeId is { } owner
+                ? await nameResolver.ResolveOwnerNameAsync(updated.CurrentDepartmentId, owner, cancellationToken)
+                : null;
+            var history = await ticketsApiClient.GetAssignmentHistoryAsync(id, cancellationToken);
+            return new JsonResult(new
+            {
+                ok = true,
+                message = "Ticket assigned.",
+                ownerId = updated.CurrentOwnerEmployeeId,
+                ownerName = ownerName ?? "Assigned",
+                rowVersion = updated.RowVersion,
+                history = history.IsSuccess && history.Value is not null
+                    ? history.Value.Select(h => new { h.Type, h.ChangedAtUtc, h.PreviousEmployeeName, h.NewEmployeeName, h.ChangedByName, h.Reason, h.TowerCode, h.UnitNumber })
+                    : null
+            });
+        }
+
+        if (failure is not null)
+        {
+            return await ReloadWithErrorAsync("assign", failure, cancellationToken);
+        }
+
+        ActionSuccess = "Ticket assigned.";
+        return RedirectToPage(new { id });
+    }
+
     /// <summary>Parses the assign control's "employeeId|departmentId" value (departmentId optional for the single-department control).</summary>
     internal static bool TryParseAssignTarget(string? target, out Guid employeeId, out int? departmentId)
     {
@@ -555,6 +632,15 @@ public sealed class TicketDetailsModel(
         return true;
     }
 
+    /// <summary>The Tower/Unit choices for a move into Collections, fetched by the Transfer / Reopen forms only when Collections is chosen (it asks CRM, so it is not part of every page load).</summary>
+    public async Task<IActionResult> OnGetCollectionsOptionsAsync(long id, CancellationToken cancellationToken)
+    {
+        var result = await ticketsApiClient.GetCollectionsTransferOptionsAsync(id, cancellationToken);
+        return result.IsSuccess
+            ? new JsonResult(result.Value)
+            : new JsonResult(new { status = "Error", message = DescribeError(result.Outcome, result.Detail), towers = Array.Empty<object>() }) { StatusCode = 200 };
+    }
+
     public async Task<IActionResult> OnPostTransferAsync(long id, CancellationToken cancellationToken)
     {
         TicketId = id;
@@ -569,7 +655,7 @@ public sealed class TicketDetailsModel(
         }
 
         var result = await ticketsApiClient.TransferAsync(
-            id, new TransferTicketRequestDto(Transfer.TargetDepartmentId, Transfer.Reason, rowVersion, null, Transfer.ReasonCode), cancellationToken);
+            id, new TransferTicketRequestDto(Transfer.TargetDepartmentId, Transfer.Reason, rowVersion, null, Transfer.ReasonCode, Transfer.CollectionsTowerId, Transfer.CollectionsUnitRef), cancellationToken);
         return await HandleMutationAsync(result, "transfer", "Ticket transferred.", cancellationToken);
     }
 
@@ -740,7 +826,7 @@ public sealed class TicketDetailsModel(
         }
 
         var result = await ticketsApiClient.ReopenAsync(
-            id, new ReopenTicketRequestDto(Reopen.Reason, Reopen.TargetDepartmentId, rowVersion), cancellationToken);
+            id, new ReopenTicketRequestDto(Reopen.Reason, Reopen.TargetDepartmentId, rowVersion, Reopen.CollectionsTowerId, Reopen.CollectionsUnitRef), cancellationToken);
 
         // Stays on this page: the redirect re-reads the ticket, so the agent
         // sees In Progress, the department that now owns it, the resulting
@@ -1109,11 +1195,14 @@ public sealed class TicketDetailsModel(
         var historyTask = ticketsApiClient.GetLifecycleHistoryAsync(TicketId, cancellationToken);
         var timelineTask = ticketsApiClient.GetActivityTimelineAsync(TicketId, cancellationToken);
         var reviewsTask = ticketsApiClient.GetReviewsAsync(TicketId, cancellationToken);
+        var assignmentHistoryTask = ticketsApiClient.GetAssignmentHistoryAsync(TicketId, cancellationToken);
         var downgradesTask = slaApiClient.GetPriorityDowngradeRequestsAsync(TicketId, cancellationToken);
 
         await Task.WhenAll(
             slaTask, notesTask, escalationsTask, assignableTask, assignableUsersTask, customerHistoryTask, approvalsTask, interactionsTask,
-            historyTask, downgradesTask, reviewsTask, timelineTask);
+            historyTask, downgradesTask, reviewsTask, timelineTask, assignmentHistoryTask);
+
+        AssignmentHistory = assignmentHistoryTask.Result.IsSuccess && assignmentHistoryTask.Result.Value is not null ? assignmentHistoryTask.Result.Value : [];
 
         Reviews = reviewsTask.Result.IsSuccess && reviewsTask.Result.Value is not null ? reviewsTask.Result.Value.Cycles : [];
         ReviewsUnavailable = !reviewsTask.Result.IsSuccess;
@@ -1177,6 +1266,7 @@ public sealed class TicketDetailsModel(
 
         // Pre-fill the RowVersion the forms will post back, and default the
         // employee/status pickers so an untouched form still submits something valid.
+        CollectionsAssign = new CollectionsAssignInput { RowVersionBase64 = Ticket.RowVersion };
         Assign = new AssignInput
         {
             RowVersionBase64 = Ticket.RowVersion,
@@ -1748,6 +1838,18 @@ public sealed class TicketDetailsModel(
         public string? RowVersionBase64 { get; set; }
     }
 
+    public sealed class CollectionsAssignInput
+    {
+        /// <summary>The chosen Collections employee.</summary>
+        public string? EmployeeId { get; set; }
+
+        /// <summary>Optional: why the ticket is assigned / reassigned. Kept in the assignment history.</summary>
+        [StringLength(500)]
+        public string? Reason { get; set; }
+
+        public string? RowVersionBase64 { get; set; }
+    }
+
     public sealed class ClassifyInput
     {
         public int CategoryId { get; set; }
@@ -1769,6 +1871,10 @@ public sealed class TicketDetailsModel(
         /// <summary>Required: a manual transfer always says why (Unable to Resolve / Needs Escalation / ...), so escalations can be reviewed.</summary>
         public TicketTransferReason? ReasonCode { get; set; }
         public string? RowVersionBase64 { get; set; }
+
+        /// <summary>Required when the target is Collections: the tower, then one of the customer's units in it. The Api verifies both against CRM.</summary>
+        public int? CollectionsTowerId { get; set; }
+        public string? CollectionsUnitRef { get; set; }
     }
 
     public sealed class StatusInput
@@ -1827,6 +1933,10 @@ public sealed class TicketDetailsModel(
         public int TargetDepartmentId { get; set; }
 
         public string? RowVersionBase64 { get; set; }
+
+        /// <summary>Required when the target is Collections (see <see cref="TransferInput"/>).</summary>
+        public int? CollectionsTowerId { get; set; }
+        public string? CollectionsUnitRef { get; set; }
     }
 
     public sealed class NoteInput

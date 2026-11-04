@@ -124,6 +124,14 @@ public sealed class TicketsApiClient(HttpClient httpClient, ILogger<TicketsApiCl
     public Task<ApiResult<TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineDto>> GetActivityTimelineAsync(long ticketId, CancellationToken cancellationToken) =>
         GetAsync<TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineDto>($"api/tickets/{ticketId}/activity-timeline", cancellationToken);
 
+    /// <summary>The Tower and Unit choices for moving this ticket into Collections (the customer's verified towers and their units).</summary>
+    public Task<ApiResult<TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTransferOptionsDto>> GetCollectionsTransferOptionsAsync(long ticketId, CancellationToken cancellationToken) =>
+        GetAsync<TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTransferOptionsDto>($"api/tickets/{ticketId}/collections-transfer-options", cancellationToken);
+
+    /// <summary>The ticket's Collections assignment history (automatic and manual) - append-only, read-only; empty for a ticket that never had one.</summary>
+    public Task<ApiResult<IReadOnlyList<TicketAssignmentHistoryItemDto>>> GetAssignmentHistoryAsync(long ticketId, CancellationToken cancellationToken) =>
+        GetAsync<IReadOnlyList<TicketAssignmentHistoryItemDto>>($"api/tickets/{ticketId}/assignment-history", cancellationToken);
+
     /// <summary>The ticket's customer satisfaction review cycles — read from the persisted review store; never contains a review token.</summary>
     public Task<ApiResult<TigerCS.Application.Modules.CustomerReviews.Dto.TicketReviewsDto>> GetReviewsAsync(long ticketId, CancellationToken cancellationToken) =>
         GetAsync<TigerCS.Application.Modules.CustomerReviews.Dto.TicketReviewsDto>($"api/tickets/{ticketId}/reviews", cancellationToken);

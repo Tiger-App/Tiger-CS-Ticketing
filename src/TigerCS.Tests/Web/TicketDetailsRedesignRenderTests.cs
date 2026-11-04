@@ -116,6 +116,41 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     }
 
     [Fact]
+    public async Task CollectionsTicket_OffersAssignBesideAssignedTo_OnlyWhenTheServerSaysTheViewerMayAssign()
+    {
+        var offered = Dec(await Page(220, Roles.DepartmentEmployee));
+
+        Assert.Equal(1, Count(offered, "data-collections-assign"));
+        var control = Section(offered, "data-collections-assign", "</details>");
+        Assert.Contains("Reassign", control);                                   // the ticket has an owner
+        Assert.Contains("Search Collections team", control);                    // searchable list of the team
+        Assert.Contains("name=\"CollectionsAssign.EmployeeId\"", control);
+        Assert.Contains("Reason (optional)", control);
+        Assert.Contains("Current: <strong data-assign-current>", control);
+        Assert.Equal(1, Count(offered, "<span class=\"tw-fact__k\">Assigned To</span>"));   // still shown once, with the control inside it
+
+        Assert.DoesNotContain("data-collections-assign", await Page(212, Roles.CsManager));   // not a Collections ticket for this viewer
+    }
+
+    [Fact]
+    public async Task TransferAndReopenForms_CarryTheMandatoryTowerAndUnitBlock_OnlyForTheCollectionsDepartment()
+    {
+        var open = Dec(await Page(203, Roles.CsManager));
+        var transfer = Section(open, "id=\"action-transfer\"", "</details>");
+
+        Assert.Contains("data-ct-collections-ids=\"7\"", transfer);               // only Collections (by its code) needs it
+        Assert.Contains("data-ct-trigger=\"#Transfer_TargetDepartmentId\"", transfer);
+        Assert.Contains("name=\"Transfer.CollectionsTowerId\"", transfer);        // tower first...
+        Assert.Contains("name=\"Transfer.CollectionsUnitRef\"", transfer);         // ...then the unit of that tower
+        Assert.Contains("Select a tower first", transfer);
+        Assert.Matches(@"<div class=""ct"" hidden", transfer);                      // hidden (and its selects disabled) until Collections is chosen
+        Assert.Contains("ticket-collections-tower-unit.js", open);
+
+        var reopen = Dec(await Page(209, Roles.CsManager));
+        Assert.Contains("name=\"Reopen.CollectionsTowerId\"", Section(reopen, "id=\"action-reopen\"", "</details>"));
+    }
+
+    [Fact]
     public async Task ClassifiedButUnassigned_ManagerIsToldToAssign()
     {
         var html = await Page(202);
@@ -438,14 +473,15 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         private static TicketDetailDto T(
             long id, string status = "InProgress", Guid? owner = null, int? category = 1, byte? priority = 3, string verification = "Unverified",
             string summary = "Handover documents", int reopens = 0, bool crm = false, bool classified = true, bool reopenEligible = false,
-            string sla = "Running", byte? outcome = null, string? source = null, string? externalName = null, string? crmName = null) =>
+            string sla = "Running", byte? outcome = null, string? source = null, string? externalName = null, string? crmName = null, bool collectionsAssign = false) =>
             new(id, $"TG-CS-{id}", CustomerService, CustomerService, owner, null, null, category, priority, status, verification, "None", sla, outcome, null,
                 summary, reopens, Now.AddHours(-3), Row,
                 CrmBuyerCustomerId: crm ? 9001 : null, CrmBuyerUnitId: crm ? 41 : null, CrmBuyerProjectId: crm ? 7 : null,
                 CrmBuyerCustomerName: crm ? "Mariam Al Falasi" : crmName, CrmBuyerProjectName: crm ? "Tiger Tower" : null, CrmBuyerUnitNumber: crm ? "T-1204" : null,
                 RequestTypeId: classified ? 10 : null, RequestTypeName: classified ? "Complaint Handling" : null, IsClassified: classified,
                 IsReopenEligible: reopenEligible, OriginatingChannelId: 1, OriginatingChannelName: "Website chat",
-                CustomerVerificationSource: source, ExternalCustomerId: source is null ? null : "T-77", ExternalCustomerName: externalName);
+                CustomerVerificationSource: source, ExternalCustomerId: source is null ? null : "T-77", ExternalCustomerName: externalName,
+                CanAssignInCollections: collectionsAssign);
 
         private static TicketDetailDto? Detail(long id) => id switch
         {
@@ -470,6 +506,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
             // Phone call answered by the AI virtual agent, caller not in CRM, nothing classified yet, nobody assigned.
             219 => T(219, "Open", category: null, priority: 3, classified: false, summary: "Phone Call – CS – Contract Status or Unit Registration")
                 with { ManualProjectName = "NOT_REGISTERED", ManualUnitNumber = "NOT_REGISTERED", OriginatingChannelName = "Phone" },
+            220 => T(220, "Open", owner: Someone, collectionsAssign: true),
             _ => null,
         };
 
@@ -523,7 +560,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
             object? body = path switch
             {
                 "/api/users/me" => new CurrentUserResponseDto(ViewerId, "Test Agent", [role], [new DepartmentMembershipDto(CustomerService, "Customer Service", true)], true),
-                "/api/departments" => new[] { new DepartmentDto(CustomerService, "Customer Service"), new DepartmentDto(3, "Facilities") },
+                "/api/departments" => new[] { new DepartmentDto(CustomerService, "Customer Service"), new DepartmentDto(3, "Facilities"), new DepartmentDto(7, "Collections", "COL") },
                 "/api/channels" => new[] { new ChannelDto(1, "Website chat", "WEB", true, true, true, 1) },
                 "/api/categories" => new[] { new CategoryDto(1, "Complaint Handling", CustomerService, "Customer Service") }.Where(c => departmentId is null || c.DepartmentId == departmentId).ToArray(),
                 "/api/request-types" => new[] { new RequestTypeOptionDto(10, "Complaint Handling", CustomerService, 3, true) }.Where(r => departmentId is null || r.DepartmentId == departmentId).ToArray(),
