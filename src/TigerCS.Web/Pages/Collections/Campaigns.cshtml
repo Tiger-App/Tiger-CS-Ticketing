@@ -36,7 +36,7 @@
                     }
                 </select>
             </div>
-            <partial name="_TowerPicker" model="@(new TowerPickerModel("campaignTower", Model.Towers, Model.TowerId, Model.TowersFailed, "Project / Tower", "All projects"))" />
+            <partial name="_TowerMultiPicker" model="@(new TowerMultiPickerModel("campaignTower", Model.Towers, Model.TowerIds, Model.TowersFailed))" />
             <div class="field-group">
                 <label class="field-label" for="campaignPayment">Payment status</label>
                 <select class="field-select" id="campaignPayment" name="paymentStatus" data-payment-status>
@@ -113,6 +113,6 @@
 <script src="~/js/info-tip.js" asp-append-version="true"></script>
 <script src="~/js/receivables-load-monitor.js" asp-append-version="true"></script>
 <script src="~/js/receivables.js" asp-append-version="true"></script>
-<script src="~/js/collections-towers.js" asp-append-version="true"></script>
+<script src="~/js/collections-tower-multi.js" asp-append-version="true"></script>
 <script src="~/js/collections-campaign-filters.js" asp-append-version="true"></script>
 <script src="~/js/collections-campaign-approve.js" asp-append-version="true"></script>

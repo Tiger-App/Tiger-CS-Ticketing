@@ -58,7 +58,7 @@ public sealed class CrmBuyerHttpGateway(
                 "Crm:SecretKey is not configured — cannot call CRM GetBuyerByPhone for {MaskedPhoneNumber}. "
                 + "See docs/DEV-SETUP.md for how to configure it via user-secrets/environment variable.",
                 Mask(phoneNumber));
-            return CrmBuyerLookupResult.Unavailable("Crm:SecretKey is not configured.");
+            return CrmBuyerLookupResult.Unavailable("Crm:SecretKey is not configured.", CrmLookupFailureKind.NotConfigured);
         }
 
         using var request = new HttpRequestMessage(
@@ -75,14 +75,23 @@ public sealed class CrmBuyerHttpGateway(
             // HttpClient.Timeout elapsed — distinct from the caller's own
             // cancellationToken being cancelled, which is left to propagate.
             logger.LogWarning(ex, "CRM GetBuyerByPhone timed out for {MaskedPhoneNumber}.", Mask(phoneNumber));
-            return CrmBuyerLookupResult.Unavailable("CRM request timed out.");
+            return CrmBuyerLookupResult.Unavailable("CRM request timed out.", CrmLookupFailureKind.TimedOut);
         }
         catch (Exception ex) when (ex is HttpRequestException or InvalidOperationException)
         {
             // InvalidOperationException covers an unconfigured Crm:BaseUrl
             // (typed HttpClient with no BaseAddress rejects a relative URI).
             logger.LogWarning(ex, "CRM GetBuyerByPhone could not be reached for {MaskedPhoneNumber}.", Mask(phoneNumber));
-            return CrmBuyerLookupResult.Unavailable("CRM could not be reached.");
+            return CrmBuyerLookupResult.Unavailable("CRM could not be reached.", CrmLookupFailureKind.Unreachable);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // Anything else unexpected still comes back as a classified failure: an unhandled fault here would surface as a 500 to every
+            // caller and, in the customer search, discard the PACT/Tasleeh results. Only the exception TYPE is logged - its message is not
+            // ours to vouch for as free of customer data.
+            logger.LogError(
+                "CRM GetBuyerByPhone failed unexpectedly ({ExceptionType}) for {MaskedPhoneNumber}.", ex.GetType().Name, Mask(phoneNumber));
+            return CrmBuyerLookupResult.Unavailable("CRM lookup failed unexpectedly.", CrmLookupFailureKind.UnexpectedError);
         }
 
         using (response)
@@ -99,12 +108,12 @@ public sealed class CrmBuyerHttpGateway(
                 case HttpStatusCode.BadRequest:
                     logger.LogWarning(
                         "CRM GetBuyerByPhone returned 400 Bad Request for {MaskedPhoneNumber}.", Mask(phoneNumber));
-                    return CrmBuyerLookupResult.InvalidResponse("CRM rejected the request (400).");
+                    return CrmBuyerLookupResult.InvalidResponse("CRM rejected the request (400).", CrmLookupFailureKind.RejectedRequest);
                 default:
                     logger.LogWarning(
                         "CRM GetBuyerByPhone returned unexpected status {StatusCode} for {MaskedPhoneNumber}.",
                         (int)response.StatusCode, Mask(phoneNumber));
-                    return CrmBuyerLookupResult.Unavailable($"CRM returned unexpected status {(int)response.StatusCode}.");
+                    return CrmBuyerLookupResult.Unavailable($"CRM returned unexpected status {(int)response.StatusCode}.", CrmLookupFailureKind.UnexpectedStatus);
             }
         }
     }

@@ -293,7 +293,7 @@ public sealed class TicketNextActionTests
         Assert.NotNull(dir);
         var view = File.ReadAllText(Path.Combine(dir!, "TigerCS.Web", "Pages", "TicketDetails.cshtml"));
 
-        Assert.True(view.IndexOf("What needs your attention?", StringComparison.Ordinal) < view.IndexOf("_TicketCustomerCard", StringComparison.Ordinal));
+        Assert.True(view.IndexOf("class=\"customer-strip\"", StringComparison.Ordinal) < view.IndexOf(">Next step</div>", StringComparison.Ordinal));
         foreach (var handler in new[] { "Assign", "Classify", "Transfer", "ChangeStatus", "Resolve", "Escalate", "RequestDowngrade", "Close", "Reopen", "RecordFirstResponse", "AddNote", "RequestApproval", "DecideApproval", "RecordEvent" })
         {
             Assert.Contains($"asp-page-handler=\"{handler}\"", view);

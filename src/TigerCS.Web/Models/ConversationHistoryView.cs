@@ -105,6 +105,34 @@ public static class ConversationHistoryView
             ? null
             : interaction.Handoff is { } handoff ? $"Handoff: {TicketDisplay.HandoffStatusLabel(handoff.Status)}" : "No handoff";
 
+    /// <summary>How long the interaction lasted ("7 min", "1 h 5 min"), or null while it is live or when no end was reported.</summary>
+    public static string? Duration(TicketInteractionDto interaction)
+    {
+        if (interaction.EndedAtUtc is not { } ended || ended < interaction.StartedAtUtc)
+        {
+            return null;
+        }
+
+        var span = ended - interaction.StartedAtUtc;
+        return span.TotalMinutes < 1 ? "under a minute"
+            : span.TotalHours < 1 ? $"{(int)span.TotalMinutes} min"
+            : $"{(int)span.TotalHours} h {span.Minutes} min";
+    }
+
+    /// <summary>Who started the contact, in words an agent uses; null when Genesys did not say. An unknown value is shown as stated.</summary>
+    public static string? DirectionLabel(string? direction) => direction switch
+    {
+        null or "" => null,
+        "Inbound" => "Customer contacted us",
+        "Outbound" => "We contacted the customer",
+        var other => other
+    };
+
+    /// <summary>True for a telephone call, which has no written transcript to show.</summary>
+    public static bool IsVoice(TicketInteractionDto interaction) =>
+        string.Equals(interaction.ChannelName?.Trim(), "Phone", StringComparison.OrdinalIgnoreCase)
+        || (interaction.ChannelName?.Contains("call", StringComparison.OrdinalIgnoreCase) ?? false);
+
     public static string MessageCount(TicketInteractionDto interaction) =>
         interaction.Messages.Count switch
         {

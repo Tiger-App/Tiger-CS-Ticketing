@@ -5,7 +5,7 @@ Full design, semantics, schedule, deployment order and verification: [`docs/Coll
 
 ## Execution order (before the application is deployed)
 
-`V001` -> `V003` -> `V010` -> `V011` -> **`R001`** -> **`V012`** -> **`V013`** -> **`R002` -> `R003` -> `R004`** -> `migration/M01` (backup) ... deploy the application ... verify ... `migration/M02` (cleanup).
+`V001` -> `V003` -> `V010` -> `V011` -> **`R001`** -> **`V012`** -> **`V013`** -> **`V014`** -> **`R002` -> `R003` -> `R004`** -> `migration/M01` (backup) ... deploy the application ... verify ... `migration/M02` (cleanup).
 (V001, V003, V010, V011 are usually already deployed; re-running them is harmless. V010 no longer needs the old snapshot objects. **V012 is new and must be deployed BEFORE R004** - R004 reads `fn_Collections_TowerNames` and the new CRM columns - and AFTER R001 - V012 reads the snapshot tables.)
 
 | Script | Purpose |
@@ -17,6 +17,8 @@ Full design, semantics, schedule, deployment order and verification: [`docs/Coll
 | `V012__crm_owner_company_resolution_and_tower_names.sql` | CRM owners get their company from the exact unit (never the tower number alone), keep the CRM project name, `fn_Collections_TowerNames` (the one source of tower names), `usp_Collections_ResolveCrmOwnerCompanies`; backfills the current CRM run. Idempotent. |
 | `V013__create_crm_project_map_evidence.sql` | `dbo.CollectionsCrmProjectMapEvidence` + `usp_Collections_RecordCrmProjectEvidence`: what customer lookups observed (CRM project -> PACT tower/company, from the SAME customer's PACT contract). Never creates a mapping; units with `*` in the PACT code are never recorded. Idempotent. |
 | `tools/review_crm_project_map.sql` | Preview (default, read-only) of every CRM project: Mapped / ReadyToPromote / Ambiguous / Unresolved, with the evidence; `@Apply = 1` inserts only ReadyToPromote rows (idempotent). |
+| `V014__sync_collections_towers.sql` | `dbo.usp_CollectionsRcv_SyncTowers @Apply`: adds the towers the current snapshot (lines + unit directory) holds to `dbo.CollectionsTowers` (idempotent, no duplicates, never deletes or overwrites a real name; name from the single CRM project name, else the number). The application runs it after every successful refresh. Creates the procedure only - changes no data. |
+| `tools/backfill_collections_towers.sql` | **Dry run by default** (`@Apply = 0`): first population of an empty/incomplete `CollectionsTowers` through the V014 procedure, with before/after and consistency reports. |
 | `R001__create_tables.sql` | **New snapshot:** `CollectionsRcvRun`, `CollectionsRcvCompany`, `CollectionsRcvLine`. |
 | `R002__usp_CollectionsRcv_Refresh.sql` | `usp_CollectionsRcv_Refresh @CompanyId` (PACT -> temp table -> validated atomic publish, per-company lock), `usp_CollectionsRcv_ReapDeadRuns`, `usp_CollectionsRcv_NoteClientAbort`. |
 | `R003__usp_CollectionsRcv_GetStatus.sql` | Per-company state for the pages (closes orphaned attempts first; `IsLoading` is true only while that company's refresh really runs). |

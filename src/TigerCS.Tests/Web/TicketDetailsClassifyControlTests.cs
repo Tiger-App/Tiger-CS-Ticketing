@@ -196,7 +196,7 @@ public sealed class TicketDetailsClassifyControlTests
         var view = File.ReadAllText(FindRepoFile("TigerCS.Web/Pages/TicketDetails.cshtml"));
 
         Assert.Contains("t.IsDefaultClassification", view);
-        Assert.Contains("DefaultClassificationService.DisplayLabel", view);
+        Assert.Contains("DefaultClassificationService.CategoryName", view);
         Assert.Contains("\"Reclassify\" : \"Classify\"", view);
         Assert.Equal("Customer Services / General", TigerCS.Application.Modules.Ticketing.Services.DefaultClassificationService.DisplayLabel);
     }

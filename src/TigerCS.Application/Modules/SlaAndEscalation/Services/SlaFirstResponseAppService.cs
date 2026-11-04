@@ -32,6 +32,15 @@ public sealed class SlaFirstResponseAppService(
     ITicketingUnitOfWork unitOfWork,
     TimeProvider timeProvider)
 {
+    /// <summary>
+    /// How far before the ticket's creation a <see cref="FirstResponseSource.GenesysCallAnswer"/> may be placed. SLA-Architecture §16
+    /// Example E is a call answered "a moment" before its ticket was created; it is not a licence to place the response arbitrarily far
+    /// back. Beyond the window the request is refused (never clamped). The value is NOT restricted to a service identity: the
+    /// record-first-response route is not an integration route (a service identity is refused there by the platform policy), so that
+    /// restriction would make the approved DTO value unreachable for everyone.
+    /// </summary>
+    public static readonly TimeSpan GenesysCallAnswerLeadAllowance = TimeSpan.FromHours(1);
+
     public async Task<SlaOperationResult<TicketSlaSummaryResponseDto>> RecordAsync(
         Guid callerEmployeeId,
         IReadOnlyCollection<string> callerRoles,
@@ -47,8 +56,14 @@ public sealed class SlaFirstResponseAppService(
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.NotFound);
         }
 
-        if (!Enum.TryParse<FirstResponseSource>(request.Source, ignoreCase: true, out var source))
+        // Enum.TryParse also accepts any number ("99"), so an undefined value is rejected explicitly: it used to slip past the
+        // `source == Manual` lower bound below as if it were a system source.
+        if (!Enum.TryParse<FirstResponseSource>(request.Source, ignoreCase: true, out var source)
+            || !Enum.IsDefined(source)
+            || source == FirstResponseSource.HumanAgentMessage)
         {
+            // HumanAgentMessage is OBSERVED by the system from a stored transcript line (GenesysConversationEndAppService); a client
+            // cannot claim it, so it is not callable here.
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.InvalidRequest);
         }
 
@@ -76,7 +91,9 @@ public sealed class SlaFirstResponseAppService(
         // ticket existed (that allowance is SLA-Architecture §16 Example E, for a Genesys call answer only). Without these
         // bounds a caller could backdate the response to erase a breach.
         if (occurredAtUtc > nowUtc.AddMinutes(5)
-            || (source == FirstResponseSource.Manual && occurredAtUtc < ticket.CreatedAtUtc))
+            || occurredAtUtc < (source == FirstResponseSource.GenesysCallAnswer
+                ? ticket.CreatedAtUtc - GenesysCallAnswerLeadAllowance
+                : ticket.CreatedAtUtc))
         {
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.InvalidRequest);
         }

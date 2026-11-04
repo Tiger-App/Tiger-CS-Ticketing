@@ -669,15 +669,40 @@ public sealed class GenesysInquiryIngestionAppService(
                 return new CustomerLookupSummary($"Found(Ambiguous:{candidates.Count} customers share this number)", null);
             }
 
+            if (found)
+            {
+                return new CustomerLookupSummary("Found", candidates.FirstOrDefault());
+            }
+
+            // Nothing was found - but only a source that ANSWERED can say "not found". A source that failed (timeout, outage, bad key,
+            // malformed reply) says nothing about whether this customer is registered, and must never be recorded as NotFound.
+            var failures = new List<string>();
+            if (result.CrmStatus == "Failed")
+            {
+                failures.Add($"Crm={result.CrmFailureKind ?? "Unavailable"}");
+            }
+
+            failures.AddRange(result.ExternalSources.Where(s => s.Status == "Failed").Select(s => $"{s.Source}=Failed"));
+            if (failures.Count > 0)
+            {
+                return new CustomerLookupSummary($"LookupFailed({string.Join(";", failures)})", null);
+            }
+
             return new CustomerLookupSummary(
-                found ? "Found" : $"NotFound(Crm={result.CrmStatus})",
-                candidates.FirstOrDefault());
+                result.CrmStatus == "AmbiguousMatch" ? "Ambiguous(Crm=AmbiguousMatch)" : $"NotFound(Crm={result.CrmStatus})",
+                null);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // A timeout surfacing as a cancellation: say so, rather than the exception's type name.
+            return new CustomerLookupSummary("LookupFailed(TimedOut)", null);
         }
         catch (Exception ex)
         {
             // Deliberately broad: an unexpected fault in an enrichment step
             // must never cost us the inquiry. What went wrong is recorded on
-            // the audit entry; the ticket is created regardless.
+            // the audit entry (the exception TYPE only - never its message, which could carry customer data); the ticket is created
+            // regardless.
             return new CustomerLookupSummary($"LookupFailed({ex.GetType().Name})", null);
         }
     }
