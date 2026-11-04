@@ -3,6 +3,7 @@
 @using TigerCS.Domain.Modules.Ticketing
 @{
     ViewData["ActiveNav"] = "tickets";
+    ViewData["CompactShell"] = true;   // one-row app header: brand, navigation, search, account
     Layout = "_Layout";
 }
 
@@ -63,10 +64,10 @@ else
     <div class="page page--workspace">
         <nav class="breadcrumb breadcrumb--compact" aria-label="Breadcrumb">
             <a href="/Tickets">Tickets</a>
-            <span class="sep">/</span>
+            <span class="sep">@TicketIcons.Svg("chevron-right", "ic ic--sep")</span>
             <a href="@Model.ReturnContext.Href">@Model.ReturnContext.View.Label()</a>
-            <span class="sep">/</span>
-            <span class="current">@t.TicketNumber</span>
+            <span class="sep">@TicketIcons.Svg("chevron-right", "ic ic--sep")</span>
+            <span class="current" aria-current="page">@t.TicketNumber</span>
         </nav>
 
 
@@ -106,23 +107,31 @@ else
 
         @* ---- Ticket workspace header: one compact block. Line 1 identifies the ticket and its state and holds the one Actions menu; the title
                follows; then who the customer is and who owns it. Everything else lives in the properties sidebar. ---- *@
+        @* Two columns: the ticket (header, next step, tabs) on the left and the properties sidebar beside all of it, as in the approved design. *@
+        <div class="tw-body">
+        <div class="tw-main">
         <header class="tw-head" aria-label="Ticket summary">
             <div class="tw-head__top">
-                <div class="tw-head__ident">
+                <span class="tw-head__bar" aria-hidden="true"></span>
+                <span class="tw-head__tile" aria-hidden="true">@TicketIcons.Svg(TicketIcons.ForChannel(t.OriginatingChannelName), "ic ic--tile")</span>
+                <div class="tw-head__main">
                     <span class="tw-head__id">@t.TicketNumber</span>
-                    <span class="tw-state tw-state--@statusKey"><span class="tw-state__dot" aria-hidden="true"></span>@TicketDisplay.TicketStatusLabel(t.TicketStatus)</span>
-                    <span class="tw-prio tw-prio--@TicketDisplay.PriorityCssKey(t.PriorityId)">@TicketDisplay.PriorityLabel(t.PriorityId)</span>
-                    @if (slaBadge is not null)
-                    {
-                        <span class="tw-sla tw-sla--@slaBadge.Value.CssKey" title="@(Model.Sla?.Explanation?.NotStartedReason)">SLA: @slaBadge.Value.Label</span>
-                    }
+                    <h1 class="tw-head__title">@t.RequestSummary</h1>
+                    <div class="tw-head__ident">
+                        <span class="tw-state tw-state--@statusKey"><span class="tw-state__dot" aria-hidden="true"></span>@TicketDisplay.TicketStatusLabel(t.TicketStatus)</span>
+                        <span class="tw-prio tw-prio--@TicketDisplay.PriorityCssKey(t.PriorityId)"><span class="tw-state__dot" aria-hidden="true"></span>@TicketDisplay.PriorityLabel(t.PriorityId)</span>
+                        @if (slaBadge is not null)
+                        {
+                            <span class="tw-sla tw-sla--@slaBadge.Value.CssKey" title="@(Model.Sla?.Explanation?.NotStartedReason)">@TicketIcons.Svg("clock", "ic ic--chip")SLA: @slaBadge.Value.Label</span>
+                        }
+                    </div>
                 </div>
 
                 @if (showActionsMenu)
                 {
                 <div class="tw-head__actions">
                     <details class="disclosure actions-menu" id="actions-menu" open="@(Model.OpenSection is "assign" or "classify" or "transfer" or "status" or "resolve" or "escalate" or "downgrade" or "reopen" ? "open" : null)">
-                        <summary class="btn btn-sm">Actions</summary>
+                        <summary class="btn btn-sm tw-actions-btn" aria-haspopup="true">Actions @TicketIcons.Svg("chevron-down", "ic ic--btn")</summary>
                         <div class="disclosure__panel actions-menu__panel" role="group" aria-label="Ticket actions">
                     @if (!isClosed)
                     {
@@ -135,7 +144,9 @@ else
                         {
                         <details class="disclosure" id="action-assign" data-action="assign" open="@(Model.OpenSection == "assign" ? "open" : null)">
                             <summary class="btn btn-sm@(Rec("assign"))">Assign</summary>
-                            <div class="disclosure__panel">
+                            <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Assign ticket">
+                                <div class="action-modal__head"><h2 class="action-modal__title">Assign ticket</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <div class="action-modal__body">
                                 <form method="post" asp-page-handler="Assign" class="action-form">
                                     <input type="hidden" asp-for="Assign.RowVersionBase64" />
                                     @if (Model.CanAssignAcrossDepartments)
@@ -237,7 +248,9 @@ else
                                as something to do while it cannot be completed. *@
                             <details class="disclosure" id="action-classify" data-action="classify" open="@(Model.OpenSection == "classify" ? "open" : null)">
                                 <summary class="btn btn-sm@(Model.ClassifyNotice is null ? Rec("classify") : "")">@(t.IsDefaultClassification || t.CanCorrectClassification ? "Reclassify" : "Classify")@(Model.ClassifyNotice is null ? "" : " (not available)")</summary>
-                                <div class="disclosure__panel">
+                                <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="@(t.IsDefaultClassification || t.CanCorrectClassification ? "Reclassify ticket" : "Classify ticket")">
+                                <div class="action-modal__head"><h2 class="action-modal__title">@(t.IsDefaultClassification || t.CanCorrectClassification ? "Reclassify ticket" : "Classify ticket")</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <div class="action-modal__body">
                                     @if (Model.ClassifyNotice is { } classifyNotice)
                                     {
                                         <div class="classify-notice@(classifyNotice.IsConfiguration ? "" : " classify-notice--error")" role="status">
@@ -307,6 +320,7 @@ else
                                     </form>
                                     }
                                 </div>
+                                </div>
                             </details>
                         }
 
@@ -314,7 +328,9 @@ else
                         {
                             <details class="disclosure" id="action-transfer" data-action="transfer" open="@(Model.OpenSection == "transfer" ? "open" : null)">
                                 <summary class="btn btn-sm@(Rec("transfer"))">Transfer</summary>
-                                <div class="disclosure__panel">
+                                <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Transfer ticket">
+                                <div class="action-modal__head"><h2 class="action-modal__title">Transfer ticket</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <div class="action-modal__body">
                                     <form method="post" asp-page-handler="Transfer" class="action-form">
                                         <input type="hidden" asp-for="Transfer.RowVersionBase64" />
                                         <div class="field-group">
@@ -352,6 +368,7 @@ else
                                         <div class="action-form__footer"><button type="submit" class="btn btn-gold btn-sm" disabled="@(Model.TransferTargets.Count == 0 ? "disabled" : null)">Transfer</button></div>
                                     </form>
                                 </div>
+                                </div>
                             </details>
                         }
 
@@ -359,7 +376,9 @@ else
                         {
                         <details class="disclosure" id="action-status" data-action="status" open="@(Model.OpenSection == "status" ? "open" : null)">
                             <summary class="btn btn-sm@(Rec("status"))">Change Status</summary>
-                            <div class="disclosure__panel">
+                            <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Change status">
+                                <div class="action-modal__head"><h2 class="action-modal__title">Change status</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <div class="action-modal__body">
                                 <form method="post" asp-page-handler="ChangeStatus" class="action-form">
                                     <input type="hidden" asp-for="Status.RowVersionBase64" />
                                     <div class="field-group">
@@ -389,7 +408,9 @@ else
                         {
                         <details class="disclosure" id="action-resolve" data-action="resolve" open="@(Model.OpenSection == "resolve" ? "open" : null)">
                             <summary class="btn btn-sm@(Rec("resolve"))">Resolve</summary>
-                            <div class="disclosure__panel">
+                            <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Resolve ticket">
+                                <div class="action-modal__head"><h2 class="action-modal__title">Resolve ticket</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <div class="action-modal__body">
                                 <form method="post" asp-page-handler="Resolve" class="action-form">
                                     <input type="hidden" asp-for="Resolve.RowVersionBase64" />
                                     <div class="field-group">
@@ -420,7 +441,9 @@ else
                         {
                         <details class="disclosure" id="action-escalate" data-action="escalate" open="@(Model.OpenSection == "escalate" ? "open" : null)">
                             <summary class="btn btn-sm@(Rec("escalate"))">Escalate</summary>
-                            <div class="disclosure__panel">
+                            <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Escalate ticket">
+                                <div class="action-modal__head"><h2 class="action-modal__title">Escalate ticket</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <div class="action-modal__body">
                                 <form method="post" asp-page-handler="Escalate" class="action-form">
                                     <input type="hidden" asp-for="Escalate.RowVersionBase64" />
                                     <div class="field-group">
@@ -454,7 +477,9 @@ else
                         {
                         <details class="disclosure" id="action-downgrade" data-action="downgrade" open="@(Model.OpenSection == "downgrade" ? "open" : null)">
                             <summary class="btn btn-sm">Request priority downgrade</summary>
-                            <div class="disclosure__panel">
+                            <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Request priority downgrade">
+                                <div class="action-modal__head"><h2 class="action-modal__title">Request priority downgrade</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <div class="action-modal__body">
                                 <form method="post" asp-page-handler="RequestDowngrade" class="action-form">
                                     <div class="field-group">
                                         <label class="field-label" asp-for="DowngradeRequest.NewPriorityId">Lower the priority to</label>
@@ -498,7 +523,9 @@ else
                     {
                         <details class="disclosure" id="action-reopen" data-action="reopen" open="@(Model.OpenSection == "reopen" ? "open" : null)">
                             <summary class="btn btn-sm@(Rec("reopen"))">Reopen</summary>
-                            <div class="disclosure__panel">
+                            <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Reopen ticket">
+                                <div class="action-modal__head"><h2 class="action-modal__title">Reopen ticket</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <div class="action-modal__body">
                                 @if (Model.ReopenTargetsUnavailable)
                                 {
                                     <p class="field-hint">The department directory could not be loaded, so this ticket cannot be reopened right now. Refresh and try again.</p>
@@ -521,6 +548,7 @@ else
                                         <div class="action-form__footer"><button type="submit" class="btn btn-gold btn-sm">Reopen ticket</button></div>
                                     </form>
                                 }
+                                </div>
                             </div>
                         </details>
                     }
@@ -530,41 +558,51 @@ else
                 }
             </div>
 
-            <h1 class="tw-head__title">@t.RequestSummary</h1>
-
             <div class="tw-head__people">
                 @* Customer: a small labelled grid (who · phone · unit), not one long line; the verification state sits with the name. *@
                 <div class="tw-who">
                     <div class="tw-fact tw-fact--name">
-                        <span class="tw-fact__k">Customer</span>
-                        <span class="tw-fact__v">
-                            <span class="tw-avatar" aria-hidden="true">@(customer.HasName ? TicketDisplay.Initials(customer.Name) : "?")</span>
-                            @if (customer.ProfileHref is { } whoProfile)
-                            {
-                                <a class="tw-who__name" href="@whoProfile">@customer.Name</a>
-                            }
-                            else
-                            {
-                                <span class="tw-who__name@(customer.HasName ? "" : " is-muted")">@customer.Name</span>
-                            }
-                            <span class="tw-verif tw-verif--@customer.StateCss">@customer.StateLabel</span>
-                        </span>
+                        @TicketIcons.Svg("user", "ic ic--fact")
+                        <div class="tw-fact__body">
+                            <span class="tw-fact__k">Customer</span>
+                            <span class="tw-fact__v">
+                                @if (customer.ProfileHref is { } whoProfile)
+                                {
+                                    <a class="tw-who__name" href="@whoProfile">@customer.Name</a>
+                                }
+                                else
+                                {
+                                    <span class="tw-who__name@(customer.HasName ? "" : " is-muted")">@customer.Name</span>
+                                }
+                                <span class="tw-verif tw-verif--@customer.StateCss" title="@customer.StateLabel">@(customer.State == CustomerLookupState.ManualEntry ? "Manual entry" : customer.StateLabel)</span>
+                            </span>
+                        </div>
                     </div>
                     <div class="tw-fact">
-                        <span class="tw-fact__k">Phone</span>
-                        <span class="tw-fact__v tw-who__phone">@(customer.Phone ?? "No phone recorded")</span>
+                        @TicketIcons.Svg("phone", "ic ic--fact")
+                        <div class="tw-fact__body">
+                            <span class="tw-fact__k">Phone</span>
+                            <span class="tw-fact__v tw-who__phone">@(customer.Phone ?? "No phone recorded")</span>
+                        </div>
                     </div>
                     @if (customer.ProjectUnit is not null)
                     {
                         <div class="tw-fact">
-                            <span class="tw-fact__k">Project / Unit</span>
-                            <span class="tw-fact__v">@customer.ProjectUnit@if (!customer.UnitIsConfirmed) { <span class="tw-muted"> (typed in)</span> }</span>
+                            @TicketIcons.Svg("building", "ic ic--fact")
+                            <div class="tw-fact__body">
+                                <span class="tw-fact__k">Project / Unit</span>
+                                <span class="tw-fact__v tw-fact__v--unit">@customer.ProjectUnit@if (!customer.UnitIsConfirmed) { <span class="tw-fact__sub"> (typed in)</span> }</span>
+                            </div>
                         </div>
                     }
-                </div>
-                <div class="tw-owner">
-                    <span class="tw-fact"><strong>Assigned To:</strong> @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
-                    <span class="tw-fact"><strong>Assigned Department:</strong> @TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
+                    <div class="tw-fact tw-owner">
+                        @TicketIcons.Svg("users", "ic ic--fact")
+                        <div class="tw-fact__body">
+                            <span class="tw-fact__k">Assigned To</span>
+                            <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
+                            <span class="tw-fact__sub"><span class="visually-hidden">Assigned Department: </span>@TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -617,8 +655,8 @@ else
             var hasWhy = !string.IsNullOrWhiteSpace(guidance.Reason) || guidance.Alerts.Count > 0 || guidance.Unavailable.Count > 0;
         }
         <section class="tw-next tw-next--@nextCss" aria-labelledby="attention-title">
-            <span class="tw-next__label" id="attention-title">Next step</span>
-            <span class="tw-next__headline">@guidance.Headline</span>
+            <span class="tw-next__icon" aria-hidden="true">@TicketIcons.Svg("target", "ic ic--next")</span>
+            <p class="tw-next__text"><strong class="tw-next__label" id="attention-title">Next Step:</strong> <span class="tw-next__headline">@guidance.Headline</span></p>
             <span class="tw-next__tools">
                 @if (Model.CanRecordFirstResponse)
                 {
@@ -626,7 +664,7 @@ else
                        (phone, e-mail, walk-in) record it here; AI/automated replies never do. *@
                     <form method="post" asp-page-handler="RecordFirstResponse" class="tw-next__inline-form">
                         <input type="hidden" asp-for="Escalate.RowVersionBase64" />
-                        <button type="submit" class="tw-link-btn" title="Already answered the customer outside the system?">Record first response</button>
+                        <button type="submit" class="btn btn-sm tw-next__secondary" title="Already answered the customer outside the system?">Record first response</button>
                     </form>
                 }
                 @if (hasWhy)
@@ -671,17 +709,15 @@ else
             </span>
         </section>
 
-        <div class="tw-body">
-        <div class="tw-main">
         <div class="tabs-card tabs-card--page ticket-tabs">
             <input type="radio" name="pageTab" id="tab-details" class="tab-input" checked />
-            <label class="tab-label" for="tab-details">Conversation</label>
+            <label class="tab-label" for="tab-details">@TicketIcons.Svg("chat", "ic ic--tab")Conversation</label>
             <input type="radio" name="pageTab" id="tab-activity" class="tab-input" />
-            <label class="tab-label" for="tab-activity">Activity <span class="tab-count">@(Model.ActivityFeed.Count + Model.Escalations.Count)</span></label>
+            <label class="tab-label" for="tab-activity">@TicketIcons.Svg("list", "ic ic--tab")Activity <span class="tab-count">@(Model.ActivityFeed.Count + Model.Escalations.Count)</span></label>
             <input type="radio" name="pageTab" id="tab-customer" class="tab-input" />
-            <label class="tab-label" for="tab-customer">Customer@(Model.CustomerHistory is not null ? $" ({Model.CustomerHistory.TotalTickets})" : "")</label>
+            <label class="tab-label" for="tab-customer">@TicketIcons.Svg("users", "ic ic--tab")Customer@(Model.CustomerHistory is not null ? $" ({Model.CustomerHistory.TotalTickets})" : "")</label>
             <input type="radio" name="pageTab" id="tab-approvals" class="tab-input" />
-            <label class="tab-label" for="tab-approvals">Approvals@(Model.Approvals is { } approvalsTab && approvalsTab.Approvals.Count > 0 ? $" ({approvalsTab.Approvals.Count})" : "")</label>
+            <label class="tab-label" for="tab-approvals">@TicketIcons.Svg("check-circle", "ic ic--tab")Approvals@(Model.Approvals is { } approvalsTab && approvalsTab.Approvals.Count > 0 ? $" ({approvalsTab.Approvals.Count})" : "")</label>
 
             <div class="tabs-body">
                 @* ---- Overview: D. the request and its conversation, E. the latest activity, F. everything else behind one fold ---- *@
@@ -711,7 +747,7 @@ else
                                             </li>
                                         }
                                     </ol>
-                                    <p class="panel-note"><span class="text-secondary">UAE time.</span> <label class="link-muted tab-jump" for="tab-activity">Open the full activity timeline</label></p>
+                                    <p class="tw-feed__more"><label class="tw-gold-link tab-jump" for="tab-activity">@TicketIcons.Svg("external", "ic ic--link")Open the full activity timeline</label><span class="tw-feed__zone">Times in UAE time</span></p>
                                 }
                             </section>
                     </div>
@@ -1092,7 +1128,7 @@ else
             var handlingInteraction = Model.Interactions.LastOrDefault(i => i.HandlingState is not null);
         }
         <section class="tw-sec" aria-label="Request details">
-            <div class="facts-section__title" role="heading" aria-level="2">Request Details</div>
+            <h2 class="tw-sec__title">@TicketIcons.Svg("doc", "ic ic--sec")Request Details</h2>
             <dl class="tw-props">
                 @* An unclassified ticket says so plainly — a real state, not missing data. Categories are shown by name, never by id. *@
                 @* The approved default (a department's own General) is a real, stored classification - shown as such, and replaceable through Reclassify. *@
@@ -1134,7 +1170,7 @@ else
             </dl>
         </section>
         <section class="tw-sec" aria-label="SLA">
-            <div class="facts-section__title" role="heading" aria-level="2">SLA Information</div>
+            <h2 class="tw-sec__title">@TicketIcons.Svg("clock", "ic ic--sec")SLA Information</h2>
             @if (Model.Sla is null)
             {
                 <p class="tw-muted">SLA data unavailable.</p>
@@ -1160,7 +1196,7 @@ else
                 @if (why is not null)
                 {
                     <details class="tw-fold sla-explain">
-                        <summary>How this SLA is calculated</summary>
+                        <summary>@TicketIcons.Svg("chevron-right", "ic ic--fold")How this SLA is calculated</summary>
                         <dl class="tw-props">
                             <div class="facts-row"><dt>Applied priority</dt><dd>@(why.AppliedPriorityLabel ?? "Not set")</dd></div>
                             <div class="facts-row"><dt>Policy</dt><dd>@(why.FirstResponseTargetMinutes is null ? "None" : why.PolicySource)</dd></div>
@@ -1201,39 +1237,49 @@ else
         @if (customer.Hint is not null || customer.NameNote is not null || Model.CustomerHistory is not null || customer.ProfileHref is not null)
         {
         <section class="tw-sec tw-cust" aria-label="Customer">
-            <div class="facts-section__title" role="heading" aria-level="2">Customer</div>
-            @if (customer.NameNote is { } customerNameNote)
+            <h2 class="tw-sec__title">@TicketIcons.Svg("user", "ic ic--sec")Customer</h2>
+            @if (customer.Hint is not null || customer.NameNote is not null)
             {
-                <p class="tw-note">@customerNameNote</p>
+                <div class="tw-callout" role="note">
+                    @TicketIcons.Svg("info", "ic ic--callout")
+                    <div>
+                        @if (customer.NameNote is { } customerNameNote)
+                        {
+                            <p class="tw-callout__title">@customerNameNote</p>
+                        }
+                        else if (customer.State is not (CustomerLookupState.VerifiedCrm or CustomerLookupState.VerifiedExternal))
+                        {
+                            <p class="tw-callout__title">@customer.StateLabel</p>
+                        }
+                        @if (customer.Hint is { } customerHint)
+                        {
+                            <p class="tw-callout__text">@customerHint</p>
+                        }
+                    </div>
+                </div>
             }
-            @if (customer.Hint is { } customerHint)
-            {
-                <p class="tw-note">@customerHint</p>
-            }
-            @if (Model.CustomerHistory is { } sideHistory)
-            {
-                <dl class="tw-props">
-                    <div class="facts-row"><dt>Tickets</dt><dd>@sideHistory.OpenTickets open &middot; @sideHistory.TotalTickets total</dd></div>
-                </dl>
-            }
-            <div class="tw-linkrow">
+            <ul class="tw-links">
+                @if (Model.CustomerHistory is { } sideHistory)
+                {
+                    <li class="tw-links__row"><span class="tw-links__lead">@TicketIcons.Svg("ticket", "ic ic--row")<span class="tw-links__k">Tickets</span></span><span class="tw-links__v">@sideHistory.OpenTickets open &middot; @sideHistory.TotalTickets total</span></li>
+                }
                 @if (customer.ProfileHref is { } sideProfile)
                 {
-                    <a class="tw-link" href="@sideProfile">Customer profile</a>
-                    <label class="tw-link tab-jump" for="tab-customer">Previous tickets@(Model.CustomerHistory is not null ? $" ({Model.CustomerHistory.TotalTickets})" : "")</label>
+                    <li class="tw-links__row"><a class="tw-gold-link" href="@sideProfile">@TicketIcons.Svg("user", "ic ic--row")Customer profile<span class="tw-links__end">@TicketIcons.Svg("external", "ic ic--row")</span></a></li>
+                    <li class="tw-links__row"><label class="tw-gold-link tab-jump" for="tab-customer">@TicketIcons.Svg("list", "ic ic--row")Previous tickets@(Model.CustomerHistory is not null ? $" ({Model.CustomerHistory.TotalTickets})" : "")<span class="tw-links__end">@TicketIcons.Svg("external", "ic ic--row")</span></label></li>
                 }
                 else if (customer.Hint is null)
                 {
-                    <span class="tw-muted">No customer identity on this ticket, so there is no profile to open.</span>
+                    <li class="tw-muted">No customer identity on this ticket, so there is no profile to open.</li>
                 }
-            </div>
+            </ul>
         </section>
         }
         @* ---- Customer satisfaction: shown on the page only when a review exists (or could not be loaded); otherwise one line under Additional details. ---- *@
         @if (Model.ReviewsUnavailable || Model.Reviews.Count > 0)
         {
         <section class="tw-sec" id="customer-satisfaction" aria-label="Customer satisfaction">
-<div class="facts-section__title" role="heading" aria-level="2">Customer Satisfaction</div>
+<h2 class="tw-sec__title">@TicketIcons.Svg("star", "ic ic--sec")Customer Satisfaction</h2>
 @if (Model.ReviewsUnavailable)
 {
     <p class="field-hint">Customer reviews are unavailable right now.</p>
