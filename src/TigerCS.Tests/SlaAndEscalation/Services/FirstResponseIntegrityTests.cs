@@ -131,6 +131,29 @@ public class FirstResponseIntegrityTests
         Assert.Empty(h.Sla.Audit.Entries);
     }
 
+    /// <summary>The audit trail of a Genesys call answer says who entered it, as what, when it is stated to have happened, when it was entered, and how far back.</summary>
+    [Fact]
+    public async Task GenesysCallAnswer_IsFullyAudited_ActorSourceStatedTimeEntryTimeAndBackdating()
+    {
+        var h = await CreateAsync();
+        var stated = CreatedAt.AddMinutes(-20);
+
+        var result = await Record(h, "GenesysCallAnswer", stated);
+
+        Assert.Equal(SlaOperationOutcome.Success, result.Outcome);
+        var audit = Assert.Single(h.Sla.Audit.Entries, e => e.Action == "RecordFirstResponse");
+        Assert.Equal(h.OwnerId, audit.ActorEmployeeId);
+        Assert.Contains("\"source\":\"GenesysCallAnswer\"", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains($"\"firstHumanResponseAtUtc\":\"{stated:O}\"", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains($"\"recordedAtUtc\":\"{Now:O}\"", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains($"\"backdatedMinutes\":{(int)(Now - stated).TotalMinutes}", audit.AfterValue, StringComparison.Ordinal);
+        Assert.Contains("\"actorIsSystem\":false", audit.AfterValue, StringComparison.Ordinal);
+        var history = Assert.Single(h.Sla.StatusHistory.Added, e => e.Dimension == TicketStatusDimension.SlaState);
+        Assert.False(history.ActorIsSystem);
+        Assert.Equal(h.OwnerId, history.ActorEmployeeId);
+        Assert.Contains("GenesysCallAnswer", history.Note, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task GenesysCallAnswer_ExactlyAtTheAllowance_IsAccepted()
     {

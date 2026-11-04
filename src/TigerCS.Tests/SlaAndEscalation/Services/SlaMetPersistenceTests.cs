@@ -164,6 +164,33 @@ public class SlaMetPersistenceTests
         Assert.Equal(SlaState.Met, h.Ticket.SlaState);
     }
 
+    /// <summary>
+    /// An AI completion closes the ticket without any human speaking. It must never write a first human response (ISSUE-019: only a human
+    /// response or an authorized Record First Response stops that clock), and it settles the Resolution clock only - the First Response flag
+    /// and timestamp are exactly what they were, whether the closure is on time or late.
+    /// </summary>
+    [Theory]
+    [InlineData(2, 3, 6)]    // closed on time: inside both deadlines
+    [InlineData(8, 1, 6)]    // closed late: after both deadlines (First Response was never flagged by a job in this scenario)
+    public async Task AiCompletionClosure_NeverFabricatesAHumanResponse_AndLeavesTheFirstResponseClockAlone(int nowHours, int frHours, int resHours)
+    {
+        var h = await CreateAsync(CreatedAt.AddHours(nowHours), CreatedAt.AddHours(frHours), CreatedAt.AddHours(resHours));
+        var before = (await h.Sla.SlaInstances.GetCurrentAsync(h.Ticket.TicketId))!.FirstResponseBreached;
+
+        var result = await h.Service.CloseForAiCompletionAsync(
+            Guid.NewGuid(), h.Ticket.TicketId, "Closed by AI", "detail", releaseAutomaticOwner: true);
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, h.Ticket.TicketStatus);
+        Assert.Null(h.Ticket.FirstHumanResponseAtUtc);
+        Assert.DoesNotContain(h.Sla.Audit.Entries, e => e.Action == "RecordFirstResponse");
+        Assert.DoesNotContain(h.Sla.StatusHistory.Added, e => e.Note is { } n && n.Contains("First human response recorded", StringComparison.Ordinal));
+        var instance = (await h.Sla.SlaInstances.GetCurrentAsync(h.Ticket.TicketId))!;
+        Assert.Equal(before, instance.FirstResponseBreached);   // First Response untouched, in either direction
+        Assert.Equal(nowHours > resHours, instance.ResolutionBreached);   // Resolution judged on its own deadline
+        Assert.Empty(h.Sla.Escalations.All);                    // a closing ticket is not escalated
+    }
+
     [Fact]
     public async Task SystemClosure_AsCancelled_DoesNotClaimMet()
     {
