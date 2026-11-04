@@ -58,12 +58,13 @@ public sealed partial class AppTypographyTests
 
     /// <summary>The scale's anchors, in the ranges the hierarchy is built on.</summary>
     [Theory]
-    [InlineData("--text-2xl", 28, 32)]  // page title
-    [InlineData("--text-xl", 20, 24)]   // record title
-    [InlineData("--text-lg", 18, 20)]   // section title
-    [InlineData("--text-base", 14, 15)] // body
-    [InlineData("--text-sm", 14, 14)]   // tables, lists, controls, buttons
-    [InlineData("--text-xs", 12, 13)]   // meta
+    [InlineData("--text-2xl", 22, 24)]  // page title
+    [InlineData("--text-xl", 22, 24)]   // record title
+    [InlineData("--text-lg", 15, 16)]   // section heading
+    [InlineData("--text-md", 14, 15)]   // card heading
+    [InlineData("--text-base", 13, 14)] // body
+    [InlineData("--text-sm", 13, 13)]   // tables, lists, controls, buttons
+    [InlineData("--text-xs", 12, 12)]   // labels, meta
     [InlineData("--text-2xs", 12, 12)]  // uppercase micro-labels — the floor
     public void SiteCss_TypeScale_SitsInTheIntendedRanges(string token, double min, double max)
     {
@@ -81,7 +82,7 @@ public sealed partial class AppTypographyTests
 
         // Page title, KPI number, section title, table, button, navigation.
         Assert.Contains(".page-title { font-size: var(--text-2xl); font-weight: var(--weight-title);", css, StringComparison.Ordinal);
-        Assert.Contains(".kpi-card strong { font-size: 30px; font-weight: 700;", css, StringComparison.Ordinal);
+        Assert.Contains(".kpi-card strong { font-size: 26px; font-weight: 700;", css, StringComparison.Ordinal);
         Assert.Contains(".panel__title { font-size: var(--text-lg); font-weight: var(--weight-section);", css, StringComparison.Ordinal);
         Assert.Contains(".data-table { width: 100%; border-collapse: collapse; font-size: var(--text-sm); }", css, StringComparison.Ordinal);
         Assert.Contains("font-size: var(--text-sm); font-weight: var(--weight-strong); line-height: 1; letter-spacing: -0.005em;", css, StringComparison.Ordinal);
@@ -93,6 +94,23 @@ public sealed partial class AppTypographyTests
             var match = Regex.Match(css, Regex.Escape(token) + @":\s*([0-9]+);");
             Assert.True(match.Success, $"{token} is not defined.");
             Assert.InRange(int.Parse(match.Groups[1].Value, CultureInfo.InvariantCulture), min, max);
+        }
+    }
+
+    /// <summary>The one official brand gold, defined once as --tiger-gold, carried by dark text on filled controls.</summary>
+    [Fact]
+    public void SiteCss_DefinesTheOfficialTigerGold_Once()
+    {
+        var css = SiteCss();
+
+        Assert.Contains("--tiger-gold: #E7B95E;", css, StringComparison.Ordinal);
+        Assert.Contains("--color-gold: var(--tiger-gold);", css, StringComparison.Ordinal);
+        Assert.Contains(".btn-gold { background: var(--tiger-gold); border-color: var(--tiger-gold); color: var(--tiger-on-gold); }", css, StringComparison.Ordinal);
+
+        // No second gold: the legacy browns / ambers that used to stand in for the accent are gone.
+        foreach (var retired in new[] { "#C58D19", "#B8841B", "#A5740F", "#A56F0E", "#B98A21", "#dfae4a" })
+        {
+            Assert.DoesNotContain(retired, css, StringComparison.OrdinalIgnoreCase);
         }
     }
 
