@@ -16,6 +16,12 @@
      * Collections tickets are never touched. A valid department WITHOUT its own General is a CONFIGURATION error: reported, nothing written
        (run EnsureDefaultGeneralClassification.sql first). Nothing is created here and the department is never swapped for Customer Services'.
      * Writes Tickets.CategoryId / RequestTypeId / WorkflowTemplateId ONLY. Applies to every status (a Closed ticket is labelled, never reopened).
+     * AI ENDED WITHOUT HUMAN INTERVENTION (a Genesys conversation exists, none is live, and there is no human evidence: no follow-up flag, handoff, first human
+       response, agent message, handler or handled-by user - the SAME evidence phase 2 uses) is a LABEL on the tickets above, not a new rule: such a ticket with no / invalid
+       classification becomes <department> / General / General + that department's Published workflow, or Customer Services / General when its department is unknown /
+       inactive; a valid classification is preserved. They are counted separately in report 1 (ClassificationToApply_AiEndedWithoutHuman, AiEndedWithoutHuman_TicketsTotal),
+       report 1b (A1), report 3b (outcome by status) and flagged in report 4 / the audit row ("AiEndedWithoutHuman=1"). @ApprovedClassificationCount stays the TOTAL.
+       Any status is labelled; only ACTIVE unowned ones then get a CS Agent (phase 2, @IncludeAiEndedWithoutHuman = 1, the application default).
 
    PHASE 2  ASSIGNMENT      = CsAgentBackfillClassifier.Classify + CsAgentBackfillService.TryBackfillAsync + TicketAutoAssignmentService
                               (AssignConfirmedHandlerAsync, EnsureCsAgentAsync -> AssignRoundRobinAsync with the shared Call Center CS Agent rotation)
@@ -157,7 +163,10 @@ DECLARE @Cls TABLE (
     TicketId bigint PRIMARY KEY, TicketNumber nvarchar(80) NULL, TicketStatus tinyint NOT NULL, CurrentDepartmentId int NOT NULL, OriginatingDepartmentId int NOT NULL,
     OldCategoryId int NULL, OldRequestTypeId int NULL, OldWorkflowTemplateId int NULL, RowVer binary(8) NOT NULL,
     State varchar(20) NOT NULL, IsDefault bit NOT NULL, IsCollections bit NOT NULL,
-    Decision varchar(40) NOT NULL, TargetDeptCode nvarchar(50) NULL, NewCategoryId int NULL, NewRequestTypeId int NULL, NewWorkflowTemplateId int NULL);
+    Decision varchar(40) NOT NULL, TargetDeptCode nvarchar(50) NULL, NewCategoryId int NULL, NewRequestTypeId int NULL, NewWorkflowTemplateId int NULL,
+    -- Evidence that the AI conversation ended WITHOUT a human (same definition as @Asg.HumanNeeded / HasGenesys / HasLiveGenesys; proven identical by a check below).
+    EvHumanNeeded bit NOT NULL DEFAULT 0, EvGenesys bit NOT NULL DEFAULT 0, EvLiveGenesys bit NOT NULL DEFAULT 0, AiEndedNoHuman bit NOT NULL DEFAULT 0,
+    TargetSource varchar(16) NULL);       -- OWN_DEPARTMENT (originating department's General) | CS_FALLBACK (department unknown / inactive)
 DECLARE @Asg TABLE (
     TicketId bigint PRIMARY KEY, TicketNumber nvarchar(80) NULL, TicketStatus tinyint NOT NULL, CurrentDepartmentId int NOT NULL, CreatedAtUtc datetime2 NOT NULL,
     RowVer binary(8) NOT NULL, PendingApproval bit NOT NULL, IsCollections bit NOT NULL, HumanNeeded bit NOT NULL, HasGenesys bit NOT NULL, HasLiveGenesys bit NOT NULL,
@@ -202,6 +211,9 @@ DECLARE @ProtectedBefore bigint, @ProtectedAfter bigint;
 SELECT @ProtectedBefore = CHECKSUM_AGG(CHECKSUM(TicketId, TicketNumber, TicketStatus, CurrentDepartmentId, OriginatingDepartmentId, PriorityId, SlaState,
                                                 EscalationLevel, CreatedAtUtc, FirstHumanResponseAtUtc))
 FROM dbo.Tickets WITH (NOLOCK);
+-- Existing ownership: every ticket that has an owner today must have the SAME owner afterwards (the assignment phase only ever fills an empty owner).
+DECLARE @OwnerSnap TABLE (TicketId bigint PRIMARY KEY, OwnerId uniqueidentifier NOT NULL);
+INSERT @OwnerSnap (TicketId, OwnerId) SELECT TicketId, CurrentOwnerEmployeeId FROM dbo.Tickets WITH (NOLOCK) WHERE CurrentOwnerEmployeeId IS NOT NULL;
 
 BEGIN TRY
     BEGIN TRANSACTION;
@@ -254,6 +266,21 @@ BEGIN TRY
         WHEN r.DepartmentId <> c.DepartmentId THEN 'INCONSISTENT'
         ELSE 'VALID' END AS State) s;
 
+    -- AI conversation ended WITHOUT human intervention (any ticket status; read-only evidence, nothing is written from it except the label and the report).
+    -- Identical to the evidence the assignment phase uses (CsAgentBackfillClassifier: HumanNeeded / HasGenesysInteraction / HasLiveGenesysInteraction).
+    UPDATE k SET
+        EvHumanNeeded = CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.RequiresHumanFollowUp = 1)
+                      OR EXISTS (SELECT 1 FROM dbo.TicketAgentHandoffs h WHERE h.TicketId = k.TicketId AND h.Status IN (2, 3, 4))
+                      OR t.FirstHumanResponseAtUtc IS NOT NULL
+                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i JOIN dbo.TicketInteractionMessages m ON m.TicketInteractionId = i.TicketInteractionId
+                                 WHERE i.TicketId = k.TicketId AND m.Sender = 2)
+                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = k.TicketId)
+                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.HandledByUserId IS NOT NULL) THEN 1 ELSE 0 END,
+        EvGenesys     = CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.Source = 2) THEN 1 ELSE 0 END,
+        EvLiveGenesys = CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL AND i.InactivityClosedAtUtc IS NULL) THEN 1 ELSE 0 END
+    FROM @Cls k JOIN dbo.Tickets t ON t.TicketId = k.TicketId;
+    UPDATE @Cls SET AiEndedNoHuman = CASE WHEN EvGenesys = 1 AND EvLiveGenesys = 0 AND EvHumanNeeded = 0 THEN 1 ELSE 0 END;
+
     -- DefaultClassificationBackfillClassifier.Decide, then the target (ResolveForDepartmentAsync on the ORIGINATING department).
     UPDATE @Cls SET Decision =
         CASE WHEN @RunClassification = 0 THEN 'PHASE_OFF'
@@ -267,14 +294,14 @@ BEGIN TRY
     UPDATE @Cls SET Decision = 'CONFIG_MISSING_CS' WHERE Decision = 'CANDIDATE' AND @CsGap IS NOT NULL;
 
     -- Originating department known (active, not Collections): ITS OWN General, or a configuration gap (never Customer Services' as a stand-in).
-    UPDATE k SET Decision = CASE WHEN g.Gap IS NULL THEN 'APPLY' ELSE 'DEPT_GENERAL_MISSING' END,
+    UPDATE k SET Decision = CASE WHEN g.Gap IS NULL THEN 'APPLY' ELSE 'DEPT_GENERAL_MISSING' END, TargetSource = 'OWN_DEPARTMENT',
                  TargetDeptCode = g.Code, NewCategoryId = CASE WHEN g.Gap IS NULL THEN g.CategoryId END,
                  NewRequestTypeId = CASE WHEN g.Gap IS NULL THEN g.RequestTypeId END, NewWorkflowTemplateId = CASE WHEN g.Gap IS NULL THEN g.WorkflowTemplateId END
     FROM @Cls k JOIN @Gen g ON g.DepartmentId = k.OriginatingDepartmentId
     WHERE k.Decision = 'CANDIDATE';
 
     -- Department unknown / inactive: Customer Services / General - the existing human classification queue.
-    UPDATE k SET Decision = 'APPLY', TargetDeptCode = g.Code, NewCategoryId = g.CategoryId, NewRequestTypeId = g.RequestTypeId, NewWorkflowTemplateId = g.WorkflowTemplateId
+    UPDATE k SET Decision = 'APPLY', TargetSource = 'CS_FALLBACK', TargetDeptCode = g.Code, NewCategoryId = g.CategoryId, NewRequestTypeId = g.RequestTypeId, NewWorkflowTemplateId = g.WorkflowTemplateId
     FROM @Cls k CROSS JOIN @Gen g
     WHERE k.Decision = 'CANDIDATE' AND g.DepartmentId = @CsId;
 
@@ -310,7 +337,8 @@ BEGIN TRY
                N'CategoryId=' + CONVERT(nvarchar(20), k.NewCategoryId) + N';RequestTypeId=' + CONVERT(nvarchar(20), k.NewRequestTypeId)
                  + N';WorkflowTemplateId=' + CONVERT(nvarchar(20), k.NewWorkflowTemplateId) + N';Default=' + k.TargetDeptCode + N'/General;State=' + k.State
                  + N';Reason=Historical backfill;BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId))
-                 + N';DepartmentId=' + CONVERT(nvarchar(20), k.CurrentDepartmentId) + N' (unchanged);Status=' + CONVERT(nvarchar(10), k.TicketStatus) + N' (unchanged)',
+                 + N';DepartmentId=' + CONVERT(nvarchar(20), k.CurrentDepartmentId) + N' (unchanged);Status=' + CONVERT(nvarchar(10), k.TicketStatus) + N' (unchanged)'
+                 + N';Target=' + k.TargetSource + CASE WHEN k.AiEndedNoHuman = 1 THEN N';AiEndedWithoutHuman=1' ELSE N'' END,
                @BatchId, @Now
         FROM @Cls k WHERE k.Decision = 'APPLY';
 
@@ -319,7 +347,7 @@ BEGIN TRY
                k.State + N': Category ' + ISNULL(CONVERT(nvarchar(20), k.OldCategoryId), N'-') + N' -> ' + CONVERT(nvarchar(20), k.NewCategoryId)
                + N', RequestType ' + ISNULL(CONVERT(nvarchar(20), k.OldRequestTypeId), N'-') + N' -> ' + CONVERT(nvarchar(20), k.NewRequestTypeId)
                + N', Workflow ' + ISNULL(CONVERT(nvarchar(20), k.OldWorkflowTemplateId), N'-') + N' -> ' + CONVERT(nvarchar(20), k.NewWorkflowTemplateId)
-               + N' (' + k.TargetDeptCode + N'/General)'
+               + N' (' + k.TargetDeptCode + N'/General, ' + k.TargetSource + N')' + CASE WHEN k.AiEndedNoHuman = 1 THEN N' [AI ended, no human]' ELSE N'' END
         FROM @Cls k WHERE k.Decision = 'APPLY';
     END;
 
@@ -520,6 +548,24 @@ BEGIN TRY
     INSERT @Check SELECT N'No Closed / Resolved ticket received an owner', CASE WHEN NOT EXISTS (
                       SELECT 1 FROM @Asg a JOIN dbo.Tickets t ON t.TicketId = a.TicketId WHERE a.AgentId IS NOT NULL AND t.TicketStatus IN (5, 6)) THEN 'PASS' ELSE 'FAIL' END, NULL;
 
+    INSERT @Check SELECT N'Existing ownership preserved: every ticket that had an owner keeps the same owner',
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM @OwnerSnap o JOIN dbo.Tickets t ON t.TicketId = o.TicketId
+                                        WHERE t.CurrentOwnerEmployeeId IS NULL OR t.CurrentOwnerEmployeeId <> o.OwnerId) THEN 'PASS' ELSE 'FAIL' END,
+                  CONVERT(nvarchar(20), (SELECT COUNT(*) FROM @OwnerSnap)) + N' owned ticket(s) compared';
+    INSERT @Check SELECT N'Valid existing classifications untouched (no ALREADY_VALID / ALREADY_DEFAULT / CATEGORY_ONLY_KEPT / Collections ticket was reclassified)',
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM @Cls k JOIN dbo.Tickets t ON t.TicketId = k.TicketId
+                                        WHERE k.Decision <> 'APPLY'
+                                          AND (ISNULL(t.CategoryId, -1) <> ISNULL(k.OldCategoryId, -1) OR ISNULL(t.RequestTypeId, -1) <> ISNULL(k.OldRequestTypeId, -1)
+                                               OR ISNULL(t.WorkflowTemplateId, -1) <> ISNULL(k.OldWorkflowTemplateId, -1))) THEN 'PASS' ELSE 'FAIL' END, NULL;
+    INSERT @Check SELECT N'AI-ended-without-human evidence identical in the classification and assignment phases',
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM @Cls k JOIN @Asg a ON a.TicketId = k.TicketId
+                                        WHERE k.EvHumanNeeded <> a.HumanNeeded OR k.EvGenesys <> a.HasGenesys OR k.EvLiveGenesys <> a.HasLiveGenesys) THEN 'PASS' ELSE 'FAIL' END, NULL;
+    INSERT @Check SELECT N'AI-ended-without-human tickets that are Closed / Resolved: classification label only: status and owner unchanged',
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM @Cls k JOIN dbo.Tickets t ON t.TicketId = k.TicketId
+                                        WHERE k.AiEndedNoHuman = 1 AND k.TicketStatus IN (5, 6)
+                                          AND (t.TicketStatus <> k.TicketStatus
+                                               OR (t.CurrentOwnerEmployeeId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM @OwnerSnap o WHERE o.TicketId = t.TicketId)))) THEN 'PASS' ELSE 'FAIL' END, NULL;
+
     IF EXISTS (SELECT 1 FROM @Check WHERE Result = 'FAIL')
         THROW 50820, 'ABORTED: an invariant check failed (report 8 of a dry run lists it). Whole run rolled back.', 1;
 
@@ -539,6 +585,9 @@ PRINT CASE WHEN @DryRun = 1 THEN N'DRY RUN - every write and check was performed
 -- 1. Run summary and the commit gates (1b below: the same counts by ticket status)
 SELECT CASE WHEN @DryRun = 1 THEN 'DRY RUN (rolled back)' ELSE 'COMMITTED' END AS Mode, DB_NAME() AS [Database], @BatchId AS BatchId,
        @ClsApply AS ClassificationToApply, @ClsGap AS ClassificationBlockedByConfiguration,
+       (SELECT COUNT(*) FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 1) AS ClassificationToApply_AiEndedWithoutHuman,
+       (SELECT COUNT(*) FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 0) AS ClassificationToApply_Other,
+       (SELECT COUNT(*) FROM @Cls WHERE AiEndedNoHuman = 1 AND IsCollections = 0) AS AiEndedWithoutHuman_TicketsTotal,
        @AsgApply AS AssignmentToApply, @AsgHandler AS AssignmentToConfirmedHandler, @AsgRotation AS AssignmentToSharedRotation, @AsgNoAgent AS AssignmentBlockedNoAgent,
        @N AS EligibleCsAgents, @Cursor AS RotationCursorBefore, ISNULL(@LastAgent, @Cursor) AS RotationCursorAfter,
        (SELECT COUNT(*) FROM @Check WHERE Result = 'FAIL') AS FailedChecks;
@@ -548,6 +597,7 @@ SELECT x.Category, CASE x.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgres
                                        WHEN 5 THEN 'Resolved' WHEN 6 THEN 'Closed' END AS Status, COUNT(*) AS Tickets
 FROM (
     SELECT 'A. Classification correction (will change)' AS Category, TicketStatus FROM @Cls WHERE Decision = 'APPLY'
+    UNION ALL SELECT 'A1. of which: AI ended without human intervention', TicketStatus FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 1
     UNION ALL SELECT 'B. Assignment (will change)', TicketStatus FROM @Asg WHERE AgentId IS NOT NULL
     UNION ALL SELECT 'C. Manual review: classification blocked (department has no usable General / CS General)', TicketStatus FROM @Cls WHERE Decision IN ('DEPT_GENERAL_MISSING', 'CONFIG_MISSING_CS')
     UNION ALL SELECT 'C. Manual review: assignment blocked (no eligible CS Agent / assignment disabled)', TicketStatus FROM @Asg WHERE Class IN ('NO_ELIGIBLE_AGENT', 'ASSIGNMENT_DISABLED')
@@ -564,9 +614,26 @@ FROM @Gen ORDER BY Code;
 SELECT State, TicketStatus, Decision, COUNT(*) AS Tickets FROM @Cls WHERE Decision NOT IN ('ALREADY_VALID', 'ALREADY_DEFAULT', 'PHASE_OFF')
 GROUP BY State, TicketStatus, Decision ORDER BY Decision, State, TicketStatus;
 
+-- 3b. AI conversation ended WITHOUT human intervention: what happens to those tickets (a separate count; every status; Collections shown only to prove exclusion).
+--     APPLY = relabelled General / General (own department, or Customer Services when the department is unknown / inactive). ALREADY_VALID / ALREADY_DEFAULT = kept.
+SELECT CASE k.Decision WHEN 'APPLY' THEN '1. Will be classified General / General'
+                       WHEN 'ALREADY_DEFAULT' THEN '2. Kept: already General / General'
+                       WHEN 'ALREADY_VALID' THEN '3. Kept: existing valid classification preserved'
+                       WHEN 'CATEGORY_ONLY_KEPT' THEN '4. Kept: category-only (partial) - set @IncludeCategoryOnly = 1 to include'
+                       WHEN 'EXCLUDED_COLLECTIONS' THEN '5. Excluded: Collections'
+                       WHEN 'DEPT_GENERAL_MISSING' THEN '6. BLOCKED: department has no usable General'
+                       WHEN 'CONFIG_MISSING_CS' THEN '6. BLOCKED: Customer Services General missing'
+                       ELSE '7. ' + k.Decision END AS AiEndedWithoutHuman_Outcome,
+       ISNULL(k.TargetSource, '-') AS ClassificationTarget, k.State AS StoredClassificationState,
+       CASE k.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' WHEN 3 THEN 'PendingCustomer' WHEN 4 THEN 'PendingThirdParty' WHEN 5 THEN 'Resolved' WHEN 6 THEN 'Closed' END AS Status,
+       COUNT(*) AS Tickets
+FROM @Cls k WHERE k.AiEndedNoHuman = 1
+GROUP BY k.Decision, k.TargetSource, k.State, k.TicketStatus ORDER BY AiEndedWithoutHuman_Outcome, ClassificationTarget, StoredClassificationState, k.TicketStatus;
+
 -- 4. Classification: proposed changes (APPLY) and blocked tickets, oldest first
 SELECT TOP (5000) k.TicketId, k.TicketNumber, k.TicketStatus, d.Code AS CurrentDepartment, o.Code AS OriginatingDepartment, k.State,
-       k.OldCategoryId, k.OldRequestTypeId, k.NewCategoryId, k.NewRequestTypeId, k.NewWorkflowTemplateId, k.TargetDeptCode AS NewClassificationDepartment, k.Decision
+       k.OldCategoryId, k.OldRequestTypeId, k.NewCategoryId, k.NewRequestTypeId, k.NewWorkflowTemplateId, k.TargetDeptCode AS NewClassificationDepartment, k.TargetSource,
+       k.AiEndedNoHuman AS AiEndedWithoutHuman, k.Decision
 FROM @Cls k JOIN dbo.Departments d ON d.DepartmentId = k.CurrentDepartmentId JOIN dbo.Departments o ON o.DepartmentId = k.OriginatingDepartmentId
 WHERE k.Decision IN ('APPLY', 'DEPT_GENERAL_MISSING', 'CONFIG_MISSING_CS') ORDER BY k.Decision, k.TicketId;
 
