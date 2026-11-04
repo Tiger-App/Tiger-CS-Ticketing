@@ -64,14 +64,10 @@ public static class TicketDisplay
     /// <summary>Shown only for an assignment failure: an active ticket with no CS Agent. Never worded as a department queue.</summary>
     public const string UnassignedCsAgentLabel = "Unassigned — awaiting CS Agent";
 
-    /// <summary>Shown for a finished (Resolved/Closed) ticket that has no owner: nobody is "awaited" any more, so it must not read as a failure.</summary>
-    public const string NoOwnerOnFinishedTicketLabel = "No one assigned";
-
-    /// <param name="isActive">False for a Resolved or Closed ticket. An active ticket without a CS Agent is an assignment failure and says so; a finished one is simply unowned.</param>
     public static string AssignedToLabel(
-        Guid? currentOwnerEmployeeId, string? ownerName, int currentDepartmentId, string? departmentName, bool isActive = true)
+        Guid? currentOwnerEmployeeId, string? ownerName, int currentDepartmentId, string? departmentName)
         => currentOwnerEmployeeId is not { } ownerId
-            ? isActive ? UnassignedCsAgentLabel : NoOwnerOnFinishedTicketLabel
+            ? UnassignedCsAgentLabel
             : ownerName ?? $"Employee #{ownerId.ToString()[..8]}";
 
     /// <summary>True when the ticket sits in its department queue rather than with a named employee — for styling only, never for the label text.</summary>
@@ -421,18 +417,6 @@ public static class TicketDisplay
         return minutes % 60 == 0 ? $"{minutes / 60} h" : $"{minutes / 60} h {minutes % 60} min";
     }
 
-    /// <summary>The earliest deadline still open on a running ticket: the first reply (only while no person has given it) or the resolution.</summary>
-    internal static (string Kind, DateTime? DueAtUtc) NextOpenDeadline(TicketSlaSummaryResponseDto sla)
-    {
-        DateTime? firstResponse = sla.FirstHumanResponseAtUtc is null && !sla.FirstResponseBreached ? sla.FirstResponseDueAtUtc : null;
-        if (firstResponse is { } fr && (sla.ResolutionDueAtUtc is not { } res || fr <= res))
-        {
-            return ("First reply", fr);
-        }
-
-        return sla.ResolutionDueAtUtc is { } resolution ? ("Resolution", resolution) : ("SLA", null);
-    }
-
     public static (string Label, string CssKey) SlaBadgeText(TicketSlaSummaryResponseDto sla, DateTime nowUtc)
     {
         if (sla.SlaState == "Breached")
@@ -445,19 +429,10 @@ public static class TicketDisplay
 
         if (sla.SlaState == "Running")
         {
-            // The NEAREST deadline that is still open, named: a first reply nobody has given yet can be due long before the
-            // resolution, and "Due in 2d" beside a first response that is 10 minutes away hid the one that mattered.
-            var (kind, dueAt) = NextOpenDeadline(sla);
-            if (dueAt is not DateTime due)
-            {
-                return ("Running", "running");
-            }
-
-            // A deadline already behind us is "past due", never "due in <the same duration>" (FormatDuration is absolute). It keeps its
-            // own colour key because the Api has not (yet) flagged the breach; the Next-step card still keys off the Api's flag alone.
-            return due <= nowUtc
-                ? ($"{kind} past due {FormatDuration(nowUtc - due)}", "overdue")
-                : ($"{kind} due in {FormatDuration(due - nowUtc)}", "running");
+            var dueAt = sla.ResolutionDueAtUtc ?? sla.FirstResponseDueAtUtc;
+            return dueAt is DateTime due
+                ? ($"Due in {FormatDuration(due - nowUtc)}", "running")
+                : ("Running", "running");
         }
 
         if (sla.SlaState == "Met")

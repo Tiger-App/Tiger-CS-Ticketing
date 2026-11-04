@@ -231,7 +231,7 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
         Assert.DoesNotContain("tab-conversations", html, StringComparison.Ordinal);
         Assert.DoesNotContain(">Interactions", html, StringComparison.Ordinal);
 
-        var conversation = Between(html, "id=\"conversation-title\"", "</section>");
+        var conversation = Between(html, "id=\"conversation-title\"", "id=\"customer-satisfaction\"");
         Assert.Contains("Website chat", conversation, StringComparison.Ordinal);
         Assert.Contains("AI (virtual agent)", conversation, StringComparison.Ordinal);
         Assert.Contains("No handoff", conversation, StringComparison.Ordinal);
@@ -303,8 +303,8 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
         int At(string marker) => html.IndexOf(marker, StringComparison.Ordinal);
         var order = new[]
         {
-            At("class=\"ticket-header\""), At("class=\"customer-strip\""), At(">Next step</div>"), At(">Request Details</div>"),
-            At("id=\"conversation-title\""), At("id=\"customer-satisfaction\""), At(">Latest Activity</div>"), At("id=\"additional-details\""),
+            At("class=\"ticket-header\""), At("What needs your attention?"), At("Customer Information"), At(">Request Details</div>"),
+            At("id=\"conversation-title\""), At("id=\"customer-satisfaction\""), At(">Latest Activity</div>"), At("aria-label=\"Quick facts\""),
         };
         Assert.All(order, p => Assert.True(p >= 0));
         Assert.Equal(order.OrderBy(p => p), order);
@@ -315,11 +315,10 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
         Assert.Contains("Handover went smoothly.", satisfaction, StringComparison.Ordinal);
         Assert.Contains("22 Oct 2026 18:05 (UAE)", satisfaction, StringComparison.Ordinal);
         Assert.Contains("Test review", satisfaction, StringComparison.Ordinal);
-        Assert.True(At("id=\"customer-satisfaction\"") < At("id=\"additional-details\""));
+        Assert.True(At("id=\"customer-satisfaction\"") < At("<details class=\"more-details\">"));
 
-        // Information is said once: status/priority/owner/SLA are in the header only — there is no second "quick facts" panel.
-        Assert.Equal(0, Count(html, "quick-facts"));
-        Assert.Equal(1, Count(html, "Assigned To:"));
+        // Information is said once: the quick-facts sidebar carries status/priority/owner/SLA, so the main column does not.
+        Assert.Equal(1, Count(html, "<aside class=\"facts-panel quick-facts\""));
         Assert.DoesNotContain("<div class=\"facts-section__title\">Ticket Information</div>", html, StringComparison.Ordinal);
     }
 

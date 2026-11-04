@@ -55,7 +55,7 @@ public sealed class TicketDetailsCustomerHistoryTests
         Assert.Contains("for=\"tab-customer\"", html);
         Assert.Contains("id=\"panel-details\"", html);
         Assert.Contains("id=\"panel-customer\"", html);
-        foreach (var tab in new[] { "tab-activity", "tab-approvals" })
+        foreach (var tab in new[] { "tab-activity", "tab-approvals", "tab-attachments" })
         {
             Assert.Contains($"id=\"{tab}\"", html);
         }

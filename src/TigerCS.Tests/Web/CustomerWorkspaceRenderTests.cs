@@ -261,18 +261,18 @@ public sealed class CustomerWorkspaceRenderTests : IDisposable
     {
         var html = await Ok(await Client().GetAsync("/Tickets/5"));
 
-        // The customer band: name links to the profile, the action too, carrying the ticket back; phone, unit and how it was verified are stated.
-        var strip = html[html.IndexOf("class=\"customer-strip\"", StringComparison.Ordinal)..];
-        strip = strip[..strip.IndexOf("</section>", StringComparison.Ordinal)];
-        Assert.Contains("<a class=\"customer-strip__name\" href=\"/Customers/crm%3A9001?fromTicket=5\">Mariam Al Falasi</a>", strip, StringComparison.Ordinal);
-        Assert.Contains("href=\"/Customers/crm%3A9001?fromTicket=5\">Customer profile</a>", strip, StringComparison.Ordinal);
-        Assert.Contains("<dt>Phone</dt><dd class=\"text-mono\">&#x2B;971501234567</dd>", strip, StringComparison.Ordinal);
-        Assert.Contains("Verified via Tiger CRM", strip, StringComparison.Ordinal);
-        Assert.Contains("<dt>Project / unit</dt><dd>T-1204 &#xB7; Tiger Tower</dd>", strip, StringComparison.Ordinal);
+        // The card: name links to the profile, the action too, carrying the ticket back.
+        Assert.Contains("class=\"customer-card\"", html, StringComparison.Ordinal);
+        Assert.Contains("<a class=\"customer-card__name\" href=\"/Customers/crm%3A9001?fromTicket=5\">Mariam Al Falasi</a>", html, StringComparison.Ordinal);
+        Assert.Contains("href=\"/Customers/crm%3A9001?fromTicket=5\">View Customer Profile</a>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>Customer Name</dt><dd>Mariam Al Falasi</dd>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>Phone</dt><dd class=\"text-mono\">&#x2B;971501234567</dd>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>Verification Source</dt><dd>Verified via Tiger CRM</dd>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>Project / Unit</dt><dd>T-1204 &#xB7; Tiger Tower</dd>", html, StringComparison.Ordinal);
 
-        // Overview | Activity | Customer | Approvals, Overview selected. The conversation lives in the Overview now,
+        // Overview | Activity | Customer | Approvals | Attachments, Overview selected. The conversation lives in the Overview now,
         // so there is no separate Interactions tab.
-        foreach (var label in new[] { ">Overview</label>", ">Activity <span", ">Customer", ">Approvals" })
+        foreach (var label in new[] { ">Overview</label>", ">Activity <span", ">Customer", ">Approvals", ">Attachments</label>" })
         {
             Assert.Contains(label, html, StringComparison.Ordinal);
         }
@@ -281,7 +281,7 @@ public sealed class CustomerWorkspaceRenderTests : IDisposable
         Assert.Contains("id=\"conversation-title\">Conversation History", html, StringComparison.Ordinal);
 
         Assert.Contains("id=\"tab-details\" class=\"tab-input\" checked", html, StringComparison.Ordinal);
-        Assert.Contains("Not supported yet", html, StringComparison.Ordinal);   // attachments, under Additional details
+        Assert.Contains("No attachments on this ticket.", html, StringComparison.Ordinal);
         Assert.Contains("No approvals or dependencies apply.", html, StringComparison.Ordinal);
         // The breadcrumb still leads back into the Tickets workspace.
         Assert.Contains("<a href=\"/Tickets\">Tickets</a>", html, StringComparison.Ordinal);

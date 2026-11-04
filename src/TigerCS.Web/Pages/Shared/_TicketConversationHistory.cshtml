@@ -50,18 +50,6 @@
                         <div class="convo-meta__item"><dt>Interaction</dt><dd>@(interaction.Status == "Ended"
                             ? $"Ended{(string.IsNullOrWhiteSpace(interaction.EndReason) ? "" : $" ({interaction.EndReason})")}"
                             : "Active")</dd></div>
-                        @if (ConversationHistoryView.DirectionLabel(interaction.Direction) is { } directionLabel)
-                        {
-                            <div class="convo-meta__item"><dt>Contact</dt><dd>@directionLabel</dd></div>
-                        }
-                        @if (!string.IsNullOrWhiteSpace(interaction.GenesysQueueName))
-                        {
-                            <div class="convo-meta__item"><dt>Queue</dt><dd>@interaction.GenesysQueueName</dd></div>
-                        }
-                        @if (ConversationHistoryView.Duration(interaction) is { } duration)
-                        {
-                            <div class="convo-meta__item"><dt>Duration</dt><dd>@duration</dd></div>
-                        }
                         @if (!string.IsNullOrWhiteSpace(interaction.CustomerName))
                         {
                             <div class="convo-meta__item"><dt>Customer</dt><dd>@interaction.CustomerName</dd></div>
@@ -88,11 +76,9 @@
                     @if (lines.Count == 0)
                     {
                         <p class="text-secondary convo-empty">
-                            @(ConversationHistoryView.IsVoice(interaction)
-                                ? "This was a phone call — calls have no written transcript. The call details are above and what was agreed belongs in a note."
-                                : interaction.Status == "Ended"
-                                    ? "No transcript was recorded for this interaction."
-                                    : "No messages have been recorded for this conversation yet.")
+                            @(interaction.Status == "Ended"
+                                ? "No transcript was recorded for this interaction."
+                                : "No messages have been recorded for this conversation yet.")
                         </p>
                     }
                     else
