@@ -67,6 +67,31 @@ public sealed class CollectionsCampaignAppServiceTests
             unit, $"TP140-{unit}", "TP140", "INV-1", "", new(2026, 10, day), amount, "Installment");
 
     [Fact]
+    public async Task SeveralTowers_FilterCustomersCountsAndTotals_AndEmptyOrSingleKeepTheEstablishedPaths()
+    {
+        var h = new Harness(); h.Campaign.FinancialSourceValidated = true;
+        h.Source.Items.AddRange([
+            Row(amount: 100m, tenant: "1", unit: 101) with { TowerId = 1, TowerNumber = "140" },
+            Row(amount: 200m, tenant: "2", unit: 102) with { TowerId = 2, TowerNumber = "139" },
+            Row(amount: 400m, tenant: "3", unit: 103) with { TowerId = 3, TowerNumber = "138" }]);
+
+        var two = (await h.Service.PreviewAsync(h.Manager, "CurrentMonthReminder", towerIds: [2, 1])).Value!;
+        Assert.Equal(2, two.TotalCount);
+        Assert.Equal(new[] { "1", "2" }, two.Items.Select(c => c.TenantId).Order().ToArray());
+        Assert.Equal(300m, two.Items.Sum(c => c.TotalAmount));
+        Assert.Equal(new[] { 1, 2 }, two.TowerIds!.ToArray());
+        Assert.Equal(new[] { 1, 2 }, h.Source.Requests.Select(r => r.TowerId!.Value).Order().ToArray());   // one read per tower: the same evaluation as a single tower
+
+        var all = (await h.Service.PreviewAsync(h.Manager, "CurrentMonthReminder", towerIds: [])).Value!;   // empty selection = All projects
+        Assert.Equal(3, all.TotalCount); Assert.Equal(700m, all.Items.Sum(c => c.TotalAmount)); Assert.Null(all.TowerIds);
+
+        var one = (await h.Service.PreviewAsync(h.Manager, "CurrentMonthReminder", towerIds: [3])).Value!;
+        Assert.Equal(new[] { "3" }, one.Items.Select(c => c.TenantId).ToArray()); Assert.Equal(3, one.TowerId);
+
+        Assert.Equal(CollectionsOutcome.InvalidRequest, (await h.Service.PreviewAsync(h.Manager, "CurrentMonthReminder", towerIds: [1, 0])).Outcome);
+    }
+
+    [Fact]
     public async Task DefaultIsReviewOnly_GenesysExportRequiresReconciledSource()
     {
         var h = new Harness(); h.Source.Items.Add(Row());

@@ -37,6 +37,8 @@ public sealed class RcvReceivablesRefresher(IConfiguration configuration, Receiv
         }
         var ok = results.Count(r => r.Status == "Succeeded");
         // A newly published snapshot may hold units whose CRM owners were still without a company (a tower number that exists in both companies): tie them now.
+        // The towers of the newly published snapshot join dbo.CollectionsTowers (the tower picker / filter), before the CRM owners are tied to companies.
+        if (ok > 0) await SyncTowersAsync(cancellationToken);
         if (ok > 0) await ResolveCrmOwnerCompaniesAsync(cancellationToken);
         var failed = results.Count(r => r.Status == "Failed");
         var status = failed == 0 ? (ok > 0 ? "Succeeded" : "AlreadyRunning") : ok > 0 ? "PartialFailure" : "Failed";
@@ -47,6 +49,29 @@ public sealed class RcvReceivablesRefresher(IConfiguration configuration, Receiv
             _ => string.Join(" ", results.Where(r => r.Status == "Failed").Select(r => $"Company {r.CompanyId}: {r.ErrorMessage}"))
         };
         return new ReceivablesRefreshResult(firstRun, status, message, results);
+    }
+
+    /// <summary>
+    /// Best effort and never throws (a failure here never fails or undoes the refresh): <c>dbo.usp_CollectionsRcv_SyncTowers</c> (V014) adds the towers the current snapshot holds to
+    /// <c>dbo.CollectionsTowers</c> and names a placeholder from the single CRM name. Idempotent; never deletes or overwrites a real name; touches no financial data.
+    /// </summary>
+    private async Task SyncTowersAsync(CancellationToken cancellationToken)
+    {
+        try
+        {
+            var connectionString = configuration.GetConnectionString(options.ConnectionStringName);
+            if (string.IsNullOrWhiteSpace(connectionString)) return;
+            await using var connection = new SqlConnection(connectionString);
+            await connection.OpenAsync(cancellationToken);
+            await using var command = new SqlCommand("dbo.usp_CollectionsRcv_SyncTowers", connection) { CommandType = CommandType.StoredProcedure, CommandTimeout = 120 };
+            command.Parameters.Add("@Apply", SqlDbType.Bit).Value = true;
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+            if (await reader.ReadAsync(cancellationToken))
+                logger.LogInformation("Towers synchronised from the receivables snapshot: {Inserted} added, {Renamed} named, {Skipped} skipped (not a plain numeric number), {Seen} in the snapshot.",
+                    reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3));
+        }
+        catch (Exception ex) when (ex is SqlException or InvalidOperationException)
+        { logger.LogWarning("The towers could not be synchronised after the refresh ({ExceptionType}); the tower list keeps its previous content.", ex.GetType().Name); }
     }
 
     /// <summary>
