@@ -18,16 +18,17 @@ Evidence (identical in the classification and assignment phases; a dry-run check
 
 | Situation | Result |
 |---|---|
-| No / invalid / inconsistent classification | `<originating department> / General / General` + that department's Published workflow |
+| No / invalid / inconsistent / request-type-only classification | `<originating department> / General / General` + that department's Published workflow |
 | Originating department unknown or inactive | `Customer Services / General / General` |
 | Valid classification (any status) | **Preserved**, never replaced (`ALREADY_VALID` / `ALREADY_DEFAULT`) |
-| Category-only (partial) | Kept unless `@IncludeCategoryOnly = 1`; counted in report 3b so the decision is visible |
+| Category-only (partial) | **Converted for AI-ended tickets only**; every other ticket still follows `@IncludeCategoryOnly` (unchanged, default 0). Old values are in the audit row |
+| Department | Never written. The target is the originating department's General; Customer Services General (classification only) when it is unknown or inactive |
 | Valid department with no usable General | Reported `DEPT_GENERAL_MISSING`, nothing written (run `EnsureDefaultGeneralClassification.sql`) |
 | Closed / Resolved | Label only: never reopened, never assigned, owner and status unchanged (proved by checks in report 8) |
-| Active, unowned | Existing CS Agent rules (confirmed handler, else shared Call Center rotation) |
+| Active, unowned | Existing approved rules only, no AI-specific path (confirmed handler, else shared Call Center rotation; `@IncludeAiEndedWithoutHuman` keeps its Production default). Report 5b shows each AI-ended ticket's assignment class |
 | Owned | Owner kept (every owned ticket is compared before / after) |
 
-Dry-run counts: report 1 `ClassificationToApply_AiEndedWithoutHuman` (and `_Other`, `AiEndedWithoutHuman_TicketsTotal`), report 1b row **A1**, report 3b (outcome x stored state x status), report 4 column `AiEndedWithoutHuman`. `@ApprovedClassificationCount` is still the **total** `ClassificationToApply`.
+Dry-run counts: report 1 `ClassificationToApply_AiEndedWithoutHuman` (and `_Other`, `AiEndedWithoutHuman_TicketsTotal`), report 1b row **A1**, report 3b (outcome x stored state x status), 3c (what was converted, by stored state), 5b (assignment outcome), report 4 column `AiEndedWithoutHuman`. `@ApprovedClassificationCount` is still the **total** `ClassificationToApply`.
 
 ## What is and is not written
 
@@ -45,7 +46,7 @@ Closed and Resolved tickets can be re-classified (a label only) but are never as
 1. **Department is not changed.** Only an explicit transfer / request-type routing event moves a department in the existing workflow; report 9b lists mismatches for review.
 2. **A valid department with no usable General of its own** is reported (`DEPT_GENERAL_MISSING`) and left alone — run `EnsureDefaultGeneralClassification.sql` first. It is never swapped for Customer Services'.
 3. **Owned tickets are never reassigned**, even if the owner is deactivated (report 9a lists them). Reassignment would be a new rule.
-4. Category-only tickets are kept (`@IncludeCategoryOnly = 0`); stale-AI rule off, as in Production configuration.
+4. Category-only tickets are kept (`@IncludeCategoryOnly = 0`) except AI-ended-without-human ones; stale-AI rule off, as in Production configuration.
 
 ## Run
 

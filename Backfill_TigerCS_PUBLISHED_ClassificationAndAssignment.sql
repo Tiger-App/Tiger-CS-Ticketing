@@ -12,14 +12,17 @@
        departments is re-classified to  <originating department> / General / General  and that request type's PUBLISHED workflow version.
        When the originating department is unknown / inactive it is classified Customer Services / General - the existing human classification queue
        (agents re-classify it with "Classify Ticket"; the UI shows "Customer Services / General").
-     * A VALID classification is never replaced; a ticket already on General stays; category-only tickets are kept unless @IncludeCategoryOnly = 1.
+     * A VALID classification is never replaced; a ticket already on General stays; category-only tickets are kept unless @IncludeCategoryOnly = 1
+       (EXCEPT AI-ended-without-human tickets, see below: for them category-only is re-classified; the global switch is not changed).
      * Collections tickets are never touched. A valid department WITHOUT its own General is a CONFIGURATION error: reported, nothing written
        (run EnsureDefaultGeneralClassification.sql first). Nothing is created here and the department is never swapped for Customer Services'.
      * Writes Tickets.CategoryId / RequestTypeId / WorkflowTemplateId ONLY. Applies to every status (a Closed ticket is labelled, never reopened).
      * AI ENDED WITHOUT HUMAN INTERVENTION (a Genesys conversation exists, none is live, and there is no human evidence: no follow-up flag, handoff, first human
        response, agent message, handler or handled-by user - the SAME evidence phase 2 uses) is a LABEL on the tickets above, not a new rule: such a ticket with no / invalid
-       classification becomes <department> / General / General + that department's Published workflow, or Customer Services / General when its department is unknown /
-       inactive; a valid classification is preserved. They are counted separately in report 1 (ClassificationToApply_AiEndedWithoutHuman, AiEndedWithoutHuman_TicketsTotal),
+       OR CATEGORY-ONLY classification becomes <originating department> / General / General + that department's Published workflow, or Customer Services / General when
+       the department is unknown / inactive (classification target ONLY - the stored current / originating department is never written); a valid classification is preserved.
+       Category-only is converted for THESE tickets only: @IncludeCategoryOnly keeps its meaning for every other ticket.
+       They get NO special assignment rule: phase 2 decides them exactly like any other active unowned ticket (report 5b shows the outcome). They are counted separately in report 1 (ClassificationToApply_AiEndedWithoutHuman, AiEndedWithoutHuman_TicketsTotal),
        report 1b (A1), report 3b (outcome by status) and flagged in report 4 / the audit row ("AiEndedWithoutHuman=1"). @ApprovedClassificationCount stays the TOTAL.
        Any status is labelled; only ACTIVE unowned ones then get a CS Agent (phase 2, @IncludeAiEndedWithoutHuman = 1, the application default).
 
@@ -287,7 +290,7 @@ BEGIN TRY
              WHEN IsCollections = 1 THEN 'EXCLUDED_COLLECTIONS'
              WHEN IsDefault = 1 THEN 'ALREADY_DEFAULT'
              WHEN State = 'VALID' THEN 'ALREADY_VALID'
-             WHEN State = 'CATEGORY_ONLY' AND @IncludeCategoryOnly = 0 THEN 'CATEGORY_ONLY_KEPT'
+             WHEN State = 'CATEGORY_ONLY' AND @IncludeCategoryOnly = 0 AND AiEndedNoHuman = 0 THEN 'CATEGORY_ONLY_KEPT'   -- AI-ended tickets: category-only IS a candidate (their own rule; the global switch is untouched)
              ELSE 'CANDIDATE' END;
 
     -- No usable Customer Services / General anywhere: the rule is not enforced and the run applies nothing (DefaultClassificationBackfillRunStatus.ConfigurationMissing).
@@ -557,6 +560,16 @@ BEGIN TRY
                                         WHERE k.Decision <> 'APPLY'
                                           AND (ISNULL(t.CategoryId, -1) <> ISNULL(k.OldCategoryId, -1) OR ISNULL(t.RequestTypeId, -1) <> ISNULL(k.OldRequestTypeId, -1)
                                                OR ISNULL(t.WorkflowTemplateId, -1) <> ISNULL(k.OldWorkflowTemplateId, -1))) THEN 'PASS' ELSE 'FAIL' END, NULL;
+    INSERT @Check SELECT N'No ticket with a VALID classification (or already on General) was selected for reclassification',
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM @Cls k WHERE k.Decision = 'APPLY' AND (k.State = 'VALID' OR k.IsDefault = 1)) THEN 'PASS' ELSE 'FAIL' END, NULL;
+    INSERT @Check SELECT N'Category-only is converted ONLY for AI-ended-without-human tickets (all others follow @IncludeCategoryOnly)',
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM @Cls k WHERE k.Decision = 'APPLY' AND k.State = 'CATEGORY_ONLY' AND k.AiEndedNoHuman = 0 AND @IncludeCategoryOnly = 0) THEN 'PASS' ELSE 'FAIL' END, NULL;
+    INSERT @Check SELECT N'Stored current and originating department unchanged for every reclassified ticket (Customer Services fallback is classification only)',
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM @Cls k JOIN dbo.Tickets t ON t.TicketId = k.TicketId
+                                        WHERE k.Decision = 'APPLY' AND (t.CurrentDepartmentId <> k.CurrentDepartmentId OR t.OriginatingDepartmentId <> k.OriginatingDepartmentId)) THEN 'PASS' ELSE 'FAIL' END, NULL;
+    INSERT @Check SELECT N'Every AI-ended active ticket that received an owner was ELIGIBLE under the unchanged phase-2 rules (not assigned because of the AI-ended flag)',
+                  CASE WHEN NOT EXISTS (SELECT 1 FROM @Cls k JOIN @Asg a ON a.TicketId = k.TicketId
+                                        WHERE k.AiEndedNoHuman = 1 AND a.AgentId IS NOT NULL AND (a.Class <> 'ELIGIBLE' OR a.TicketStatus NOT BETWEEN 1 AND 4)) THEN 'PASS' ELSE 'FAIL' END, NULL;
     INSERT @Check SELECT N'AI-ended-without-human evidence identical in the classification and assignment phases',
                   CASE WHEN NOT EXISTS (SELECT 1 FROM @Cls k JOIN @Asg a ON a.TicketId = k.TicketId
                                         WHERE k.EvHumanNeeded <> a.HumanNeeded OR k.EvGenesys <> a.HasGenesys OR k.EvLiveGenesys <> a.HasLiveGenesys) THEN 'PASS' ELSE 'FAIL' END, NULL;
@@ -587,6 +600,9 @@ SELECT CASE WHEN @DryRun = 1 THEN 'DRY RUN (rolled back)' ELSE 'COMMITTED' END A
        @ClsApply AS ClassificationToApply, @ClsGap AS ClassificationBlockedByConfiguration,
        (SELECT COUNT(*) FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 1) AS ClassificationToApply_AiEndedWithoutHuman,
        (SELECT COUNT(*) FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 0) AS ClassificationToApply_Other,
+       (SELECT COUNT(*) FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 1 AND State = 'CATEGORY_ONLY') AS ClassificationToApply_AiEnded_CategoryOnly,
+       (SELECT COUNT(*) FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 1 AND TargetSource = 'CS_FALLBACK') AS ClassificationToApply_AiEnded_CsFallback,
+       (SELECT COUNT(*) FROM @Cls WHERE AiEndedNoHuman = 1 AND Decision = 'ALREADY_VALID') AS AiEnded_ValidClassificationPreserved,
        (SELECT COUNT(*) FROM @Cls WHERE AiEndedNoHuman = 1 AND IsCollections = 0) AS AiEndedWithoutHuman_TicketsTotal,
        @AsgApply AS AssignmentToApply, @AsgHandler AS AssignmentToConfirmedHandler, @AsgRotation AS AssignmentToSharedRotation, @AsgNoAgent AS AssignmentBlockedNoAgent,
        @N AS EligibleCsAgents, @Cursor AS RotationCursorBefore, ISNULL(@LastAgent, @Cursor) AS RotationCursorAfter,
@@ -619,7 +635,7 @@ GROUP BY State, TicketStatus, Decision ORDER BY Decision, State, TicketStatus;
 SELECT CASE k.Decision WHEN 'APPLY' THEN '1. Will be classified General / General'
                        WHEN 'ALREADY_DEFAULT' THEN '2. Kept: already General / General'
                        WHEN 'ALREADY_VALID' THEN '3. Kept: existing valid classification preserved'
-                       WHEN 'CATEGORY_ONLY_KEPT' THEN '4. Kept: category-only (partial) - set @IncludeCategoryOnly = 1 to include'
+                       WHEN 'CATEGORY_ONLY_KEPT' THEN '4. (not expected for AI-ended: category-only is converted)'
                        WHEN 'EXCLUDED_COLLECTIONS' THEN '5. Excluded: Collections'
                        WHEN 'DEPT_GENERAL_MISSING' THEN '6. BLOCKED: department has no usable General'
                        WHEN 'CONFIG_MISSING_CS' THEN '6. BLOCKED: Customer Services General missing'
@@ -630,6 +646,12 @@ SELECT CASE k.Decision WHEN 'APPLY' THEN '1. Will be classified General / Genera
 FROM @Cls k WHERE k.AiEndedNoHuman = 1
 GROUP BY k.Decision, k.TargetSource, k.State, k.TicketStatus ORDER BY AiEndedWithoutHuman_Outcome, ClassificationTarget, StoredClassificationState, k.TicketStatus;
 
+-- 3c. AI-ended-without-human tickets that will be classified: how many came from each stored state (NO_CLASSIFICATION / INVALID / INCONSISTENT / REQUEST_TYPE_ONLY / CATEGORY_ONLY)
+SELECT k.State AS StoredClassificationState, k.TargetSource, COUNT(*) AS Tickets,
+       SUM(CASE WHEN k.TicketStatus IN (5, 6) THEN 1 ELSE 0 END) AS ClosedOrResolved_LabelOnly,
+       SUM(CASE WHEN k.TicketStatus BETWEEN 1 AND 4 THEN 1 ELSE 0 END) AS Active
+FROM @Cls k WHERE k.AiEndedNoHuman = 1 AND k.Decision = 'APPLY' GROUP BY k.State, k.TargetSource ORDER BY k.State, k.TargetSource;
+
 -- 4. Classification: proposed changes (APPLY) and blocked tickets, oldest first
 SELECT TOP (5000) k.TicketId, k.TicketNumber, k.TicketStatus, d.Code AS CurrentDepartment, o.Code AS OriginatingDepartment, k.State,
        k.OldCategoryId, k.OldRequestTypeId, k.NewCategoryId, k.NewRequestTypeId, k.NewWorkflowTemplateId, k.TargetDeptCode AS NewClassificationDepartment, k.TargetSource,
@@ -639,6 +661,10 @@ WHERE k.Decision IN ('APPLY', 'DEPT_GENERAL_MISSING', 'CONFIG_MISSING_CS') ORDER
 
 -- 5. Assignment: classes (active, unowned tickets only)
 SELECT Class, ISNULL(Source, '-') AS Source, TicketStatus, COUNT(*) AS Tickets FROM @Asg GROUP BY Class, Source, TicketStatus ORDER BY Class, Source, TicketStatus;
+
+-- 5b. AI-ended-without-human tickets in the ASSIGNMENT phase: they follow the SAME approved rules as every other ticket (no AI-specific path). Active + unowned only.
+SELECT a.Class, ISNULL(a.Source, '-') AS Source, a.TicketStatus, COUNT(*) AS Tickets
+FROM @Asg a JOIN @Cls k ON k.TicketId = a.TicketId WHERE k.AiEndedNoHuman = 1 GROUP BY a.Class, a.Source, a.TicketStatus ORDER BY a.Class, a.Source, a.TicketStatus;
 
 -- 6. Assignment: proposed changes, in the order the rotation deals them
 SELECT TOP (5000) a.TicketId, a.TicketNumber, a.TicketStatus, d.Code AS Department, a.CreatedAtUtc, a.Source, a.AgentId AS ProposedOwner, u.UserName AS ProposedOwnerUserName
