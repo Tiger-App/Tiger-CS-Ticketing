@@ -321,8 +321,9 @@ public sealed class ReviewQueryService(
             var d = new string(customer.Where(char.IsAsciiDigit).ToArray());
             if (d.Length >= 3) digits = d.TrimStart('0');
         }
+        var towerSet = TowerSet(f);
         return (new ReviewQuerySpec(f.CompanyId, Blank(f.Project), Blank(f.Unit), Blank(customer), digits, dueFrom, dueTo, statuses,
-            f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, TowerSet(f) is { Count: 1 } one ? one[0] : null, TowerSet(f) is { Count: > 1 } many ? many : null), null);
+            f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, towerSet is { Count: 1 } onlyTower ? onlyTower[0] : null, towerSet is { Count: > 1 } manyTowers ? manyTowers : null), null);
     }
 
     /// <summary>The distinct tower ids of a filter (the single id and the list together); empty = All projects.</summary>
