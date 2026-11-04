@@ -11,22 +11,27 @@
 <div class="field-group tower-multi" data-tower-multi data-all-text="@Model.AllText">
     <label class="field-label" id="@(Model.Id)-label">@Model.Label</label>
     <details class="tower-multi__box">
-        <summary class="field-select tower-multi__summary" aria-labelledby="@(Model.Id)-label" data-tower-summary>@(selectedCount == 0 ? Model.AllText : selectedCount == 1 ? "1 tower selected" : $"{selectedCount} towers selected")</summary>
+        <summary class="field-select tower-multi__summary" aria-labelledby="@(Model.Id)-label" aria-haspopup="listbox" data-tower-summary>@(selectedCount == 0 ? Model.AllText : selectedCount == 1 ? "1 tower selected" : $"{selectedCount} towers selected")</summary>
         <div class="tower-multi__panel">
-            <input type="search" class="field-input tower-multi__search" placeholder="Search towers" autocomplete="off" aria-label="Search towers" data-tower-search />
-            <div class="tower-multi__actions">
-                <button type="button" class="btn btn-sm" data-tower-all>Select all</button>
-                <button type="button" class="btn btn-sm" data-tower-clear>Clear all</button>
+            <div class="tower-multi__searchbox">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+                <input type="search" class="tower-multi__search" placeholder="Search towers" autocomplete="off" aria-label="Search towers" data-tower-search />
             </div>
-            <ul class="tower-multi__list" data-tower-list>
+            <div class="tower-multi__actions">
+                <span class="tower-multi__count" aria-live="polite" data-tower-count></span>
+                <button type="button" class="tower-multi__action" data-tower-all>Select all</button>
+                <button type="button" class="tower-multi__action" data-tower-clear>Clear all</button>
+            </div>
+            <ul class="tower-multi__list" role="group" aria-label="Towers" data-tower-list>
                 @foreach (var tower in Model.Towers)
                 {
                     var label = CollectionsDisplay.TowerLabel(tower);
-                    <li data-tower-item data-label="@label.ToLowerInvariant()"><label><input type="checkbox" name="towerId" value="@tower.TowerId" checked="@Model.SelectedTowerIds.Contains(tower.TowerId)" /> <span>@label</span></label></li>
+                    var named = label.Contains(" - ", StringComparison.Ordinal);
+                    <li data-tower-item data-label="@label.ToLowerInvariant()" data-display="@label"><label><input type="checkbox" name="towerId" value="@tower.TowerId" checked="@Model.SelectedTowerIds.Contains(tower.TowerId)" /> <span class="tower-multi__code">@tower.TowerNumber</span>@if (named) {<span class="tower-multi__name">@tower.TowerName.Trim()</span>}</label></li>
                 }
                 @foreach (var id in unknown)
                 {
-                    <li data-tower-item data-label="tower #@id"><label><input type="checkbox" name="towerId" value="@id" checked="checked" /> <span>Tower #@id (not in the list)</span></label></li>
+                    <li data-tower-item data-label="tower #@id" data-display="Tower #@id (not in the list)"><label><input type="checkbox" name="towerId" value="@id" checked="checked" /> <span class="tower-multi__code">#@id</span><span class="tower-multi__name">Not in the list</span></label></li>
                 }
                 <li class="tower-multi__empty" data-tower-empty hidden>No matching tower</li>
             </ul>
