@@ -151,4 +151,18 @@ public class FirstResponseTriggerTests
         Assert.NotNull(requested.TicketAgentHandoffId);
         Assert.Null(ticket.FirstHumanResponseAtUtc);
     }
+
+    [Fact]
+    public async Task ALateDeliveredEarlierLine_IsTheFirstResponse_NotTheOneWithTheLowerDeliverySequence()
+    {
+        var (f, ticket) = await SeedAsync("fr-out-of-order");
+
+        // The minute-9 line is delivered (sequenced) before the minute-7 one, but the minute-7 line was SENT first.
+        await EndAsync(f, "fr-out-of-order",
+            Line("Customer", 0, "I need a receipt."),
+            Line("HumanAgent", 9, "Could you confirm your unit?"),
+            Line("HumanAgent", 7, "Hello, I can help."));
+
+        Assert.Equal(Start.AddMinutes(7), ticket.FirstHumanResponseAtUtc);
+    }
 }

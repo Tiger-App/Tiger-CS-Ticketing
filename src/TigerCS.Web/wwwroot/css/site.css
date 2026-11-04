@@ -222,6 +222,7 @@ table { border-collapse: collapse; width: 100%; }
 .badge-sla-paused { background: var(--color-neutral-tint); color: var(--color-text-secondary); border-color: var(--color-border); }
 .badge-sla-na { background: var(--color-neutral-tint); color: var(--color-text-secondary); border-color: var(--color-border); }
 .badge-sla-breached { background: var(--color-critical-pale); color: var(--color-critical); border-color: var(--color-critical-line); }
+.badge-sla-overdue { background: var(--color-critical-pale); color: var(--color-critical); border-color: var(--color-critical-line); }
 
 .badge-verification-verified { background: var(--color-success-pale); color: var(--color-success); border-color: var(--color-success-line); }
 .badge-verification-pendingcrmverification { background: var(--color-warning-tint); color: var(--color-warning); border-color: var(--color-warning-line); }
@@ -2316,3 +2317,53 @@ a.ticket-header__customer-name:hover { text-decoration: underline; }
 .timeline-closure > div { display: flex; gap: var(--space-3); flex-wrap: wrap; padding: 2px 0; }
 .timeline-closure dt { min-width: 14em; font-weight: 600; }
 .timeline-closure dd { margin: 0; }
+
+
+/* ---------- Ticket Details redesign: header, customer band, next step, one fold ----------
+   One dominant (gold) action on the page — the Next step button. Every other allowed action lives in the Actions menu, which opens
+   each action's form inline as an accordion (no popover inside a popover). */
+.ticket-header { padding: var(--space-4) var(--space-5); }
+.ticket-header__top { grid-template-columns: minmax(0, 1fr) auto; }
+.ticket-header__badges { margin: var(--space-2) 0; }
+.ticket-header__actions { align-self: start; }
+.actions-menu__panel { width: min(380px, calc(100vw - 2 * var(--space-4))); max-height: 70vh; overflow-y: auto; display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-2); }
+.actions-menu__panel > .disclosure, .actions-menu__panel > form { width: 100%; }
+.actions-menu__panel > .disclosure > summary { width: 100%; justify-content: flex-start; }
+.actions-menu__panel > form .btn { width: 100%; justify-content: flex-start; }
+.actions-menu__panel .disclosure__panel { position: static; box-shadow: none; border: 0; padding: var(--space-2) var(--space-1) var(--space-1); min-width: 0; }
+.actions-menu > summary::after { content: ""; width: 6px; height: 6px; margin-left: 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg) translateY(-2px); }
+
+.customer-strip { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-3) var(--space-5); background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-3); }
+.customer-strip__avatar { flex: none; width: 36px; height: 36px; font-size: 14px; }
+.customer-strip__main { flex: 1 1 260px; min-width: 0; }
+.customer-strip__name-row { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-2); }
+.customer-strip__name { font-size: 16px; font-weight: 700; color: var(--color-text); overflow-wrap: anywhere; }
+a.customer-strip__name { color: var(--color-info); }
+a.customer-strip__name:hover { text-decoration: underline; }
+.customer-strip__name.is-muted { color: var(--color-text-secondary); font-weight: 600; }
+.customer-strip__hint { margin: 2px 0 0; font-size: 13px; color: var(--color-text-secondary); }
+.customer-strip__facts { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-5); margin: 0; font-size: 14px; }
+.customer-strip__facts dt { font-size: var(--text-2xs); font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: var(--color-text-secondary); }
+.customer-strip__facts dd { margin: 0; overflow-wrap: anywhere; }
+.customer-strip__link { flex: none; }
+
+.attention { margin-bottom: var(--space-3); }
+.overview-stack { display: flex; flex-direction: column; gap: var(--space-3); }
+.more-details__hint { margin-left: var(--space-2); font-weight: 400; font-size: 13px; color: var(--color-text-secondary); }
+.more-details__body > .facts-section + .facts-section { margin-top: var(--space-4); padding-top: var(--space-4); border-top: 1px solid var(--color-border); }
+.attention__more summary, .attention__unavailable summary { min-height: 24px; }
+
+@media (max-width: 720px) {
+  .ticket-header { padding: var(--space-3); }
+  .ticket-header__top { grid-template-columns: minmax(0, 1fr); }
+  .ticket-header__actions { justify-self: stretch; }
+  .ticket-header__actions .actions-menu > summary { width: 100%; justify-content: center; }
+  .actions-menu__panel { position: static; width: 100%; max-height: none; margin-top: var(--space-2); box-shadow: none; }
+  .customer-strip { padding: var(--space-3); gap: var(--space-2); }
+  .customer-strip__link { width: 100%; justify-content: center; }
+}
+
+/* Minimal alert: urgency is the red edge and headline, not a filled box. */
+.attention--critical { background: var(--color-surface); }
+.attention--warning { background: var(--color-surface); }
+.attention--info { background: var(--color-surface); }

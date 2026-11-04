@@ -501,8 +501,14 @@ public sealed class FakeTicketResolutionRepository : ITicketResolutionRepository
 {
     public List<TicketResolution> Added { get; } = [];
 
+    /// <summary>
+    /// Behave like the real repository inside a unit of work: a row staged with AddAsync is NOT returned by a read until the work is saved
+    /// (EF's query does not see Added entities, and the fakes never "save"). Off by default so existing tests keep their simpler model.
+    /// </summary>
+    public bool HideUnsavedRows { get; init; }
+
     public Task<TicketResolution?> GetCurrentAsync(long ticketId, CancellationToken cancellationToken = default) =>
-        Task.FromResult(Added.LastOrDefault(r => r.TicketId == ticketId && r.IsCurrent));
+        Task.FromResult(HideUnsavedRows ? null : Added.LastOrDefault(r => r.TicketId == ticketId && r.IsCurrent));
 
     public Task<IReadOnlyDictionary<long, TicketResolution>> ListCurrentByTicketIdsAsync(
         IReadOnlyCollection<long> ticketIds, CancellationToken cancellationToken = default) =>

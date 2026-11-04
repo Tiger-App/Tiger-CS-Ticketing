@@ -55,8 +55,8 @@ public sealed class TicketDetailsConversationHistoryTests
         var order = new[]
         {
             At("class=\"ticket-header\""),
-            At("What needs your attention?"),
-            At("_TicketCustomerCard"),
+            At("class=\"customer-strip\""),
+            At(">Next step</div>"),
             At("<div class=\"facts-section__title\">Request Details</div>"),
             At("_TicketConversationHistory"),
             At("id=\"customer-satisfaction\""),
@@ -68,24 +68,21 @@ public sealed class TicketDetailsConversationHistoryTests
     }
 
     [Fact]
-    public void TheQuickFactsSidebar_StaysOperationalOnly_AndDoesNotRepeatTheConversationOrSatisfaction()
+    public void ThereIsNoQuickFactsSidebar_StatusPriorityOwnerAndSlaLiveInTheHeaderOnly()
     {
         var html = TicketDetailsViewHtml();
-        var start = html.IndexOf("aria-label=\"Quick facts\"", StringComparison.Ordinal);
-        var quickFacts = html[start..html.IndexOf("</aside>", start, StringComparison.Ordinal)];
 
-        Assert.DoesNotContain("Conversation", quickFacts);
-        Assert.DoesNotContain("Satisfaction", quickFacts);
-        Assert.DoesNotContain("review", quickFacts, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("quick-facts", html);
+        Assert.DoesNotContain("Quick facts", html);
     }
 
     [Fact]
-    public void CustomerSatisfaction_IsAlwaysVisible_NotInsideTheCollapsedReferenceDetails()
+    public void CustomerSatisfaction_WhenAReviewExists_IsVisible_NotInsideTheCollapsedAdditionalDetails()
     {
         var html = TicketDetailsViewHtml();
 
         var satisfaction = html.IndexOf("id=\"customer-satisfaction\"", StringComparison.Ordinal);
-        var collapsed = html.IndexOf("<details class=\"more-details\">", StringComparison.Ordinal);
+        var collapsed = html.IndexOf("id=\"additional-details\"", StringComparison.Ordinal);
         Assert.True(satisfaction > 0 && collapsed > satisfaction, "Customer Satisfaction must come before, and outside, the collapsed reference details.");
 
         // Rating, feedback, review date and the test indicator are all still rendered.

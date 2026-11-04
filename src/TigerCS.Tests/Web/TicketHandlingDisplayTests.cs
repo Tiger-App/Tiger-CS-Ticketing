@@ -149,7 +149,7 @@ public sealed class TicketHandlingDisplayTests
     {
         var view = File.ReadAllText(SourceFile(Path.Combine("TigerCS.Web", "Pages", "TicketDetails.cshtml")));
 
-        foreach (var label in new[] { "First handled by", "Current owner", "Times transferred", "Escalated", "Resolved by", "Resolved on" })
+        foreach (var label in new[] { "First handled by", "Times transferred", "Escalated", "Resolved by" })
         {
             Assert.Contains(label, view);
         }

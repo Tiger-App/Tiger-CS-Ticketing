@@ -83,19 +83,31 @@ public sealed class SlaBreachProcessor(
     /// <param name="nowUtc">The evaluation moment.</param>
     /// <param name="correlationId">Ties every row this call writes to one event (NFR-REL-03).</param>
     /// <param name="cancellationToken">Cancels the operation.</param>
+    /// <param name="resolutionAchievedAtUtc">
+    /// The moment the Resolution was achieved, when the CALLER has just staged the resolution row in the same unit of work. That row is
+    /// not yet visible to a database query, so reading it back (the default) finds nothing and an on-time resolution was never marked
+    /// <c>Met</c>. Ignored for the First Response clock, whose achievement moment is on the ticket itself.
+    /// </param>
+    /// <param name="settlingClosure">
+    /// True only for the system closure that Resolves and Closes in one step: the ticket is already Closed in memory, but this is the single
+    /// moment its Resolution SLA outcome can still be settled (nothing may touch a Closed ticket afterwards). On time it records Met; late it
+    /// records the Resolution breach (flag, SlaState, history, audit) but, because the ticket is closing, no Level 2 escalation.
+    /// </param>
     public async Task<SlaBreachProcessingOutcome> ProcessDeadlineAsync(
         Ticket ticket,
         SlaDeadlineType deadlineType,
         DateTime nowUtc,
         Guid correlationId,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        DateTime? resolutionAchievedAtUtc = null,
+        bool settlingClosure = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
 
         // Closed-ticket immutability, checked before anything is read or
         // written: a Closed ticket's SLA outcome was settled when it was
         // resolved, and nothing — including a system job — may change it now.
-        if (ticket.TicketStatus == TicketStatus.Closed)
+        if (ticket.TicketStatus == TicketStatus.Closed && !settlingClosure)
         {
             return SlaBreachProcessingOutcome.TicketClosed;
         }
@@ -124,7 +136,9 @@ public sealed class SlaBreachProcessor(
         }
 
         var dueAtUtc = instance.DueAtUtcFor(deadlineType);
-        var achievedAtUtc = await GetAchievementMomentAsync(ticket, deadlineType, cancellationToken);
+        var achievedAtUtc = deadlineType == SlaDeadlineType.Resolution && resolutionAchievedAtUtc is { } staged
+            ? staged
+            : await GetAchievementMomentAsync(ticket, deadlineType, cancellationToken);
 
         if (!IsBreached(dueAtUtc, achievedAtUtc, nowUtc))
         {
@@ -179,7 +193,13 @@ public sealed class SlaBreachProcessor(
             correlationId,
             cancellationToken);
 
-        await RaiseAutomaticLevel2Async(ticket, dueAtUtc, deadlineType, nowUtc, correlationId, cancellationToken);
+        // A ticket that is closing in this same step cannot be escalated (the domain refuses to raise the level of a Closed ticket, and
+        // there is nobody left to act on it), but the breach itself is still recorded: a system closure that landed after the deadline
+        // is a late resolution exactly like a person's, and must not read as "Running" forever.
+        if (!settlingClosure)
+        {
+            await RaiseAutomaticLevel2Async(ticket, dueAtUtc, deadlineType, nowUtc, correlationId, cancellationToken);
+        }
 
         return SlaBreachProcessingOutcome.BreachRecorded;
     }

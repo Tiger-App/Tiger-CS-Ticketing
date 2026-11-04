@@ -4,6 +4,7 @@ using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.SlaAndEscalation.Abstractions;
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
+using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
@@ -41,7 +42,9 @@ public sealed class TicketEscalationAppService(
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ITicketInteractionHandlerRepository? handlerRepository = null,
+    IServiceIdentityRegistry? serviceIdentities = null)
 {
     public async Task<SlaOperationResult<TicketEscalationResponseDto>> EscalateAsync(
         Guid callerEmployeeId,
@@ -83,7 +86,14 @@ public sealed class TicketEscalationAppService(
             return SlaOperationResult<TicketEscalationResponseDto>.Failure(SlaOperationOutcome.EscalationLevelTriggerMismatch);
         }
 
-        if (!await IsAuthorizedAsync(callerEmployeeId, callerRoles, ticket, triggerType, cancellationToken))
+        // Resource-level check first: escalating changes the ticket, so the caller must be able to open AND modify THIS ticket
+        // (Full access). Without it a restricted CS Agent - who is "inherently cross-department" for the role gate below - could
+        // escalate any ticket id, including ones assigned to other agents that they cannot even see. Chairman/CEO-style read-only
+        // access and a creator's read-only access fall out here as well.
+        if (await TicketVisibilityRule.GetTicketAccessAsync(
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken)
+            != TicketAccessLevel.Full
+            || !await IsAuthorizedAsync(callerEmployeeId, callerRoles, ticket, triggerType, cancellationToken))
         {
             return SlaOperationResult<TicketEscalationResponseDto>.Failure(SlaOperationOutcome.Forbidden);
         }

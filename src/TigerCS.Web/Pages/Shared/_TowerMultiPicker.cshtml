@@ -1,0 +1,43 @@
+@using TigerCS.Application.Modules.Collections.Dto
+@using TigerCS.Web.Pages.Collections
+@model TowerMultiPickerModel
+@* Multi-select Project / Tower filter. Works without JavaScript (a scrollable checkbox list in a <details>); collections-tower-multi.js adds search, Select all, Clear all and the summary text.
+   Nothing ticked = All projects. The checkboxes are named towerId, so the existing filter form, URLs and bookmarks carry the selection. *@
+@{
+    var known = Model.Towers.Select(t => t.TowerId).ToHashSet();
+    var unknown = Model.SelectedTowerIds.Where(id => !known.Contains(id)).ToList();
+    var selectedCount = Model.SelectedTowerIds.Count;
+}
+<div class="field-group tower-multi" data-tower-multi data-all-text="@Model.AllText">
+    <label class="field-label" id="@(Model.Id)-label">@Model.Label</label>
+    <details class="tower-multi__box">
+        <summary class="field-select tower-multi__summary" aria-labelledby="@(Model.Id)-label" data-tower-summary>@(selectedCount == 0 ? Model.AllText : selectedCount == 1 ? "1 tower selected" : $"{selectedCount} towers selected")</summary>
+        <div class="tower-multi__panel">
+            <input type="search" class="field-input tower-multi__search" placeholder="Search towers" autocomplete="off" aria-label="Search towers" data-tower-search />
+            <div class="tower-multi__actions">
+                <button type="button" class="btn btn-sm" data-tower-all>Select all</button>
+                <button type="button" class="btn btn-sm" data-tower-clear>Clear all</button>
+            </div>
+            <ul class="tower-multi__list" data-tower-list>
+                @foreach (var tower in Model.Towers)
+                {
+                    var label = CollectionsDisplay.TowerLabel(tower);
+                    <li data-tower-item data-label="@label.ToLowerInvariant()"><label><input type="checkbox" name="towerId" value="@tower.TowerId" checked="@Model.SelectedTowerIds.Contains(tower.TowerId)" /> <span>@label</span></label></li>
+                }
+                @foreach (var id in unknown)
+                {
+                    <li data-tower-item data-label="tower #@id"><label><input type="checkbox" name="towerId" value="@id" checked="checked" /> <span>Tower #@id (not in the list)</span></label></li>
+                }
+                <li class="tower-multi__empty" data-tower-empty hidden>No matching tower</li>
+            </ul>
+        </div>
+    </details>
+    @if (Model.LoadFailed)
+    {
+        <span class="receivables-meta" role="status">The tower list could not be loaded; only "@Model.AllText" is available. Retry the page.</span>
+    }
+    else if (Model.Towers.Count == 0)
+    {
+        <span class="receivables-meta" role="status">No towers are available yet; showing "@Model.AllText".</span>
+    }
+</div>

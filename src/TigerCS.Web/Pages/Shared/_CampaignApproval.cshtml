@@ -127,9 +127,10 @@
         }
         @foreach (var name in CampaignsModel.FilterFieldNames)
         {
+            if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
             <input type="hidden" name="@name" value="@(name switch {
                 "stage" => Model.Stage, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
-                "towerId" => Model.TowerId?.ToString(), "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
+                "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
         }
         <input type="hidden" name="selectionMode" value="@Model.SelectionMode" /><input type="hidden" name="unitKeys" value="@Model.UnitKeys" />
         <input type="hidden" name="expectedCount" value="@s.Count" /><input type="hidden" name="expectedFingerprint" value="@s.Fingerprint" />

@@ -345,6 +345,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
         if (s.CompanyId is { } company) q = q.Where(r => r.CompanyId == company);
         if (s.Project is { } project) { var p = Like(project); q = q.Where(r => EF.Functions.Like(r.ProjectCode, p, "\\")); }
         if (s.TowerId is { } tower) q = q.Where(r => r.TowerId == tower);
+        if (s.TowerIds is { Count: > 0 } towers) q = q.Where(r => r.TowerId != null && towers.Contains(r.TowerId.Value));
         if (s.Unit is { } unit) { var p = Like(unit); q = q.Where(r => EF.Functions.Like(r.UnitCode, p, "\\")); }
         if (s.CustomerText is { } text)
         {

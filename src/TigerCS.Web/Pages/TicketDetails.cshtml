@@ -51,6 +51,13 @@ else
     // The header action the guidance recommends is ringed, so the right button is easy to find among the allowed ones.
     string Rec(string key) => guidance.Primary is { IsTab: false } rp && rp.Key == key ? " is-recommended" : "";
 
+    // The Actions menu is rendered only when it would hold at least one action — never an empty menu. Each entry inside keeps the
+    // exact permission gate its endpoint enforces; this is only "is there anything to list".
+    var showActionsMenu = (!isClosed && (Model.CanAssign || Model.CanClassify || Model.CanTransfer || Model.CanChangeStatus
+                                          || Model.CanResolve || Model.CanEscalate || Model.CanRequestDowngrade))
+        || (isResolved && Model.CanClose)
+        || (t.IsReopenEligible && Model.CanReopen);
+
     <div class="page">
         <nav class="breadcrumb" aria-label="Breadcrumb">
             <a href="/Tickets">Tickets</a>
@@ -95,31 +102,13 @@ else
             </div>
         }
 
-        <section class="ticket-header">
+        @* ---- A. Ticket header: what it is, its state and who owns it. The customer is the next band; the one recommended step is the
+               band after that; every other allowed action lives in this menu, once. ---- *@
+        <section class="ticket-header" aria-label="Ticket summary">
             <div class="ticket-header__top">
                 <div class="ticket-header__main">
                     <div class="ticket-header__id">@t.TicketNumber</div>
                     <h1 class="ticket-header__title">@t.RequestSummary</h1>
-                    <div class="ticket-header__customer">
-                        <span class="customer-card__avatar ticket-header__avatar" aria-hidden="true">@TicketDisplay.Initials(Model.CustomerDisplayName ?? Model.CustomerNameLabel)</span>
-                        @if (Model.CustomerProfileHref is { } headerProfileHref)
-                        {
-                            <a class="ticket-header__customer-name" href="@headerProfileHref">@Model.CustomerNameLabel</a>
-                        }
-                        else
-                        {
-                            <span class="ticket-header__customer-name">@Model.CustomerNameLabel</span>
-                        }
-                        @if (Model.CustomerPhone is { } headerPhone)
-                        {
-                            <span class="text-secondary text-mono">@headerPhone</span>
-                        }
-                        <span class="badge badge-verification-@t.VerificationStatus.ToLowerInvariant()">@Model.CustomerVerificationLabel</span>
-                    </div>
-                    <div class="ticket-header__meta">
-                        <span><strong>Assigned To:</strong> @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName)</span>
-                        <span><strong>Assigned Department:</strong> @TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
-                    </div>
                     <div class="ticket-header__badges">
                         <span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(t.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(t.TicketStatus)</span>
                         <span class="badge badge-priority-@TicketDisplay.PriorityCssKey(t.PriorityId)">@TicketDisplay.PriorityLabel(t.PriorityId)</span>
@@ -128,9 +117,18 @@ else
                             <span class="badge badge-sla-@slaBadge.Value.CssKey" title="@(Model.Sla?.Explanation?.NotStartedReason)">SLA: @slaBadge.Value.Label</span>
                         }
                     </div>
+                    <div class="ticket-header__meta">
+                        <span><strong>Assigned To:</strong> @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
+                        <span><strong>Assigned Department:</strong> @TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
+                    </div>
                 </div>
 
-                <div class="ticket-header__actions" role="group" aria-label="Ticket actions">
+                @if (showActionsMenu)
+                {
+                <div class="ticket-header__actions">
+                    <details class="disclosure actions-menu" id="actions-menu" open="@(Model.OpenSection is "assign" or "classify" or "transfer" or "status" or "resolve" or "escalate" or "downgrade" or "reopen" ? "open" : null)">
+                        <summary class="btn btn-sm">Actions</summary>
+                        <div class="disclosure__panel actions-menu__panel" role="group" aria-label="Ticket actions">
                     @if (!isClosed)
                     {
                         @* Every control in this block is gated on the SAME rule its
@@ -243,7 +241,7 @@ else
                                from, the form is replaced by the reason and the existing administrative path: Classify is never offered
                                as something to do while it cannot be completed. *@
                             <details class="disclosure" id="action-classify" data-action="classify" open="@(Model.OpenSection == "classify" ? "open" : null)">
-                                <summary class="btn @(Model.ClassifyNotice is null ? "btn-gold " : "")btn-sm@(Model.ClassifyNotice is null ? Rec("classify") : "")">Classify@(Model.ClassifyNotice is null ? "" : " (not available)")</summary>
+                                <summary class="btn btn-sm@(Model.ClassifyNotice is null ? Rec("classify") : "")">Classify@(Model.ClassifyNotice is null ? "" : " (not available)")</summary>
                                 <div class="disclosure__panel">
                                     @if (Model.ClassifyNotice is { } classifyNotice)
                                     {
@@ -365,7 +363,7 @@ else
                         @if (Model.CanChangeStatus)
                         {
                         <details class="disclosure" id="action-status" data-action="status" open="@(Model.OpenSection == "status" ? "open" : null)">
-                            <summary class="btn @(isResolved ? "btn-sm" : "btn-gold btn-sm")@(Rec("status"))">Change Status</summary>
+                            <summary class="btn btn-sm@(Rec("status"))">Change Status</summary>
                             <div class="disclosure__panel">
                                 <form method="post" asp-page-handler="ChangeStatus" class="action-form">
                                     <input type="hidden" asp-for="Status.RowVersionBase64" />
@@ -490,7 +488,7 @@ else
                     {
                         <form method="post" asp-page-handler="Close" id="action-close" data-action="close">
                             <input type="hidden" asp-for="Close.RowVersionBase64" />
-                            <button type="submit" class="btn btn-gold btn-sm@(Rec("close"))">Close ticket</button>
+                            <button type="submit" class="btn btn-sm@(Rec("close"))">Close ticket</button>
                         </form>
                     }
 
@@ -504,7 +502,7 @@ else
                     @if (t.IsReopenEligible && Model.CanReopen)
                     {
                         <details class="disclosure" id="action-reopen" data-action="reopen" open="@(Model.OpenSection == "reopen" ? "open" : null)">
-                            <summary class="btn @(isClosed ? "btn-gold btn-sm" : "btn-sm")@(Rec("reopen"))">Reopen</summary>
+                            <summary class="btn btn-sm@(Rec("reopen"))">Reopen</summary>
                             <div class="disclosure__panel">
                                 @if (Model.ReopenTargetsUnavailable)
                                 {
@@ -531,7 +529,10 @@ else
                             </div>
                         </details>
                     }
+                        </div>
+                    </details>
                 </div>
+                }
             </div>
 
             @if (Model.PendingDowngrade is { } pendingDowngrade)
@@ -570,6 +571,114 @@ else
         </section>
 
 
+        @* ---- B. Customer summary: who is calling, how sure we are, and the way into the profile. Stated plainly when the lookup found nobody. ---- *@
+        @{
+            var customer = Model.CustomerSummary!;
+        }
+        <section class="customer-strip" aria-label="Customer">
+            <span class="customer-card__avatar customer-strip__avatar" aria-hidden="true">@(customer.HasName ? TicketDisplay.Initials(customer.Name) : "?")</span>
+            <div class="customer-strip__main">
+                <div class="customer-strip__name-row">
+                    @if (customer.ProfileHref is { } stripProfile)
+                    {
+                        <a class="customer-strip__name" href="@stripProfile">@customer.Name</a>
+                    }
+                    else
+                    {
+                        <span class="customer-strip__name@(customer.HasName ? "" : " is-muted")">@customer.Name</span>
+                    }
+                    <span class="badge badge-source-@customer.StateCss">@customer.StateLabel</span>
+                </div>
+                @if (customer.Hint is { } customerHint)
+                {
+                    <p class="customer-strip__hint">@customerHint</p>
+                }
+            </div>
+            <dl class="customer-strip__facts">
+                <div><dt>Phone</dt><dd class="text-mono">@(customer.Phone ?? "No phone recorded")</dd></div>
+                <div><dt>Project / unit</dt><dd>@(customer.ProjectUnit ?? "Not provided")@if (customer.ProjectUnit is not null && !customer.UnitIsConfirmed) { <span class="text-secondary"> · typed in</span> }</dd></div>
+            </dl>
+            @if (customer.ProfileHref is { } stripProfileLink)
+            {
+                <a class="btn btn-sm customer-strip__link" href="@stripProfileLink">Customer profile</a>
+            }
+        </section>
+
+        @* ---- C. Next step: the one recommended action for THIS viewer, why, and what blocks the rest. Everything else allowed is in the Actions menu. ---- *@
+        @{
+            var attentionCss = guidance.Level switch
+            {
+                AttentionLevel.Urgent => "critical",
+                AttentionLevel.Attention => "warning",
+                AttentionLevel.Done => "neutral",
+                _ => "info"
+            };
+        }
+        <section class="attention attention--@attentionCss" aria-labelledby="attention-title">
+            <div class="attention__label" id="attention-title">Next step</div>
+            <div class="attention__main">
+                <div class="attention__text">
+                    <p class="attention__headline">@guidance.Headline</p>
+                    <p class="attention__reason">@guidance.Reason</p>
+                </div>
+                @if (guidance.Primary is { } primary)
+                {
+                    @if (primary.IsTab)
+                    {
+                        <label class="btn btn-gold btn-sm tab-jump attention__cta" for="@primary.Key">@primary.Label</label>
+                    }
+                    else
+                    {
+                        <a class="btn btn-gold btn-sm attention__cta" href="#action-@primary.Key" data-guidance-target="@primary.Key">@primary.Label</a>
+                    }
+                }
+            </div>
+            @if (guidance.Alerts.Count > 0)
+            {
+                @* Blockers in a line or two; anything beyond the first two folds away so the card stays short. *@
+                <ul class="attention__alerts">
+                    @foreach (var alert in guidance.Alerts.Take(2))
+                    {
+                        <li class="attention__alert attention__alert--@alert.Level.ToString().ToLowerInvariant()">@alert.Text</li>
+                    }
+                </ul>
+                @if (guidance.Alerts.Count > 2)
+                {
+                    <details class="attention__unavailable">
+                        <summary>@(guidance.Alerts.Count - 2) more to be aware of</summary>
+                        <ul>
+                            @foreach (var alert in guidance.Alerts.Skip(2))
+                            {
+                                <li>@alert.Text</li>
+                            }
+                        </ul>
+                    </details>
+                }
+            }
+            @if (Model.CanRecordFirstResponse)
+            {
+                @* First Response SLA stops only on a HUMAN response. Staff who answer the customer outside the
+                   Genesys transcript (phone, e-mail, walk-in) record it here; AI/automated replies never do. *@
+                <form method="post" asp-page-handler="RecordFirstResponse" class="attention__inline-form">
+                    <input type="hidden" asp-for="Escalate.RowVersionBase64" />
+                    <span class="field-hint">Already answered the customer outside the system?</span>
+                    <button type="submit" class="btn btn-sm">Record first response</button>
+                </form>
+            }
+            @if (guidance.Unavailable.Count > 0)
+            {
+                <details class="attention__unavailable">
+                    <summary>Not available to you right now (@guidance.Unavailable.Count)</summary>
+                    <ul>
+                        @foreach (var blocked in guidance.Unavailable)
+                        {
+                            <li><strong>@blocked.Label</strong> &mdash; @blocked.Reason</li>
+                        }
+                    </ul>
+                </details>
+            }
+        </section>
+
         <div class="tabs-card tabs-card--page ticket-tabs">
             <input type="radio" name="pageTab" id="tab-details" class="tab-input" checked />
             <label class="tab-label" for="tab-details">Overview</label>
@@ -579,104 +688,42 @@ else
             <label class="tab-label" for="tab-customer">Customer@(Model.CustomerHistory is not null ? $" ({Model.CustomerHistory.TotalTickets})" : "")</label>
             <input type="radio" name="pageTab" id="tab-approvals" class="tab-input" />
             <label class="tab-label" for="tab-approvals">Approvals@(Model.Approvals is { } approvalsTab && approvalsTab.Approvals.Count > 0 ? $" ({approvalsTab.Approvals.Count})" : "")</label>
-            <input type="radio" name="pageTab" id="tab-attachments" class="tab-input" />
-            <label class="tab-label" for="tab-attachments">Attachments</label>
 
             <div class="tabs-body">
-                @* ---- Overview: the customer, the ticket facts, the SLA ---- *@
+                @* ---- Overview: D. the request and its conversation, E. the latest activity, F. everything else behind one fold ---- *@
                 <div class="tab-panel" id="panel-details">
-                    <div class="detail-layout">
-                        <div class="detail-main">
-                            @* ---- 1. What needs my attention? — the next step, in the order a CS employee works ---- *@
-                            @{
-                                var attentionCss = guidance.Level switch
+                    <div class="overview-stack">
+                        @* ---- D. Customer request: what was asked and how it is classified. Status, priority, owner and SLA are in the header;
+                                who is talking to the customer is in the conversation below. ---- *@
+                        @{
+                            var handlingInteraction = Model.Interactions.LastOrDefault(i => i.HandlingState is not null);
+                        }
+                        <section class="facts-panel" aria-label="Request details">
+                            <div class="facts-section__title">Request Details</div>
+                            <dl class="request-facts">
+                                @* An unclassified ticket says so plainly — a real state, not missing data. Categories are shown by name, never by id. *@
+                                <div class="facts-row"><dt>Category</dt><dd>@(t.CategoryId is null ? "Not yet classified" : Model.CategoryName ?? "Classified")</dd></div>
+                                <div class="facts-row"><dt>Request type</dt><dd>@(t.RequestTypeName ?? "Not yet classified")</dd></div>
+                                @if (t.OriginatingChannelId is not null)
                                 {
-                                    AttentionLevel.Urgent => "critical",
-                                    AttentionLevel.Attention => "warning",
-                                    AttentionLevel.Done => "neutral",
-                                    _ => "info"
-                                };
-                            }
-                            <section class="attention attention--@attentionCss" aria-labelledby="attention-title">
-                                <div class="attention__label" id="attention-title">What needs your attention?</div>
-                                <div class="attention__main">
-                                    <div class="attention__text">
-                                        <p class="attention__headline">@guidance.Headline</p>
-                                        <p class="attention__reason">@guidance.Reason</p>
+                                    @* The channel the ticket ENTERED on, resolved from channel configuration by id (still named once deactivated). *@
+                                    <div class="facts-row"><dt>Came in through</dt><dd>@(t.OriginatingChannelName ?? "Unknown channel")</dd></div>
+                                }
+                                @if (handlingInteraction is not null)
+                                {
+                                    <div class="facts-row">
+                                        <dt>Handled by</dt>
+                                        <dd>@TicketDisplay.HandlingStateLabel(handlingInteraction.HandlingState, handlingInteraction.AgentName)@if (handlingInteraction.Handoff is { } handlingHandoff) { <text> &middot; Handoff: @TicketDisplay.HandoffStatusLabel(handlingHandoff.Status)</text> }</dd>
                                     </div>
-                                    @if (guidance.Primary is { } primary)
-                                    {
-                                        @if (primary.IsTab)
-                                        {
-                                            <label class="btn btn-gold btn-sm tab-jump attention__cta" for="@primary.Key">@primary.Label</label>
-                                        }
-                                        else
-                                        {
-                                            <a class="btn btn-gold btn-sm attention__cta" href="#action-@primary.Key" data-guidance-target="@primary.Key">@primary.Label</a>
-                                        }
-                                    }
-                                </div>
-                                @if (guidance.Alerts.Count > 0)
-                                {
-                                    <ul class="attention__alerts">
-                                        @foreach (var alert in guidance.Alerts)
-                                        {
-                                            <li class="attention__alert attention__alert--@alert.Level.ToString().ToLowerInvariant()">@alert.Text</li>
-                                        }
-                                    </ul>
                                 }
-                                @if (Model.CanRecordFirstResponse)
-                                {
-                                    @* First Response SLA stops only on a HUMAN response. Staff who answer the customer outside the
-                                       Genesys transcript (phone, e-mail, walk-in) record it here; AI/automated replies never do. *@
-                                    <form method="post" asp-page-handler="RecordFirstResponse" class="attention__inline-form">
-                                        <input type="hidden" asp-for="Escalate.RowVersionBase64" />
-                                        <span class="field-hint">No person has replied yet. Answered outside the system?</span>
-                                        <button type="submit" class="btn btn-sm">Record first response</button>
-                                    </form>
-                                }
-                                @if (guidance.Unavailable.Count > 0)
-                                {
-                                    <details class="attention__unavailable">
-                                        <summary>Not available to you right now (@guidance.Unavailable.Count)</summary>
-                                        <ul>
-                                            @foreach (var blocked in guidance.Unavailable)
-                                            {
-                                                <li><strong>@blocked.Label</strong> &mdash; @blocked.Reason</li>
-                                            }
-                                        </ul>
-                                    </details>
-                                }
-                            </section>
+                            </dl>
+                        </section>
 
-                            @* ---- 2. Who is the customer ---- *@
-@await Html.PartialAsync("_TicketCustomerCard", Model, new ViewDataDictionary(ViewData) { ["Compact"] = true })
+                        @await Html.PartialAsync("_TicketConversationHistory", Model)
 
-                            @* ---- 4. Request Details: what was asked and how it is classified. Status, priority, owner, department
-                                  and SLA live in Quick facts, and who handled it lives in Conversation History — not repeated here. ---- *@
-                            <section class="facts-panel" aria-label="Request details">
-                                <div class="facts-section__title">Request Details</div>
-                                <dl class="request-facts">
-                                    <div class="facts-row"><dt>Request</dt><dd>@t.RequestSummary</dd></div>
-                                    @* An unclassified ticket says so plainly — a real state, not missing data. Categories are shown by name, never by id. *@
-                                    <div class="facts-row"><dt>Category</dt><dd>@(t.CategoryId is null ? "Not yet classified" : Model.CategoryName ?? "Classified")</dd></div>
-                                    <div class="facts-row"><dt>Request type</dt><dd>@(t.RequestTypeName ?? "Not yet classified")</dd></div>
-                                    @if (t.OriginatingChannelId is not null)
-                                    {
-                                        @* The channel the ticket ENTERED on, resolved from channel configuration by id (still named once deactivated). *@
-                                        <div class="facts-row"><dt>Came in through</dt><dd>@(t.OriginatingChannelName ?? "Unknown channel")</dd></div>
-                                    }
-                                    @if (t.WorkflowName is not null)
-                                    {
-                                        <div class="facts-row"><dt>Workflow</dt><dd>@t.WorkflowName <span class="badge badge-neutral">V@(t.WorkflowVersionNumber)</span></dd></div>
-                                    }
-                                </dl>
-                            </section>
-
-                            @* ---- 5. Conversation History: the customer's whole conversation, without leaving the Overview ---- *@
-                            @await Html.PartialAsync("_TicketConversationHistory", Model)
-
-                            @* ---- 6. Customer Satisfaction ---- *@
+                            @* ---- Customer satisfaction: shown on the page only when a review exists (or could not be loaded); otherwise one line under Additional details. ---- *@
+                            @if (Model.ReviewsUnavailable || Model.Reviews.Count > 0)
+                            {
                             <section class="facts-panel" id="customer-satisfaction" aria-label="Customer satisfaction">
                     <div class="facts-section__title">Customer Satisfaction</div>
                     @if (Model.ReviewsUnavailable)
@@ -730,40 +777,9 @@ else
                     }
                             </section>
 
-                            @* ---- Handling & escalation: who first handled the customer, who owns it now, how often it changed
-                                   hands and who resolved it. Read from the interaction, the typed transfer events and the
-                                   resolution row — nothing here is stored on the ticket. ---- *@
-                            <section class="facts-panel" aria-label="Handling and escalation">
-                                <div class="facts-section__title">Handling &amp; Escalation</div>
-                                <dl class="request-facts">
-                                    <div class="facts-row"><dt>First handled by</dt><dd>@(Model.FirstHandledByName ?? "Not recorded")</dd></div>
-                                    <div class="facts-row"><dt>Current owner</dt><dd>@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName)</dd></div>
-                                    <div class="facts-row"><dt>Times transferred</dt><dd>@t.TransferCount</dd></div>
-                                    <div class="facts-row">
-                                        <dt>Escalated</dt>
-                                        <dd>
-                                            @if (t.EscalationCount > 0)
-                                            {
-                                                <span class="badge badge-warning">Escalated @(t.EscalationCount == 1 ? "once" : $"{t.EscalationCount} times") — unable to resolve / needs escalation</span>
-                                            }
-                                            else
-                                            {
-                                                <text>No</text>
-                                            }
-                                        </dd>
-                                    </div>
-                                    @if (t.ResolvedByEmployeeId is not null)
-                                    {
-                                        <div class="facts-row"><dt>Resolved by</dt><dd>@Model.ResolvedByName</dd></div>
-                                        @if (t.ResolvedAtUtc is { } resolvedAt)
-                                        {
-                                            <div class="facts-row"><dt>Resolved on</dt><dd>@TicketDisplay.UaeTime(resolvedAt)</dd></div>
-                                        }
-                                    }
-                                </dl>
-                            </section>
+                            }
 
-                            @* ---- 7. Latest Activity ---- *@
+                            @* ---- E. Activity: the latest three, newest first; the full timeline is one click away. ---- *@
                             <section class="facts-panel" aria-label="Latest activity">
                                 <div class="facts-section__title">Latest Activity</div>
                                 @if (Model.ActivityFeed.Count == 0)
@@ -785,14 +801,84 @@ else
                                             </li>
                                         }
                                     </ol>
-                                    <label class="link-muted tab-jump" for="tab-activity">Open the full activity timeline</label>
+                                    <p class="panel-note"><span class="text-secondary">UAE time.</span> <label class="link-muted tab-jump" for="tab-activity">Open the full activity timeline</label></p>
                                 }
                             </section>
 
-                            @* ---- Reference detail, out of the way until needed ---- *@
-                            <details class="more-details">
-                                <summary>Verification, unit and SLA details</summary>
-                                <div class="more-details__body">
+
+                        @* ---- F. Additional details: everything an agent rarely needs, folded away. ---- *@
+                        <details class="more-details" id="additional-details">
+                            <summary>Additional details <span class="more-details__hint">SLA &middot; verification &middot; handling &middot; reviews &middot; attachments</span></summary>
+                            <div class="more-details__body">
+                                @* ---- SLA: each clock on its own (the Api's single SlaState sums both and keeps a breach forever). ---- *@
+                                <div class="facts-section">
+                                    <div class="facts-section__title">SLA Information</div>
+                                    @if (Model.Sla is null)
+                                    {
+                                        <p class="text-secondary">SLA data unavailable.</p>
+                                    }
+                                    else
+                                    {
+                                        var sla = Model.Sla;
+                                        var why = sla.Explanation;
+                                        var slaView = TicketSlaView.Build(sla, t.TicketStatus, DateTime.UtcNow);
+                                        @if (slaView.NotStartedReason is { } notStarted)
+                                        {
+                                            @* No clock is running — say exactly why, before any dashes. *@
+                                            <p class="sla-explain__reason">@notStarted</p>
+                                        }
+                                        <dl>
+                                            <div class="facts-row"><dt>Overall</dt><dd><span class="badge badge-sla-@slaView.HeadlineCss">@slaView.Headline</span></dd></div>
+                                            <div class="facts-row"><dt>@slaView.FirstResponse.Name</dt><dd class="@(slaView.FirstResponse.CssKey is "breached" ? "is-critical" : "")">@slaView.FirstResponse.State</dd></div>
+                                            <div class="facts-row"><dt>@slaView.Resolution.Name</dt><dd class="@(slaView.Resolution.CssKey is "breached" ? "is-critical" : "")">@slaView.Resolution.State</dd></div>
+                                            @if (why is not null)
+                                            {
+                                                <div class="facts-row"><dt>Applied priority</dt><dd>@(why.AppliedPriorityLabel ?? "Not set")</dd></div>
+                                                <div class="facts-row"><dt>Policy</dt><dd>@(why.FirstResponseTargetMinutes is null ? "None" : why.PolicySource)</dd></div>
+                                                @if (why.FirstResponseTargetMinutes is int fr && why.ResolutionTargetMinutes is int res)
+                                                {
+                                                    <div class="facts-row"><dt>Targets</dt><dd>First response @TicketDisplay.FormatMinutes(fr) &middot; Resolution @TicketDisplay.FormatMinutes(res)</dd></div>
+                                                }
+                                                @if (why.ClockBasis is not null)
+                                                {
+                                                    <div class="facts-row"><dt>Clock</dt><dd>@why.ClockBasis@(why.Calendar is null ? "" : $" ({why.Calendar.BusinessDayStartLocal}–{why.Calendar.BusinessDayEndLocal} {why.Calendar.TimeZoneId})")</dd></div>
+                                                }
+                                                <div class="facts-row"><dt>Clock started</dt><dd>@(why.ClockStartedAtUtc is { } clockStarted ? TicketDisplay.UaeTime(clockStarted) : "Not started")</dd></div>
+                                            }
+                                            @if (sla.IsCurrentlyPaused)
+                                            {
+                                                <div class="facts-row"><dt>Resolution clock</dt><dd>Paused — @sla.CurrentPauseReason (first response is not paused)</dd></div>
+                                            }
+                                            @if (sla.TotalPausedMinutesThisPeriod > 0)
+                                            {
+                                                <div class="facts-row"><dt>Paused so far</dt><dd>@TicketDisplay.FormatMinutes(sla.TotalPausedMinutesThisPeriod)</dd></div>
+                                            }
+                                            @if (why?.RequestTypeSlaNote is { } requestTypeSlaNote)
+                                            {
+                                                <div class="facts-row"><dt>Request-type SLA</dt><dd>@requestTypeSlaNote</dd></div>
+                                            }
+                                        </dl>
+                                        @if (why is not null)
+                                        {
+                                            <details class="sla-explain">
+                                                <summary class="link-muted">How this SLA is calculated</summary>
+                                                <ul class="sla-explain__notes">
+                                                    @foreach (var note in why.Notes)
+                                                    {
+                                                        <li>@note</li>
+                                                    }
+                                                    @if (why.Calendar is { } cal)
+                                                    {
+                                                        <li>Business calendar “@cal.Name”: @cal.BusinessDayStartLocal–@cal.BusinessDayEndLocal (@cal.TimeZoneId), working days @string.Join(", ", cal.WorkingDays); @cal.HolidayCount holiday@(cal.HolidayCount == 1 ? "" : "s") configured.</li>
+                                                    }
+                                                    <li><strong>First response:</strong> @why.FirstResponseRule</li>
+                                                    <li><strong>Pausing:</strong> @why.PauseRule</li>
+                                                </ul>
+                                            </details>
+                                        }
+                                    }
+                                </div>
+
                 <div class="facts-section">
                     <div class="facts-section__title">Verification &amp; Unit</div>
                     <dl>
@@ -834,118 +920,45 @@ else
                     </dl>
                 </div>
 
-                <div class="facts-section">
-                    <div class="facts-section__title">SLA Information</div>
-                    @if (Model.Sla is null)
-                    {
-                        <p class="text-secondary">SLA data unavailable.</p>
-                    }
-                    else
-                    {
-                        var sla = Model.Sla;
-                        var why = sla.Explanation;
-                        @if (why is { HasActivePeriod: false })
-                        {
-                            @* No clock is running — say exactly why, before any dashes. *@
-                            <p class="sla-explain__reason">@why.NotStartedReason</p>
-                        }
-                        <dl>
-                            <div class="facts-row"><dt>SLA status</dt><dd>@(sla.SlaState == "NotApplicable" && why?.NotStartedReason is not null ? "Not started (see the reason above)" : TicketDisplay.SlaStateLabel(sla.SlaState))</dd></div>
-                            @if (why is not null)
-                            {
-                                <div class="facts-row"><dt>Applied priority</dt><dd>@(why.AppliedPriorityLabel ?? "Not set")</dd></div>
-                                <div class="facts-row"><dt>Policy</dt><dd>@(why.FirstResponseTargetMinutes is null ? "None" : why.PolicySource)</dd></div>
-                                @if (why.FirstResponseTargetMinutes is int fr && why.ResolutionTargetMinutes is int res)
-                                {
-                                    <div class="facts-row"><dt>Targets</dt><dd>First response @TicketDisplay.FormatMinutes(fr) · Resolution @TicketDisplay.FormatMinutes(res)</dd></div>
-                                }
-                                @if (why.ClockBasis is not null)
-                                {
-                                    <div class="facts-row"><dt>Clock</dt><dd>@why.ClockBasis@(why.Calendar is null ? "" : $" ({why.Calendar.BusinessDayStartLocal}–{why.Calendar.BusinessDayEndLocal} {why.Calendar.TimeZoneId})")</dd></div>
-                                }
-                                <div class="facts-row"><dt>Clock started</dt><dd>@(why.ClockStartedAtUtc?.ToLocalTime().ToString("MMM d, HH:mm") ?? "Not started")</dd></div>
-                            }
-                            <div class="facts-row"><dt>First response due</dt><dd>@(sla.FirstResponseDueAtUtc?.ToLocalTime().ToString("MMM d, HH:mm") ?? "—")</dd></div>
-                            <div class="facts-row"><dt>First response</dt><dd class="@(sla.FirstResponseBreached ? "is-critical" : "")">@(sla.FirstHumanResponseAtUtc?.ToLocalTime().ToString("MMM d, HH:mm") ?? (sla.FirstResponseBreached ? "Breached" : why is { HasActivePeriod: false } ? "Not started" : "Pending"))</dd></div>
-                            <div class="facts-row"><dt>Resolution due</dt><dd>@(sla.ResolutionDueAtUtc?.ToLocalTime().ToString("MMM d, HH:mm") ?? "—")</dd></div>
-                            <div class="facts-row"><dt>Resolution</dt><dd class="@(sla.ResolutionBreached ? "is-critical" : "")">@(sla.ResolutionBreached ? "Breached" : TicketDisplay.SlaStateLabel(sla.SlaState))</dd></div>
-                            @if (sla.IsCurrentlyPaused)
-                            {
-                                <div class="facts-row"><dt>Resolution clock</dt><dd>Paused — @sla.CurrentPauseReason (first response is not paused)</dd></div>
-                            }
-                            @if (sla.TotalPausedMinutesThisPeriod > 0)
-                            {
-                                <div class="facts-row"><dt>Paused so far</dt><dd>@TicketDisplay.FormatMinutes(sla.TotalPausedMinutesThisPeriod)</dd></div>
-                            }
-                            @if (why?.RequestTypeSlaNote is { } requestTypeSlaNote)
-                            {
-                                <div class="facts-row"><dt>Request-type SLA</dt><dd>@requestTypeSlaNote</dd></div>
-                            }
-                        </dl>
-                        @if (why is not null)
-                        {
-                            <details class="sla-explain">
-                                <summary class="link-muted">How this SLA is calculated</summary>
-                                <ul class="sla-explain__notes">
-                                    @foreach (var note in why.Notes)
-                                    {
-                                        <li>@note</li>
-                                    }
-                                    @if (why.Calendar is { } cal)
-                                    {
-                                        <li>Business calendar “@cal.Name”: @cal.BusinessDayStartLocal–@cal.BusinessDayEndLocal (@cal.TimeZoneId), working days @string.Join(", ", cal.WorkingDays); @cal.HolidayCount holiday@(cal.HolidayCount == 1 ? "" : "s") configured.</li>
-                                    }
-                                    <li><strong>First response:</strong> @why.FirstResponseRule</li>
-                                    <li><strong>Pausing:</strong> @why.PauseRule</li>
-                                </ul>
-                            </details>
-                        }
-                    }
-                </div>
-
+                                <div class="facts-section">
+                                    <div class="facts-section__title">Handling &amp; Escalation</div>
+                                    <dl>
+                                        <div class="facts-row"><dt>First handled by</dt><dd>@(Model.FirstHandledByName ?? "Not recorded")</dd></div>
+                                        <div class="facts-row"><dt>Times transferred</dt><dd>@t.TransferCount</dd></div>
+                                        <div class="facts-row"><dt>Escalated</dt><dd>@(t.EscalationCount == 0 ? "No" : t.EscalationCount == 1 ? "Once" : $"{t.EscalationCount} times")@(t.EscalationLevel != "None" ? $" · now {TicketDisplay.EscalationLevelLabel(t.EscalationLevel)}" : "")</dd></div>
+                                        @if (t.ReopenCount > 0)
+                                        {
+                                            <div class="facts-row"><dt>Reopened</dt><dd>@(t.ReopenCount == 1 ? "Once" : $"{t.ReopenCount} times")</dd></div>
+                                        }
+                                        @if (t.ResolvedByEmployeeId is not null)
+                                        {
+                                            <div class="facts-row"><dt>Resolved by</dt><dd>@Model.ResolvedByName@(t.ResolvedAtUtc is { } resolvedAt ? $" · {TicketDisplay.UaeTime(resolvedAt)}" : "")</dd></div>
+                                        }
+                                        @if (t.ResolutionOutcome is not null)
+                                        {
+                                            <div class="facts-row"><dt>Outcome</dt><dd>@TicketDisplay.ResolutionOutcomeLabel(t.ResolutionOutcome)</dd></div>
+                                        }
+                                        @if (t.WorkflowName is not null)
+                                        {
+                                            <div class="facts-row"><dt>Workflow</dt><dd>@t.WorkflowName <span class="badge badge-neutral">V@(t.WorkflowVersionNumber)</span></dd></div>
+                                        }
+                                    </dl>
                                 </div>
-                            </details>
-                        </div>
 
-                        @* Operational quick facts only: nothing here needs scrolling to find. *@
-                        <aside class="facts-panel quick-facts" aria-label="Quick facts">
-                            <div class="facts-section__title">Quick facts</div>
-                            <dl>
-                                <div class="facts-row"><dt>Status</dt><dd><span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(t.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(t.TicketStatus)</span></dd></div>
-                                <div class="facts-row"><dt>Priority</dt><dd><span class="badge badge-priority-@TicketDisplay.PriorityCssKey(t.PriorityId)">@TicketDisplay.PriorityLabel(t.PriorityId)</span></dd></div>
-                                <div class="facts-row"><dt>Assigned To</dt><dd>@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName)</dd></div>
-                                <div class="facts-row"><dt>Assigned Department</dt><dd>@TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</dd></div>
-                                @if (slaBadge is not null)
-                                {
-                                    <div class="facts-row"><dt>SLA</dt><dd><span class="badge badge-sla-@slaBadge.Value.CssKey">@slaBadge.Value.Label</span></dd></div>
-                                    @if (Model.Sla is { IsCurrentlyPaused: true } pausedSla)
-                                    {
-                                        <div class="facts-row"><dt>Resolution clock</dt><dd>Paused&nbsp;&mdash; @pausedSla.CurrentPauseReason</dd></div>
-                                    }
-                                    else if (Model.Sla?.ResolutionDueAtUtc is { } resolutionDue && !isResolved && !isClosed)
-                                    {
-                                        <div class="facts-row"><dt>Resolution due</dt><dd>@resolutionDue.ToLocalTime().ToString("MMM d, HH:mm")</dd></div>
-                                    }
-                                }
-                                else
-                                {
-                                    <div class="facts-row"><dt>SLA</dt><dd>Not available</dd></div>
-                                }
-                                @if (t.EscalationLevel != "None")
-                                {
-                                    <div class="facts-row"><dt>Escalation level</dt><dd class="is-critical">@TicketDisplay.EscalationLevelLabel(t.EscalationLevel)</dd></div>
-                                }
-                                @if (t.ReopenCount > 0)
-                                {
-                                    <div class="facts-row"><dt>Reopened</dt><dd>@(t.ReopenCount == 1 ? "Once" : $"{t.ReopenCount} times")</dd></div>
-                                }
-                                @if (t.ResolutionOutcome is not null)
-                                {
-                                    <div class="facts-row"><dt>Resolution</dt><dd>@TicketDisplay.ResolutionOutcomeLabel(t.ResolutionOutcome)</dd></div>
-                                }
-                                <div class="facts-row"><dt>Opened</dt><dd>@TicketDisplay.AgoLabel(t.CreatedAtUtc, DateTime.UtcNow)</dd></div>
-                            </dl>
-                        </aside>
+                                <div class="facts-section">
+                                    <div class="facts-section__title">Reviews, Approvals &amp; Attachments</div>
+                                    <dl>
+                                        @if (!Model.ReviewsUnavailable && Model.Reviews.Count == 0)
+                                        {
+                                            <div class="facts-row"><dt>Customer review</dt><dd>None requested yet</dd></div>
+                                        }
+                                        <div class="facts-row"><dt>Approvals</dt><dd>@(Model.Approvals is { Approvals.Count: > 0 } approvalsSummary ? $"{approvalsSummary.Approvals.Count} on record — see the Approvals tab" : Model.Approvals is null ? "Unavailable right now" : "None apply")</dd></div>
+                                        <div class="facts-row"><dt>Attachments</dt><dd>Not supported yet — documents stay on the channel they arrived on; record where they are in a note.</dd></div>
+                                    </dl>
+                                    <p class="panel-note"><label class="link-muted tab-jump" for="tab-activity">Open the complete audit history</label></p>
+                                </div>
+                            </div>
+                        </details>
                     </div>
                 </div>
 
@@ -1072,7 +1085,7 @@ else
                                     {
                                         <div class="entry-row">
                                             <span class="entry-row__field">Escalated to @TicketDisplay.EscalationLevelLabel($"Level{e.Level}") (@e.TriggerType)</span>
-                                            <span class="text-secondary">@e.RaisedAtUtc.ToLocalTime().ToString("MMM d, HH:mm")</span>
+                                            <span class="text-secondary">@TicketDisplay.UaeDateTime(e.RaisedAtUtc)</span>
                                         </div>
                                     }
                                 </div>
@@ -1081,10 +1094,8 @@ else
                     </div>
                 </div>
 
-                @* ---- Customer: the summary card, previous tickets, the unit ---- *@
+                @* ---- Customer: previous tickets (the customer summary band above is always visible) ---- *@
                 <div class="tab-panel" id="panel-customer">
-@await Html.PartialAsync("_TicketCustomerCard", Model)
-
                     <div class="facts-panel facts-panel--flat">
                         <div class="facts-section__title">Previous Tickets@(Model.CustomerHistory is not null ? $" ({Model.CustomerHistory.TotalTickets})" : "")</div>
                     @if (Model.CustomerHistory is null)
@@ -1122,7 +1133,7 @@ else
                                             <th>Status</th>
                                             <th>Priority</th>
                                             <th>Created</th>
-                                            <th>Closed</th>
+                                            <th>Resolved</th>
                                             <th></th>
                                         </tr>
                                     </thead>
@@ -1131,12 +1142,12 @@ else
                                         {
                                             <tr>
                                                 <td><a class="ticket-id-link" href="/Tickets/@row.TicketId">@row.TicketNumber</a></td>
-                                                <td><span class="id-fallback">@(row.CategoryId is int rowCat ? $"Category #{rowCat}" : "Unclassified")</span></td>
+                                                <td>@Model.CategoryLabel(row.CategoryId)</td>
                                                 <td>@TicketDisplay.AssignedDepartmentLabel(row.CurrentDepartmentId, Model.NameResolver.TryGetDepartmentName(row.CurrentDepartmentId))</td>
                                                 <td><span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(row.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(row.TicketStatus)</span></td>
                                                 <td><span class="badge badge-priority-@TicketDisplay.PriorityCssKey(row.PriorityId)">@TicketDisplay.PriorityLabel(row.PriorityId)</span></td>
-                                                <td class="text-secondary text-mono">@row.CreatedAtUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
-                                                <td class="text-secondary text-mono">—</td>
+                                                <td class="text-secondary text-mono">@TicketDisplay.UaeDate(row.CreatedAtUtc)</td>
+                                                <td class="text-secondary text-mono">@(row.ResolvedAtUtc is { } rowResolved ? TicketDisplay.UaeDate(rowResolved) : "—")</td>
                                                 <td><a class="btn btn-sm" href="/Tickets/@row.TicketId">Open</a></td>
                                             </tr>
                                         }
@@ -1185,10 +1196,10 @@ else
                         {
                             <dl>
                                 <div class="facts-row"><dt>@ApprovalLabel(approval.ApprovalType)</dt><dd>@approval.Status</dd></div>
-                                <div class="facts-row"><dt>Requested</dt><dd>@approval.RequestedAtUtc.ToLocalTime().ToString("dd MMM yyyy HH:mm")</dd></div>
+                                <div class="facts-row"><dt>Requested</dt><dd>@TicketDisplay.UaeDateTime(approval.RequestedAtUtc)</dd></div>
                                 @if (approval.DecisionAtUtc is { } decidedAt)
                                 {
-                                    <div class="facts-row"><dt>Decided</dt><dd>@decidedAt.ToLocalTime().ToString("dd MMM yyyy HH:mm")</dd></div>
+                                    <div class="facts-row"><dt>Decided</dt><dd>@TicketDisplay.UaeDateTime(decidedAt)</dd></div>
                                 }
                                 @if (!string.IsNullOrEmpty(approval.RequestComment))
                                 {
@@ -1271,7 +1282,7 @@ else
                             }
                             @if (approvalsView.PrerequisitesCompletedAtUtc is { } prereqAt)
                             {
-                                <div class="facts-row"><dt>Prerequisites</dt><dd>Completed @prereqAt.ToLocalTime().ToString("dd MMM yyyy HH:mm")</dd></div>
+                                <div class="facts-row"><dt>Prerequisites</dt><dd>Completed @TicketDisplay.UaeDateTime(prereqAt)</dd></div>
                             }
                         </dl>
 
@@ -1316,15 +1327,6 @@ else
                                 <p>@(Model.Approvals is null ? "Approval information is unavailable right now." : "This ticket's request type requires no approval, maintenance or prerequisite step.")</p>
                             </div>
                         }
-                    </div>
-                </div>
-
-                @* ---- Attachments ---- *@
-                <div class="tab-panel" id="panel-attachments">
-                    <div class="empty-state">
-                        <svg viewBox="0 0 24 24" fill="none"><path d="M21 12.5 12.5 21a5 5 0 0 1-7-7l9-9a3.5 3.5 0 0 1 5 5l-9 9a2 2 0 0 1-3-3l8-8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                        <p class="empty-state__title">No attachments on this ticket.</p>
-                        <p>File attachments are not yet supported in TigerCS — documents exchanged with the customer stay on the originating channel, and a note here can record where they are.</p>
                     </div>
                 </div>
             </div>

@@ -336,9 +336,13 @@ public sealed class TicketLifecycleAppService(
         // Runs through the same processor and the same idempotency key as
         // the scheduled job and the sweep, so a deadline a job already
         // flagged is not re-recorded here.
+        //
+        // The resolution row was staged just above in this same unit of work, so a database read cannot see it: its moment (`now`) is
+        // handed over, otherwise an on-time resolution was never recorded as Met.
         foreach (var deadlineType in new[] { SlaDeadlineType.FirstResponse, SlaDeadlineType.Resolution })
         {
-            await breachProcessor.ProcessDeadlineAsync(ticket, deadlineType, now, correlationId, cancellationToken);
+            await breachProcessor.ProcessDeadlineAsync(
+                ticket, deadlineType, now, correlationId, cancellationToken, resolutionAchievedAtUtc: now);
         }
 
         try
@@ -1056,10 +1060,11 @@ public sealed class TicketLifecycleAppService(
             await EnqueueLifecycleEventAsync(
                 OutboxEventTypes.TicketResolved, OutboxEventTypes.TicketResolvedVersion,
                 ticket, integrationEmployeeId, correlationId, now, cancellationToken);
-            foreach (var deadlineType in new[] { SlaDeadlineType.FirstResponse, SlaDeadlineType.Resolution })
-            {
-                await breachProcessor.ProcessDeadlineAsync(ticket, deadlineType, now, correlationId, cancellationToken);
-            }
+            // The ticket is already Closed in memory here, so the processor used to answer TicketClosed and the Resolution SLA of a
+            // system-closed Resolved ticket was never settled (it stayed Running). Settle the Resolution clock - and only that one - now.
+            await breachProcessor.ProcessDeadlineAsync(
+                ticket, SlaDeadlineType.Resolution, now, correlationId, cancellationToken,
+                resolutionAchievedAtUtc: now, settlingClosure: true);
         }
 
         await EnqueueLifecycleEventAsync(
