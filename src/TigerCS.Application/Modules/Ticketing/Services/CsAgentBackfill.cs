@@ -30,10 +30,10 @@ public sealed class CsAgentBackfillOptions
     public int MinTicketAgeMinutes { get; set; } = 3;
 
     /// <summary>
-    /// Tickets whose AI conversation ended with no human need but which were never closed. Default false: they are listed as an exclusion for a
-    /// business decision, not assigned.
+    /// Tickets whose AI conversation ended without resolving or closing the ticket. Final business rule: they are no longer AI-owned, so they
+    /// DO get a CS Agent (default true). Set false only to hold them back for review.
     /// </summary>
-    public bool IncludeAiEndedWithoutHuman { get; set; }
+    public bool IncludeAiEndedWithoutHuman { get; set; } = true;
 }
 
 /// <summary>Why a ticket is, or is not, part of the backfill.</summary>
@@ -54,10 +54,7 @@ public enum CsAgentBackfillClass
     /// <summary>A live AI conversation nobody asked a person for: stays AI-owned.</summary>
     ActiveAiConversation,
 
-    /// <summary>A person demonstrably handled the interaction (answering agent / human reply). The business rule is that THAT person owns it, so Round Robin must not give it to someone else: manual review.</summary>
-    HumanHandledNeedsManualReview,
-
-    /// <summary>The AI conversation ended with no human need but the ticket was never closed: left for a business decision.</summary>
+    /// <summary>The AI conversation ended with no human need but the ticket was never closed. Assigned by default (<see cref="CsAgentBackfillOptions.IncludeAiEndedWithoutHuman"/>); an exclusion only when that is switched off.</summary>
     AiEndedNoHumanNeed,
 
     /// <summary>Created moments ago; its own creation flow may still be assigning it.</summary>
@@ -76,9 +73,9 @@ public static class CsAgentBackfillClassifier
         if (e.PendingApproval) return CsAgentBackfillClass.PendingApproval;
         if (e.CreatedAtUtc > nowUtc - TimeSpan.FromMinutes(Math.Max(0, options.MinTicketAgeMinutes))) return CsAgentBackfillClass.TooNew;
 
-        if (e.AnsweringEmployeeId is not null || e.PhonePickupByUnmappedAgent) return CsAgentBackfillClass.HumanHandledNeedsManualReview;
-
-        var humanNeeded = e.RequiresHumanFollowUp || e.OpenHandoff || e.HumanEvidence;
+        // A confirmed handling agent / a phone pick-up is human work (never "AI-owned"): the service gives it to that agent when eligible,
+        // otherwise to the shared rotation.
+        var humanNeeded = e.RequiresHumanFollowUp || e.OpenHandoff || e.HumanEvidence || e.AnsweringEmployeeId is not null || e.PhonePickupByUnmappedAgent;
         if (e.HasGenesysInteraction && !humanNeeded)
         {
             if (e.HasLiveGenesysInteraction) return CsAgentBackfillClass.ActiveAiConversation;
@@ -91,7 +88,14 @@ public static class CsAgentBackfillClassifier
 
 public sealed record CsAgentBackfillRow(
     long TicketId, string TicketNumber, TicketStatus Status, int DepartmentId, string? DepartmentName, DateTime CreatedAtUtc,
-    CsAgentBackfillClass Class, Guid? ProposedEmployeeId);
+    CsAgentBackfillClass Class, Guid? ProposedEmployeeId, string? ProposedSource = null);
+
+/// <summary>The two ways the backfill picks an agent: <see cref="ConfirmedHandler"/> (priority 2) or <see cref="RoundRobin"/> (priority 4).</summary>
+public static class CsAgentBackfillSource
+{
+    public const string ConfirmedHandler = "ConfirmedHandler";
+    public const string RoundRobin = "RoundRobin";
+}
 
 /// <summary>A read-only look at what the backfill would do. Nothing is locked, written or advanced.</summary>
 public sealed record CsAgentBackfillPreview(
@@ -114,7 +118,7 @@ public enum CsAgentBackfillOutcome
 }
 
 public sealed record CsAgentBackfillTicketResult(
-    long TicketId, CsAgentBackfillOutcome Outcome, CsAgentBackfillClass Class, Guid? AssignedEmployeeId = null);
+    long TicketId, CsAgentBackfillOutcome Outcome, CsAgentBackfillClass Class, Guid? AssignedEmployeeId = null, string? Source = null);
 
 /// <summary>
 /// The one-time backfill of active tickets that have no CS Agent. It runs the SAME engine as new tickets
@@ -153,10 +157,21 @@ public sealed class CsAgentBackfillService(
             var cls = CsAgentBackfillClassifier.Classify(e, now, options);
             Guid? proposed = null;
             var departmentName = names.GetValueOrDefault(e.CurrentDepartmentId);
+            string? source = null;
             if (cls == CsAgentBackfillClass.Eligible)
             {
-                proposed = DepartmentAssignmentRotation.PickNext(simulated, pool);
-                if (proposed is not null) simulated = proposed;
+                if (await ConfirmedHandlerAsync(e, callCenter, cancellationToken) is { } handler)
+                {
+                    proposed = handler;                                  // priority 2: the handling agent; the rotation does not move
+                    source = CsAgentBackfillSource.ConfirmedHandler;
+                }
+                else
+                {
+                    proposed = DepartmentAssignmentRotation.PickNext(simulated, pool);
+                    if (proposed is not null) simulated = proposed;
+                    source = CsAgentBackfillSource.RoundRobin;
+                }
+
                 var key = departmentName ?? e.CurrentDepartmentId.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 byDepartment[key] = byDepartment.GetValueOrDefault(key) + 1;
             }
@@ -165,13 +180,20 @@ public sealed class CsAgentBackfillService(
                 exclusions[cls.ToString()] = exclusions.GetValueOrDefault(cls.ToString()) + 1;
             }
 
-            rows.Add(new CsAgentBackfillRow(e.TicketId, e.TicketNumber, e.Status, e.CurrentDepartmentId, departmentName, e.CreatedAtUtc, cls, proposed));
+            rows.Add(new CsAgentBackfillRow(e.TicketId, e.TicketNumber, e.Status, e.CurrentDepartmentId, departmentName, e.CreatedAtUtc, cls, proposed, source));
         }
 
         return new CsAgentBackfillPreview(
             callCenter is not null, pool.Count, cursor, page.Count, rows.Count(r => r.Class == CsAgentBackfillClass.Eligible),
             exclusions, byDepartment, rows, page.Count == 0 ? afterTicketId : page[^1].TicketId, Complete: page.Count < limit);
     }
+
+    /// <summary>The confirmed handling CS Agent when there is one AND they are an eligible Call Center CS Agent; otherwise null (shared rotation).</summary>
+    private async Task<Guid?> ConfirmedHandlerAsync(UnassignedTicketEvidence e, Domain.Modules.IdentityAndAccess.Department? callCenter, CancellationToken cancellationToken) =>
+        e.AnsweringEmployeeId is { } handler && callCenter is not null
+        && await autoAssignment.CheckAnsweringAgentAsync(handler, callCenter.DepartmentId, cancellationToken) == AnsweringAgentIssue.None
+            ? handler
+            : null;
 
     /// <summary>
     /// Backfills ONE ticket in its own transaction (call with a fresh scope per ticket). Re-checks everything under the transaction, so it is
@@ -196,9 +218,11 @@ public sealed class CsAgentBackfillService(
             return new CsAgentBackfillTicketResult(ticketId, CsAgentBackfillOutcome.Skipped, cls);
         }
 
+        var handlerId = await ConfirmedHandlerAsync(evidence, await autoAssignment.ResolveCallCenterAsync(cancellationToken), cancellationToken);
         if (dryRun)
         {
-            return new CsAgentBackfillTicketResult(ticketId, CsAgentBackfillOutcome.WouldAssign, cls);
+            return new CsAgentBackfillTicketResult(
+                ticketId, CsAgentBackfillOutcome.WouldAssign, cls, handlerId, handlerId is null ? CsAgentBackfillSource.RoundRobin : CsAgentBackfillSource.ConfirmedHandler);
         }
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
@@ -211,7 +235,16 @@ public sealed class CsAgentBackfillService(
             }
 
             var correlationId = Guid.NewGuid();
-            var result = await autoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.Backfill, now, correlationId, cancellationToken);
+            var source = CsAgentBackfillSource.ConfirmedHandler;
+            var result = handlerId is { } handler
+                ? await autoAssignment.AssignConfirmedHandlerAsync(ticket, handler, AutoAssignmentTrigger.Backfill, now, correlationId, cancellationToken)
+                : null;
+            if (result is null)
+            {
+                source = CsAgentBackfillSource.RoundRobin;
+                result = await autoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.Backfill, now, correlationId, cancellationToken);
+            }
+
             if (result.AssignedEmployeeId is not { } employeeId)
             {
                 // The engine has recorded the failure (audit + Manual Assignment Required, once); persist it and stop the caller.
@@ -223,12 +256,12 @@ public sealed class CsAgentBackfillService(
             await auditWriter.WriteAsync(
                 actorEmployeeId: null, "BackfillAssign", "Ticket", ticketId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 beforeValue: "Unassigned",
-                afterValue: $"AssignedEmployeeId={employeeId};DepartmentId={ticket.CurrentDepartmentId};Status={ticket.TicketStatus};BatchId={batchId}",
+                afterValue: $"AssignedEmployeeId={employeeId};DepartmentId={ticket.CurrentDepartmentId};Status={ticket.TicketStatus};Source={source};BatchId={batchId}",
                 correlationId, cancellationToken);
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return new CsAgentBackfillTicketResult(ticketId, CsAgentBackfillOutcome.Assigned, cls, employeeId);
+            return new CsAgentBackfillTicketResult(ticketId, CsAgentBackfillOutcome.Assigned, cls, employeeId, source);
         }
         catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {

@@ -297,7 +297,7 @@ public sealed class ProvisionalOwnerSqlServerTests : IDisposable
     }
 
     [VisibilitySqlServerFact]
-    public async Task AConfirmedAgentWhoIsNotACsAgent_IsNotAssigned_AndTheTicketWaitsFlaggedInTheQueue()
+    public async Task AConfirmedAgentWhoIsNotACsAgent_IsNotAssigned_TheEligibleProvisionalCsAgentIsKept_AndItIsFlagged()
     {
         var seed = CreateAndSeedDatabase();
         var (ticketId, provisional) = await AddProvisionallyAssignedTicketAsync(seed, 1, WellKnownChannels.Facebook);
@@ -311,10 +311,10 @@ public sealed class ProvisionalOwnerSqlServerTests : IDisposable
         Assert.Equal(AnsweringAgentIssue.NotCsAgent, result.Issue);
         using var after = CreateContext();
         var ticket = after.Tickets.AsNoTracking().Single(t => t.TicketId == ticketId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);                                                  // never given to the Department Employee, nor a substitute
+        Assert.Equal(provisional, ticket.CurrentOwnerEmployeeId);                                    // never the Department Employee; the existing eligible CS Agent is preserved
         Assert.Equal(seed.CallCenterId, ticket.CurrentDepartmentId);
-        Assert.DoesNotContain(after.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId), a => a.IsCurrent);
-        Assert.Contains(after.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId), a => a.AssignedEmployeeId == provisional && !a.IsCurrent);   // history kept
+        Assert.Contains(after.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId), a => a.AssignedEmployeeId == provisional && a.IsCurrent);
+        Assert.Contains(after.TicketWorkflowEvents.AsNoTracking().Where(e => e.TicketId == ticketId), e => e.EventType == WorkflowEventType.ManualAssignmentRequired);   // still flagged
     }
 
     [VisibilitySqlServerTheory]

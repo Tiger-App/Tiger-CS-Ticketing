@@ -75,17 +75,18 @@ public class ActualReceivingAgentOwnsTheTicketTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task AHumanLineFromAnAgentWhoCannotTakeIt_FlagsTheTicket_NeverGivesItToSomeoneElse(GenesysChannel channel)
+    public async Task AHumanLineFromAnAgentWhoCannotTakeIt_FlagsTheTicket_AndTheSharedRotationGivesItACsAgent(GenesysChannel channel)
     {
         var w = Build();
-        w.F.AddAgent("g-emp", "Dept Employee", roles: Roles.DepartmentEmployee);        // mapped Call Center member, but not a CS Agent
+        var employee = w.F.AddAgent("g-emp", "Dept Employee", roles: Roles.DepartmentEmployee);        // mapped Call Center member, but not a CS Agent
         var t = await IngestAsync(w, "c-inelig", channel);
 
         await HumanLineAsync(w, t, "c-inelig", "HumanAgent", "g-emp");
 
         Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);
-        AssertSingleOwner(w, t, null);
-        Assert.True(RotationUntouched(w));
+        Assert.NotEqual(employee, t.CurrentOwnerEmployeeId);                              // the non-CS-Agent never owns it
+        Assert.Contains(t.CurrentOwnerEmployeeId!.Value, w.Agents);                       // an eligible CS Agent does (final rule: never unassigned)
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == t.TicketId && a.IsCurrent);
         Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == t.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
     }
 

@@ -116,10 +116,10 @@ public class CallCenterCsAgentOnlyTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task ConfirmedAgentWhoIsNotACsAgent_DoesNotTakeTheTicket_ItWaitsFlaggedInTheCallCenterQueue(GenesysChannel channel)
+    public async Task ConfirmedAgentWhoIsNotACsAgent_DoesNotTakeTheTicket_ItIsFlagged_AndAnEligibleCsAgentOwnsIt(GenesysChannel channel)
     {
         var (f, cs) = Build();
-        f.AddAgent("g-a1", "Agent 1");
+        var csAgent = f.AddAgent("g-a1", "Agent 1");
         var employee = f.AddAgent("g-emp", "Dept Employee", roles: Roles.DepartmentEmployee);   // Call Center member, operational role, NOT a CS Agent
         var ticket = await IngestHumanRequiredAsync(f, cs, "c-emp", channel);
 
@@ -127,7 +127,7 @@ public class CallCenterCsAgentOnlyTests
 
         Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
         Assert.NotEqual(employee, ticket.CurrentOwnerEmployeeId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);                                              // never a substitute person
+        Assert.Equal(csAgent, ticket.CurrentOwnerEmployeeId);                                    // the only eligible CS Agent, via the shared rotation - never unassigned
         Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticket.TicketId.ToString());
         Assert.Contains(f.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired
             && e.Note!.Contains("CS Agent"));

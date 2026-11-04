@@ -296,17 +296,20 @@ public class OmnichannelAnsweringAgentMatrixTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task ConnectedAgentWhoCannotTakeIt_LeavesItQueuedInCallCenter_NeverGivenToSomeoneElse(GenesysChannel channel)
+    public async Task ConnectedAgentWhoCannotTakeIt_IsFlagged_AndTheSharedRotationGivesItACsAgent(GenesysChannel channel)
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-cannot", channel, humanFollowUp: null);
         // Mapped but not a Call Center member: a real person, so the ticket is human-managed, but they cannot own a Call Center ticket.
-        w.F.AddAgent("g-finance-person", "Finance Person", inCallCenter: false, roles: [Roles.DepartmentEmployee]);
+        var outsider = w.F.AddAgent("g-finance-person", "Finance Person", inCallCenter: false, roles: [Roles.DepartmentEmployee]);
 
         await ConnectAsync(w, ticketId, "c-cannot", "g-finance-person");
 
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        AssertOneOwner(w, ticketId, null);
+        var owner = w.Ticket(ticketId).CurrentOwnerEmployeeId;
+        Assert.NotNull(owner);
+        Assert.NotEqual(outsider, owner);
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
         Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == ticketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
     }
 }
