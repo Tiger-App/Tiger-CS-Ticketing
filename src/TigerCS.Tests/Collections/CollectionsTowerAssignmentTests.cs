@@ -666,9 +666,14 @@ public class CollectionsTowerAssignmentTests
         var readByEmployee = await f.Towers.GetMonthAsync(f.Alice, [Roles.DepartmentEmployee], 2026, 11);
         var readByOutsider = await f.Towers.GetMonthAsync(f.Outsider, [Roles.DepartmentEmployee], 2026, 11);
 
-        Assert.All(new[] { byEmployee.Outcome, byOutsiderHead.Outcome, byCsAgent.Outcome, readByOutsider.Outcome }, o => Assert.Equal(CollectionsOutcome.Forbidden, o));
-        Assert.True(readByEmployee.IsSuccess);
-        Assert.False(readByEmployee.Value!.CanManage);
+        var historyByEmployee = await f.Towers.ListHistoryAsync(f.Alice, [Roles.DepartmentEmployee], 2026, 11, null);
+        var readByManager = await f.Towers.GetMonthAsync(f.Manager, [Roles.DepartmentHead], 2026, 11);
+
+        // Reading is as restricted as changing: a plain Collections employee neither reads nor changes the assignments.
+        Assert.All(new[] { byEmployee.Outcome, byOutsiderHead.Outcome, byCsAgent.Outcome, readByOutsider.Outcome, readByEmployee.Outcome, historyByEmployee.Outcome },
+            o => Assert.Equal(CollectionsOutcome.Forbidden, o));
+        Assert.True(readByManager.IsSuccess);
+        Assert.True(readByManager.Value!.CanManage);
         Assert.Empty(f.TowerRows.Rows);
     }
 

@@ -28,6 +28,11 @@
     {
         items.Add(("admin", "Administration", "/Admin"));
     }
+    else if (access.CanReach(Permissions.CollectionsEdit, TowerAssignmentsPolicy.AppliesTo(currentUser)))
+    {
+        // A Collections manager who is not a System Administrator reaches only Administration -> Collections Tower Assignments.
+        items.Add(("admin", "Administration", TowerAssignmentsPolicy.Route));
+    }
 }
 <nav class="app-nav" aria-label="Primary">
     <ul class="app-nav__list">
