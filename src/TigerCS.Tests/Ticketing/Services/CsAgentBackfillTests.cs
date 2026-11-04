@@ -73,7 +73,7 @@ public class CsAgentBackfillTests
         public async Task<Ticket> SeedAsync(
             Department department, TicketStatus status = TicketStatus.Open, DateTime? created = null,
             bool liveAi = false, bool aiEnded = false, bool pendingApproval = false, Guid? answeredBy = null, bool humanFollowUp = false,
-            Guid? owner = null)
+            Guid? owner = null, DateTime? lastActivity = null, bool openHandoff = false)
         {
             var ticket = Ticket.CreateUnverified($"TG-FM-20261103-{Evidence.Rows.Count + 1:D4}", department.DepartmentId, 5, (byte)PriorityLevel.High, "AC", created ?? Old);
             if (status == TicketStatus.InProgress)
@@ -90,8 +90,8 @@ public class CsAgentBackfillTests
             Evidence.Rows[ticket.TicketId] = new UnassignedTicketEvidence(
                 ticket.TicketId, ticket.TicketNumber, status, owner, department.DepartmentId, department.DepartmentId, created ?? Old,
                 PendingApproval: pendingApproval, HasGenesysInteraction: liveAi || aiEnded, HasLiveGenesysInteraction: liveAi,
-                RequiresHumanFollowUp: humanFollowUp, OpenHandoff: false, HumanEvidence: false, AnsweringEmployeeId: answeredBy,
-                AnsweringGenesysUserId: null, PhonePickupByUnmappedAgent: false, UnmappedGenesysAgentId: null, LastActivityUtc: created ?? Old,
+                RequiresHumanFollowUp: humanFollowUp, OpenHandoff: openHandoff, HumanEvidence: false, AnsweringEmployeeId: answeredBy,
+                AnsweringGenesysUserId: null, PhonePickupByUnmappedAgent: false, UnmappedGenesysAgentId: null, LastActivityUtc: lastActivity ?? created ?? Old,
                 LeftCallCenter: false, ReleasedByPerson: false);
             return ticket;
         }
@@ -535,5 +535,200 @@ public class CsAgentBackfillTests
         var busy = await Runner(env, lockBusy: true).RunAsync(new CsAgentBackfillRunRequest(DryRun: false), default);
         Assert.Equal(CsAgentBackfillRunStatus.Busy, busy.Status);
         Assert.Equal(0, env.UnitOfWork.SaveChangesCallCount);
+    }
+
+    // ---- stale AI conversations ---------------------------------------------------------------------------------------------------------
+
+    private static CsAgentBackfillOptions Stale(int? hours) => new() { Enabled = true, DelayBetweenTicketsMs = 0, StaleAiAfterHours = hours };
+
+    [Fact]
+    public async Task StaleAi_IsDisabledByDefault_SoEveryLiveAiConversationStaysProtected_HoweverOld()
+    {
+        Assert.Null(new CsAgentBackfillOptions().StaleAiAfterHours);
+        Assert.Null(new CsAgentBackfillOptions().StaleAiThreshold);
+
+        var env = new Env();
+        var ancient = await env.SeedAsync(env.Facilities, liveAi: true, lastActivity: Now.AddDays(-90));
+
+        foreach (var hours in new int?[] { null, 0, -5 })   // null, zero and negative all mean "off"
+        {
+            Assert.Equal(CsAgentBackfillClass.ActiveAiConversation, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[ancient.TicketId], Now, Stale(hours)));
+        }
+
+        Assert.Equal(CsAgentBackfillOutcome.Skipped, (await env.Service().TryBackfillAsync(ancient.TicketId, "b", Stale(null), dryRun: false)).Outcome);
+        Assert.Null(ancient.CurrentOwnerEmployeeId);
+    }
+
+    [Theory]
+    [InlineData(12, 11.9, false)]
+    [InlineData(12, 12.0, false)]    // exactly the threshold is NOT "more than"
+    [InlineData(12, 12.1, true)]
+    [InlineData(24, 23.9, false)]
+    [InlineData(24, 24.0, false)]
+    [InlineData(24, 24.1, true)]
+    [InlineData(48, 47.9, false)]
+    [InlineData(48, 48.1, true)]
+    [InlineData(24, 24 * 30.0, true)]
+    public async Task StaleAi_BecomesEligibleOnlyAfterSilenceLongerThanTheThreshold(int threshold, double silentHours, bool eligible)
+    {
+        var env = new Env();
+        var ticket = await env.SeedAsync(env.Facilities, liveAi: true, lastActivity: Now.AddHours(-silentHours));
+
+        var cls = CsAgentBackfillClassifier.Classify(env.Evidence.Rows[ticket.TicketId], Now, Stale(threshold));
+
+        Assert.Equal(eligible ? CsAgentBackfillClass.Eligible : CsAgentBackfillClass.ActiveAiConversation, cls);
+        Assert.Equal(eligible, CsAgentBackfillClassifier.IsStaleAi(env.Evidence.Rows[ticket.TicketId], Now, Stale(threshold)));
+    }
+
+    [Fact]
+    public async Task StaleAi_ProtectsPendingApprovals_AndCreatedMoments_AndEndedOrClosedTickets()
+    {
+        var env = new Env();
+        var approval = await env.SeedAsync(env.Facilities, liveAi: true, pendingApproval: true, lastActivity: Now.AddDays(-5));
+        var tooNew = await env.SeedAsync(env.Facilities, liveAi: true, created: Now.AddMinutes(-1), lastActivity: Now.AddDays(-5));
+        var options = Stale(24);
+
+        Assert.Equal(CsAgentBackfillClass.PendingApproval, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[approval.TicketId], Now, options));
+        Assert.Equal(CsAgentBackfillClass.TooNew, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[tooNew.TicketId], Now, options));
+
+        var closed = env.Evidence.Rows[approval.TicketId] with { PendingApproval = false, Status = TicketStatus.Closed };
+        Assert.Equal(CsAgentBackfillClass.NotActive, CsAgentBackfillClassifier.Classify(closed, Now, options));
+        var owned = env.Evidence.Rows[approval.TicketId] with { PendingApproval = false, OwnerEmployeeId = Guid.NewGuid() };
+        Assert.Equal(CsAgentBackfillClass.HasOwner, CsAgentBackfillClassifier.Classify(owned, Now, options));
+    }
+
+    [Fact]
+    public async Task OpenHandoff_AndHumanFollowUp_AlwaysGetACsAgent_EvenWhenRecent_AndWithTheStaleRuleOff()
+    {
+        var env = new Env(2);
+        var handoff = await env.SeedAsync(env.Facilities, liveAi: true, openHandoff: true, lastActivity: Now.AddMinutes(-2));
+        var followUp = await env.SeedAsync(env.Facilities, liveAi: true, humanFollowUp: true, lastActivity: Now.AddMinutes(-2));
+
+        foreach (var options in new[] { Stale(null), Stale(24) })
+        {
+            Assert.Equal(CsAgentBackfillClass.Eligible, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[handoff.TicketId], Now, options));
+            Assert.Equal(CsAgentBackfillClass.Eligible, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[followUp.TicketId], Now, options));
+            // Eligible because a person is required, not because it is stale.
+            Assert.False(CsAgentBackfillClassifier.IsStaleAi(env.Evidence.Rows[handoff.TicketId], Now, options));
+        }
+
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, (await env.Service().TryBackfillAsync(handoff.TicketId, "b", Stale(null), dryRun: false)).Outcome);
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, (await env.Service().TryBackfillAsync(followUp.TicketId, "b", Stale(null), dryRun: false)).Outcome);
+        Assert.NotNull(handoff.CurrentOwnerEmployeeId);
+        Assert.NotNull(followUp.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task StaleAi_UsesTheSharedRotation_PreservesEverythingButTheOwner_AndAuditsTheReason()
+    {
+        var env = new Env(3);
+        (await env.Rotation.GetForUpdateAsync(env.CallCenter.DepartmentId, Now)).Advance(env.Agents[0], Now);
+        var stale = await env.SeedAsync(env.Facilities, liveAi: true, lastActivity: Now.AddHours(-30));
+        var recent = await env.SeedAsync(env.Facilities, liveAi: true, lastActivity: Now.AddHours(-2));
+        var before = (stale.CurrentDepartmentId, stale.OriginatingDepartmentId, stale.TicketStatus, stale.PriorityId, stale.CategoryId, stale.RequestTypeId, stale.SlaState, stale.CreatedAtUtc, stale.ReopenCount);
+        var options = Stale(24);
+
+        var result = await env.Service().TryBackfillAsync(stale.TicketId, "stale-1", options, dryRun: false);
+        var recentResult = await env.Service().TryBackfillAsync(recent.TicketId, "stale-1", options, dryRun: false);
+
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, result.Outcome);
+        Assert.True(result.StaleAi);
+        Assert.Equal(CsAgentBackfillSource.RoundRobin, result.Source);
+        Assert.Equal(env.Agents[1], stale.CurrentOwnerEmployeeId);                                   // the shared cursor continued (agent 0 was last)
+        Assert.Equal(env.Agents[1], env.Rotation.Rows[env.CallCenter.DepartmentId].LastAssignedEmployeeId);
+        Assert.Equal(before, (stale.CurrentDepartmentId, stale.OriginatingDepartmentId, stale.TicketStatus, stale.PriorityId, stale.CategoryId, stale.RequestTypeId, stale.SlaState, stale.CreatedAtUtc, stale.ReopenCount));
+        Assert.Equal(CsAgentBackfillOutcome.Skipped, recentResult.Outcome);                          // a recent AI conversation stays protected
+        Assert.Null(recent.CurrentOwnerEmployeeId);
+        Assert.Single(env.Assignments.Added);
+        Assert.Contains(env.Audit.Entries, e => e.Action == "BackfillAssign" && e.AfterValue!.Contains("Reason=StaleAi") && e.AfterValue.Contains("BatchId=stale-1"));
+        Assert.Empty(env.Events.All);                                                                // no transfer / status event: history untouched
+    }
+
+    [Fact]
+    public async Task StaleAi_PreviewAndRun_AgreeTicketForTicket()
+    {
+        var env = new Env(3);
+        await env.SeedAsync(env.Facilities, liveAi: true, lastActivity: Now.AddHours(-13));       // stale at 12h only
+        await env.SeedAsync(env.Facilities, liveAi: true, lastActivity: Now.AddHours(-30));       // stale at 12h and 24h
+        await env.SeedAsync(env.Leasing, liveAi: true, lastActivity: Now.AddHours(-60));          // stale at all three
+        await env.SeedAsync(env.Leasing, liveAi: true, lastActivity: Now.AddMinutes(-20));        // never stale
+        await env.SeedAsync(env.Leasing, liveAi: true, pendingApproval: true, lastActivity: Now.AddDays(-9));
+        await env.SeedAsync(env.Facilities, liveAi: true, openHandoff: true, lastActivity: Now.AddMinutes(-5));
+
+        var counts = new Dictionary<int, int>();
+        foreach (var hours in new[] { 12, 24, 48 })
+        {
+            var options = Stale(hours);
+            var preview = await env.Service().PreviewAsync(0, 50, options);
+            var dry = new List<CsAgentBackfillTicketResult>();
+            foreach (var row in preview.Rows)
+            {
+                dry.Add(await env.Service().TryBackfillAsync(row.TicketId, "b", options, dryRun: true));
+            }
+
+            // The same classification, ticket by ticket, for Preview and for the run's own re-check.
+            Assert.Equal(
+                preview.Rows.Select(r => (r.TicketId, Eligible: r.Class == CsAgentBackfillClass.Eligible, r.StaleAi)),
+                dry.Select(d => (d.TicketId, Eligible: d.Outcome == CsAgentBackfillOutcome.WouldAssign, d.StaleAi)));
+            counts[hours] = preview.Rows.Count(r => r.StaleAi);
+        }
+
+        Assert.Equal(new Dictionary<int, int> { [12] = 3, [24] = 2, [48] = 1 }, counts);
+    }
+
+    [Fact]
+    public async Task StaleAi_IsRecheckedDuringExecution_ANewCustomerMessageProtectsTheTicketAgain()
+    {
+        var env = new Env(2);
+        var ticket = await env.SeedAsync(env.Facilities, liveAi: true, lastActivity: Now.AddHours(-30));
+        var options = Stale(24);
+        var preview = await env.Service().PreviewAsync(0, 10, options);
+        Assert.True(preview.Rows.Single().StaleAi);                                                  // eligible at preview time
+
+        // The customer writes after the preview / listing and before the write: the first read still says stale, the re-check under the transaction does not.
+        var racing = new ActivityArrivesAfterFirstRead(env.Evidence, ticket.TicketId, Now.AddMinutes(-1));
+        var service = new CsAgentBackfillService(racing, env.Tickets, env.Engine(), env.Departments, env.Audit, env.UnitOfWork, new FakeTimeProvider(Now));
+
+        var result = await service.TryBackfillAsync(ticket.TicketId, "b", options, dryRun: false);
+
+        Assert.Equal(CsAgentBackfillOutcome.Skipped, result.Outcome);
+        Assert.Equal(CsAgentBackfillClass.ActiveAiConversation, result.Class);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Empty(env.Assignments.Added);
+        Assert.Empty(env.Audit.Entries);
+    }
+
+    [Fact]
+    public async Task StaleAi_AConfirmedEligibleHandlingAgent_IsUsedInsteadOfTheRotation()
+    {
+        var env = new Env(3);
+        (await env.Rotation.GetForUpdateAsync(env.CallCenter.DepartmentId, Now)).Advance(env.Agents[0], Now);
+        var handled = await env.SeedAsync(env.Facilities, liveAi: true, answeredBy: env.Agents[2], lastActivity: Now.AddDays(-4));
+
+        var result = await env.Service().TryBackfillAsync(handled.TicketId, "b", Stale(24), dryRun: false);
+
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, result.Outcome);
+        Assert.Equal(CsAgentBackfillSource.ConfirmedHandler, result.Source);
+        Assert.Equal(env.Agents[2], handled.CurrentOwnerEmployeeId);
+        Assert.Equal(env.Agents[0], env.Rotation.Rows[env.CallCenter.DepartmentId].LastAssignedEmployeeId);   // the rotation did not move
+    }
+
+    /// <summary>Evidence whose ticket gains fresh customer activity after it has been read once (the race between listing and writing).</summary>
+    private sealed class ActivityArrivesAfterFirstRead(
+        CallCenterUnassignedWorkReconcilerTests.StubEvidence inner, long ticketId, DateTime activityAtUtc) : ITicketUnassignedWorkRepository
+    {
+        private int _reads;
+
+        public Task<IReadOnlyList<UnassignedTicketEvidence>> ListOpenUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default) =>
+            inner.ListOpenUnownedAsync(afterTicketId, limit, cancellationToken);
+
+        public Task<IReadOnlyList<UnassignedTicketEvidence>> ListActiveUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default) =>
+            inner.ListActiveUnownedAsync(afterTicketId, limit, cancellationToken);
+
+        public async Task<UnassignedTicketEvidence?> GetEvidenceAsync(long id, CancellationToken cancellationToken = default)
+        {
+            var row = await inner.GetEvidenceAsync(id, cancellationToken);
+            return row is not null && id == ticketId && ++_reads > 1 ? row with { LastActivityUtc = activityAtUtc } : row;
+        }
     }
 }
