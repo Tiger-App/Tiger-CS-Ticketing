@@ -30,7 +30,8 @@ public sealed class SlaFirstResponseAppService(
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     FirstHumanResponseRecorder firstHumanResponseRecorder,
     ITicketingUnitOfWork unitOfWork,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IServiceIdentityRegistry? serviceIdentities = null)
 {
     public async Task<SlaOperationResult<TicketSlaSummaryResponseDto>> RecordAsync(
         Guid callerEmployeeId,
@@ -47,12 +48,26 @@ public sealed class SlaFirstResponseAppService(
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.NotFound);
         }
 
-        if (!Enum.TryParse<FirstResponseSource>(request.Source, ignoreCase: true, out var source))
+        // Enum.TryParse also accepts any number ("99"), so an undefined value is rejected explicitly: it used to slip past the
+        // `source == Manual` lower bound below as if it were a system source.
+        if (!Enum.TryParse<FirstResponseSource>(request.Source, ignoreCase: true, out var source)
+            || !Enum.IsDefined(source)
+            || source == FirstResponseSource.HumanAgentMessage)
         {
+            // HumanAgentMessage is OBSERVED by the system from a stored transcript line (GenesysConversationEndAppService); a client
+            // cannot claim it, so it is not callable here.
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.InvalidRequest);
         }
 
         if (!await IsAuthorizedAsync(callerEmployeeId, callerRoles, ticket, cancellationToken))
+        {
+            return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.Forbidden);
+        }
+
+        // A Genesys call answer is a system observation (SLA-Architecture §16 Example E may predate the ticket). A person must not label
+        // their own entry with it: that is how the creation-time bound below would be bypassed and the audit trail mislabelled. People
+        // record what happened outside the system as Manual.
+        if (source == FirstResponseSource.GenesysCallAnswer && serviceIdentities?.IsServiceIdentity(callerEmployeeId) != true)
         {
             return SlaOperationResult<TicketSlaSummaryResponseDto>.Failure(SlaOperationOutcome.Forbidden);
         }

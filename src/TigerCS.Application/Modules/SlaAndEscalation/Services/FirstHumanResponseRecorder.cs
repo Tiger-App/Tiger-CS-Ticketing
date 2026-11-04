@@ -108,13 +108,14 @@ public sealed class FirstHumanResponseRecorder(
             new TicketStatusHistory(
                 ticket.TicketId, TicketStatusDimension.SlaState, (byte)ticket.SlaState, (byte)ticket.SlaState,
                 actorEmployeeId, actorIsSystem,
-                note: $"First human response recorded ({source}) at {occurredAtUtc:O}.", correlationId, nowUtc),
+                note: $"First human response recorded ({source}) at {occurredAtUtc:O}; entered at {nowUtc:O}.", correlationId, nowUtc),
             cancellationToken);
 
         await auditWriter.WriteAsync(
             actorEmployeeId, "RecordFirstResponse", nameof(Ticket), ticket.TicketId.ToString(),
             beforeValue: "{\"firstHumanResponseAtUtc\":null}",
-            afterValue: $"{{\"firstHumanResponseAtUtc\":\"{occurredAtUtc:O}\",\"source\":\"{source}\"}}",
+            afterValue: $"{{\"firstHumanResponseAtUtc\":\"{occurredAtUtc:O}\",\"source\":\"{source}\",\"recordedAtUtc\":\"{nowUtc:O}\","
+                + $"\"actorIsSystem\":{(actorIsSystem ? "true" : "false")}}}",
             correlationId, cancellationToken);
 
         // Finalizes the breach flag if the response landed late — and, if it

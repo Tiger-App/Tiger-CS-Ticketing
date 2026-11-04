@@ -80,13 +80,44 @@ public enum CrmBuyerLookupOutcome
 }
 
 /// <summary>
+/// WHY a CRM lookup did not produce an answer — a compatible extension: <see cref="CrmBuyerLookupOutcome"/> is unchanged (every existing
+/// consumer keeps working), and this carries the detail the outcome collapses. A failure is never a "not found": callers that must tell
+/// the two apart (the Genesys ingestion audit, the customer search) read this instead of guessing from the message text.
+/// </summary>
+public enum CrmLookupFailureKind
+{
+    /// <summary>The request timed out (HttpClient.Timeout elapsed).</summary>
+    TimedOut,
+
+    /// <summary>A network/DNS/connection failure — CRM could not be reached.</summary>
+    Unreachable,
+
+    /// <summary>The integration is not configured (missing secret key or base address) — nothing was sent.</summary>
+    NotConfigured,
+
+    /// <summary>CRM rejected the secret key (401).</summary>
+    Unauthorized,
+
+    /// <summary>CRM answered 400 — it rejected the request.</summary>
+    RejectedRequest,
+
+    /// <summary>CRM answered with a status the contract does not define (e.g. 500/503).</summary>
+    UnexpectedStatus,
+
+    /// <summary>CRM answered 200 with a body that does not parse as the documented contract, or <c>success:false</c>.</summary>
+    MalformedResponse
+}
+
+/// <summary>
 /// The outcome-wrapped result of a Buyer-by-phone lookup. <c>Buyers</c> is
 /// only populated for <see cref="CrmBuyerLookupOutcome.Success"/>; every
 /// other outcome carries no payload beyond an optional CRM-supplied
 /// <c>Message</c> for diagnostics/logging (never shown to the customer).
+/// <c>FailureKind</c> is set for the failure outcomes only (never for NotFound / Ambiguous) and says which kind of failure it was.
 /// </summary>
 public sealed record CrmBuyerLookupResult(
-    CrmBuyerLookupOutcome Outcome, IReadOnlyList<CrmBuyerMatchDto>? Buyers = null, string? Message = null)
+    CrmBuyerLookupOutcome Outcome, IReadOnlyList<CrmBuyerMatchDto>? Buyers = null, string? Message = null,
+    CrmLookupFailureKind? FailureKind = null)
 {
     public static CrmBuyerLookupResult Success(IReadOnlyList<CrmBuyerMatchDto> buyers, string? message = null) =>
         new(CrmBuyerLookupOutcome.Success, buyers, message);
@@ -95,13 +126,13 @@ public sealed record CrmBuyerLookupResult(
         new(CrmBuyerLookupOutcome.NotFound, Message: message);
 
     public static CrmBuyerLookupResult Unauthorized(string? message = null) =>
-        new(CrmBuyerLookupOutcome.Unauthorized, Message: message);
+        new(CrmBuyerLookupOutcome.Unauthorized, Message: message, FailureKind: CrmLookupFailureKind.Unauthorized);
 
-    public static CrmBuyerLookupResult InvalidResponse(string? message = null) =>
-        new(CrmBuyerLookupOutcome.InvalidResponse, Message: message);
+    public static CrmBuyerLookupResult InvalidResponse(string? message = null, CrmLookupFailureKind kind = CrmLookupFailureKind.MalformedResponse) =>
+        new(CrmBuyerLookupOutcome.InvalidResponse, Message: message, FailureKind: kind);
 
-    public static CrmBuyerLookupResult Unavailable(string? message = null) =>
-        new(CrmBuyerLookupOutcome.Unavailable, Message: message);
+    public static CrmBuyerLookupResult Unavailable(string? message = null, CrmLookupFailureKind kind = CrmLookupFailureKind.Unreachable) =>
+        new(CrmBuyerLookupOutcome.Unavailable, Message: message, FailureKind: kind);
 
     public static CrmBuyerLookupResult AmbiguousCustomerMatch(string? message = null) =>
         new(CrmBuyerLookupOutcome.AmbiguousCustomerMatch, Message: message);

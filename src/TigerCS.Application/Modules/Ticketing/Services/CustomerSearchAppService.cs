@@ -48,6 +48,24 @@ public sealed class CustomerSearchAppService(
             phoneNumber,
             crmStatus,
             crmResult.Outcome == CrmBuyerLookupOutcome.Success ? crmResult.Buyers ?? [] : [],
-            externalResults);
+            externalResults,
+            crmStatus == "Failed" ? FailureKindName(crmResult) : null);
     }
+
+    /// <summary>The failure, in words that cannot be mistaken for "not found". Falls back to the outcome when a gateway gave no kind.</summary>
+    internal static string FailureKindName(CrmBuyerLookupResult result) => result.FailureKind switch
+    {
+        CrmLookupFailureKind.TimedOut => "TimedOut",
+        CrmLookupFailureKind.Unreachable => "Unreachable",
+        CrmLookupFailureKind.NotConfigured or CrmLookupFailureKind.Unauthorized => "Misconfigured",
+        CrmLookupFailureKind.RejectedRequest => "Rejected",
+        CrmLookupFailureKind.UnexpectedStatus => "UnexpectedStatus",
+        CrmLookupFailureKind.MalformedResponse => "InvalidResponse",
+        _ => result.Outcome switch
+        {
+            CrmBuyerLookupOutcome.Unauthorized => "Misconfigured",
+            CrmBuyerLookupOutcome.InvalidResponse => "InvalidResponse",
+            _ => "Unavailable"
+        }
+    };
 }

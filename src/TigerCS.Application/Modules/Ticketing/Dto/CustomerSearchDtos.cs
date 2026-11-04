@@ -16,10 +16,12 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// </summary>
 /// <param name="PhoneNumber">The phone number that was searched, echoed back.</param>
 /// <param name="CrmStatus">The CRM Buyer Lookup outcome: Found, NotFound, AmbiguousMatch (CRM returned conflicting customers — fall back to manual), or Failed (CRM unreachable/misconfigured).</param>
+/// <param name="CrmFailureKind">When <paramref name="CrmStatus"/> is Failed: why — TimedOut, Unreachable, Misconfigured, Rejected, UnexpectedStatus or InvalidResponse. Null otherwise. A compatible extension: <c>CrmStatus</c> keeps its values.</param>
 /// <param name="CrmBuyers">The matched CRM Buyer (at most one, with every eligible unit) when <paramref name="CrmStatus"/> is Found; empty otherwise.</param>
 /// <param name="ExternalSources">The PACT and Tasleeh results — each Found/NotFound/Failed with its matched customers, same shape as the intake-anchored customer lookup.</param>
 public sealed record CustomerSearchResultDto(
     string PhoneNumber,
     string CrmStatus,
     IReadOnlyList<CrmBuyerMatchDto> CrmBuyers,
-    IReadOnlyList<CustomerLookupSourceResultDto> ExternalSources);
+    IReadOnlyList<CustomerLookupSourceResultDto> ExternalSources,
+    string? CrmFailureKind = null);

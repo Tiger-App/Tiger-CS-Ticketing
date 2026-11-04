@@ -360,7 +360,10 @@ public sealed class GenesysConversationEndAppService(
 
         var firstHumanMessage = transcript
             .Where(m => m.Sender == InteractionMessageSender.HumanAgent)
-            .OrderBy(m => m.Sequence)
+            // The EARLIEST human line by when it was sent (the sequence breaks a tie): a line delivered late but sent earlier is
+            // the real first response, and ordering by delivery sequence alone could pick a later one and report a false breach.
+            .OrderBy(m => m.SentAtUtc)
+            .ThenBy(m => m.Sequence)
             .FirstOrDefault();
 
         if (firstHumanMessage is null)

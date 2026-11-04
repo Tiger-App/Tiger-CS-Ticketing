@@ -106,11 +106,27 @@ public class SlaFirstResponseAppServiceTests
         Assert.False((await h.Sla.SlaInstances.GetCurrentAsync(h.Ticket.TicketId))!.FirstResponseBreached);
     }
 
-    /// <summary>SLA-Architecture.md §16 Example E — a call answered before the ticket existed still satisfies the SLA.</summary>
+    private sealed class OnlyThis(Guid id) : TigerCS.Application.Authorization.IServiceIdentityRegistry
+    {
+        public bool IsServiceIdentity(Guid employeeId) => employeeId == id;
+
+        public IReadOnlyCollection<Guid> ServiceIdentityIds => [id];
+    }
+
+    /// <summary>
+    /// SLA-Architecture.md §16 Example E — a call answered before the ticket existed still satisfies the SLA. Only the Genesys integration
+    /// account (a configured service identity) may claim that source; a person doing so is refused (FirstResponseIntegrityTests).
+    /// </summary>
     [Fact]
     public async Task AGenesysCallAnswerBeforeTicketCreation_SatisfiesTheDeadline()
     {
         var h = await CreateAsync(CreatedAt.AddMinutes(2));
+        h = h with
+        {
+            Service = new SlaFirstResponseAppService(
+                h.Sla.Tickets, h.Sla.SlaInstances, h.Sla.DepartmentAssignments, h.Sla.FirstHumanResponse, h.Sla.UnitOfWork, h.Clock,
+                new OnlyThis(h.OwnerId))
+        };
 
         var result = await h.Service.RecordAsync(
             h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId,
