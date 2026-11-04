@@ -118,6 +118,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         var result = await api.GetCampaignExportAsync(Stage, mode, BusinessDate, null, Search, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds);
         if (result.IsSuccess && result.Value is { } file)
         {
+            // Review export: the simplified employee workbook. Genesys export: the unchanged machine CSV.
+            if (file.Xlsx is { Length: > 0 } workbook)
+                return File(workbook, TigerCS.Application.Modules.Collections.Services.CollectionsCampaignReviewWorkbook.ContentType, file.XlsxFileName ?? "collections-review.xlsx");
             var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(file.Csv)).ToArray();
             return File(bytes, "text/csv; charset=utf-8", file.FileName);
         }

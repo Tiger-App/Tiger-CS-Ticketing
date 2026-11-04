@@ -427,8 +427,12 @@ public sealed class CollectionsCampaignAppService(
             report = report with { Items = report.Items.Where(c => c.Status == "Ready").ToList() };
         }
         var csv = CollectionsCampaignCsv.Write(report, review: mode == "review");
+        // Review mode additionally carries the simplified employee workbook, built from the same filtered items; the audit CSV above is unchanged.
+        var baseName = $"collections-{report.Stage}-{report.BusinessDate:yyyy-MM-dd}-{mode}";
         return CollectionsResult<CollectionsCampaignExportDto>.Ok(new(
-            $"collections-{report.Stage}-{report.BusinessDate:yyyy-MM-dd}-{mode}.csv", csv, report.Items.Count));
+            $"{baseName}.csv", csv, report.Items.Count,
+            mode == "review" ? CollectionsCampaignReviewWorkbook.Write(report) : null,
+            mode == "review" ? $"{baseName}.xlsx" : null));
     }
 }
 
