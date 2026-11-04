@@ -176,7 +176,10 @@ public enum GenesysIngestionOutcome
     RequestTypeInvalid,
 
     /// <summary>Ticket creation itself was refused; <see cref="GenesysIngestionResult.TicketCreationOutcome"/> carries the underlying reason unchanged.</summary>
-    TicketCreationFailed
+    TicketCreationFailed,
+
+    /// <summary>A human-handled inquiry's (valid) department has no usable General category / request type. Nothing was created or moved; the error is audited. Run <c>EnsureDefaultGeneralClassification.sql</c>; a redelivery then succeeds.</summary>
+    DefaultClassificationNotConfigured
 }
 
 /// <summary>

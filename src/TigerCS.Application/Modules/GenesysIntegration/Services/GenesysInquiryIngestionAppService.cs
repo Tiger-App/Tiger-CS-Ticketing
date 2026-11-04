@@ -110,7 +110,8 @@ public sealed class GenesysInquiryIngestionAppService(
     GenesysDefaultPriorityResolver defaultPriorityResolver,
     GenesysRequestTypeClassificationAppService classificationAppService,
     GenesysAgentHandlingHistory handlingHistory,
-    GenesysInteractionHandlerRecorder? handlerRecorder = null)
+    GenesysInteractionHandlerRecorder? handlerRecorder = null,
+    DefaultClassificationService? defaultClassification = null)
 {
     public async Task<GenesysIngestionResult> IngestAsync(
         Guid callerEmployeeId, GenesysInquiryDto inquiry, CancellationToken cancellationToken = default)
@@ -156,6 +157,42 @@ public sealed class GenesysInquiryIngestionAppService(
             ? await classificationAppService.ValidateAsync(supplied, cancellationToken)
             : null;
 
+        // Default classification (Customer Services / General): an inquiry whose request type is missing, invalid, ambiguous or cannot complete a
+        // category + request type pair is classified by the approved fallback instead of staying "Unclassified" - and instead of guessing. A valid
+        // request type keeps its normal route (classified right after creation). Collections is out of scope; with the fallback not configured the
+        // previous behaviour applies unchanged.
+        DefaultClassification? fallback = null;
+        string? fallbackReason = null;
+        string? configurationError = null;
+        if (defaultClassification is not null && !DefaultClassificationService.IsExcluded(department))
+        {
+            fallbackReason = inquiry.RequestType is not { IsSupplied: true }
+                ? "no request type was supplied."
+                : await classificationAppService.GetCategoryPairingGapAsync(requestTypeCheck!, cancellationToken);
+            if (fallbackReason is not null)
+            {
+                // General / General within the department the AI named. Customer Services' only when there is no valid department. A valid
+                // department WITHOUT its own General is a configuration error - never a cross-department stand-in, never a move.
+                var resolved = await defaultClassification.ResolveForDepartmentAsync(department?.DepartmentId, cancellationToken);
+                if (resolved.Value is { } available)
+                {
+                    fallback = available;
+                    if (department is null)
+                    {
+                        (department, departmentSource) = (available.Department, GenesysDepartmentSource.DefaultClassification);
+                    }
+                }
+                else if (resolved.DepartmentKnown)
+                {
+                    configurationError = resolved.Detail;
+                }
+                else
+                {
+                    fallbackReason = null;   // the rule is not configured at all: previous behaviour
+                }
+            }
+        }
+
         if (department is null)
         {
             // Nothing named a department. Routing still never falls back to a guess, only to what configuration says, in this order:
@@ -184,7 +221,7 @@ public sealed class GenesysInquiryIngestionAppService(
         // Unclassified in that queue, where a person classifies it, instead of being routed on a guess. An explicit department the caller
         // named is respected; only a department that came from a queue mapping or a fallback is replaced.
         string? requestTypeRejected = null;
-        if (requestTypeCheck is { IsValid: false } rejected)
+        if (fallback is null && requestTypeCheck is { IsValid: false } rejected)
         {
             var classificationQueue = await ResolveClassificationDepartmentAsync(cancellationToken);
             if (classificationQueue is null)
@@ -224,6 +261,20 @@ public sealed class GenesysInquiryIngestionAppService(
         // Was this accepted by a person? Judged from the actual event (an explicit flag, or a voice call created at pickup by a mapped agent),
         // never from the channel alone: a Phone ticket with no such evidence stays AI-handled and is not moved.
         var humanSignal = GenesysHumanHandlingEvidence.ForInquiry(inquiry, agent is { IsResolved: true });
+
+        // Controlled configuration failure: a human-handled inquiry whose (valid) department has no usable General is refused with an explicit,
+        // audited outcome - nothing is created, nothing is moved, and the same delivery succeeds once EnsureDefaultGeneralClassification.sql ran.
+        if (configurationError is not null && humanSignal != GenesysHumanSignal.None)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, DefaultClassificationAuditActions.ConfigurationError, GenesysAuditActions.ConversationEntityType, conversationId,
+                beforeValue: null,
+                afterValue: $"Handling=Human;Channel={inquiry.Channel};DepartmentId={department!.DepartmentId};DepartmentCode={department.Code};Error={configurationError};"
+                    + "Action=Run EnsureDefaultGeneralClassification.sql;TicketCreated=false",
+                correlationId: Guid.NewGuid(), cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            return GenesysIngestionResult.Failure(GenesysIngestionOutcome.DefaultClassificationNotConfigured, configurationError);
+        }
 
         // The configured default priority (Normal). Unresolvable configuration
         // never costs the inquiry: it falls back to the previous behavior (no
@@ -279,6 +330,8 @@ public sealed class GenesysInquiryIngestionAppService(
             ManualProjectName: NullIfBlank(inquiry.TowerName),
             ManualUnitNumber: NullIfBlank(inquiry.UnitNumber),
             DepartmentId: department.DepartmentId,
+            // The fallback is applied by ticket creation itself; a valid request type is classified right after creation instead.
+            SkipDefaultClassification: fallback is null,
             // Deliberately no RequestTypeId: nothing about a department, a
             // queue or a channel implies a request type.
             GenesysContext: new GenesysInteractionContextDto(
@@ -381,7 +434,9 @@ public sealed class GenesysInquiryIngestionAppService(
                 + $"ReceivedDepartmentId={(inquiry.DepartmentId?.ToString() ?? "(none)")};"
                 + $"ReceivedDepartmentCode={(string.IsNullOrWhiteSpace(inquiry.DepartmentCode) ? "(none)" : inquiry.DepartmentCode.Trim())};"
                 + $"QueueId={inquiry.QueueId ?? "(none)"};QueueName={inquiry.QueueName ?? "(none)"};"
-                + $"CustomerLookup={lookup.Status};Classification=Unclassified;"
+                + $"CustomerLookup={lookup.Status};Classification={(fallback is null ? "Unclassified" : "Default")};"
+                + $"DefaultClassification={(fallback is null ? "(not applied)" : $"{DefaultClassificationService.DisplayLabel} because {fallbackReason}")};"
+                + $"DefaultClassificationConfigurationError={configurationError ?? "(none)"};"
                 + $"DefaultPriority={(defaultPriority is null ? "(none: not configured or not found)" : $"{defaultPriority.Name}({defaultPriority.PriorityId})")};"
                 + $"AgentMapping={DescribeAgentMapping(inquiry.AgentId, agent)};"
                 + $"ServiceRequestId={serviceRequestId ?? "(none)"};HumanFollowUpRequired={inquiry.HumanFollowUpRequired == true};HumanSignal={humanSignal};"
@@ -390,10 +445,42 @@ public sealed class GenesysInquiryIngestionAppService(
             cancellationToken);
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
-        var classification = requestTypeRejected is not null
-            ? GenesysRequestTypeClassificationAppService.AwaitClassification(
-                $"{requestTypeRejected} The ticket is in the classification queue for a person to classify.")
-            : await ClassifyOrQueueAsync(callerEmployeeId, creation.Response.TicketId, conversationId, inquiry, cancellationToken);
+        if (configurationError is not null)
+        {
+            // AI-handled inquiry in a department without its own General: created (the customer is not lost), left unclassified and NOT moved,
+            // and the configuration error is recorded against the ticket. It can never be closed by the AI or handed to a person until fixed.
+            await auditWriter.WriteAsync(
+                callerEmployeeId, DefaultClassificationAuditActions.ConfigurationError, "Ticket", creation.Response.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"Handling=AI;DepartmentId={department.DepartmentId};DepartmentCode={department.Code};Error={configurationError};Action=Run EnsureDefaultGeneralClassification.sql",
+                correlationId: Guid.NewGuid(), cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+
+        var classification = fallback is not null
+            ? new GenesysClassificationResult(
+                GenesysClassificationOutcome.Classified, fallback.RequestType.RequestTypeId, fallback.RequestType.Name, fallback.Department.DepartmentId,
+                Detail: $"Default classification {DefaultClassificationService.DisplayLabel} applied because {fallbackReason}")
+            : requestTypeRejected is not null
+                ? GenesysRequestTypeClassificationAppService.AwaitClassification(
+                    $"{requestTypeRejected} The ticket is in the classification queue for a person to classify.")
+                : await ClassifyOrQueueAsync(callerEmployeeId, creation.Response.TicketId, conversationId, inquiry, cancellationToken);
+
+        // Safety net: a validated request type that could not be applied after all (it changed between validation and write, or a concurrent
+        // update won) must not leave the new ticket Unclassified. Only a ticket with no valid classification is touched.
+        if (classification.Outcome == GenesysClassificationOutcome.AwaitingClassification
+            && defaultClassification is not null
+            && await defaultClassification.EnsureClassifiedAsync(
+                creation.Response.TicketId, classification.Detail ?? "the request type could not be applied.", callerEmployeeId,
+                save: true, cancellationToken) == DefaultClassificationApplyOutcome.Applied)
+        {
+            classification = classification with
+            {
+                Outcome = GenesysClassificationOutcome.Classified,
+                RequestTypeName = DefaultClassificationService.RequestTypeName,
+                Detail = $"Default classification {DefaultClassificationService.DisplayLabel} applied because {classification.Detail}"
+            };
+        }
 
         // Classification can move the ticket (department, owner), so the
         // response is read back rather than echoing the creation snapshot.
@@ -738,5 +825,8 @@ public enum GenesysDepartmentSource
     RequestTypeDepartment = 4,
 
     /// <summary>Nothing could be routed from configuration; the ticket went to the configured classification queue (<c>Genesys:ClassificationDepartmentCode</c>) for a person to classify.</summary>
-    ClassificationQueue = 5
+    ClassificationQueue = 5,
+
+    /// <summary>The inquiry carried no usable classification, so the approved default (Customer Services / General) placed the ticket.</summary>
+    DefaultClassification = 6
 }
