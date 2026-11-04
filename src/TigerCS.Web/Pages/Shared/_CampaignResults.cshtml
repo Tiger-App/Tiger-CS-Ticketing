@@ -111,9 +111,10 @@ else if (Model.Report is { } report)
         <form method="post" class="campaign-approve" data-approve-form asp-page-handler="Approve">
             @foreach (var name in CampaignsModel.FilterFieldNames)
             {
-                <input type="hidden" name="@name" value="@(name switch {
+                if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
+            <input type="hidden" name="@name" value="@(name switch {
                     "stage" => Model.Stage, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
-                    "towerId" => Model.TowerId?.ToString(), "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
+                    "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
             }
             <input type="hidden" name="unitKeys" value="" data-selected-units />
             @if (report.ReadyCount > 0)

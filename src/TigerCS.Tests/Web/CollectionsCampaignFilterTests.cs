@@ -57,7 +57,7 @@ public sealed class CollectionsCampaignFilterTests
         Assert.Contains("<option value=\"LastSixMonths\" selected=\"selected\">Last 6 months</option>", html);
         Assert.Contains("name=\"dateFrom\" type=\"date\"", html); Assert.Contains("value=\"2026-04-14\"", html); Assert.Contains("value=\"2026-10-14\"", html);
         Assert.Contains("<option value=\"Overdue\" selected=\"selected\">Overdue</option>", html);
-        Assert.Contains("<option value=\"7\" selected=\"selected\">", html);
+        Assert.Contains("<input type=\"checkbox\" name=\"towerId\" value=\"7\" checked=\"checked\" />", html);          // the chosen tower stays ticked in the multi-select
     }
 
     [Fact]
@@ -67,8 +67,9 @@ public sealed class CollectionsCampaignFilterTests
         using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
         var html = await (await client.GetAsync("/Collections/Campaigns?stage=CurrentMonthReminder")).Content.ReadAsStringAsync();
         var form = Regex.Match(html, "<form id=\"campaignFilters\".*?</form>", RegexOptions.Singleline).Value;
-        foreach (var name in new[] { "stage", "towerId", "paymentStatus", "dateFrom", "dateTo", "minTotal", "businessDate" })
+        foreach (var name in new[] { "stage", "paymentStatus", "dateFrom", "dateTo", "minTotal", "businessDate" })
             Assert.Single(Regex.Matches(form, $"name=\"{name}\""));                  // no duplicate filters
+        Assert.Equal(2, Regex.Matches(form, "name=\"towerId\"").Count);                  // Project / Tower is a multi-select: one checkbox per tower of the list (two in the fake), none ticked = All projects
         Assert.Single(Regex.Matches(html, "id=\"campaignSearch\""));                         // the search box sits by the results but still belongs to the same form
         Assert.Contains("form=\"campaignFilters\"", html);
         Assert.DoesNotContain("name=\"month\"", form); Assert.DoesNotContain("name=\"year\"", form);
