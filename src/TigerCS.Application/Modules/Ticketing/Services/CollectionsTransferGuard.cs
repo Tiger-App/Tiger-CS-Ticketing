@@ -18,14 +18,14 @@ public sealed record CollectionsTransferDecision(VerifiedCollectionsUnit? Unit, 
 public sealed class CollectionsTransferGuard(CollectionsTeam team, CollectionsTransferSelectionService selection)
 {
     public async Task<CollectionsTransferDecision> CheckAsync(
-        Ticket ticket, int targetDepartmentId, int? towerId, int? unitId, CancellationToken cancellationToken = default)
+        Ticket ticket, int targetDepartmentId, int? towerId, string? unitRef, CancellationToken cancellationToken = default)
     {
         if (!await team.IsCollectionsDepartmentAsync(targetDepartmentId, cancellationToken))
         {
             return CollectionsTransferDecision.NotCollections;
         }
 
-        var result = await selection.CheckAsync(ticket, towerId, unitId, cancellationToken);
+        var result = await selection.CheckAsync(ticket, towerId, unitRef, cancellationToken);
         return result.Outcome switch
         {
             CollectionsSelectionOutcome.Valid => new(result.Unit, null),
@@ -39,5 +39,5 @@ public sealed class CollectionsTransferGuard(CollectionsTeam team, CollectionsTr
     public Task StoreAsync(Ticket ticket, VerifiedCollectionsUnit unit, Guid selectedBy, DateTime nowUtc, CancellationToken cancellationToken = default) =>
         selection.StoreAsync(ticket, unit, selectedBy, nowUtc, cancellationToken);
 
-    public static string Describe(VerifiedCollectionsUnit unit) => $"CollectionsTower={unit.Tower.TowerCode};CollectionsUnit={unit.UnitNumber}";
+    public static string Describe(VerifiedCollectionsUnit unit) => $"CollectionsTower={unit.Tower.TowerCode};CollectionsUnit={unit.UnitNumber};UnitRef={unit.UnitRef}";
 }

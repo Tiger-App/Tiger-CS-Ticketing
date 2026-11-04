@@ -21,11 +21,11 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// </param>
 /// <param name="RowVersion">Required. The <c>rowVersion</c> from the ticket you read. A stale value is answered with 409.</param>
 /// <param name="CollectionsTowerId">Required when the category routes the ticket to Collections (unless it already carries a verified tower and unit): the tower.</param>
-/// <param name="CollectionsUnitId">Required with the tower: the CRM unit of that tower this request is about.</param>
+/// <param name="CollectionsUnitRef">Required with the tower: the unit of that tower this request is about (<c>crm:{id}</c> or <c>pact:{id}</c>).</param>
 public sealed record ClassifyTicketRequestDto(
     int CategoryId,
     byte PriorityId,
     int? RequestTypeId,
     byte[] RowVersion,
     int? CollectionsTowerId = null,
-    int? CollectionsUnitId = null);
+    string? CollectionsUnitRef = null);

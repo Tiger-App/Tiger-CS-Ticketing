@@ -1165,7 +1165,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
         // A tower/unit the customer does not own is refused too (the ticket has no verified unit to match it against).
         var invented = await client.PostAsJsonAsync(
             $"/api/tickets/{ticket.TicketId}/transfer",
-            new TransferTicketRequestDto(collectionsId, "Payment follow-up", RowVersionOf(afterwards), CollectionsTowerId: 1, CollectionsUnitId: 1));
+            new TransferTicketRequestDto(collectionsId, "Payment follow-up", RowVersionOf(afterwards), CollectionsTowerId: 1, CollectionsUnitRef: "crm:1"));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, invented.StatusCode);
 
         // The CRM-less lookup answers for the same ticket (the page's tower/unit choices), and says nothing is verified.

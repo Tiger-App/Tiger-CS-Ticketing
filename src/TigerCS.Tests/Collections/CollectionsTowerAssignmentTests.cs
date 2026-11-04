@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.Collections.TowerAssignments;
 using Microsoft.Extensions.Logging.Abstractions;
 using TigerCS.Application.Modules.CustomerVerification.CrmIntegration;
 using TigerCS.Application.Modules.CustomerVerification.Dto;
+using TigerCS.Application.Modules.CustomerVerification.PactIntegration;
 using TigerCS.Application.Modules.CustomerVerification.Services;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
@@ -53,6 +54,7 @@ public class CollectionsTowerAssignmentTests
         public CollectionsTicketRoutingService Routing = null!;
         public CollectionsTeam Team = null!;
         public FakeCrmBuyerLookupGateway Crm = new();
+        public FakePactLookup Pact = new();
         public FakeTicketInteractionRepository Interactions = new();
         public FakeTicketCollectionsUnitRepository SelectionStore = new();
         public CollectionsTransferSelectionService Selection = null!;
@@ -86,7 +88,7 @@ public class CollectionsTowerAssignmentTests
             f.Crm.Returns(CrmBuyerLookupResult.Success([new CrmBuyerMatchDto(new CrmCustomerDto(1, "Customer", null, "0501234567", null), [
                 CrmUnit(3, "1001", 79), CrmUnit(4, "502", 80), CrmUnit(5, "777", 999)])]));
             f.Selection = new CollectionsTransferSelectionService(
-                new CrmBuyerLookupAppService(f.Crm, NullLogger<CrmBuyerLookupAppService>.Instance), f.ProjectMap, f.Catalog, new FakeIntakeRecordRepository(), f.Interactions, f.SelectionStore);
+                new CrmBuyerLookupAppService(f.Crm, NullLogger<CrmBuyerLookupAppService>.Instance), f.Pact, f.ProjectMap, f.Catalog, new FakeIntakeRecordRepository(), f.Interactions, f.SelectionStore);
             f.Guard = new CollectionsTransferGuard(f.Team, f.Selection);
             var resolver = new CollectionsTicketTowerResolver(f.ProjectMap, f.Catalog, f.SelectionStore);
             f.Routing = new CollectionsTicketRoutingService(f.Team, resolver, f.TowerRows, f.TicketAssignments, f.History, f.Audit, f.Options);
@@ -125,9 +127,9 @@ public class CollectionsTowerAssignmentTests
         }
 
         /// <summary>Transfers to Collections. With no tower/unit given, the ticket's own verified pair is used (as an API caller or an untouched preselection would).</summary>
-        public Task<TicketMutationResult> TransferToCollectionsAsync(Ticket ticket, int? towerId = null, int? unitId = null) =>
+        public Task<TicketMutationResult> TransferToCollectionsAsync(Ticket ticket, int? towerId = null, string? unitRef = null) =>
             Assignments.TransferAsync(Manager, [Roles.CsManager], ticket.TicketId,
-                new TransferTicketRequestDto(Collections.DepartmentId, "Payment follow-up", [], CollectionsTowerId: towerId, CollectionsUnitId: unitId));
+                new TransferTicketRequestDto(Collections.DepartmentId, "Payment follow-up", [], CollectionsTowerId: towerId, CollectionsUnitRef: unitRef));
 
         public Task<TowerSaveResult> ActivateAsync(Guid employee, int year, int month, params int[] towerIds) =>
             Towers.SaveEmployeeTowersAsync(Manager, [Roles.DepartmentHead], employee, new SaveEmployeeTowersRequest(year, month, towerIds, Activate: true))
@@ -281,10 +283,10 @@ public class CollectionsTowerAssignmentTests
         var saves = f.UnitOfWork.SaveChangesCallCount;
 
         var typedResult = await f.TransferToCollectionsAsync(typed);
-        var typedWithIds = await f.TransferToCollectionsAsync(pact, towerId: 1, unitId: 3);   // ids of someone else's unit are not accepted either
+        var typedWithIds = await f.TransferToCollectionsAsync(pact, towerId: 1, unitRef: "crm:3");   // PACT cannot be asked (no phone on record): nothing is verified
 
         Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, typedResult.Outcome);
-        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitInvalid, typedWithIds.Outcome);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitUnavailable, typedWithIds.Outcome);
         Assert.All(new[] { typed, pact }, t =>
         {
             Assert.Equal(f.CallCenter.DepartmentId, t.CurrentDepartmentId);
@@ -304,7 +306,7 @@ public class CollectionsTowerAssignmentTests
         var ticket = await f.CallCenterTicketAsync(owner: f.CsAgent);
 
         var towerOnly = await f.TransferToCollectionsAsync(ticket, towerId: 1);
-        var unitOnly = await f.TransferToCollectionsAsync(ticket, unitId: 3);
+        var unitOnly = await f.TransferToCollectionsAsync(ticket, unitRef: "crm:3");
 
         Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, towerOnly.Outcome);
         Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, unitOnly.Outcome);
@@ -322,17 +324,17 @@ public class CollectionsTowerAssignmentTests
         var ticket = await f.CallCenterTicketAsync(crmProjectId: 79, unit: "1001", owner: f.CsAgent);    // raised on unit 1001 (tower 140)...
 
         var options = await f.Selection.GetOptionsAsync(ticket);
-        var result = await f.TransferToCollectionsAsync(ticket, towerId: 2, unitId: 4);                    // ...but this request is about unit 502 in tower 141
+        var result = await f.TransferToCollectionsAsync(ticket, towerId: 2, unitRef: "crm:4");                    // ...but this request is about unit 502 in tower 141
 
         Assert.Equal([1, 2], options.Towers.Select(t => t.TowerId));                                       // only verified towers: the unmapped project's unit is not offered
         Assert.Equal(["1001"], options.Towers[0].Units.Select(u => u.UnitNumber));
-        Assert.Equal((1, 3), (options.PreselectedTowerId, options.PreselectedUnitId));                      // the ticket's own verified pair is preselected
+        Assert.Equal((1, "crm:3"), (options.PreselectedTowerId, options.PreselectedUnitRef));                      // the ticket's own verified pair is preselected
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(f.Bob, ticket.CurrentOwnerEmployeeId);                                                // the collector of tower 141, not of the ticket's own tower
         var entry = Assert.Single(f.History.Entries);
         Assert.Equal(("141", "502", TicketAssignmentKind.Automatic), (entry.TowerCode, entry.UnitNumber, entry.Kind));
         var stored = Assert.Single(f.SelectionStore.Rows);
-        Assert.Equal((2, 4, f.Manager), (stored.TowerId, stored.CrmUnitId, stored.SelectedByEmployeeId));
+        Assert.Equal((2, "crm:4", f.Manager), (stored.TowerId, stored.UnitRef, stored.SelectedByEmployeeId));
         Assert.Contains(f.Audit.Entries, a => a.Action == "Transfer" && a.AfterValue!.Contains("CollectionsTower=141;CollectionsUnit=502"));
     }
 
@@ -343,9 +345,9 @@ public class CollectionsTowerAssignmentTests
         await f.ActivateAsync(f.Alice, 2026, 11, 1);
         var ticket = await f.CallCenterTicketAsync(owner: f.CsAgent);
 
-        var wrongTower = await f.TransferToCollectionsAsync(ticket, towerId: 1, unitId: 4);    // unit 502 belongs to tower 141, not 140
-        var strangersUnit = await f.TransferToCollectionsAsync(ticket, towerId: 1, unitId: 99);
-        var unmappedProjectUnit = await f.TransferToCollectionsAsync(ticket, towerId: 3, unitId: 5);   // unit 777's project has no verified tower
+        var wrongTower = await f.TransferToCollectionsAsync(ticket, towerId: 1, unitRef: "crm:4");    // unit 502 belongs to tower 141, not 140
+        var strangersUnit = await f.TransferToCollectionsAsync(ticket, towerId: 1, unitRef: "crm:99");
+        var unmappedProjectUnit = await f.TransferToCollectionsAsync(ticket, towerId: 3, unitRef: "crm:5");   // unit 777's project has no verified tower
 
         Assert.All(new[] { wrongTower, strangersUnit, unmappedProjectUnit }, r => Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitInvalid, r.Outcome));
         Assert.Equal((f.CallCenter.DepartmentId, (Guid?)f.CsAgent), (ticket.CurrentDepartmentId, ticket.CurrentOwnerEmployeeId));
@@ -362,12 +364,96 @@ public class CollectionsTowerAssignmentTests
         var other = await f.CallCenterTicketAsync(owner: f.CsAgent);
 
         var ok = await f.TransferToCollectionsAsync(own);                                      // preselected pair, no CRM needed
-        var unavailable = await f.TransferToCollectionsAsync(other, towerId: 2, unitId: 4);
+        var unavailable = await f.TransferToCollectionsAsync(other, towerId: 2, unitRef: "crm:4");
 
         Assert.Equal(TicketMutationOutcome.Success, ok.Outcome);
         Assert.Equal(f.Alice, own.CurrentOwnerEmployeeId);
         Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitUnavailable, unavailable.Outcome);
         Assert.Equal(f.CallCenter.DepartmentId, other.CurrentDepartmentId);
+    }
+
+    private static PactCustomerLookupResult PactCustomer(string tenant, params (string unitId, string code, int company)[] units) =>
+        PactCustomerLookupResult.Success([new PactCustomerMatchDto(tenant, "Omar", "0501234567", null, null,
+            [.. units.Select(u => new PactContractDto(u.unitId, "C-" + u.unitId, u.code[(u.code.IndexOf('-') + 1)..], "Tiger Tower", null, u.company, null, u.code))])]);
+
+    private static async Task<Ticket> PactTicketAsync(Fixture f, string tenant = "T-77", string unitId = "U-9", Guid? owner = null)
+    {
+        var ticket = Ticket.CreateFromExternalLookup(
+            $"TG-PACT-{Guid.NewGuid():N}"[..14], f.CallCenter.DepartmentId, "Pact", tenant, unitId, "Typed Tower", "typed-unit", 5, (byte)PriorityLevel.Medium, "Payment query", November);
+        await f.Tickets.AddAsync(ticket);
+        await f.Interactions.AddAsync(TicketInteraction.CreateLocal(ticket.TicketId, 1, "0501234567", November, isOriginatingInteraction: true));
+        if (owner is { } o) ticket.AssignTo(o);
+        return ticket;
+    }
+
+    [Fact]
+    public async Task APactVerifiedCustomer_CanBeTransferred_WithTheTowerFromPactsOwnUnitCode()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);
+        await f.ActivateAsync(f.Bob, 2026, 11, 2);
+        f.Pact.Result = PactCustomer("T-77", ("U-9", "TP140-1001", 4), ("U-10", "TP141-502", 4));
+        var ticket = await PactTicketAsync(f, owner: f.CsAgent);
+
+        var options = await f.Selection.GetOptionsAsync(ticket);
+        var viaPreselection = await f.TransferToCollectionsAsync(ticket);
+
+        Assert.Equal([1, 2], options.Towers.Select(t => t.TowerId));
+        Assert.Equal((1, "pact:U-9"), (options.PreselectedTowerId, options.PreselectedUnitRef));   // the unit the ticket was verified with
+        Assert.All(options.Towers.SelectMany(t => t.Units), u => Assert.Equal("Pact", u.Source));
+        Assert.Equal(TicketMutationOutcome.Success, viaPreselection.Outcome);
+        Assert.Equal(f.Alice, ticket.CurrentOwnerEmployeeId);                                    // routed by the verified unit, not by the typed "Typed Tower"
+        Assert.Equal("pact:U-9", Assert.Single(f.SelectionStore.Rows).UnitRef);                    // kept for routing: a PACT unit is not readable from the ticket itself
+    }
+
+    [Fact]
+    public async Task APactCustomerWithSeveralUnits_ChoosesTheUnitOfTheRequest()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Bob, 2026, 11, 2);
+        f.Pact.Result = PactCustomer("T-77", ("U-9", "TP140-1001", 4), ("U-10", "TP141-502", 4));
+        var ticket = await PactTicketAsync(f, owner: f.CsAgent);
+
+        var result = await f.TransferToCollectionsAsync(ticket, towerId: 2, unitRef: "pact:U-10");
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(f.Bob, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(("141", "502", "pact:U-10"), (f.History.Entries.Single().TowerCode, f.History.Entries.Single().UnitNumber, f.SelectionStore.Rows.Single().UnitRef));
+    }
+
+    [Fact]
+    public async Task PactIsOnlyTrustedWhenItReturnsTheSameCustomerTheTicketWasVerifiedWith()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);
+        f.Pact.Result = PactCustomer("SOMEONE-ELSE", ("U-9", "TP140-1001", 4));        // the phone now belongs to another tenant
+        var ticket = await PactTicketAsync(f, owner: f.CsAgent);
+        var saves = f.UnitOfWork.SaveChangesCallCount;
+
+        var preselected = await f.TransferToCollectionsAsync(ticket);
+        var chosen = await f.TransferToCollectionsAsync(ticket, towerId: 1, unitRef: "pact:U-9");
+
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, preselected.Outcome);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitUnavailable, chosen.Outcome);
+        Assert.Equal((f.CallCenter.DepartmentId, (Guid?)f.CsAgent), (ticket.CurrentDepartmentId, ticket.CurrentOwnerEmployeeId));
+        Assert.Equal(saves, f.UnitOfWork.SaveChangesCallCount);
+        Assert.Equal("The customer's units could not be read from PACT, so they cannot be verified.", (await f.Selection.GetOptionsAsync(ticket)).Message);
+    }
+
+    [Fact]
+    public async Task APactContractWithoutAUnitCode_IsNotOffered_BecauseItsTowerCannotBeVerified()
+    {
+        var f = Fixture.Create();
+        f.Pact.Result = PactCustomerLookupResult.Success([new PactCustomerMatchDto("T-77", "Omar", null, null, null, [new PactContractDto("U-9", "C-9", "1001", "Tiger Tower", null, 4)])]);
+        var ticket = await PactTicketAsync(f, owner: f.CsAgent);
+
+        var options = await f.Selection.GetOptionsAsync(ticket);
+        var result = await f.TransferToCollectionsAsync(ticket);
+
+        Assert.Empty(options.Towers);
+        Assert.Contains("cannot be moved to Collections", options.Message);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, result.Outcome);
+        Assert.Equal(f.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
     }
 
     [Fact]

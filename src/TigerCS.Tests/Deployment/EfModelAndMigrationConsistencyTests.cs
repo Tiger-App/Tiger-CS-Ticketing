@@ -42,7 +42,7 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
 
         // AddUserPermissionOverrides (per-employee permission overrides) and AddCollectionsTowerAssignments (Collections tower assignments) were added after
         // these four and are deployed by their own scripts; the Production script for the four must stay exactly these, immediately before them.
-        Assert.Equal("20261104123248_AddCollectionsTowerAssignments", migrations[^1]);
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^1]);
         Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^2]);
         Assert.Equal(FourPendingMigrations, migrations.SkipLast(2).TakeLast(4));
     }

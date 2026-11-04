@@ -147,8 +147,7 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     TowerCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
                     TowerName = table.Column<string>(type: "nvarchar(200)", maxLength: 200, nullable: false),
                     CompanyId = table.Column<int>(type: "int", nullable: false),
-                    CrmUnitId = table.Column<int>(type: "int", nullable: false),
-                    CrmProjectId = table.Column<int>(type: "int", nullable: false),
+                    UnitRef = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
                     UnitNumber = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
                     SelectedByEmployeeId = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
                     SelectedAtUtc = table.Column<DateTime>(type: "datetime2", nullable: false)

@@ -87,6 +87,7 @@ public class TicketCollectionsUnitConfiguration : IEntityTypeConfiguration<Ticke
         builder.Property(u => u.TicketId).ValueGeneratedNever();
         builder.Property(u => u.TowerCode).HasMaxLength(20).IsRequired();
         builder.Property(u => u.TowerName).HasMaxLength(200).IsRequired();
+        builder.Property(u => u.UnitRef).HasMaxLength(100).IsRequired();
         builder.Property(u => u.UnitNumber).HasMaxLength(100).IsRequired();
         builder.HasOne<Ticket>().WithMany().HasForeignKey(u => u.TicketId).OnDelete(DeleteBehavior.Restrict);
         builder.HasOne<Employee>().WithMany().HasForeignKey(u => u.SelectedByEmployeeId).OnDelete(DeleteBehavior.Restrict);

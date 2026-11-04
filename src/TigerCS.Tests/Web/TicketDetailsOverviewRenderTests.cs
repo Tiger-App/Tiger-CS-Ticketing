@@ -212,7 +212,7 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
     {
         var html = await Page(104);
 
-        var requestDetails = Between(html, ">Request Details</div>", "</section>");
+        var requestDetails = Between(html, "Request Details</h2>", "</section>");
         Assert.Contains("<dt>Category</dt><dd>Complaint Handling</dd>", requestDetails, StringComparison.Ordinal);
         Assert.Contains("<dt>Request type</dt><dd>Complaint Handling</dd>", requestDetails, StringComparison.Ordinal);
         Assert.DoesNotContain("#2", requestDetails, StringComparison.Ordinal);
@@ -306,7 +306,7 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
         var order = new[]
         {
             At("class=\"tw-head\""), At("class=\"tw-next "), At("id=\"conversation-title\""), At(">Latest Activity</div>"),
-            At(">Request Details</div>"), At("id=\"customer-satisfaction\""), At("id=\"additional-details\""),
+            At("Request Details</h2>"), At("id=\"customer-satisfaction\""), At("id=\"additional-details\""),
         };
         Assert.All(order, p => Assert.True(p >= 0));
         Assert.Equal(order.OrderBy(p => p), order);
@@ -321,7 +321,7 @@ public sealed class TicketDetailsOverviewRenderTests : IDisposable
 
         // Information is said once: status/priority/owner/SLA are in the header only — there is no second "quick facts" panel.
         Assert.Equal(0, Count(html, "quick-facts"));
-        Assert.Equal(1, Count(html, "Assigned To:"));
+        Assert.Equal(1, Count(html, ">Assigned To<"));
         Assert.DoesNotContain("<div class=\"facts-section__title\">Ticket Information</div>", html, StringComparison.Ordinal);
     }
 

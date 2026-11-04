@@ -118,7 +118,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     [Fact]
     public async Task CollectionsTicket_OffersAssignBesideAssignedTo_OnlyWhenTheServerSaysTheViewerMayAssign()
     {
-        var offered = Dec(await Page(219, Roles.DepartmentEmployee));
+        var offered = Dec(await Page(220, Roles.DepartmentEmployee));
 
         Assert.Equal(1, Count(offered, "data-collections-assign"));
         var control = Section(offered, "data-collections-assign", "</details>");
@@ -127,7 +127,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Contains("name=\"CollectionsAssign.EmployeeId\"", control);
         Assert.Contains("Reason (optional)", control);
         Assert.Contains("Current: <strong data-assign-current>", control);
-        Assert.Equal(1, Count(offered, "Assigned To:"));                        // still shown once, beside the control
+        Assert.Equal(1, Count(offered, "<span class=\"tw-fact__k\">Assigned To</span>"));   // still shown once, with the control inside it
 
         Assert.DoesNotContain("data-collections-assign", await Page(212, Roles.CsManager));   // not a Collections ticket for this viewer
     }
@@ -141,7 +141,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Contains("data-ct-collections-ids=\"7\"", transfer);               // only Collections (by its code) needs it
         Assert.Contains("data-ct-trigger=\"#Transfer_TargetDepartmentId\"", transfer);
         Assert.Contains("name=\"Transfer.CollectionsTowerId\"", transfer);        // tower first...
-        Assert.Contains("name=\"Transfer.CollectionsUnitId\"", transfer);         // ...then the unit of that tower
+        Assert.Contains("name=\"Transfer.CollectionsUnitRef\"", transfer);         // ...then the unit of that tower
         Assert.Contains("Select a tower first", transfer);
         Assert.Matches(@"<div class=""ct"" hidden", transfer);                      // hidden (and its selects disabled) until Collections is chosen
         Assert.Contains("ticket-collections-tower-unit.js", open);
@@ -165,8 +165,8 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     {
         var html = await Page(203, Roles.CsAgent, "redesign-assigned");
 
-        Assert.Equal(1, Count(html, "Assigned To:"));
-        Assert.Contains("<strong>Assigned To:</strong> Test Agent", html);
+        Assert.Equal(1, Count(html, ">Assigned To<"));
+        Assert.Contains("<span class=\"tw-fact__v\">Test Agent</span>", html);
         Assert.Contains("Contact the customer", NextStep(html));   // yours, and nobody has replied yet
 
         // One dominant action: the Next step button is the only gold control outside forms' own submit buttons.
@@ -227,6 +227,17 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
 
         Assert.Contains("This was a phone call", html);
         Assert.DoesNotContain("No transcript was recorded", html);
+    }
+
+    [Fact]
+    public async Task UnregisteredPhoneCaller_HandledByAi_RendersTheWholeWorkspace()
+    {
+        var html = Dec(await Page(219, Roles.CsManager, "redesign-phone-ai"));
+
+        Assert.Contains("Phone Call – CS – Contract Status or Unit Registration", html);
+        Assert.Contains("This was a phone call", html);
+        Assert.Contains("Unnamed caller", html);
+        Assert.Contains("(typed in)", html);
     }
 
     [Fact]
@@ -308,7 +319,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         var html = await Page(208, Roles.CsManager, "redesign-resolved");
 
         Assert.Contains("Check the resolution, then close the ticket", NextStep(html));
-        Assert.Contains("<strong>Assigned To:</strong> No one assigned", html);
+        Assert.Contains("<span class=\"tw-fact__v\">No one assigned</span>", html);
         Assert.DoesNotContain("awaiting CS Agent", html);
         Assert.Contains("SLA: Met", html);
         Assert.DoesNotContain("past due", html);
@@ -394,8 +405,8 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         int At(string marker) => html.IndexOf(marker, StringComparison.Ordinal);
         var order = new[]
         {
-            At("<header class=\"tw-head\""), At("class=\"tw-next "), At("class=\"tw-body\""), At("class=\"tw-main\""),
-            At("id=\"conversation-title\""), At("<aside class=\"tw-side\""), At(">Request Details</div>"), At(">SLA Information</div>"),
+            At("class=\"tw-body\""), At("class=\"tw-main\""), At("<header class=\"tw-head\""), At("class=\"tw-next "),
+            At("id=\"conversation-title\""), At("<aside class=\"tw-side\""), At("Request Details</h2>"), At("SLA Information</h2>"),
         };
         Assert.All(order, position => Assert.True(position >= 0));
         Assert.Equal(order.OrderBy(p => p), order);
@@ -421,7 +432,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         var html = await Page(203, Roles.CsAgent);
         var sidebar = html[html.IndexOf("<aside class=\"tw-side\"", StringComparison.Ordinal)..];
 
-        Assert.Equal(1, Count(html, "Assigned To:"));
+        Assert.Equal(1, Count(html, ">Assigned To<"));
         Assert.Equal(1, Count(html, "Assigned Department:"));
         Assert.DoesNotContain("Assigned To", sidebar);
         Assert.DoesNotContain("<dt>Status</dt>", sidebar);
@@ -492,7 +503,10 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
             216 => T(216, "Open", owner: Someone, crm: true, verification: "Verified"),
             217 => T(217, "Open", owner: Someone, verification: "PendingCrmVerification"),
             218 => T(218, "Open", owner: Someone, crmName: "NOT_REGISTERED"),
-            219 => T(219, "Open", owner: Someone, collectionsAssign: true),
+            // Phone call answered by the AI virtual agent, caller not in CRM, nothing classified yet, nobody assigned.
+            219 => T(219, "Open", category: null, priority: 3, classified: false, summary: "Phone Call – CS – Contract Status or Unit Registration")
+                with { ManualProjectName = "NOT_REGISTERED", ManualUnitNumber = "NOT_REGISTERED", OriginatingChannelName = "Phone" },
+            220 => T(220, "Open", owner: Someone, collectionsAssign: true),
             _ => null,
         };
 
@@ -510,6 +524,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
                 210 => new("Breached", now.AddDays(-4), false, now.AddDays(-4), now.AddHours(20), false, false, null, 0, "None", Why(true)),
                 211 => new("Paused", now.AddHours(-1), false, now.AddHours(-2), now.AddDays(1), false, true, "Pending Customer", 30, "None", Why(true)),
                 212 => new("Running", now.AddMinutes(30), false, null, now.AddDays(1), false, false, null, 0, "None", Why(true)),
+                219 => new("Running", now.AddHours(17.95), false, null, now.AddDays(3.9), false, false, null, 0, "None", Why(true)),
                 _ => new("Running", now.AddHours(1), false, now.AddMinutes(-20), now.AddHours(6), false, false, null, 0, "None", Why(true)),
             };
         }
@@ -532,6 +547,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
                 217 => [Chat("+971507770004", "Sara Khalid", "Human")],
                 218 => [Chat("+971507770005", "Huda Nasser", "Human")],
                 206 => [Chat("+971509998888", "Omar", "Human", agent: "Layla Hassan", channel: "Phone", messages: [])],
+                219 => [Chat("+971506856307", null, "Ai", channel: "Phone", messages: []) with { Status = "Active", EndedAtUtc = null, EndReason = null }],
                 _ => [],
             };
         }
@@ -572,6 +588,8 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
                     "sla" when parts.Length == 4 => Sla(id),
                     "interactions" => new TicketInteractionHistoryDto(id, Interactions(id)),
                     "approvals" => new TicketApprovalsViewDto([], [], [], null, null, false),
+                    "customer-history" when id == 219 => new CustomerHistoryDto("Unverified", null, "+971506856307", null, 4, 4, 0,
+                        Enumerable.Range(0, 4).Select(i => new CustomerHistoryTicketDto(219 - i, $"TG-CS-{219 - i}", Now.AddDays(-i), "Open", 3, null, CustomerService, null, null, "Unverified")).ToList()),
                     "reviews" => new TicketReviewsDto(id, []),
                     _ => null,
                 };

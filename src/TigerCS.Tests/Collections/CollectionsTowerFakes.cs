@@ -92,3 +92,17 @@ public sealed class FakeTicketCollectionsUnitRepository : ITicketCollectionsUnit
         return Task.CompletedTask;
     }
 }
+
+public sealed class FakePactLookup : TigerCS.Application.Modules.CustomerVerification.PactIntegration.IPactCustomerLookupGateway
+{
+    public TigerCS.Application.Modules.CustomerVerification.PactIntegration.PactCustomerLookupResult Result { get; set; } =
+        TigerCS.Application.Modules.CustomerVerification.PactIntegration.PactCustomerLookupResult.NotFound();
+
+    public int Calls { get; private set; }
+
+    public Task<TigerCS.Application.Modules.CustomerVerification.PactIntegration.PactCustomerLookupResult> SearchByMobileAsync(string phoneNumber, CancellationToken cancellationToken = default)
+    {
+        Calls++;
+        return Task.FromResult(Result);
+    }
+}

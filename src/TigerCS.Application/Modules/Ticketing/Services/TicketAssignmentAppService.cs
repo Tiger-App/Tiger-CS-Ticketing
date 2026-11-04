@@ -352,7 +352,7 @@ public sealed class TicketAssignmentAppService(
         // Into Collections a verified Tower AND Unit are mandatory. Refused here, before any write, so the department and the assignee stay exactly as they were.
         var collectionsDecision = collectionsGuard is null
             ? CollectionsTransferDecision.NotCollections
-            : await collectionsGuard.CheckAsync(ticket, request.TargetDepartmentId, request.CollectionsTowerId, request.CollectionsUnitId, cancellationToken);
+            : await collectionsGuard.CheckAsync(ticket, request.TargetDepartmentId, request.CollectionsTowerId, request.CollectionsUnitRef, cancellationToken);
         if (collectionsDecision.Refusal is { } refusal)
         {
             return TicketMutationResult.Failure(refusal);

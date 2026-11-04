@@ -28,7 +28,7 @@
             unit.appendChild(first);
             (chosen ? chosen.units : []).forEach(u => {
                 const o = document.createElement('option');
-                o.value = u.unitId;
+                o.value = u.unitRef;
                 o.textContent = 'Unit ' + u.unitNumber + (u.projectName ? ' - ' + u.projectName : '');
                 unit.appendChild(o);
             });
@@ -50,7 +50,7 @@
             if (data.preselectedTowerId) {
                 tower.value = String(data.preselectedTowerId);
                 fillUnits();
-                if (data.preselectedUnitId) unit.value = String(data.preselectedUnitId);
+                if (data.preselectedUnitRef) unit.value = data.preselectedUnitRef;
             } else {
                 fillUnits();
             }

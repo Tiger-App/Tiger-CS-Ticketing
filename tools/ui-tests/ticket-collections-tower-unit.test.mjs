@@ -9,17 +9,17 @@ import { JSDOM } from 'jsdom';
 
 const script = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'TigerCS.Web', 'wwwroot', 'js', 'ticket-collections-tower-unit.js'), 'utf8');
 const OPTIONS = {
-    status: 'Ok', message: null, preselectedTowerId: 1, preselectedUnitId: 3,
+    status: 'Ok', message: null, preselectedTowerId: 1, preselectedUnitRef: 'crm:3',
     towers: [
-        { towerId: 1, towerCode: '140', towerName: 'Tiger Tower 140', units: [{ unitId: 3, unitNumber: '1001', projectName: 'P79' }] },
-        { towerId: 2, towerCode: '141', towerName: 'Tiger Tower 141', units: [{ unitId: 4, unitNumber: '502', projectName: 'P80' }, { unitId: 6, unitNumber: '503', projectName: 'P80' }] }
+        { towerId: 1, towerCode: '140', towerName: 'Tiger Tower 140', units: [{ unitRef: 'crm:3', unitNumber: '1001', projectName: 'P79' }] },
+        { towerId: 2, towerCode: '141', towerName: 'Tiger Tower 141', units: [{ unitRef: 'crm:4', unitNumber: '502', projectName: 'P80' }, { unitRef: 'pact:6', unitNumber: '503', projectName: 'P80' }] }
     ]
 };
 const PAGE = `<!doctype html><body><form id="f" method="post">
 <select id="Transfer_TargetDepartmentId"><option value="3" selected>Facilities</option><option value="7">Collections</option></select>
 <div class="ct" hidden data-ct data-ct-trigger="#Transfer_TargetDepartmentId" data-ct-collections-ids="7" data-ct-url="/load">
  <select name="Transfer.CollectionsTowerId" data-ct-tower disabled><option value="">Select a tower</option></select>
- <select name="Transfer.CollectionsUnitId" data-ct-unit disabled><option value="">Select a tower first</option></select>
+ <select name="Transfer.CollectionsUnitRef" data-ct-unit disabled><option value="">Select a tower first</option></select>
  <p data-ct-hint></p><p data-ct-error hidden></p></div>
 <button type="submit">Transfer</button></form></body>`;
 
@@ -55,7 +55,7 @@ test('choosing Collections shows the block, loads the options once and preselect
     assert.equal(t.d.querySelector('[data-ct]').hidden, false);
     assert.equal(tower.disabled, false);
     assert.equal(tower.value, '1');
-    assert.equal(unit.value, '3');
+    assert.equal(unit.value, 'crm:3');
     assert.deepEqual([...tower.options].map(o => o.text), ['Select a tower', '140 - Tiger Tower 140', '141 - Tiger Tower 141']);
     t.pick('Transfer_TargetDepartmentId', '3'); t.pick('Transfer_TargetDepartmentId', '7'); await t.settle();
     assert.equal(t.fetched(), 1);
@@ -79,7 +79,7 @@ test('submitting without both a tower and a unit is blocked with a clear message
     assert.equal(t.submit(), true);
     assert.equal(error.hidden, false);
     assert.equal(error.textContent, 'Select both a Tower and a Unit before transferring to Collections.');
-    unit.value = '4'; unit.dispatchEvent(new t.win.Event('change', { bubbles: true }));
+    unit.value = 'crm:4'; unit.dispatchEvent(new t.win.Event('change', { bubbles: true }));
     assert.equal(error.hidden, true);
     assert.equal(t.submit(), false);
 });

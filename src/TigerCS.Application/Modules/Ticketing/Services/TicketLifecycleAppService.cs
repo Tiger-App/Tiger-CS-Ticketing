@@ -650,7 +650,7 @@ public sealed class TicketLifecycleAppService(
         // Reopening into Collections is a move into Collections: a verified Tower AND Unit are mandatory, checked before anything is written.
         var collectionsDecision = collectionsGuard is null
             ? CollectionsTransferDecision.NotCollections
-            : await collectionsGuard.CheckAsync(ticket, request.TargetDepartmentId, request.CollectionsTowerId, request.CollectionsUnitId, cancellationToken);
+            : await collectionsGuard.CheckAsync(ticket, request.TargetDepartmentId, request.CollectionsTowerId, request.CollectionsUnitRef, cancellationToken);
         if (collectionsDecision.Refusal is { } collectionsRefusal)
         {
             return TicketMutationResult.Failure(collectionsRefusal);

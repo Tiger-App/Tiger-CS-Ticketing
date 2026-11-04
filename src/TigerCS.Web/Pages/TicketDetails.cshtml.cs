@@ -655,7 +655,7 @@ public sealed class TicketDetailsModel(
         }
 
         var result = await ticketsApiClient.TransferAsync(
-            id, new TransferTicketRequestDto(Transfer.TargetDepartmentId, Transfer.Reason, rowVersion, null, Transfer.ReasonCode, Transfer.CollectionsTowerId, Transfer.CollectionsUnitId), cancellationToken);
+            id, new TransferTicketRequestDto(Transfer.TargetDepartmentId, Transfer.Reason, rowVersion, null, Transfer.ReasonCode, Transfer.CollectionsTowerId, Transfer.CollectionsUnitRef), cancellationToken);
         return await HandleMutationAsync(result, "transfer", "Ticket transferred.", cancellationToken);
     }
 
@@ -826,7 +826,7 @@ public sealed class TicketDetailsModel(
         }
 
         var result = await ticketsApiClient.ReopenAsync(
-            id, new ReopenTicketRequestDto(Reopen.Reason, Reopen.TargetDepartmentId, rowVersion, Reopen.CollectionsTowerId, Reopen.CollectionsUnitId), cancellationToken);
+            id, new ReopenTicketRequestDto(Reopen.Reason, Reopen.TargetDepartmentId, rowVersion, Reopen.CollectionsTowerId, Reopen.CollectionsUnitRef), cancellationToken);
 
         // Stays on this page: the redirect re-reads the ticket, so the agent
         // sees In Progress, the department that now owns it, the resulting
@@ -1874,7 +1874,7 @@ public sealed class TicketDetailsModel(
 
         /// <summary>Required when the target is Collections: the tower, then one of the customer's units in it. The Api verifies both against CRM.</summary>
         public int? CollectionsTowerId { get; set; }
-        public int? CollectionsUnitId { get; set; }
+        public string? CollectionsUnitRef { get; set; }
     }
 
     public sealed class StatusInput
@@ -1936,7 +1936,7 @@ public sealed class TicketDetailsModel(
 
         /// <summary>Required when the target is Collections (see <see cref="TransferInput"/>).</summary>
         public int? CollectionsTowerId { get; set; }
-        public int? CollectionsUnitId { get; set; }
+        public string? CollectionsUnitRef { get; set; }
     }
 
     public sealed class NoteInput

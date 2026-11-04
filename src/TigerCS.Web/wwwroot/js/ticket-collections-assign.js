@@ -26,9 +26,8 @@
                 const response = await fetch(root.dataset.postUrl, { method: 'POST', body: new FormData(form), headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, credentials: 'same-origin' });
                 const data = await response.json();
                 if (!data.ok) { say(data.message || 'Could not save.', true); return; }
-                const label = document.querySelector('[data-assigned-to-row]');
-                const strong = label && label.querySelector('strong');
-                if (strong && strong.nextSibling) strong.nextSibling.textContent = ' ' + data.ownerName;
+                const label = document.querySelector('.tw-owner .tw-fact__v');
+                if (label) label.textContent = data.ownerName;
                 root.querySelector('[data-assign-current]').textContent = data.ownerName;
                 root.querySelector('summary').textContent = 'Reassign';
                 form.querySelector('[data-assign-rowversion]').value = data.rowVersion;

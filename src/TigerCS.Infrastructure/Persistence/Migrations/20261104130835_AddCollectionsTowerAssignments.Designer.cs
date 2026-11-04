@@ -12,7 +12,7 @@ using TigerCS.Infrastructure.Persistence;
 namespace TigerCS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(TigerCsDbContext))]
-    [Migration("20261104123248_AddCollectionsTowerAssignments")]
+    [Migration("20261104130835_AddCollectionsTowerAssignments")]
     partial class AddCollectionsTowerAssignments
     {
         /// <inheritdoc />
@@ -2985,12 +2985,6 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<int>("CompanyId")
                         .HasColumnType("int");
 
-                    b.Property<int>("CrmProjectId")
-                        .HasColumnType("int");
-
-                    b.Property<int>("CrmUnitId")
-                        .HasColumnType("int");
-
                     b.Property<DateTime>("SelectedAtUtc")
                         .HasColumnType("datetime2");
 
@@ -3011,6 +3005,11 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(200)");
 
                     b.Property<string>("UnitNumber")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("UnitRef")
                         .IsRequired()
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");

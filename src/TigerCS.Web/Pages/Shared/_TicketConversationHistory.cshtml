@@ -6,7 +6,7 @@
     var interactions = Model.Interactions;
 }
 <section class="facts-panel conversation" id="action-conversation" data-action="conversation" aria-labelledby="conversation-title">
-    <div class="facts-section__title" id="conversation-title">Conversation History@(interactions.Count > 1 ? $" ({interactions.Count} interactions)" : "")</div>
+    <div class="facts-section__title@(interactions.Count > 1 ? "" : " visually-hidden")" id="conversation-title">Conversation History@(interactions.Count > 1 ? $" ({interactions.Count} interactions)" : "")</div>
     @if (Model.InteractionsUnavailable)
     {
         <div class="empty-state empty-state--compact"><p>Conversation history is unavailable right now.</p></div>
@@ -27,6 +27,8 @@
             <details class="convo-group" open="@(ConversationHistoryView.OpensByDefault(interactions, index) ? "open" : null)">
                 <summary class="convo-group__summary">
                     <span class="convo-group__head">
+                        <span class="convo-group__chev" aria-hidden="true">@TicketIcons.Svg("chevron-right", "ic ic--chev")</span>
+                        @TicketIcons.Svg(ConversationHistoryView.IsVoice(interaction) ? "phone" : TicketIcons.ForChannel(interaction.ChannelName), "ic ic--chan")
                         <span class="convo-group__channel">@(interaction.ChannelName ?? "Unknown channel")</span>
                         @if (interaction.IsOriginatingInteraction)
                         {
@@ -41,7 +43,7 @@
                             <span class="convo-chip convo-chip--handoff@(interaction.Handoff is null ? " convo-chip--quiet" : "")">@handoffStatus</span>
                         }
                     </span>
-                    <span class="convo-group__when">@ConversationHistoryView.TimeWindow(interaction) · @ConversationHistoryView.MessageCount(interaction)</span>
+                    <span class="convo-group__when">@TicketIcons.Svg("calendar", "ic ic--when")<span>@ConversationHistoryView.TimeWindow(interaction) · @ConversationHistoryView.MessageCount(interaction)</span></span>
                 </summary>
 
                 <div class="convo-group__body">

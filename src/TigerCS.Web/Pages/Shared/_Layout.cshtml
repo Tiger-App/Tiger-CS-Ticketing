@@ -8,8 +8,12 @@
     <link rel="stylesheet" href="~/css/site.css" asp-append-version="true" />
 </head>
 <body>
+    @{ var compactShell = ViewData["CompactShell"] is true; }
     @await Html.PartialAsync("_Header")
-    @await Html.PartialAsync("_Nav")
+    @if (!compactShell)
+    {
+        @await Html.PartialAsync("_Nav")
+    }
     @if ((ViewData["ActiveNav"] as string) == "admin")
     {
         @await Html.PartialAsync("_AdminSubNav")

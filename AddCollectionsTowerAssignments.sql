@@ -2,7 +2,7 @@
 -- ## UAT ONLY. Run against database TigerCsTicketing; any other name aborts before any change.
 -- ## DO NOT RUN ON PRODUCTION from this file (Production gets its own reviewed script).
 -- ############################################################################################
--- Migration : 20261104123248_AddCollectionsTowerAssignments (EF Core 10.0.11)
+-- Migration : 20261104130835_AddCollectionsTowerAssignments (EF Core 10.0.11)
 -- Depends on: 20261102065459_AddUserPermissionOverrides and dbo.Employees / dbo.Departments / dbo.Tickets.
 -- Effect    : creates FOUR new, empty tables (+ indexes, FKs) and records the migration in dbo.__EFMigrationsHistory:
 --               CollectionsTowerAssignments        monthly tower -> collector mapping (unique primary collector per tower and month)
@@ -12,7 +12,7 @@
 --             No existing table, row, user, role or permission is read-modified, altered or deleted. Empty tables = no tower is
 --             assigned = Collections tickets keep arriving unassigned exactly as before until a manager activates a month.
 -- Idempotent: safe to run repeatedly (guarded by __EFMigrationsHistory). Runs in one transaction.
--- Generated from: dotnet ef migrations script 20261102065459_AddUserPermissionOverrides 20261104123248_AddCollectionsTowerAssignments --idempotent
+-- Generated from: dotnet ef migrations script 20261102065459_AddUserPermissionOverrides 20261104130835_AddCollectionsTowerAssignments --idempotent
 -- ############################################################################################
 SET NOCOUNT ON;
 SET XACT_ABORT ON;
@@ -28,7 +28,7 @@ IF NOT EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = N'202
 BEGIN TRANSACTION;
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE TABLE [CollectionsTowerAssignmentHistory] (
@@ -52,7 +52,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE TABLE [CollectionsTowerAssignments] (
@@ -79,7 +79,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE TABLE [TicketAssignmentHistory] (
@@ -107,7 +107,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE TABLE [TicketCollectionsUnits] (
@@ -116,8 +116,7 @@ BEGIN
         [TowerCode] nvarchar(20) NOT NULL,
         [TowerName] nvarchar(200) NOT NULL,
         [CompanyId] int NOT NULL,
-        [CrmUnitId] int NOT NULL,
-        [CrmProjectId] int NOT NULL,
+        [UnitRef] nvarchar(100) NOT NULL,
         [UnitNumber] nvarchar(100) NOT NULL,
         [SelectedByEmployeeId] uniqueidentifier NOT NULL,
         [SelectedAtUtc] datetime2 NOT NULL,
@@ -129,7 +128,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_CollectionsTowerAssignmentHistory_ChangedByEmployeeId] ON [CollectionsTowerAssignmentHistory] ([ChangedByEmployeeId]);
@@ -137,7 +136,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_CollectionsTowerAssignmentHistory_Month_Tower] ON [CollectionsTowerAssignmentHistory] ([Year], [Month], [TowerId]);
@@ -145,7 +144,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_CollectionsTowerAssignmentHistory_NewEmployeeId] ON [CollectionsTowerAssignmentHistory] ([NewEmployeeId]);
@@ -153,7 +152,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_CollectionsTowerAssignmentHistory_PreviousEmployeeId] ON [CollectionsTowerAssignmentHistory] ([PreviousEmployeeId]);
@@ -161,7 +160,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_CollectionsTowerAssignments_EmployeeId] ON [CollectionsTowerAssignments] ([EmployeeId]);
@@ -169,7 +168,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_CollectionsTowerAssignments_Month_Employee] ON [CollectionsTowerAssignments] ([Year], [Month], [EmployeeId]);
@@ -177,7 +176,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     EXEC(N'CREATE UNIQUE INDEX [UX_CollectionsTowerAssignments_Tower_Month_Primary] ON [CollectionsTowerAssignments] ([TowerId], [Year], [Month]) WHERE [IsPrimary] = 1');
@@ -185,7 +184,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_TicketAssignmentHistory_ChangedByEmployeeId] ON [TicketAssignmentHistory] ([ChangedByEmployeeId]);
@@ -193,7 +192,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_TicketAssignmentHistory_DepartmentId] ON [TicketAssignmentHistory] ([DepartmentId]);
@@ -201,7 +200,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_TicketAssignmentHistory_NewEmployeeId] ON [TicketAssignmentHistory] ([NewEmployeeId]);
@@ -209,7 +208,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_TicketAssignmentHistory_PreviousEmployeeId] ON [TicketAssignmentHistory] ([PreviousEmployeeId]);
@@ -217,7 +216,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_TicketAssignmentHistory_Ticket_Changed] ON [TicketAssignmentHistory] ([TicketId], [ChangedAtUtc]);
@@ -225,7 +224,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     CREATE INDEX [IX_TicketCollectionsUnits_SelectedByEmployeeId] ON [TicketCollectionsUnits] ([SelectedByEmployeeId]);
@@ -233,11 +232,11 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261104123248_AddCollectionsTowerAssignments'
+    WHERE [MigrationId] = N'20261104130835_AddCollectionsTowerAssignments'
 )
 BEGIN
     INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-    VALUES (N'20261104123248_AddCollectionsTowerAssignments', N'10.0.11');
+    VALUES (N'20261104130835_AddCollectionsTowerAssignments', N'10.0.11');
 END;
 
 COMMIT;

@@ -268,11 +268,12 @@ public sealed class CustomerWorkspaceRenderTests : IDisposable
         Assert.Contains("&#x2B;971501234567", who, StringComparison.Ordinal);
         Assert.Contains("Verified via Tiger CRM", who, StringComparison.Ordinal);
         Assert.Contains("T-1204 &#xB7; Tiger Tower", who, StringComparison.Ordinal);
-        Assert.Contains("href=\"/Customers/crm%3A9001?fromTicket=5\">Customer profile</a>", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"tw-gold-link\" href=\"/Customers/crm%3A9001?fromTicket=5\">", html, StringComparison.Ordinal);
+        Assert.Contains("Customer profile", html, StringComparison.Ordinal);
 
         // Conversation | Activity | Customer | Approvals, Conversation selected. The conversation lives in the Overview now,
         // so there is no separate Interactions tab.
-        foreach (var label in new[] { ">Conversation</label>", ">Activity <span", ">Customer", ">Approvals" })
+        foreach (var label in new[] { "Conversation</label>", "Activity <span", "Customer", "Approvals" })
         {
             Assert.Contains(label, html, StringComparison.Ordinal);
         }

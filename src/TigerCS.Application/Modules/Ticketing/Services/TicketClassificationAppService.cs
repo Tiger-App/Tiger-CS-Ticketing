@@ -175,7 +175,7 @@ public sealed class TicketClassificationAppService(
 
         // Classifying into a Collections category moves the ticket there: a verified Tower AND Unit are mandatory, checked before anything is written.
         var collectionsDecision = routeToCategoryDepartment && collectionsGuard is not null
-            ? await collectionsGuard.CheckAsync(ticket, category.DepartmentId, request.CollectionsTowerId, request.CollectionsUnitId, cancellationToken)
+            ? await collectionsGuard.CheckAsync(ticket, category.DepartmentId, request.CollectionsTowerId, request.CollectionsUnitRef, cancellationToken)
             : CollectionsTransferDecision.NotCollections;
         if (collectionsDecision.Refusal is { } collectionsRefusal)
         {
