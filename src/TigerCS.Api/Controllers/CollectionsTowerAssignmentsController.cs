@@ -11,8 +11,8 @@ using TigerCS.Infrastructure.Modules.IdentityAndAccess.Services;
 namespace TigerCS.Api.Controllers;
 
 /// <summary>
-/// Collections -> Tower Assignments: which Collections employee is responsible for which tower in which month. Who may read and who may change it is decided in
-/// <see cref="CollectionsTeam"/> (the Collections manager, CS Manager and the System Administrator manage; the Collections team reads) - never by the page.
+/// Administration -> Collections Tower Assignments: which Collections employee is responsible for which tower in which month. Who may read and who may change it is decided in
+/// <see cref="CollectionsTeam"/> (only the Collections manager, CS Manager and the System Administrator read or change it) - never by the page.
 /// Internal routes called server-side by the Web application as the signed-in user.
 /// </summary>
 [ApiController]

@@ -77,9 +77,10 @@ public sealed class CollectionsTeam(
                 && await members.ExistsAsync(callerEmployeeId, collections.DepartmentId, cancellationToken)));
     }
 
-    /// <summary>Reading the page: anyone who may manage it, plus members of the Collections department.</summary>
-    public async Task<bool> CanViewTowersAsync(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, CancellationToken cancellationToken = default) =>
-        await CanManageTowersAsync(callerEmployeeId, callerRoles, cancellationToken)
-        || (await GetDepartmentAsync(cancellationToken) is { } collections
-            && await members.ExistsAsync(callerEmployeeId, collections.DepartmentId, cancellationToken));
+    /// <summary>
+    /// Reading the page and its history is administration data and needs the same authority as changing it: the Collections manager, the CS Manager and the System Administrator.
+    /// Plain members of the Collections department do not read it (their manual ticket Assign / Reassign is unaffected: see <see cref="CanAssignTicketsAsync"/>).
+    /// </summary>
+    public Task<bool> CanViewTowersAsync(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, CancellationToken cancellationToken = default) =>
+        CanManageTowersAsync(callerEmployeeId, callerRoles, cancellationToken);
 }

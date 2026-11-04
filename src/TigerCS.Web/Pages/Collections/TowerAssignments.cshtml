@@ -1,10 +1,11 @@
-@page "/Collections/TowerAssignments"
+@page "/Admin/CollectionsTowerAssignments"
 @model TigerCS.Web.Pages.Collections.TowerAssignmentsModel
 @using TigerCS.Web.Pages.Collections
 @using TigerCS.Web.Services.Api
 @{
-    ViewData["Title"] = "Tower assignments";
-    ViewData["ActiveNav"] = "collections";
+    ViewData["Title"] = "Collections Tower Assignments";
+    ViewData["ActiveNav"] = "admin";
+    ViewData["AdminSection"] = "towerassignments";
     Layout = "_Layout";
 }
 <link rel="stylesheet" href="~/css/collections-snapshot.css" asp-append-version="true" />
@@ -13,12 +14,8 @@
 <div class="page receivables-workspace tower-assign">
     <div class="page-header">
         <div>
-            <p class="receivables-eyebrow">Collections</p>
-            <h1 class="page-title">Tower assignments</h1>
-        </div>
-        <div class="page-header__actions">
-            <a class="btn" href="/Collections/Receivables">Receivables</a>
-            <a class="btn" href="/Collections/Campaigns">Campaigns</a>
+            <p class="receivables-eyebrow">Administration</p>
+            <h1 class="page-title">Collections Tower Assignments</h1>
         </div>
     </div>
 
@@ -33,7 +30,7 @@
     {
         var monthLabel = $"{TowerAssignmentsModel.MonthNames[data.Month - 1]} {data.Year}";
         var editing = Model.EditEmployeeId is { } editId && data.CanManage ? data.Collectors.FirstOrDefault(c => c.EmployeeId == editId) : null;
-        <form class="filter-bar tower-assign__bar" method="get" action="/Collections/TowerAssignments">
+        <form class="filter-bar tower-assign__bar" method="get" action="/Admin/CollectionsTowerAssignments">
             <div class="field-group">
                 <label class="field-label" for="taMonth">Month</label>
                 <select class="field-select" id="taMonth" name="month">
@@ -92,7 +89,7 @@
                         <td class="num">@collector.Towers.Count</td>
                         @if (data.CanManage)
                         {
-                            <td class="tower-assign__edit">@if (collector.IsActiveMember && !isEditing) { <a class="btn btn-sm" href="/Collections/TowerAssignments?year=@data.Year&month=@data.Month&edit=@collector.EmployeeId">Edit</a> }</td>
+                            <td class="tower-assign__edit">@if (collector.IsActiveMember && !isEditing) { <a class="btn btn-sm" href="/Admin/CollectionsTowerAssignments?year=@data.Year&month=@data.Month&edit=@collector.EmployeeId">Edit</a> }</td>
                         }
                     </tr>
                     if (isEditing)
@@ -110,7 +107,7 @@
                                     <div class="tower-assign__buttons">
                                         <button class="btn" type="submit" name="activate" value="false">Save draft</button>
                                         <button class="btn btn-gold" type="submit" name="activate" value="true">Save and activate</button>
-                                        <a class="btn btn-link" href="/Collections/TowerAssignments?year=@data.Year&month=@data.Month">Cancel</a>
+                                        <a class="btn btn-link" href="/Admin/CollectionsTowerAssignments?year=@data.Year&month=@data.Month">Cancel</a>
                                     </div>
                                 </form>
                             </td>

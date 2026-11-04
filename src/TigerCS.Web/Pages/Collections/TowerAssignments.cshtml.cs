@@ -7,7 +7,7 @@ using TigerCS.Web.Services.Api;
 namespace TigerCS.Web.Pages.Collections;
 
 /// <summary>
-/// Collections -> Tower Assignments: one compact table of the Collections team and the towers each holds for a month. Editing one collector opens the same page with that row expanded
+/// Administration -> Collections Tower Assignments (served at /Admin/CollectionsTowerAssignments): one compact table of the Collections team and the towers each holds for a month. Editing one collector opens the same page with that row expanded
 /// (a searchable multi-select; works without script). The page decides nothing: the Api checks who may read or change, validates the collector and the towers, and enforces one collector per tower.
 /// </summary>
 public sealed class TowerAssignmentsModel(TowerAssignmentsApiClient api) : PageModel
