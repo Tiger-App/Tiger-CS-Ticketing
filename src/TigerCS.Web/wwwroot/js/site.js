@@ -393,6 +393,47 @@
     });
   });
 
+  // Ticket Details "Actions" menu: each action's form opens as a modal dialog (CSS positions it; the <details> keeps it working
+  // without script). Here: one modal at a time, focus moves into it and is kept there, the close button works, and focus returns
+  // to the action's row when it closes.
+  var MODAL_FOCUSABLE = 'a[href], button:not([disabled]), select:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type=hidden]), summary';
+  document.addEventListener("toggle", function (event) {
+    var details = event.target;
+    if (!(details instanceof HTMLDetailsElement) || !details.matches(".actions-menu__panel > details[data-action]")) return;
+    var summary = details.querySelector(":scope > summary");
+    if (details.open) {
+      details.parentElement.querySelectorAll(":scope > details[data-action][open]").forEach(function (other) {
+        if (other !== details) other.removeAttribute("open");
+      });
+      var first = details.querySelector(".action-modal__body select, .action-modal__body textarea, .action-modal__body input:not([type=hidden]), .action-modal__body button, .action-modal__body a[href]");
+      if (first) first.focus({ preventScroll: true });
+    } else if (!document.activeElement || document.activeElement === document.body || details.contains(document.activeElement)) {
+      // Back to the control that opened it: the action's row, or the Actions button when the whole menu closed (Escape, outside click).
+      var menu = details.closest("details.actions-menu");
+      var back = menu && !menu.open ? menu.querySelector(":scope > summary") : summary;
+      if (back) back.focus({ preventScroll: true });
+    }
+  }, true);
+
+  document.addEventListener("click", function (event) {
+    var close = event.target instanceof Element ? event.target.closest("[data-modal-close]") : null;
+    if (!close) return;
+    var details = close.closest("details");
+    if (details) details.removeAttribute("open");
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Tab") return;
+    var modal = document.querySelector(".actions-menu__panel > details[open] > .action-modal");
+    if (!modal) return;
+    var items = Array.prototype.filter.call(modal.querySelectorAll(MODAL_FOCUSABLE), function (el) { return el.offsetParent !== null; });
+    if (items.length === 0) return;
+    var firstItem = items[0], lastItem = items[items.length - 1];
+    if (!modal.contains(document.activeElement)) { event.preventDefault(); firstItem.focus(); }
+    else if (event.shiftKey && document.activeElement === firstItem) { event.preventDefault(); lastItem.focus(); }
+    else if (!event.shiftKey && document.activeElement === lastItem) { event.preventDefault(); firstItem.focus(); }
+  });
+
   // Keyboard access for tab-jump labels (they target a tab's radio input): focusable, announced as buttons, Enter/Space activate.
   document.querySelectorAll("label.tab-jump").forEach(function (label) {
     if (!label.hasAttribute("tabindex")) label.setAttribute("tabindex", "0");

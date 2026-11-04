@@ -58,7 +58,7 @@ public sealed class TicketDetailsConversationHistoryTests
             At("class=\"tw-next "),
             At("_TicketConversationHistory"),
             At("<div class=\"facts-section__title\">Latest Activity</div>"),
-            At(">Request Details</div>"),
+            At("Request Details</h2>"),
             At("id=\"customer-satisfaction\""),
             At("id=\"additional-details\""),
         };
@@ -218,7 +218,7 @@ public sealed class TicketDetailsConversationHistoryTests
 
         Assert.Equal("22 Oct 2026 14:05 → 14:12 (UAE)", ConversationHistoryView.TimeWindow(sameDay));
         Assert.Equal("22 Oct 2026 14:05 → 23 Oct 2026 02:05 (UAE)", ConversationHistoryView.TimeWindow(overnight));
-        Assert.Equal("22 Oct 2026 14:05 → not ended (UAE)", ConversationHistoryView.TimeWindow(live));
+        Assert.Equal("22 Oct 2026 14:05 (UAE) — Not ended", ConversationHistoryView.TimeWindow(live));
     }
 
     [Fact]

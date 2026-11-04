@@ -75,7 +75,7 @@ public static class ConversationHistoryView
         var started = TicketDisplay.UaeDateTime(interaction.StartedAtUtc);
         if (interaction.EndedAtUtc is not { } ended)
         {
-            return $"{started} → not ended (UAE)";
+            return $"{started} (UAE) — Not ended";
         }
 
         var sameDay = TicketDisplay.UaeDate(interaction.StartedAtUtc) == TicketDisplay.UaeDate(ended);

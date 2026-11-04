@@ -1,16 +1,23 @@
 @{
     var currentUser = CurrentUser.FromPrincipal(User);
+    // CompactShell: pages that want the one-row header (brand · navigation · search · account), e.g. Ticket Details.
+    var compact = ViewData["CompactShell"] is true;
 }
-<header class="app-header">
+<header class="app-header@(compact ? " app-header--shell" : "")">
     <a class="app-header__brand" href="/Dashboard" aria-label="Tiger Ticketing home">
         @await Html.PartialAsync("_BrandMark")
         <span class="brand-name">Tiger <span>Ticketing</span></span>
     </a>
 
+    @if (compact)
+    {
+        @await Html.PartialAsync("_Nav")
+    }
+
     <div class="app-header__search">
         <form class="search-field" role="search" action="/Tickets" method="get">
-            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
-            <input type="search" name="search" placeholder="Search tickets: number, customer, phone, unit…" aria-label="Search tickets" />
+            <label for="header-search" class="search-field__icon" title="Search tickets"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg></label>
+            <input id="header-search" type="search" name="search" placeholder="Search tickets: number, customer, phone, unit…" aria-label="Search tickets" />
         </form>
     </div>
 
