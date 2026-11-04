@@ -77,6 +77,32 @@ public class TicketAssignmentHistoryEntryConfiguration : IEntityTypeConfiguratio
     }
 }
 
+/// <summary>The verified Tower + Unit a person selected when moving a ticket into Collections (one row per ticket: the latest selection).</summary>
+public class TicketCollectionsUnitConfiguration : IEntityTypeConfiguration<TicketCollectionsUnit>
+{
+    public void Configure(EntityTypeBuilder<TicketCollectionsUnit> builder)
+    {
+        builder.ToTable("TicketCollectionsUnits");
+        builder.HasKey(u => u.TicketId);
+        builder.Property(u => u.TicketId).ValueGeneratedNever();
+        builder.Property(u => u.TowerCode).HasMaxLength(20).IsRequired();
+        builder.Property(u => u.TowerName).HasMaxLength(200).IsRequired();
+        builder.Property(u => u.UnitNumber).HasMaxLength(100).IsRequired();
+        builder.HasOne<Ticket>().WithMany().HasForeignKey(u => u.TicketId).OnDelete(DeleteBehavior.Restrict);
+        builder.HasOne<Employee>().WithMany().HasForeignKey(u => u.SelectedByEmployeeId).OnDelete(DeleteBehavior.Restrict);
+    }
+}
+
+public sealed class TicketCollectionsUnitRepository(TigerCsDbContext dbContext) : ITicketCollectionsUnitRepository
+{
+    // FindAsync looks at the change tracker first, so a selection stored earlier in the same transaction is seen before it is saved.
+    public async Task<TicketCollectionsUnit?> GetAsync(long ticketId, CancellationToken cancellationToken = default) =>
+        await dbContext.TicketCollectionsUnits.FindAsync([ticketId], cancellationToken);
+
+    public async Task AddAsync(TicketCollectionsUnit unit, CancellationToken cancellationToken = default) =>
+        await dbContext.TicketCollectionsUnits.AddAsync(unit, cancellationToken);
+}
+
 public sealed class CollectionsTowerAssignmentRepository(TigerCsDbContext dbContext) : ICollectionsTowerAssignmentRepository
 {
     public async Task<IReadOnlyList<CollectionsTowerAssignment>> ListByMonthAsync(int year, int month, CancellationToken cancellationToken = default) =>

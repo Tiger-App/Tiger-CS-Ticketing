@@ -21,11 +21,16 @@ public sealed record ResolvedTower(int TowerId, string TowerCode, string TowerNa
 /// </list>
 /// An unmapped project, several different tower codes, an unknown tower or one that exists under two companies is unresolved too.
 /// </summary>
-public sealed class CollectionsTicketTowerResolver(ICollectionsCrmProjectMap projectMap, ICollectionsTowerCatalog towers)
+public sealed class CollectionsTicketTowerResolver(
+    ICollectionsCrmProjectMap projectMap, ICollectionsTowerCatalog towers, Ticketing.Abstractions.ITicketCollectionsUnitRepository? selections = null)
 {
     public async Task<TicketTowerResolution> ResolveAsync(Ticket ticket, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(ticket);
+
+        // The tower and unit a person selected when moving the ticket into Collections (verified against the customer's CRM units then) come first.
+        if (selections is not null && await selections.GetAsync(ticket.TicketId, cancellationToken) is { } selected)
+            return new TicketTowerResolution(new ResolvedTower(selected.TowerId, selected.TowerCode, selected.TowerName, selected.CompanyId), selected.UnitNumber, "Resolved");
 
         string? unit;
         string towerCode;

@@ -396,6 +396,10 @@ public static class InfrastructureServiceCollectionExtensions
         // Monthly tower -> collector assignments, Collections ticket routing and the Collections assignment history.
         services.AddScoped<ICollectionsTowerAssignmentRepository, CollectionsTowerAssignmentRepository>();
         services.AddScoped<ITicketAssignmentHistoryRepository, TicketAssignmentHistoryRepository>();
+        services.AddScoped<ITicketCollectionsUnitRepository, TicketCollectionsUnitRepository>();
+        services.AddScoped<CollectionsTransferSelectionService>();
+        services.AddScoped<CollectionsTransferGuard>();
+        services.AddScoped<CollectionsTransferOptionsAppService>();
         services.AddScoped<CollectionsTeam>();
         services.AddScoped<CollectionsTicketTowerResolver>();
         services.AddScoped<CollectionsTicketRoutingService>();

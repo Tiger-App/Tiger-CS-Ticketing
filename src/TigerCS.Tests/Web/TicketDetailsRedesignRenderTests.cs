@@ -133,6 +133,24 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     }
 
     [Fact]
+    public async Task TransferAndReopenForms_CarryTheMandatoryTowerAndUnitBlock_OnlyForTheCollectionsDepartment()
+    {
+        var open = Dec(await Page(203, Roles.CsManager));
+        var transfer = Section(open, "id=\"action-transfer\"", "</details>");
+
+        Assert.Contains("data-ct-collections-ids=\"7\"", transfer);               // only Collections (by its code) needs it
+        Assert.Contains("data-ct-trigger=\"#Transfer_TargetDepartmentId\"", transfer);
+        Assert.Contains("name=\"Transfer.CollectionsTowerId\"", transfer);        // tower first...
+        Assert.Contains("name=\"Transfer.CollectionsUnitId\"", transfer);         // ...then the unit of that tower
+        Assert.Contains("Select a tower first", transfer);
+        Assert.Matches(@"<div class=""ct"" hidden", transfer);                      // hidden (and its selects disabled) until Collections is chosen
+        Assert.Contains("ticket-collections-tower-unit.js", open);
+
+        var reopen = Dec(await Page(209, Roles.CsManager));
+        Assert.Contains("name=\"Reopen.CollectionsTowerId\"", Section(reopen, "id=\"action-reopen\"", "</details>"));
+    }
+
+    [Fact]
     public async Task ClassifiedButUnassigned_ManagerIsToldToAssign()
     {
         var html = await Page(202);
@@ -526,7 +544,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
             object? body = path switch
             {
                 "/api/users/me" => new CurrentUserResponseDto(ViewerId, "Test Agent", [role], [new DepartmentMembershipDto(CustomerService, "Customer Service", true)], true),
-                "/api/departments" => new[] { new DepartmentDto(CustomerService, "Customer Service"), new DepartmentDto(3, "Facilities") },
+                "/api/departments" => new[] { new DepartmentDto(CustomerService, "Customer Service"), new DepartmentDto(3, "Facilities"), new DepartmentDto(7, "Collections", "COL") },
                 "/api/channels" => new[] { new ChannelDto(1, "Website chat", "WEB", true, true, true, 1) },
                 "/api/categories" => new[] { new CategoryDto(1, "Complaint Handling", CustomerService, "Customer Service") }.Where(c => departmentId is null || c.DepartmentId == departmentId).ToArray(),
                 "/api/request-types" => new[] { new RequestTypeOptionDto(10, "Complaint Handling", CustomerService, 3, true) }.Where(r => departmentId is null || r.DepartmentId == departmentId).ToArray(),

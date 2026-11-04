@@ -78,3 +78,17 @@ public sealed class FixedTimeProvider(DateTime utcNow) : TimeProvider
 
     public override DateTimeOffset GetUtcNow() => new(DateTime.SpecifyKind(Now, DateTimeKind.Utc), TimeSpan.Zero);
 }
+
+public sealed class FakeTicketCollectionsUnitRepository : ITicketCollectionsUnitRepository
+{
+    public List<TicketCollectionsUnit> Rows { get; } = [];
+
+    public Task<TicketCollectionsUnit?> GetAsync(long ticketId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Rows.FirstOrDefault(r => r.TicketId == ticketId));
+
+    public Task AddAsync(TicketCollectionsUnit unit, CancellationToken cancellationToken = default)
+    {
+        Rows.Add(unit);
+        return Task.CompletedTask;
+    }
+}

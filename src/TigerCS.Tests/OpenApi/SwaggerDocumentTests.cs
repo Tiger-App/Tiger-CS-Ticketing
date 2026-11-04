@@ -148,6 +148,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "POST /api/collections/tower-assignments/copy-previous",
         "GET /api/collections/tower-assignments/history",
         "GET /api/tickets/{ticketId}/assignment-history",
+        "GET /api/tickets/{ticketId}/collections-transfer-options",
         "GET /api/collections/campaigns/preview",
         "GET /api/collections/campaigns/export",
         "GET /api/collections/units/payment-summary",

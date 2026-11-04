@@ -246,6 +246,8 @@ public sealed record AssignTicketRequestDto(Guid AssignedEmployeeId, byte[] RowV
 /// <param name="TargetDepartmentId">Required. Must be an active department, and not the ticket's current one.</param>
 /// <param name="Reason">Required. Why the ticket is being transferred.</param>
 /// <param name="RowVersion">Required. The <c>rowVersion</c> from the ticket you read. A stale value is answered with 409.</param>
+/// <param name="CollectionsTowerId">Required when the target is the Collections department (unless the ticket already carries a verified tower and unit): the tower, from the ticket customer's verified towers.</param>
+/// <param name="CollectionsUnitId">Required with <paramref name="CollectionsTowerId"/>: the CRM unit of that tower this request is about.</param>
 /// <param name="AssignToEmployeeId">
 /// Optional. Transfer-and-assign: once the ticket is in the target
 /// department, assign it to this employee in the same operation. The employee
@@ -256,7 +258,9 @@ public sealed record AssignTicketRequestDto(Guid AssignedEmployeeId, byte[] RowV
 /// target department's rules decide.
 /// </param>
 /// <param name="ReasonCode">Optional structured reason (1=UnableToResolve, 2=NeedsEscalation, 3=WrongDepartment, 4=CustomerRequest, 6=Other). Omitted is recorded as Unspecified; <c>Reason</c> stays the required free text.</param>
-public sealed record TransferTicketRequestDto(int TargetDepartmentId, string Reason, byte[] RowVersion, Guid? AssignToEmployeeId = null, TicketTransferReason? ReasonCode = null);
+public sealed record TransferTicketRequestDto(
+    int TargetDepartmentId, string Reason, byte[] RowVersion, Guid? AssignToEmployeeId = null, TicketTransferReason? ReasonCode = null,
+    int? CollectionsTowerId = null, int? CollectionsUnitId = null);
 
 public enum TicketMutationOutcome
 {
@@ -297,6 +301,15 @@ public enum TicketMutationOutcome
 
     /// <summary>Approved rule: Reopen requires the department that takes the reopened work on.</summary>
     TargetDepartmentRequired,
+
+    /// <summary>A move into Collections without both a Tower and a Unit (and the ticket carries no verified pair).</summary>
+    CollectionsTowerUnitRequired,
+
+    /// <summary>The Tower/Unit sent is not a verified unit of the ticket's customer.</summary>
+    CollectionsTowerUnitInvalid,
+
+    /// <summary>The customer's units could not be verified right now (CRM / tower mapping unavailable).</summary>
+    CollectionsTowerUnitUnavailable,
 
     /// <summary>Reassigning a ticket that already has a different owner needs an explicit transfer reason (Unable to Resolve, Needs Escalation, Wrong Department, Customer Request or Other). The first assignment out of the department queue needs none.</summary>
     TransferReasonRequired,
@@ -394,7 +407,9 @@ public sealed record CloseTicketRequestDto(byte[] RowVersion);
 /// <param name="Reason">Required. Why the ticket is being reopened — recorded on the status-history row, on the Reopened workflow event Ticket Details renders, and in the audit trail. Enforced by the application service, not only by model validation.</param>
 /// <param name="TargetDepartmentId">Required. The department that takes responsibility for the reopened work. Must exist and be active; may be the ticket's current department. The previous owner is cleared either way and the existing assignment automation re-runs against this department.</param>
 /// <param name="RowVersion">Required. The <c>rowVersion</c> from the ticket you read. A stale value is answered with 409 — including when a concurrent reopen already won the race.</param>
-public sealed record ReopenTicketRequestDto(string Reason, int TargetDepartmentId, byte[] RowVersion);
+/// <param name="CollectionsTowerId">Required when the target is the Collections department (unless the ticket already carries a verified tower and unit): the tower.</param>
+/// <param name="CollectionsUnitId">Required with the tower: the CRM unit of that tower this request is about.</param>
+public sealed record ReopenTicketRequestDto(string Reason, int TargetDepartmentId, byte[] RowVersion, int? CollectionsTowerId = null, int? CollectionsUnitId = null);
 
 // ---- Notes (MVP-API-Contracts.md §4.1/§4.2) ----
 

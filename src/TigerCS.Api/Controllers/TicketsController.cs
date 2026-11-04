@@ -5,6 +5,7 @@ using TigerCS.Api.Filters;
 using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
+using TigerCS.Application.Modules.Collections.TowerAssignments;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
@@ -41,7 +42,8 @@ public class TicketsController(
     TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewQueryAppService ticketReviewQueryAppService,
     TicketClassificationAppService ticketClassificationAppService,
     TicketClaimAppService ticketClaimAppService,
-    TicketAssignmentHistoryAppService ticketAssignmentHistoryAppService) : ControllerBase
+    TicketAssignmentHistoryAppService ticketAssignmentHistoryAppService,
+    CollectionsTransferOptionsAppService collectionsTransferOptionsAppService) : ControllerBase
 {
     /// <summary>Create a ticket from an IntakeRecord. CS Agent/CS Supervisor only.</summary>
     /// <remarks>
@@ -251,6 +253,33 @@ public class TicketsController(
 
         var result = await ticketInteractionQueryAppService.GetForTicketAsync(
             employeeId.Value, GetRoles(), ticketId, cancellationToken);
+        return result.Outcome switch
+        {
+            TicketQueryOutcome.Success => Ok(result.Response),
+            TicketQueryOutcome.Forbidden => Forbid(),
+            _ => NotFound()
+        };
+    }
+
+    /// <summary>The Tower and Unit choices for moving this ticket into Collections: the customer's verified towers, each with that tower's units, and the ticket's own verified pair to preselect.</summary>
+    /// <remarks>Read-only; CRM is asked for the ticket's own customer (never a typed value). Visible to exactly the callers who can see the ticket.</remarks>
+    /// <param name="ticketId">The ticket.</param>
+    /// <response code="200">The options.</response>
+    /// <response code="404">No such ticket, or it is not visible to the caller.</response>
+    [HttpGet("{ticketId:long}/collections-transfer-options")]
+    [RequirePermission(Permissions.TicketsView)]
+    [Tags(OpenApiTags.Assignment)]
+    [ProducesResponseType<CollectionsTransferOptionsDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetCollectionsTransferOptions(long ticketId, CancellationToken cancellationToken)
+    {
+        var employeeId = GetEmployeeId();
+        if (employeeId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await collectionsTransferOptionsAppService.GetAsync(employeeId.Value, GetRoles(), ticketId, cancellationToken);
         return result.Outcome switch
         {
             TicketQueryOutcome.Success => Ok(result.Response),
@@ -1226,6 +1255,24 @@ public class TicketsController(
             title: "A reopen reason is required",
             detail: "Every reopen records why it happened.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.CollectionsTowerUnitRequired => Problem(
+            type: "https://tigercs.internal/problems/collections-tower-unit-required",
+            title: "Tower and Unit are required for Collections",
+            detail: "Select both a Tower and a Unit before transferring to Collections.",
+            statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.CollectionsTowerUnitInvalid => Problem(
+            type: "https://tigercs.internal/problems/collections-tower-unit-invalid",
+            title: "Tower and Unit are not verified",
+            detail: "That Tower and Unit are not a verified unit of this ticket's customer. Choose the tower first, then one of its units.",
+            statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.CollectionsTowerUnitUnavailable => Problem(
+            type: "https://tigercs.internal/problems/collections-tower-unit-unavailable",
+            title: "The customer's units could not be verified",
+            detail: "The customer's units could not be verified in CRM right now. Try again shortly.",
+            statusCode: StatusCodes.Status503ServiceUnavailable),
 
         TicketMutationOutcome.TargetDepartmentRequired => Problem(
             type: "https://tigercs.internal/problems/target-department-required",

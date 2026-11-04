@@ -38,7 +38,8 @@ public sealed class TicketDetailsModel(
     UsersApiClient usersApiClient,
     TicketNameResolver nameResolver,
     CategoriesApiClient? categoriesApiClient = null,
-    RequestTypesApiClient? requestTypesApiClient = null) : PageModel
+    RequestTypesApiClient? requestTypesApiClient = null,
+    Microsoft.Extensions.Configuration.IConfiguration? configuration = null) : PageModel
 {
     public long TicketId { get; private set; }
 
@@ -423,6 +424,12 @@ public sealed class TicketDetailsModel(
     [BindProperty] public CollectionsAssignInput CollectionsAssign { get; set; } = new();
 
     /// <summary>Whether the inline Assign / Reassign control beside "Assigned To" is offered: a Collections ticket the viewer may assign (the server's own answer, <c>TicketDetailDto.CanAssignInCollections</c>).</summary>
+    /// <summary>The Collections department(s) among the departments the Transfer and Reopen forms offer (matched by the configured code, never by name): moving there needs a Tower and a Unit.</summary>
+    public string CollectionsDepartmentIds => string.Join(',',
+        TransferTargets.Concat(ReopenTargets)
+            .Where(d => string.Equals(d.Code, configuration?["Collections:CollectionsDepartmentCode"] ?? "COL", StringComparison.OrdinalIgnoreCase))
+            .Select(d => d.DepartmentId).Distinct());
+
     public bool CanAssignInCollections => Ticket is { CanAssignInCollections: true } && !IsReadOnlyAccess;
 
     /// <summary>Every assignment event of the ticket (automatic and manual), oldest first. Empty for tickets without one.</summary>
@@ -625,6 +632,15 @@ public sealed class TicketDetailsModel(
         return true;
     }
 
+    /// <summary>The Tower/Unit choices for a move into Collections, fetched by the Transfer / Reopen forms only when Collections is chosen (it asks CRM, so it is not part of every page load).</summary>
+    public async Task<IActionResult> OnGetCollectionsOptionsAsync(long id, CancellationToken cancellationToken)
+    {
+        var result = await ticketsApiClient.GetCollectionsTransferOptionsAsync(id, cancellationToken);
+        return result.IsSuccess
+            ? new JsonResult(result.Value)
+            : new JsonResult(new { status = "Error", message = DescribeError(result.Outcome, result.Detail), towers = Array.Empty<object>() }) { StatusCode = 200 };
+    }
+
     public async Task<IActionResult> OnPostTransferAsync(long id, CancellationToken cancellationToken)
     {
         TicketId = id;
@@ -639,7 +655,7 @@ public sealed class TicketDetailsModel(
         }
 
         var result = await ticketsApiClient.TransferAsync(
-            id, new TransferTicketRequestDto(Transfer.TargetDepartmentId, Transfer.Reason, rowVersion, null, Transfer.ReasonCode), cancellationToken);
+            id, new TransferTicketRequestDto(Transfer.TargetDepartmentId, Transfer.Reason, rowVersion, null, Transfer.ReasonCode, Transfer.CollectionsTowerId, Transfer.CollectionsUnitId), cancellationToken);
         return await HandleMutationAsync(result, "transfer", "Ticket transferred.", cancellationToken);
     }
 
@@ -810,7 +826,7 @@ public sealed class TicketDetailsModel(
         }
 
         var result = await ticketsApiClient.ReopenAsync(
-            id, new ReopenTicketRequestDto(Reopen.Reason, Reopen.TargetDepartmentId, rowVersion), cancellationToken);
+            id, new ReopenTicketRequestDto(Reopen.Reason, Reopen.TargetDepartmentId, rowVersion, Reopen.CollectionsTowerId, Reopen.CollectionsUnitId), cancellationToken);
 
         // Stays on this page: the redirect re-reads the ticket, so the agent
         // sees In Progress, the department that now owns it, the resulting
@@ -1855,6 +1871,10 @@ public sealed class TicketDetailsModel(
         /// <summary>Required: a manual transfer always says why (Unable to Resolve / Needs Escalation / ...), so escalations can be reviewed.</summary>
         public TicketTransferReason? ReasonCode { get; set; }
         public string? RowVersionBase64 { get; set; }
+
+        /// <summary>Required when the target is Collections: the tower, then one of the customer's units in it. The Api verifies both against CRM.</summary>
+        public int? CollectionsTowerId { get; set; }
+        public int? CollectionsUnitId { get; set; }
     }
 
     public sealed class StatusInput
@@ -1913,6 +1933,10 @@ public sealed class TicketDetailsModel(
         public int TargetDepartmentId { get; set; }
 
         public string? RowVersionBase64 { get; set; }
+
+        /// <summary>Required when the target is Collections (see <see cref="TransferInput"/>).</summary>
+        public int? CollectionsTowerId { get; set; }
+        public int? CollectionsUnitId { get; set; }
     }
 
     public sealed class NoteInput

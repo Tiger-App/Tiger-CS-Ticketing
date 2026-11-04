@@ -2974,6 +2974,51 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("TicketAssignmentHistory", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.TicketCollectionsUnit", b =>
+                {
+                    b.Property<long>("TicketId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("CompanyId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("CrmProjectId")
+                        .HasColumnType("int");
+
+                    b.Property<int>("CrmUnitId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("SelectedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("SelectedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TowerCode")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("nvarchar(20)");
+
+                    b.Property<int>("TowerId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("TowerName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("UnitNumber")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("TicketId");
+
+                    b.HasIndex("SelectedByEmployeeId");
+
+                    b.ToTable("TicketCollectionsUnits", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.TicketInteraction", b =>
                 {
                     b.Property<long>("TicketInteractionId")
@@ -4623,6 +4668,21 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("PreviousEmployeeId")
                         .OnDelete(DeleteBehavior.Restrict);
+
+                    b.HasOne("TigerCS.Domain.Modules.Ticketing.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.TicketCollectionsUnit", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("SelectedByEmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
 
                     b.HasOne("TigerCS.Domain.Modules.Ticketing.Ticket", null)
                         .WithMany()

@@ -161,6 +161,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
 
     public DbSet<TicketAssignmentHistoryEntry> TicketAssignmentHistory => Set<TicketAssignmentHistoryEntry>();
 
+    public DbSet<TicketCollectionsUnit> TicketCollectionsUnits => Set<TicketCollectionsUnit>();
+
     public DbSet<CollectionsReminderChannel> CollectionsReminderChannels => Set<CollectionsReminderChannel>();
 
     public DbSet<CollectionsReminderEvent> CollectionsReminderEvents => Set<CollectionsReminderEvent>();
@@ -248,6 +250,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new CollectionsTowerAssignmentConfiguration());
         builder.ApplyConfiguration(new CollectionsTowerAssignmentHistoryConfiguration());
         builder.ApplyConfiguration(new TicketAssignmentHistoryEntryConfiguration());
+        builder.ApplyConfiguration(new TicketCollectionsUnitConfiguration());
         builder.ApplyConfiguration(new CollectionsReminderChannelConfiguration());
         builder.ApplyConfiguration(new CollectionsReminderEventConfiguration());
         builder.ApplyConfiguration(new CollectionsReviewRunConfiguration());

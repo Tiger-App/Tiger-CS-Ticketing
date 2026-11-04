@@ -51,7 +51,9 @@ public sealed class TicketLifecycleAppService(
     ITicketInteractionHandlerRepository? handlerRepository = null,
     IServiceIdentityRegistry? serviceIdentities = null,
     IUserPermissionOverrideRepository? permissionOverrides = null,
-    ITicketAssignmentRepository? ticketAssignmentRepository = null)
+    ITicketAssignmentRepository? ticketAssignmentRepository = null,
+    CollectionsTransferGuard? collectionsGuard = null,
+    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null)
 {
     /// <summary>Matches the <c>TicketStatusHistory.Note</c> column, so a long reason is never lost to a database truncation error mid-transaction.</summary>
     public const int ReopenReasonMaxLength = 1000;
@@ -645,6 +647,15 @@ public sealed class TicketLifecycleAppService(
             }
         }
 
+        // Reopening into Collections is a move into Collections: a verified Tower AND Unit are mandatory, checked before anything is written.
+        var collectionsDecision = collectionsGuard is null
+            ? CollectionsTransferDecision.NotCollections
+            : await collectionsGuard.CheckAsync(ticket, request.TargetDepartmentId, request.CollectionsTowerId, request.CollectionsUnitId, cancellationToken);
+        if (collectionsDecision.Refusal is { } collectionsRefusal)
+        {
+            return TicketMutationResult.Failure(collectionsRefusal);
+        }
+
         ticketRepository.SetRowVersion(ticket, request.RowVersion);
 
         var previousStatus = ticket.TicketStatus;
@@ -693,8 +704,18 @@ public sealed class TicketLifecycleAppService(
         // department's queue, audited.
         // A reopened ticket must have an eligible CS Agent: the previous one when still eligible, otherwise the department rule, otherwise
         // the next agent of the shared rotation (a failure is recorded for staff, never left silent).
-        var assignment = await autoAssignmentService.RestorePreviousCsAgentAsync(
-            ticket, previousOwnerEmployeeId, AutoAssignmentTrigger.DepartmentTransfer, now, correlationId, cancellationToken);
+        if (collectionsDecision.Unit is { } reopenedUnit)
+        {
+            await collectionsGuard!.StoreAsync(ticket, reopenedUnit, callerEmployeeId, now, cancellationToken);
+        }
+
+        // A reopen into Collections is a new stay there: the unit's tower decides (collector, or the Collections queue), never the previous agent or the rotation.
+        var collectionsRouted = collectionsDecision.Unit is not null && collectionsRouting is not null
+            && (await collectionsRouting.RouteAsync(ticket, departmentEntry: true, fromCallCenter: false, now, correlationId, cancellationToken)).Handled;
+        AutoAssignmentResult? assignment = collectionsRouted
+            ? new AutoAssignmentResult(AutoAssignmentOutcome.NoRuleConfigured, ticket.CurrentOwnerEmployeeId)
+            : await autoAssignmentService.RestorePreviousCsAgentAsync(
+                ticket, previousOwnerEmployeeId, AutoAssignmentTrigger.DepartmentTransfer, now, correlationId, cancellationToken);
         if (assignment is null)
         {
             var configured = await autoAssignmentService.ApplyAsync(

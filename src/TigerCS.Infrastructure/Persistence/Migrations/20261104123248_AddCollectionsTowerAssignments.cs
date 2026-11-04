@@ -138,6 +138,38 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         onDelete: ReferentialAction.Restrict);
                 });
 
+            migrationBuilder.CreateTable(
+                name: "TicketCollectionsUnits",
+                columns: table => new
+                {
+                    TicketId = table.Column<long>(type: "bigint", nullable: false),
+                    TowerId = table.Column<int>(type: "int", nullable: false),
+                    TowerCode = table.Column<string>(type: "nvarchar(20)", maxLength: 20, nullable: false),
+                    TowerName = table.Column<string>(type: "nvarchar(200)", maxLength: 200, nullable: false),
+                    CompanyId = table.Column<int>(type: "int", nullable: false),
+                    CrmUnitId = table.Column<int>(type: "int", nullable: false),
+                    CrmProjectId = table.Column<int>(type: "int", nullable: false),
+                    UnitNumber = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
+                    SelectedByEmployeeId = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
+                    SelectedAtUtc = table.Column<DateTime>(type: "datetime2", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_TicketCollectionsUnits", x => x.TicketId);
+                    table.ForeignKey(
+                        name: "FK_TicketCollectionsUnits_Employees_SelectedByEmployeeId",
+                        column: x => x.SelectedByEmployeeId,
+                        principalTable: "Employees",
+                        principalColumn: "EmployeeId",
+                        onDelete: ReferentialAction.Restrict);
+                    table.ForeignKey(
+                        name: "FK_TicketCollectionsUnits_Tickets_TicketId",
+                        column: x => x.TicketId,
+                        principalTable: "Tickets",
+                        principalColumn: "TicketId",
+                        onDelete: ReferentialAction.Restrict);
+                });
+
             migrationBuilder.CreateIndex(
                 name: "IX_CollectionsTowerAssignmentHistory_ChangedByEmployeeId",
                 table: "CollectionsTowerAssignmentHistory",
@@ -199,6 +231,11 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                 name: "IX_TicketAssignmentHistory_Ticket_Changed",
                 table: "TicketAssignmentHistory",
                 columns: new[] { "TicketId", "ChangedAtUtc" });
+
+            migrationBuilder.CreateIndex(
+                name: "IX_TicketCollectionsUnits_SelectedByEmployeeId",
+                table: "TicketCollectionsUnits",
+                column: "SelectedByEmployeeId");
         }
 
         /// <inheritdoc />
@@ -212,6 +249,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
 
             migrationBuilder.DropTable(
                 name: "TicketAssignmentHistory");
+
+            migrationBuilder.DropTable(
+                name: "TicketCollectionsUnits");
         }
     }
 }

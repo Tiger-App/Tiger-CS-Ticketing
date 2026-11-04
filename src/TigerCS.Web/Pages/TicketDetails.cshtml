@@ -334,6 +334,7 @@ else
                                                 <span class="field-hint">No other active department is available to transfer to.</span>
                                             }
                                         </div>
+                                        <partial name="_CollectionsTowerUnit" model="@(new TigerCS.Web.Models.CollectionsTowerUnitFields("transfer", "Transfer", "#Transfer_TargetDepartmentId", Model.CollectionsDepartmentIds, t.TicketId))" />
                                         <div class="field-group">
                                             <label class="field-label" asp-for="Transfer.ReasonCode">Why is it being transferred?</label>
                                             <select class="field-select" asp-for="Transfer.ReasonCode">
@@ -513,6 +514,7 @@ else
                                                     asp-items="@(new SelectList(Model.ReopenTargets, nameof(DepartmentDto.DepartmentId), nameof(DepartmentDto.Name)))"></select>
                                             <span class="field-hint">Who takes this on. Keep the current department or hand it to another — either way the previous assignee is cleared and the ticket is re-assigned automatically, or waits in that department's queue.</span>
                                         </div>
+                                        <partial name="_CollectionsTowerUnit" model="@(new TigerCS.Web.Models.CollectionsTowerUnitFields("reopen", "Reopen", "#Reopen_TargetDepartmentId", Model.CollectionsDepartmentIds, t.TicketId))" />
                                         <div class="field-group">
                                             <label class="field-label" asp-for="Reopen.Reason">Reason</label>
                                             <textarea class="form-control" asp-for="Reopen.Reason" rows="2" required placeholder="Why is this ticket being reopened?"></textarea>
@@ -1415,4 +1417,5 @@ else
         </div>
     </div>
     <script src="~/js/ticket-collections-assign.js" asp-append-version="true"></script>
+    <script src="~/js/ticket-collections-tower-unit.js" asp-append-version="true"></script>
 }

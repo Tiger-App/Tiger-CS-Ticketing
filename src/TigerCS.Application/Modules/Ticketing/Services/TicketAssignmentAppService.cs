@@ -36,7 +36,8 @@ public sealed class TicketAssignmentAppService(
     CollectionsTeam? collectionsTeam = null,
     CollectionsTicketRoutingService? collectionsRouting = null,
     CollectionsTicketTowerResolver? collectionsTowerResolver = null,
-    ITicketAssignmentHistoryRepository? assignmentHistory = null)
+    ITicketAssignmentHistoryRepository? assignmentHistory = null,
+    CollectionsTransferGuard? collectionsGuard = null)
 {
     /// <summary>
     /// Safe retry of a failed automatic CS Agent assignment. Authority is cross-department assignment (CS Manager; the administrator
@@ -348,6 +349,15 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.EmployeeNotInDepartment);
         }
 
+        // Into Collections a verified Tower AND Unit are mandatory. Refused here, before any write, so the department and the assignee stay exactly as they were.
+        var collectionsDecision = collectionsGuard is null
+            ? CollectionsTransferDecision.NotCollections
+            : await collectionsGuard.CheckAsync(ticket, request.TargetDepartmentId, request.CollectionsTowerId, request.CollectionsUnitId, cancellationToken);
+        if (collectionsDecision.Refusal is { } refusal)
+        {
+            return TicketMutationResult.Failure(refusal);
+        }
+
         ticketRepository.SetRowVersion(ticket, request.RowVersion);
 
         var previousDepartmentId = ticket.CurrentDepartmentId;
@@ -374,8 +384,14 @@ public sealed class TicketAssignmentAppService(
             callerEmployeeId, "Transfer", "Ticket", ticketId.ToString(),
             beforeValue: $"DepartmentId={previousDepartmentId};AssignedEmployeeId={previousOwnerEmployeeId?.ToString() ?? "DepartmentQueue"}",
             afterValue: $"DepartmentId={request.TargetDepartmentId};Reason={request.Reason}"
-                + (previousOwnerEmployeeId is not null ? ";CsAgentPreserved=true" : string.Empty),
+                + (previousOwnerEmployeeId is not null ? ";CsAgentPreserved=true" : string.Empty)
+                + (collectionsDecision.Unit is { } selected ? ";" + CollectionsTransferGuard.Describe(selected) : string.Empty),
             correlationId, cancellationToken);
+
+        if (collectionsDecision.Unit is { } verifiedUnit)
+        {
+            await collectionsGuard!.StoreAsync(ticket, verifiedUnit, callerEmployeeId, now, cancellationToken);
+        }
 
         if (request.AssignToEmployeeId is { } explicitAssignee)
         {

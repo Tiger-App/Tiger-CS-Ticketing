@@ -69,7 +69,8 @@ public sealed class TicketClassificationAppService(
     TicketAutoAssignmentService? autoAssignmentService = null,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
     DefaultClassificationService? defaultClassification = null,
-    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null)
+    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null,
+    CollectionsTransferGuard? collectionsGuard = null)
 {
     public async Task<TicketMutationResult> ClassifyAsync(
         Guid callerEmployeeId,
@@ -170,6 +171,15 @@ public sealed class TicketClassificationAppService(
         if (await priorityRepository.GetByIdAsync(request.PriorityId, cancellationToken) is null)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.PriorityNotFound);
+        }
+
+        // Classifying into a Collections category moves the ticket there: a verified Tower AND Unit are mandatory, checked before anything is written.
+        var collectionsDecision = routeToCategoryDepartment && collectionsGuard is not null
+            ? await collectionsGuard.CheckAsync(ticket, category.DepartmentId, request.CollectionsTowerId, request.CollectionsUnitId, cancellationToken)
+            : CollectionsTransferDecision.NotCollections;
+        if (collectionsDecision.Refusal is { } collectionsRefusal)
+        {
+            return TicketMutationResult.Failure(collectionsRefusal);
         }
 
         // Optional request type — same rules as ticket creation applies them,
@@ -292,8 +302,13 @@ public sealed class TicketClassificationAppService(
                 await auditWriter.WriteAsync(
                     callerEmployeeId, "Transfer", "Ticket", ticket.TicketId.ToString(),
                     beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId={fromOwnerEmployeeId?.ToString() ?? "DepartmentQueue"}",
-                    afterValue: $"DepartmentId={category.DepartmentId};Reason={(replacing ? "Reclassified to" : "Call Center selected")} category {category.CategoryId}",
+                    afterValue: $"DepartmentId={category.DepartmentId};Reason={(replacing ? "Reclassified to" : "Call Center selected")} category {category.CategoryId}"
+                        + (collectionsDecision.Unit is { } selectedUnit ? ";" + CollectionsTransferGuard.Describe(selectedUnit) : string.Empty),
                     correlationId, cancellationToken);
+                if (collectionsDecision.Unit is { } verifiedUnit)
+                {
+                    await collectionsGuard!.StoreAsync(ticket, verifiedUnit, callerEmployeeId, now, cancellationToken);
+                }
 
                 // Into Collections the unit's tower decides (collector, or the Collections queue); the rule/rotation below never picks someone for it.
                 var collectionsRouted = collectionsRouting is not null

@@ -2546,3 +2546,9 @@ a.customer-strip__name:hover { text-decoration: underline; }
 .tw-assign__status.is-error { color: var(--danger, #b42318); }
 .assign-history { width: 100%; border-collapse: collapse; font-size: .9em; }
 .assign-history th, .assign-history td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--border, #e4e7ec); vertical-align: top; }
+
+/* Ticket Details: mandatory Tower + Unit when moving a ticket into Collections. */
+.ct { display: contents; }
+.ct[hidden] { display: none; }
+.ct__req { color: var(--danger, #b42318); }
+.field-hint--error { color: var(--danger, #b42318); }
