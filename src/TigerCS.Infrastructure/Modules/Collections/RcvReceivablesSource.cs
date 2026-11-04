@@ -102,6 +102,9 @@ public sealed class RcvReceivablesSource(
             command.Parameters.Add("@Today", SqlDbType.Date).Value = request.AsOf.ToDateTime(TimeOnly.MinValue);
             command.Parameters.Add("@CompanyId", SqlDbType.Int).Value = (object?)request.CompanyId ?? DBNull.Value;
             command.Parameters.Add("@TowerId", SqlDbType.Int).Value = (object?)request.TowerId ?? DBNull.Value;
+            // Several towers travel as ONE comma-separated parameter (OR in the procedure, before aggregation and paging). Only sent when used, so one tower or all towers never depend on it.
+            if (request.TowerIds is { Count: > 0 } towerIds)
+                command.Parameters.Add("@TowerIds", SqlDbType.NVarChar, -1).Value = string.Join(',', towerIds.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             command.Parameters.Add("@FromDate", SqlDbType.Date).Value = request.From.ToDateTime(TimeOnly.MinValue);
             command.Parameters.Add("@ToDate", SqlDbType.Date).Value = request.To.ToDateTime(TimeOnly.MinValue);
             command.Parameters.Add("@Status", SqlDbType.VarChar, 10).Value = request.Status ?? "all";

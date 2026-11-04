@@ -24,9 +24,11 @@
       then the units of a tower by their unit number ascending (numeric unit numbers before lettered ones, then the unit code text), then company, customer, unit id - a TOTAL order computed over the whole
       filtered set BEFORE the page is cut, so pages never overlap or skip (mirrored by TigerCS.Domain CollectionsTowerOrder); payments by due date DESC, then voucher, then id.
     * TOWER NAMES come from dbo.fn_Collections_TowerNames (V012): CollectionsTowers when its name is a real name, else the single name CRM holds for that company's tower. NULL = no name known (the page shows the number).
+    * TOWER FILTER (@TowerId / @TowerIds): none = every tower; otherwise a payment is kept when its (company, tower number) is ANY of the chosen towers (OR), decided on the payments BEFORE they are summed per apartment,
+      so totals, counts and paging cover exactly the chosen towers and an apartment can never appear twice. One scan of the snapshot whatever the number of towers.
     * Search: customer name, mobile, e-mail, customer id, tower number / name, apartment, voucher, project - PACT contact data AND the linked CRM contact.
   Result sets of usp_CollectionsRcv_GetUnits (a contract with RcvReceivablesSource):
-    1 scope     ScopeValid, TowerId, CompanyId, TowerNumber, TowerName   (ScopeValid = 0: unknown tower or tower/company clash; nothing else is returned)
+    1 scope     ScopeValid, TowerId, CompanyId, TowerNumber, TowerName   (ScopeValid = 0: unknown tower or tower/company clash; nothing else is returned; TowerNumber / TowerName only when ONE tower is chosen)
     2 status    usp_CollectionsRcv_GetStatus for the companies in scope
     3 totals    UnitCount, LineCount, DueLineCount, OverdueLineCount, DueTotal, OverdueTotal, Total   (over the whole filtered set, before paging)
     4 units     the requested page
@@ -44,7 +46,8 @@ CREATE OR ALTER PROCEDURE dbo.usp_CollectionsRcv_GetUnits
     @MinTotal    decimal(19,4) = NULL,
     @PageNumber  int           = 1,
     @PageSize    int           = 25,
-    @Only        tinyint       = NULL      -- NULL = all five result sets; 3, 4 or 5 = ONLY that one (so tools/verify_details_total.sql can INSERT ... EXEC it and compare the units with their payments)
+    @Only        tinyint       = NULL,     -- NULL = all five result sets; 3, 4 or 5 = ONLY that one (so tools/verify_details_total.sql can INSERT ... EXEC it and compare the units with their payments)
+    @TowerIds    nvarchar(max) = NULL      -- comma-separated local tower ids (several towers, OR); combined with @TowerId; NULL / empty with @TowerId NULL = all towers
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -56,13 +59,32 @@ BEGIN
 
     CREATE TABLE #tn (CompanyId int NOT NULL, TowerNumber nvarchar(20) NOT NULL, TowerName nvarchar(400) NOT NULL, PRIMARY KEY (CompanyId, TowerNumber));
     INSERT #tn (CompanyId, TowerNumber, TowerName) SELECT CompanyId, TowerNumber, TowerName FROM dbo.fn_Collections_TowerNames();
+    -- The chosen towers: @TowerId plus every id of @TowerIds, ONE set. A tower id that is unknown (or not a number) makes the whole selection invalid (ScopeValid = 0), exactly like an unknown single tower.
+    DECLARE @Raw TABLE (Id int NULL);
+    IF @TowerId IS NOT NULL INSERT @Raw VALUES (@TowerId);
+    IF NULLIF(LTRIM(RTRIM(@TowerIds)), N'') IS NOT NULL
+        INSERT @Raw SELECT TRY_CONVERT(int, LTRIM(RTRIM(value))) FROM STRING_SPLIT(@TowerIds, N',') WHERE LTRIM(RTRIM(value)) <> N'';
+    DECLARE @Wanted TABLE (TowerId int NOT NULL PRIMARY KEY);
+    INSERT @Wanted SELECT DISTINCT Id FROM @Raw WHERE Id IS NOT NULL;
+    DECLARE @HasTowers bit = CASE WHEN EXISTS (SELECT 1 FROM @Raw) THEN 1 ELSE 0 END;
     DECLARE @TowerFound bit = 0, @TowerCompany int, @TowerNumber nvarchar(20), @TowerName nvarchar(400);
-    IF @TowerId IS NOT NULL
-        SELECT @TowerFound = 1, @TowerCompany = t.CompanyId, @TowerNumber = LTRIM(RTRIM(CONVERT(nvarchar(20), t.TowerNumber))), @TowerName = CONVERT(nvarchar(400), t.TowerName)
-          FROM dbo.CollectionsTowers t WHERE t.TowerId = @TowerId;
+    -- (CompanyId, TowerNumber) of the chosen towers; a table VARIABLE so its collation matches the snapshot columns it is compared with.
+    DECLARE @Sel TABLE (CompanyId int NOT NULL, TowerNumber nvarchar(20) NOT NULL, PRIMARY KEY (CompanyId, TowerNumber));
+    INSERT @Sel SELECT DISTINCT t.CompanyId, LTRIM(RTRIM(CONVERT(nvarchar(20), t.TowerNumber))) FROM dbo.CollectionsTowers t JOIN @Wanted w ON w.TowerId = t.TowerId;
+    IF @HasTowers = 1 AND NOT EXISTS (SELECT 1 FROM @Raw WHERE Id IS NULL) AND (SELECT COUNT(*) FROM @Wanted) = (SELECT COUNT(*) FROM dbo.CollectionsTowers t JOIN @Wanted w ON w.TowerId = t.TowerId)
+        SET @TowerFound = 1;
+    IF (SELECT COUNT(*) FROM @Sel) = 1
+    BEGIN
+        SELECT @TowerCompany = s.CompanyId, @TowerNumber = s.TowerNumber, @TowerName = (SELECT TOP (1) CONVERT(nvarchar(400), t.TowerName) FROM dbo.CollectionsTowers t JOIN @Wanted w ON w.TowerId = t.TowerId) FROM @Sel s;
+    END
+    ELSE IF EXISTS (SELECT 1 FROM @Sel) AND (SELECT COUNT(DISTINCT CompanyId) FROM @Sel) = 1
+    BEGIN
+        SELECT @TowerCompany = MIN(CompanyId) FROM @Sel;
+    END;
     SELECT @TowerName = n.TowerName FROM #tn n WHERE n.CompanyId = @TowerCompany AND n.TowerNumber = @TowerNumber;
     DECLARE @Scope int = COALESCE(@TowerCompany, @CompanyId);
-    DECLARE @ScopeValid bit = CASE WHEN @TowerId IS NULL THEN 1 WHEN @TowerFound = 1 AND (@CompanyId IS NULL OR @CompanyId = @TowerCompany) THEN 1 ELSE 0 END;
+    DECLARE @ScopeValid bit = CASE WHEN @HasTowers = 0 THEN 1
+                                   WHEN @TowerFound = 1 AND (@CompanyId IS NULL OR NOT EXISTS (SELECT 1 FROM @Sel WHERE CompanyId <> @CompanyId)) THEN 1 ELSE 0 END;
     IF @Only IS NULL SELECT @ScopeValid AS ScopeValid, @TowerId AS TowerId, @TowerCompany AS CompanyId, @TowerNumber AS TowerNumber, @TowerName AS TowerName;
     IF @ScopeValid = 0
     BEGIN
@@ -105,7 +127,7 @@ BEGIN
       FROM dbo.CollectionsRcvCompany c
       JOIN dbo.CollectionsRcvLine s ON s.CompanyId = c.CompanyId AND s.RunId = c.CurrentRunId
      WHERE c.CurrentRunId IS NOT NULL AND (@Scope IS NULL OR c.CompanyId = @Scope)
-       AND (@TowerId IS NULL OR s.TowerNumber = @TowerNumber)
+       AND (@HasTowers = 0 OR EXISTS (SELECT 1 FROM @Sel x WHERE x.CompanyId = s.CompanyId AND x.TowerNumber = s.TowerNumber))   -- OR across the chosen towers, before aggregation and paging
        AND s.DueDate < @LastExclusive AND (@FromDate IS NULL OR s.DueDate >= @FromDate)
        AND (@Status = 'all' OR (@Status = 'due' AND s.DueDate >= @MonthStart) OR (@Status = 'overdue' AND s.DueDate < @MonthStart))
        AND s.Amount > 0 AND s.UnitId > 0 AND LTRIM(RTRIM(s.UnitCode)) NOT IN (N'', N'0') AND s.UnitCode NOT LIKE N'%*%'

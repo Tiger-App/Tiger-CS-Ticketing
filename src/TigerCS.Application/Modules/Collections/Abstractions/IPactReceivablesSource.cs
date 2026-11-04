@@ -135,10 +135,12 @@ public interface IPactInstalmentSource
 /// AsOf is the first day of the classification month, or - when <see cref="ClassifyByDay"/> is set (the By unit view) - TODAY (Dubai), whose CALENDAR MONTH is the
 /// reference (<c>CollectionsDueMonth</c>): Overdue = due before the first day of that month, Due = due inside it (any day), anything later is not in scope. PaymentFilter is outstanding, unpaid, partial, paid or all. Status (By unit only) keeps the units that have
 /// at least one instalment of that class: overdue or due (null = every unit). MinTotal (By unit): keep units whose summed remaining amount is GREATER than it (null = no minimum).
+/// TowerIds: two or more local tower ids chosen together (OR; null = not used). One tower travels as TowerId, as before. The source filters the instalments by the set BEFORE it sums, counts and pages.
 /// </remarks>
 public sealed record PactInstalmentsRequest(
     DateOnly From, DateOnly To, DateOnly AsOf, decimal MinAmount, string PaymentFilter, string? Search, string? PhoneDigits,
-    int Page, int PageSize, int? CompanyId, int? TowerId, string? Status = null, bool ClassifyByDay = false, decimal? MinTotal = null);
+    int Page, int PageSize, int? CompanyId, int? TowerId, string? Status = null, bool ClassifyByDay = false, decimal? MinTotal = null,
+    IReadOnlyList<int>? TowerIds = null);
 
 public sealed record PactInstalmentsPage(
     PactInstalmentTotalsDto Totals, IReadOnlyList<PactInstalmentRowDto> Rows, bool Unavailable, SnapshotStatusDto Snapshot, DateTime ReadAtUtc, double SqlMs);
