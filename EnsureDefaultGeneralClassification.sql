@@ -48,13 +48,15 @@ SELECT N'REQUESTTYPE' AS [Section], r.[RequestTypeId], r.[DepartmentId], d.[Code
 FROM [RequestTypes] r JOIN [Departments] d ON d.[DepartmentId] = r.[DepartmentId]
 WHERE r.[WorkflowId] IN (SELECT [WorkflowId] FROM [Workflows] WHERE [Code] IN (N'CS-GEN-001', N'CS-GENERAL-001'));
 
-CREATE TABLE #Report (DepartmentCode nvarchar(50), Result nvarchar(400), CategoryId int NULL, RequestTypeId int NULL, WorkflowId int NULL);
+IF OBJECT_ID(N'tempdb..#GeneralReport') IS NOT NULL DROP TABLE #GeneralReport;   -- a leftover table from an earlier run in the same session (old shape) must never be reused
+CREATE TABLE #GeneralReport (DepartmentCode nvarchar(50), Result nvarchar(400), CategoryId int NULL, RequestTypeId int NULL, WorkflowId int NULL);
 
 DECLARE @Now datetime2 = SYSUTCDATETIME();
 DECLARE @DepartmentId int, @DepartmentCode nvarchar(50), @DepartmentName nvarchar(200);
 DECLARE @CategoryId int, @RequestTypeId int, @WorkflowId int, @TemplateId int, @Code nvarchar(50), @WorkflowName nvarchar(200), @Description nvarchar(1000);
 DECLARE @Attempt int, @ExistingWorkflowId int, @ExistingTemplateId int, @Compatible bit, @WhyNot nvarchar(200), @Reused bit;
 
+BEGIN TRY
 BEGIN TRANSACTION;
 
 DECLARE dept_cursor CURSOR LOCAL FAST_FORWARD FOR
@@ -66,12 +68,12 @@ BEGIN
     SET @CategoryId = NULL; SET @RequestTypeId = NULL; SET @WorkflowId = NULL;
     SET @Code = @DepartmentCode + N'-GENERAL-001';
     SET @WorkflowName = @Code + N' General';
-    SET @Description = N'Default classification: ' + @DepartmentName + N' / General. ' + @DepartmentCode + N' Queue -> Agent -> Review -> Resolve -> Close. Used when a ticket has no valid classification.';
+    SET @Description = LEFT(N'Default classification: ' + @DepartmentName + N' / General. ' + @DepartmentCode + N' Queue -> Agent -> Review -> Resolve -> Close. Used when a ticket has no valid classification.', 500);
 
     IF (SELECT COUNT(*) FROM [Categories] WHERE [DepartmentId] = @DepartmentId AND [Name] = N'General') > 1
        OR (SELECT COUNT(*) FROM [RequestTypes] WHERE [DepartmentId] = @DepartmentId AND [Name] = N'General') > 1
     BEGIN
-        INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: duplicate General records - a person must choose the canonical one', NULL, NULL, NULL);
+        INSERT INTO #GeneralReport ([DepartmentCode], [Result], [CategoryId], [RequestTypeId], [WorkflowId]) VALUES (@DepartmentCode, N'SKIPPED: duplicate General records - a person must choose the canonical one', NULL, NULL, NULL);
         IF @DepartmentCode = N'CS' THROW 50701, N'ABORTED: more than one General category or request type exists in Customer Services.', 1;
         FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
     END;
@@ -81,14 +83,14 @@ BEGIN
 
     IF @RequestTypeId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM [WorkflowTemplates] WHERE [WorkflowId] = @WorkflowId AND [Status] = 2)
     BEGIN
-        INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: General request type has no Published workflow - publish it from Administration', @CategoryId, @RequestTypeId, @WorkflowId);
+        INSERT INTO #GeneralReport ([DepartmentCode], [Result], [CategoryId], [RequestTypeId], [WorkflowId]) VALUES (@DepartmentCode, N'SKIPPED: General request type has no Published workflow - publish it from Administration', @CategoryId, @RequestTypeId, @WorkflowId);
         IF @DepartmentCode = N'CS' THROW 50702, N'ABORTED: the Customer Services General request type has no Published workflow.', 1;
         FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
     END;
 
     IF @CategoryId IS NOT NULL AND @RequestTypeId IS NOT NULL
     BEGIN
-        INSERT #Report VALUES (@DepartmentCode, N'ALREADY CONFIGURED', @CategoryId, @RequestTypeId, @WorkflowId);
+        INSERT INTO #GeneralReport ([DepartmentCode], [Result], [CategoryId], [RequestTypeId], [WorkflowId]) VALUES (@DepartmentCode, N'ALREADY CONFIGURED', @CategoryId, @RequestTypeId, @WorkflowId);
         FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
     END;
 
@@ -134,12 +136,12 @@ BEGIN
 
         IF @WorkflowId IS NULL AND @Attempt > 1
         BEGIN
-            INSERT #Report VALUES (@DepartmentCode, N'SKIPPED: dedicated workflow code is not usable - ' + ISNULL(@WhyNot, @Code + N' is in use'), @CategoryId, NULL, NULL);
+            INSERT INTO #GeneralReport ([DepartmentCode], [Result], [CategoryId], [RequestTypeId], [WorkflowId]) VALUES (@DepartmentCode, N'SKIPPED: dedicated workflow code is not usable - ' + ISNULL(@WhyNot, @Code + N' is in use'), @CategoryId, NULL, NULL);
             IF @DepartmentCode = N'CS' THROW 50703, N'ABORTED: workflow code CS-GENERAL-001 is in use and not compatible with a General flow (see report).', 1;
             FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName; CONTINUE;
         END;
         SET @WorkflowName = @Code + N' General';
-        SET @Description = N'Default classification: ' + @DepartmentName + N' / General. ' + @DepartmentCode + N' Queue -> Agent -> Review -> Resolve -> Close. Used when a ticket has no valid classification.';
+        SET @Description = LEFT(N'Default classification: ' + @DepartmentName + N' / General. ' + @DepartmentCode + N' Queue -> Agent -> Review -> Resolve -> Close. Used when a ticket has no valid classification.', 500);
     END;
 
     IF @RequestTypeId IS NULL AND @WorkflowId IS NULL
@@ -176,12 +178,12 @@ BEGIN
         SET @CategoryId = CAST(SCOPE_IDENTITY() AS int);
     END;
 
-    INSERT #Report VALUES (@DepartmentCode, CASE WHEN @Reused = 1 THEN N'CREATED (missing parts only; EXISTING dedicated workflow ' + @Code + N' reused)' ELSE N'CREATED (missing parts only; new dedicated workflow ' + @Code + N')' END, @CategoryId, @RequestTypeId, @WorkflowId);
+    INSERT INTO #GeneralReport ([DepartmentCode], [Result], [CategoryId], [RequestTypeId], [WorkflowId]) VALUES (@DepartmentCode, CASE WHEN @Reused = 1 THEN N'CREATED (missing parts only; EXISTING dedicated workflow ' + @Code + N' reused)' ELSE N'CREATED (missing parts only; new dedicated workflow ' + @Code + N')' END, @CategoryId, @RequestTypeId, @WorkflowId);
     FETCH NEXT FROM dept_cursor INTO @DepartmentId, @DepartmentCode, @DepartmentName;
 END;
 CLOSE dept_cursor; DEALLOCATE dept_cursor;
 
-SELECT * FROM #Report ORDER BY DepartmentCode;
+SELECT * FROM #GeneralReport ORDER BY DepartmentCode;
 
 IF @CommitChanges = 1
 BEGIN
@@ -193,4 +195,14 @@ BEGIN
     ROLLBACK TRANSACTION;
     PRINT N'DRY RUN - rolled back. Set @CommitChanges = 1 to apply.';
 END;
-DROP TABLE #Report;
+DROP TABLE #GeneralReport;
+END TRY
+BEGIN CATCH
+    -- ANY error: roll everything back (nothing is ever left half-applied), then re-raise the original error.
+    IF CURSOR_STATUS(N'local', N'dept_cursor') >= 0 CLOSE dept_cursor;
+    IF CURSOR_STATUS(N'local', N'dept_cursor') >= -1 DEALLOCATE dept_cursor;
+    IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
+    IF OBJECT_ID(N'tempdb..#GeneralReport') IS NOT NULL DROP TABLE #GeneralReport;
+    PRINT N'FAILED - the whole transaction was rolled back. NO changes were made.';
+    THROW;
+END CATCH;
