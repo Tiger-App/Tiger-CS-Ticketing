@@ -37,7 +37,6 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         if (!string.IsNullOrWhiteSpace(status)) query["status"] = status;
         if (!string.IsNullOrWhiteSpace(dueMonth)) query["dueMonth"] = dueMonth;
         if (towerId is { } tower) query["towerId"] = Id(tower);
-        foreach (var id in towerIds ?? []) query.Add("towerIds", Id(id));
         if (dateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (dateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (!string.IsNullOrWhiteSpace(paymentStatus)) query["paymentStatus"] = paymentStatus;
@@ -143,6 +142,7 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         if (!string.IsNullOrWhiteSpace(paymentStatus)) query["paymentStatus"] = paymentStatus;
         if (minTotal is { } minimum) query["minTotal"] = minimum.ToString("0.####", CultureInfo.InvariantCulture);
         if (towerId is { } tower) query["towerId"] = Id(tower);
+        foreach (var id in towerIds ?? []) query.Add("towerIds", Id(id));
         if (dateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (dateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (businessDate is { } date) query["businessDate"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
