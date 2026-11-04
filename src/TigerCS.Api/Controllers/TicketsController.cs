@@ -40,7 +40,8 @@ public class TicketsController(
     TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineAppService ticketActivityTimelineAppService,
     TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewQueryAppService ticketReviewQueryAppService,
     TicketClassificationAppService ticketClassificationAppService,
-    TicketClaimAppService ticketClaimAppService) : ControllerBase
+    TicketClaimAppService ticketClaimAppService,
+    TicketAssignmentHistoryAppService ticketAssignmentHistoryAppService) : ControllerBase
 {
     /// <summary>Create a ticket from an IntakeRecord. CS Agent/CS Supervisor only.</summary>
     /// <remarks>
@@ -250,6 +251,33 @@ public class TicketsController(
 
         var result = await ticketInteractionQueryAppService.GetForTicketAsync(
             employeeId.Value, GetRoles(), ticketId, cancellationToken);
+        return result.Outcome switch
+        {
+            TicketQueryOutcome.Success => Ok(result.Response),
+            TicketQueryOutcome.Forbidden => Forbid(),
+            _ => NotFound()
+        };
+    }
+
+    /// <summary>Every assignment event of a Collections ticket: previous and new assignee, automatic or manual, tower and unit when known, who and when, and the reason.</summary>
+    /// <remarks>Read-only and append-only. Visible to exactly the callers who can see the ticket itself. Empty for tickets that never had a Collections assignment.</remarks>
+    /// <param name="ticketId">The ticket.</param>
+    /// <response code="200">The assignment history, oldest first.</response>
+    /// <response code="404">No such ticket, or it is not visible to the caller.</response>
+    [HttpGet("{ticketId:long}/assignment-history")]
+    [RequirePermission(Permissions.TicketsView)]
+    [Tags(OpenApiTags.Assignment)]
+    [ProducesResponseType<IReadOnlyList<TicketAssignmentHistoryItemDto>>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetAssignmentHistory(long ticketId, CancellationToken cancellationToken)
+    {
+        var employeeId = GetEmployeeId();
+        if (employeeId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await ticketAssignmentHistoryAppService.ListAsync(employeeId.Value, GetRoles(), ticketId, cancellationToken);
         return result.Outcome switch
         {
             TicketQueryOutcome.Success => Ok(result.Response),

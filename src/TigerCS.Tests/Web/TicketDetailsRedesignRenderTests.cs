@@ -116,6 +116,23 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     }
 
     [Fact]
+    public async Task CollectionsTicket_OffersAssignBesideAssignedTo_OnlyWhenTheServerSaysTheViewerMayAssign()
+    {
+        var offered = Dec(await Page(219, Roles.DepartmentEmployee));
+
+        Assert.Equal(1, Count(offered, "data-collections-assign"));
+        var control = Section(offered, "data-collections-assign", "</details>");
+        Assert.Contains("Reassign", control);                                   // the ticket has an owner
+        Assert.Contains("Search Collections team", control);                    // searchable list of the team
+        Assert.Contains("name=\"CollectionsAssign.EmployeeId\"", control);
+        Assert.Contains("Reason (optional)", control);
+        Assert.Contains("Current: <strong data-assign-current>", control);
+        Assert.Equal(1, Count(offered, "Assigned To:"));                        // still shown once, beside the control
+
+        Assert.DoesNotContain("data-collections-assign", await Page(212, Roles.CsManager));   // not a Collections ticket for this viewer
+    }
+
+    [Fact]
     public async Task ClassifiedButUnassigned_ManagerIsToldToAssign()
     {
         var html = await Page(202);
@@ -427,14 +444,15 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         private static TicketDetailDto T(
             long id, string status = "InProgress", Guid? owner = null, int? category = 1, byte? priority = 3, string verification = "Unverified",
             string summary = "Handover documents", int reopens = 0, bool crm = false, bool classified = true, bool reopenEligible = false,
-            string sla = "Running", byte? outcome = null, string? source = null, string? externalName = null, string? crmName = null) =>
+            string sla = "Running", byte? outcome = null, string? source = null, string? externalName = null, string? crmName = null, bool collectionsAssign = false) =>
             new(id, $"TG-CS-{id}", CustomerService, CustomerService, owner, null, null, category, priority, status, verification, "None", sla, outcome, null,
                 summary, reopens, Now.AddHours(-3), Row,
                 CrmBuyerCustomerId: crm ? 9001 : null, CrmBuyerUnitId: crm ? 41 : null, CrmBuyerProjectId: crm ? 7 : null,
                 CrmBuyerCustomerName: crm ? "Mariam Al Falasi" : crmName, CrmBuyerProjectName: crm ? "Tiger Tower" : null, CrmBuyerUnitNumber: crm ? "T-1204" : null,
                 RequestTypeId: classified ? 10 : null, RequestTypeName: classified ? "Complaint Handling" : null, IsClassified: classified,
                 IsReopenEligible: reopenEligible, OriginatingChannelId: 1, OriginatingChannelName: "Website chat",
-                CustomerVerificationSource: source, ExternalCustomerId: source is null ? null : "T-77", ExternalCustomerName: externalName);
+                CustomerVerificationSource: source, ExternalCustomerId: source is null ? null : "T-77", ExternalCustomerName: externalName,
+                CanAssignInCollections: collectionsAssign);
 
         private static TicketDetailDto? Detail(long id) => id switch
         {
@@ -456,6 +474,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
             216 => T(216, "Open", owner: Someone, crm: true, verification: "Verified"),
             217 => T(217, "Open", owner: Someone, verification: "PendingCrmVerification"),
             218 => T(218, "Open", owner: Someone, crmName: "NOT_REGISTERED"),
+            219 => T(219, "Open", owner: Someone, collectionsAssign: true),
             _ => null,
         };
 

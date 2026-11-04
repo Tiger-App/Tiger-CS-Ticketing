@@ -135,6 +135,7 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="OriginatingChannelId">The channel the ticket ENTERED the system on (its originating interaction's channel) — never changed by later interactions on other channels; null for tickets predating the interaction model. Populated on detail reads.</param>
 /// <param name="OriginatingChannelName">The originating channel's display name, resolved from channel configuration — still shown for a channel that has since been deactivated. Populated on detail reads.</param>
 /// <param name="ViewerActsAsInteractionHandler">True when the caller is a CS Agent Genesys reported as handling this ticket's interaction, belongs to its department and nobody else owns it: the server lets them Resolve, Close and Transfer it. Populated on detail reads; the UI uses it to show those actions.</param>
+/// <param name="CanAssignInCollections">True when THIS caller may assign / reassign this ticket as a member of the Collections team (the ticket is in Collections, the caller belongs to it and holds a Collections department role). Decided by the same <c>CollectionsTeam</c> rule <c>TicketAssignmentAppService</c> enforces. Populated on detail reads.</param>
 /// <param name="CanTakeOwnership">True when THIS caller may take ownership of this ticket right now - decided by the very same policy the <c>POST /ownership</c> endpoint applies (Call Center agent, ticket unassigned, active, human-handling, no pending approval), so the UI shows the action exactly when the API would accept it. Populated on detail reads.</param>
 /// <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
 /// <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
@@ -216,7 +217,8 @@ public sealed record TicketDetailDto(
     bool CanTakeOwnership = false,
     bool IsDefaultClassification = false,
     bool CanCorrectClassification = false,
-    string? ExternalCustomerName = null);
+    string? ExternalCustomerName = null,
+    bool CanAssignInCollections = false);
 
 public enum TicketQueryOutcome
 {

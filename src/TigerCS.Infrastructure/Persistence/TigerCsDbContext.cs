@@ -5,6 +5,7 @@ using TigerCS.Domain.Infrastructure;
 using TigerCS.Domain.Modules.ClassificationAndRouting;
 using TigerCS.Domain.Modules.Collections;
 using TigerCS.Domain.Modules.Collections.Review;
+using TigerCS.Domain.Modules.Collections.TowerAssignments;
 using TigerCS.Domain.Modules.CustomerReviews;
 using TigerCS.Domain.Modules.CustomerVerification;
 using TigerCS.Domain.Modules.GenesysIntegration;
@@ -154,6 +155,12 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
 
     public DbSet<CollectionsReminder> CollectionsReminders => Set<CollectionsReminder>();
 
+    public DbSet<CollectionsTowerAssignment> CollectionsTowerAssignments => Set<CollectionsTowerAssignment>();
+
+    public DbSet<CollectionsTowerAssignmentHistory> CollectionsTowerAssignmentHistory => Set<CollectionsTowerAssignmentHistory>();
+
+    public DbSet<TicketAssignmentHistoryEntry> TicketAssignmentHistory => Set<TicketAssignmentHistoryEntry>();
+
     public DbSet<CollectionsReminderChannel> CollectionsReminderChannels => Set<CollectionsReminderChannel>();
 
     public DbSet<CollectionsReminderEvent> CollectionsReminderEvents => Set<CollectionsReminderEvent>();
@@ -238,6 +245,9 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new GenesysScreenPopLaunchConfiguration());
 
         builder.ApplyConfiguration(new CollectionsReminderConfiguration());
+        builder.ApplyConfiguration(new CollectionsTowerAssignmentConfiguration());
+        builder.ApplyConfiguration(new CollectionsTowerAssignmentHistoryConfiguration());
+        builder.ApplyConfiguration(new TicketAssignmentHistoryEntryConfiguration());
         builder.ApplyConfiguration(new CollectionsReminderChannelConfiguration());
         builder.ApplyConfiguration(new CollectionsReminderEventConfiguration());
         builder.ApplyConfiguration(new CollectionsReviewRunConfiguration());

@@ -1,4 +1,5 @@
-﻿using TigerCS.Application.Modules.CustomerVerification.Abstractions;
+﻿using TigerCS.Application.Modules.Collections.TowerAssignments;
+using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
@@ -31,7 +32,11 @@ public sealed class TicketAssignmentAppService(
     IUserPermissionOverrideRepository? permissionOverrides = null,
     ITicketInteractionHandlerRepository? handlerRepository = null,
     IServiceIdentityRegistry? serviceIdentities = null,
-    IRequestTypeRepository? requestTypeRepository = null)
+    IRequestTypeRepository? requestTypeRepository = null,
+    CollectionsTeam? collectionsTeam = null,
+    CollectionsTicketRoutingService? collectionsRouting = null,
+    CollectionsTicketTowerResolver? collectionsTowerResolver = null,
+    ITicketAssignmentHistoryRepository? assignmentHistory = null)
 {
     /// <summary>
     /// Safe retry of a failed automatic CS Agent assignment. Authority is cross-department assignment (CS Manager; the administrator
@@ -113,10 +118,17 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
         }
 
+        // Collections tickets: the Collections team itself (not just its supervisors) may assign and reassign within the team. Decided server-side from the
+        // ticket's department and the caller's membership; it adds nothing for tickets of any other department.
+        var isCollectionsTicket = collectionsTeam is not null
+            && await collectionsTeam.IsCollectionsDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
+
         var authorized = await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
             callerRoles.Any(TicketRoleSets.AssignCrossDepartment.Contains)
             || (callerRoles.Any(TicketRoleSets.AssignWithinOwnDepartment.Contains)
-                && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken)));
+                && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
+            || (isCollectionsTicket
+                && await collectionsTeam!.CanAssignTicketsAsync(callerEmployeeId, callerRoles, ticket.CurrentDepartmentId, cancellationToken)));
 
         if (!authorized)
         {
@@ -153,7 +165,9 @@ public sealed class TicketAssignmentAppService(
         // Taking a ticket out of the department queue stays a plain assignment. Handing an OWNED ticket to someone else
         // is a hand-over and must say why — the reason is what lets "unable to resolve" be reviewed later, so it is
         // never defaulted or inferred. (Assigning to the current owner changes nothing and needs no reason.)
-        if (ticket.CurrentOwnerEmployeeId is { } currentOwner
+        // Collections: the reason is optional (it is recorded in the assignment history when given).
+        if (!isCollectionsTicket
+            && ticket.CurrentOwnerEmployeeId is { } currentOwner
             && currentOwner != request.AssignedEmployeeId
             && request.ReasonCode is (null or TicketTransferReason.Unspecified or TicketTransferReason.SystemRouting))
         {
@@ -164,7 +178,10 @@ public sealed class TicketAssignmentAppService(
         // must be an active member of the ticket's CurrentDepartmentId —
         // checked against the department the assignment target actually
         // needs to belong to, never trusted from the caller's own claims.
-        if (!await userDepartmentAssignmentRepository.ExistsAsync(request.AssignedEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
+        // A Collections ticket can only go to an ACTIVE member of the Collections team (any of them - the tower owner is not required for a manual assignment).
+        if (isCollectionsTicket
+            ? !await collectionsTeam!.IsActiveMemberAsync(request.AssignedEmployeeId, ticket.CurrentDepartmentId, cancellationToken)
+            : !await userDepartmentAssignmentRepository.ExistsAsync(request.AssignedEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.EmployeeNotInDepartment);
         }
@@ -190,6 +207,12 @@ public sealed class TicketAssignmentAppService(
             callerEmployeeId, "Assign", "Ticket", ticketId.ToString(),
             beforeValue: previousOwnerEmployeeId?.ToString(), afterValue: request.AssignedEmployeeId.ToString(),
             correlationId, cancellationToken);
+
+        if (isCollectionsTicket && previousOwnerEmployeeId != request.AssignedEmployeeId)
+        {
+            await RecordCollectionsAssignmentAsync(
+                ticket, previousOwnerEmployeeId, request.AssignedEmployeeId, TicketAssignmentKind.Manual, callerEmployeeId, now, request.Reason, cancellationToken);
+        }
 
         // Ticket transfer tracking: only a REassignment is a hand-over. Taking a ticket out of the department queue
         // (no previous owner) is the ordinary first assignment, and giving it to its current owner again changes nothing.
@@ -378,6 +401,20 @@ public sealed class TicketAssignmentAppService(
                 beforeValue: previousOwnerEmployeeId?.ToString() ?? "DepartmentQueue",
                 afterValue: $"{explicitAssignee};DepartmentId={request.TargetDepartmentId};ViaTransfer=true",
                 correlationId, cancellationToken);
+
+            // An explicit choice into Collections is a manual assignment: recorded as such, and never overwritten by tower routing.
+            if (collectionsTeam is not null && await collectionsTeam.IsCollectionsDepartmentAsync(request.TargetDepartmentId, cancellationToken))
+            {
+                await RecordCollectionsAssignmentAsync(
+                    ticket, previousOwnerEmployeeId, explicitAssignee, TicketAssignmentKind.Manual, callerEmployeeId, now, request.Reason, cancellationToken);
+            }
+        }
+        else if (collectionsRouting is not null
+            && await autoAssignmentService.IsCallCenterDepartmentAsync(previousDepartmentId, cancellationToken)
+            && (await collectionsRouting.RouteAsync(ticket, departmentEntry: true, now, correlationId, cancellationToken)).Handled)
+        {
+            // Call Center -> Collections: the collector responsible for the unit's tower this month took it, or (unknown tower / nobody assigned) it stays for manual handling.
+            // Tower routing owns this decision, so neither the department rule nor the CS Agent rotation picks someone for it.
         }
         else if (ticket.CurrentOwnerEmployeeId is null)
         {
@@ -422,5 +459,30 @@ public sealed class TicketAssignmentAppService(
 
         await transaction.CommitAsync(cancellationToken);
         return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
+    }
+
+    /// <summary>Writes one Collections assignment-history entry. The tower is looked up best-effort for context only: a failure there never blocks the assignment.</summary>
+    private async Task RecordCollectionsAssignmentAsync(
+        Ticket ticket, Guid? previousEmployeeId, Guid newEmployeeId, TicketAssignmentKind kind, Guid? changedBy, DateTime nowUtc, string? reason,
+        CancellationToken cancellationToken)
+    {
+        if (assignmentHistory is null)
+        {
+            return;
+        }
+
+        TicketTowerResolution? context = null;
+        if (collectionsTowerResolver is not null)
+        {
+            try { context = await collectionsTowerResolver.ResolveAsync(ticket, cancellationToken); }
+            catch (Exception ex) when (ex is not OperationCanceledException) { context = null; }
+        }
+
+        await assignmentHistory.AddAsync(
+            new TicketAssignmentHistoryEntry(
+                ticket.TicketId, ticket.CurrentDepartmentId, previousEmployeeId, newEmployeeId, kind, changedBy, nowUtc, reason,
+                context?.Tower?.TowerId, context?.Tower?.TowerCode, context?.Tower?.TowerName,
+                context?.UnitNumber ?? ticket.CrmBuyerUnitNumber ?? ticket.ManualUnitNumber),
+            cancellationToken);
     }
 }

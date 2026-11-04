@@ -34,7 +34,8 @@ public sealed class TicketQueryAppService(
     ITicketWorkflowEventRepository? workflowEventRepository = null,
     IEmployeeRepository? employeeRepository = null,
     TicketClaimPolicy? claimPolicy = null,
-    DefaultClassificationService? defaultClassification = null)
+    DefaultClassificationService? defaultClassification = null,
+    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTeam? collectionsTeam = null)
 {
     /// <summary>Whether the caller may use the supervisor escalation-review filter (<c>escalated=true</c>).</summary>
     public static bool CanReviewEscalations(IReadOnlyCollection<string> callerRoles) =>
@@ -173,6 +174,10 @@ public sealed class TicketQueryAppService(
             ViewerActsAsInteractionHandler = accessLevel == TicketAccessLevel.Full
                 && await TicketOwnershipRules.IsActingInteractionHandlerAsync(
                     handlerRepository, userDepartmentAssignmentRepository, callerEmployeeId, callerRoles, ticket, cancellationToken),
+            CanAssignInCollections = collectionsTeam is not null
+                && accessLevel == TicketAccessLevel.Full
+                && ticket.TicketStatus != TicketStatus.Closed
+                && await collectionsTeam.CanAssignCollectionsTicketAsync(callerEmployeeId, callerRoles, ticket.CurrentDepartmentId, cancellationToken),
             ResolvedAtUtc = currentResolution?.ResolvedAtUtc,
             ClosedAtUtc = closedAt,
             IsReopenEligible = reopenPolicy.IsReopenEligible(
