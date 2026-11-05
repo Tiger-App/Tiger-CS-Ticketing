@@ -73,7 +73,7 @@ public class CsAgentBackfillTests
         public async Task<Ticket> SeedAsync(
             Department department, TicketStatus status = TicketStatus.Open, DateTime? created = null,
             bool liveAi = false, bool aiEnded = false, bool pendingApproval = false, Guid? answeredBy = null, bool humanFollowUp = false,
-            Guid? owner = null, DateTime? lastActivity = null, bool openHandoff = false)
+            Guid? owner = null, DateTime? lastActivity = null, bool openHandoff = false, bool phone = false, bool humanEvidence = false)
         {
             var ticket = Ticket.CreateUnverified($"TG-FM-20261103-{Evidence.Rows.Count + 1:D4}", department.DepartmentId, 5, (byte)PriorityLevel.High, "AC", created ?? Old);
             if (status == TicketStatus.InProgress)
@@ -90,9 +90,9 @@ public class CsAgentBackfillTests
             Evidence.Rows[ticket.TicketId] = new UnassignedTicketEvidence(
                 ticket.TicketId, ticket.TicketNumber, status, owner, department.DepartmentId, department.DepartmentId, created ?? Old,
                 PendingApproval: pendingApproval, HasGenesysInteraction: liveAi || aiEnded, HasLiveGenesysInteraction: liveAi,
-                RequiresHumanFollowUp: humanFollowUp, OpenHandoff: openHandoff, HumanEvidence: false, AnsweringEmployeeId: answeredBy,
+                RequiresHumanFollowUp: humanFollowUp, OpenHandoff: openHandoff, HumanEvidence: humanEvidence, AnsweringEmployeeId: answeredBy,
                 AnsweringGenesysUserId: null, PhonePickupByUnmappedAgent: false, UnmappedGenesysAgentId: null, LastActivityUtc: lastActivity ?? created ?? Old,
-                LeftCallCenter: false, ReleasedByPerson: false);
+                LeftCallCenter: false, ReleasedByPerson: false, LiveGenesysIsPhoneOnly: liveAi && phone);
             return ticket;
         }
     }
@@ -712,6 +712,277 @@ public class CsAgentBackfillTests
         Assert.Equal(env.Agents[2], handled.CurrentOwnerEmployeeId);
         Assert.Equal(env.Agents[0], env.Rotation.Rows[env.CallCenter.DepartmentId].LastAssignedEmployeeId);   // the rotation did not move
     }
+
+    // ---- approved rule: stale Genesys PHONE conversations (> 6h without activity, no end event needed) -----------------------------------
+
+    private static CsAgentBackfillOptions PhoneRule(int? hours = 6) =>
+        new() { Enabled = true, DelayBetweenTicketsMs = 0, StaleAiAfterHours = null, StalePhoneAiAfterHours = hours };
+
+    [Fact]
+    public void StalePhone_ApprovedThresholdIsSixHours_AndCanBeSwitchedOff()
+    {
+        Assert.Equal(6, new CsAgentBackfillOptions().StalePhoneAiAfterHours);
+        Assert.Equal(TimeSpan.FromHours(6), new CsAgentBackfillOptions().StalePhoneAiThreshold);
+        Assert.Null(new CsAgentBackfillOptions().StaleAiAfterHours);   // the generic all-channel rule stays off
+        foreach (var off in new int?[] { null, 0, -1 })
+        {
+            Assert.Null(PhoneRule(off).StalePhoneAiThreshold);
+        }
+
+        Assert.Equal(6, new StalePhoneAssignmentOptions().StaleAfterHours);
+        Assert.False(new StalePhoneAssignmentOptions().Enabled);   // the background process is off ...
+        Assert.True(new StalePhoneAssignmentOptions().DryRun);     // ... and dry-run until approved
+    }
+
+    [Theory]
+    [InlineData(5.9, false)]
+    [InlineData(6.0, false)]   // exactly the threshold is NOT "more than"
+    [InlineData(6.1, true)]
+    [InlineData(48.0, true)]
+    public async Task StalePhone_ReleasesAPhoneTicket_OnlyAfterMoreThanSixHoursOfSilence(double silentHours, bool eligible)
+    {
+        var env = new Env();
+        var ticket = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, lastActivity: Now.AddHours(-silentHours));
+        var evidence = env.Evidence.Rows[ticket.TicketId];
+
+        Assert.Equal(eligible ? CsAgentBackfillClass.Eligible : CsAgentBackfillClass.ActiveAiConversation, CsAgentBackfillClassifier.Classify(evidence, Now, PhoneRule()));
+        Assert.Equal(eligible, CsAgentBackfillClassifier.IsStalePhoneAi(evidence, Now, PhoneRule()));
+        Assert.Equal(CsAgentBackfillClass.ActiveAiConversation, CsAgentBackfillClassifier.Classify(evidence, Now, PhoneRule(null)));   // rule off: protected however old
+    }
+
+    [Fact]
+    public async Task StalePhone_NonPhoneConversations_StayProtected_HoweverOld()
+    {
+        var env = new Env();
+        var chat = await env.SeedAsync(env.Facilities, liveAi: true, phone: false, lastActivity: Now.AddDays(-30));      // live chat / messaging
+        var mixed = env.Evidence.Rows[chat.TicketId] with { LiveGenesysIsPhoneOnly = false };                           // a live Phone call AND a live chat
+
+        Assert.Equal(CsAgentBackfillClass.ActiveAiConversation, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[chat.TicketId], Now, PhoneRule()));
+        Assert.Equal(CsAgentBackfillClass.ActiveAiConversation, CsAgentBackfillClassifier.Classify(mixed, Now, PhoneRule()));
+        Assert.False(CsAgentBackfillClassifier.IsStalePhoneAi(mixed, Now, PhoneRule()));
+    }
+
+    [Fact]
+    public async Task StalePhone_OnlyOpenAndInProgress_NeverOwned_NeverPendingApproval_NeverTooNew_NeverClosed()
+    {
+        var env = new Env();
+        var old = Now.AddHours(-30);
+        var open = await env.SeedAsync(env.Facilities, TicketStatus.Open, liveAi: true, phone: true, lastActivity: old);
+        var inProgress = await env.SeedAsync(env.Facilities, TicketStatus.InProgress, liveAi: true, phone: true, lastActivity: old);
+        var approval = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, pendingApproval: true, lastActivity: old);
+        var tooNew = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, created: Now.AddMinutes(-1), lastActivity: old);
+
+        Assert.Equal(CsAgentBackfillClass.Eligible, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[open.TicketId], Now, PhoneRule()));
+        Assert.Equal(CsAgentBackfillClass.Eligible, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[inProgress.TicketId], Now, PhoneRule()));
+        Assert.Equal(CsAgentBackfillClass.PendingApproval, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[approval.TicketId], Now, PhoneRule()));
+        Assert.Equal(CsAgentBackfillClass.TooNew, CsAgentBackfillClassifier.Classify(env.Evidence.Rows[tooNew.TicketId], Now, PhoneRule()));
+
+        var template = env.Evidence.Rows[open.TicketId];
+        foreach (var status in new[] { TicketStatus.PendingCustomer, TicketStatus.PendingThirdParty })
+        {
+            var pending = template with { Status = status };
+            Assert.Equal(CsAgentBackfillClass.ActiveAiConversation, CsAgentBackfillClassifier.Classify(pending, Now, PhoneRule()));   // not Open / InProgress: protected
+            Assert.False(CsAgentBackfillClassifier.IsStalePhoneAi(pending, Now, PhoneRule()));
+        }
+
+        Assert.Equal(CsAgentBackfillClass.NotActive, CsAgentBackfillClassifier.Classify(template with { Status = TicketStatus.Closed }, Now, PhoneRule()));
+        Assert.Equal(CsAgentBackfillClass.NotActive, CsAgentBackfillClassifier.Classify(template with { Status = TicketStatus.Resolved }, Now, PhoneRule()));
+        var owned = template with { OwnerEmployeeId = Guid.NewGuid() };
+        Assert.Equal(CsAgentBackfillClass.HasOwner, CsAgentBackfillClassifier.Classify(owned, Now, PhoneRule()));
+        Assert.False(CsAgentBackfillClassifier.IsStalePhoneAi(owned, Now, PhoneRule()));
+    }
+
+    [Fact]
+    public async Task StalePhone_AssignsThroughTheSharedRotation_AndChangesNothingButTheOwner()
+    {
+        var env = new Env(3);
+        (await env.Rotation.GetForUpdateAsync(env.CallCenter.DepartmentId, Now)).Advance(env.Agents[0], Now);
+        var ticket = await env.SeedAsync(env.Leasing, TicketStatus.InProgress, liveAi: true, phone: true, lastActivity: Now.AddHours(-9));
+        var before = (ticket.CurrentDepartmentId, ticket.OriginatingDepartmentId, ticket.TicketStatus, ticket.CategoryId, ticket.RequestTypeId, ticket.PriorityId);
+        var evidenceBefore = env.Evidence.Rows[ticket.TicketId];
+
+        var result = await env.Service().TryBackfillAsync(ticket.TicketId, "phone-1", PhoneRule(), dryRun: false);
+
+        Assert.Equal(CsAgentBackfillOutcome.Assigned, result.Outcome);
+        Assert.True(result.StalePhoneAi);
+        Assert.True(result.StaleAi);
+        Assert.Equal(CsAgentBackfillSource.RoundRobin, result.Source);
+        Assert.Equal(env.Agents[1], ticket.CurrentOwnerEmployeeId);                                              // next agent after the live cursor
+        Assert.Equal(env.Agents[1], env.Rotation.Rows[env.CallCenter.DepartmentId].LastAssignedEmployeeId);
+        Assert.Equal(before, (ticket.CurrentDepartmentId, ticket.OriginatingDepartmentId, ticket.TicketStatus, ticket.CategoryId, ticket.RequestTypeId, ticket.PriorityId));
+        Assert.Equal(evidenceBefore, env.Evidence.Rows[ticket.TicketId]);                                        // no end timestamp / interaction change fabricated
+        Assert.True(env.Evidence.Rows[ticket.TicketId].HasLiveGenesysInteraction);
+        Assert.Single(env.Assignments.Added);
+        Assert.Contains(env.Audit.Entries, e => e.Action == "BackfillAssign" && e.AfterValue!.Contains("Reason=StalePhoneAi") && e.AfterValue.Contains("BatchId=phone-1"));
+        Assert.Empty(env.Events.All);                                                                            // no transfer / status / close event: history untouched
+    }
+
+    [Fact]
+    public async Task StalePhone_NeverReassignsAnOwnedTicket_AndRecheckProtectsATicketThatBecameActive()
+    {
+        var env = new Env(2);
+        var existing = env.Agents[1];
+        var owned = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, owner: existing, lastActivity: Now.AddDays(-2));
+        Assert.NotEqual(CsAgentBackfillOutcome.Assigned, (await env.Service().TryBackfillAsync(owned.TicketId, "b", PhoneRule(), dryRun: false)).Outcome);
+        Assert.Equal(existing, owned.CurrentOwnerEmployeeId);
+        Assert.Empty(env.Assignments.Added);
+
+        var ticket = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, lastActivity: Now.AddHours(-12));
+        var racing = new ActivityArrivesAfterFirstRead(env.Evidence, ticket.TicketId, Now.AddMinutes(-1));
+        var service = new CsAgentBackfillService(racing, env.Tickets, env.Engine(), env.Departments, env.Audit, env.UnitOfWork, new FakeTimeProvider(Now));
+
+        var result = await service.TryBackfillAsync(ticket.TicketId, "b", PhoneRule(), dryRun: false);
+
+        Assert.Equal(CsAgentBackfillOutcome.Skipped, result.Outcome);                                           // a call that became active again is protected again
+        Assert.Equal(CsAgentBackfillClass.ActiveAiConversation, result.Class);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task StalePhone_APhoneTicketWithHumanEvidence_IsHumanWork_NotTheStaleRule()
+    {
+        var env = new Env();
+        var ticket = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, humanEvidence: true, lastActivity: Now.AddMinutes(-5));
+        var evidence = env.Evidence.Rows[ticket.TicketId];
+
+        Assert.Equal(CsAgentBackfillClass.Eligible, CsAgentBackfillClassifier.Classify(evidence, Now, PhoneRule()));   // eligible as human work, however recent ...
+        Assert.False(CsAgentBackfillClassifier.IsStalePhoneAi(evidence, Now, PhoneRule()));                           // ... and not reported as stale
+    }
+
+    [Fact]
+    public async Task StalePhone_PreviewAndDryRun_ShowEligibleTicketsAndTheDistribution_WithoutWriting()
+    {
+        var env = new Env(3);
+        for (var i = 0; i < 4; i++) await env.SeedAsync(env.Facilities, liveAi: true, phone: true, lastActivity: Now.AddHours(-7 - i));
+        await env.SeedAsync(env.Leasing, liveAi: true, phone: true, lastActivity: Now.AddHours(-2));           // recent: protected
+        await env.SeedAsync(env.Leasing, liveAi: true, phone: false, lastActivity: Now.AddDays(-5));           // chat: protected
+
+        var preview = await env.Service().PreviewAsync(0, 50, PhoneRule());
+
+        Assert.Equal(4, preview.Eligible);
+        Assert.Equal(2, preview.ExclusionCounts[nameof(CsAgentBackfillClass.ActiveAiConversation)]);
+        Assert.Equal(4, preview.Rows.Count(r => r.StalePhoneAi));
+        var perAgent = preview.Rows.Where(r => r.ProposedEmployeeId is not null).GroupBy(r => r.ProposedEmployeeId!.Value).ToDictionary(g => g.Key, g => g.Count());
+        Assert.Equal(3, perAgent.Count);                                                                       // dealt across the pool
+        Assert.Equal(4, perAgent.Values.Sum());
+        Assert.Empty(env.Assignments.Added);
+        Assert.Empty(env.Audit.Entries);
+        Assert.Equal(0, env.UnitOfWork.SaveChangesCallCount);
+    }
+
+    // ---- the recurring background process -------------------------------------------------------------------------------------------------
+
+    private sealed class StaticPhoneOptions(StalePhoneAssignmentOptions value) : IOptionsMonitor<StalePhoneAssignmentOptions>
+    {
+        public StalePhoneAssignmentOptions CurrentValue => value;
+        public StalePhoneAssignmentOptions Get(string? name) => value;
+        public IDisposable? OnChange(Action<StalePhoneAssignmentOptions, string?> listener) => null;
+    }
+
+    private static StalePhoneAssignmentJob PhoneJob(Env env, StalePhoneAssignmentOptions settings, bool lockBusy = false)
+    {
+        var services = new ServiceCollection();
+        services.AddSingleton<ITicketUnassignedWorkRepository>(env.Evidence);
+        services.AddSingleton<ITicketRepository>(env.Tickets);
+        services.AddSingleton<IDepartmentRepository>(env.Departments);
+        services.AddSingleton<IUserDepartmentAssignmentRepository>(env.Members);
+        services.AddSingleton<ITicketAssignmentRepository>(env.Assignments);
+        services.AddSingleton<IAuditEntryWriter>(env.Audit);
+        services.AddSingleton<ITicketingUnitOfWork>(env.UnitOfWork);
+        services.AddSingleton<ITicketWorkflowEventRepository>(env.Events);
+        services.AddSingleton<IAssignmentRotationRepository>(env.Rotation);
+        services.AddSingleton<IRequestTypeAssignmentRuleRepository>(new FakeRequestTypeAssignmentRuleRepository());
+        services.AddSingleton<IDepartmentWorkflowSettingsRepository>(new FakeDepartmentWorkflowSettingsRepository());
+        services.AddSingleton<IUserRoleReader>(env.Accounts);
+        services.AddSingleton<IUserAccountManager>(env.Accounts);
+        services.AddSingleton<TimeProvider>(new FakeTimeProvider(Now));
+        services.AddScoped<TicketAutoAssignmentService>();
+        services.AddScoped<CsAgentBackfillService>();
+        var provider = services.BuildServiceProvider();
+        return new StalePhoneAssignmentJob(
+            provider.GetRequiredService<IServiceScopeFactory>(), new StaticPhoneOptions(settings), new FakeLock(lockBusy), new FakeTimeProvider(Now),
+            NullLogger<StalePhoneAssignmentJob>.Instance);
+    }
+
+    [Fact]
+    public async Task StalePhoneJob_IsOffByDefault_AndDryRunWritesNothing()
+    {
+        var env = new Env(3);
+        await env.SeedAsync(env.Facilities, liveAi: true, phone: true, lastActivity: Now.AddHours(-10));
+
+        var off = await PhoneJob(env, new StalePhoneAssignmentOptions()).RunAsync(default);
+        Assert.Equal(StalePhoneAssignmentRunStatus.Disabled, off.Status);
+
+        var dry = await PhoneJob(env, new StalePhoneAssignmentOptions { Enabled = true, DelayBetweenTicketsMs = 0 }).RunAsync(default);   // DryRun defaults to true
+        Assert.Equal(StalePhoneAssignmentRunStatus.Completed, dry.Status);
+        Assert.True(dry.DryRun);
+        Assert.Equal(1, dry.WouldAssign);
+        Assert.Equal(0, dry.Assigned);
+        Assert.Empty(env.Assignments.Added);
+        Assert.Empty(env.Audit.Entries);
+        Assert.Equal(0, env.UnitOfWork.SaveChangesCallCount);
+
+        var disabledThreshold = await PhoneJob(env, new StalePhoneAssignmentOptions { Enabled = true, StaleAfterHours = null }).RunAsync(default);
+        Assert.Equal(StalePhoneAssignmentRunStatus.Disabled, disabledThreshold.Status);
+
+        var busy = await PhoneJob(env, new StalePhoneAssignmentOptions { Enabled = true }, lockBusy: true).RunAsync(default);
+        Assert.Equal(StalePhoneAssignmentRunStatus.Busy, busy.Status);
+    }
+
+    [Fact]
+    public async Task StalePhoneJob_Live_AssignsOnlyStalePhoneTickets_ThrottledAndLeavingEverythingElseAlone()
+    {
+        var env = new Env(3);
+        var stale1 = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, lastActivity: Now.AddHours(-10));
+        var stale2 = await env.SeedAsync(env.Leasing, TicketStatus.InProgress, liveAi: true, phone: true, lastActivity: Now.AddHours(-20));
+        var stale3 = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, lastActivity: Now.AddHours(-30));
+        var recent = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, lastActivity: Now.AddHours(-1));
+        var chat = await env.SeedAsync(env.Facilities, liveAi: true, phone: false, lastActivity: Now.AddDays(-9));
+        var plainUnowned = await env.SeedAsync(env.Facilities);                                  // ordinary unowned ticket: the backfill / reconciler's job, NOT this process
+        var aiEnded = await env.SeedAsync(env.Facilities, aiEnded: true);                        // ended AI ticket: likewise
+        var existing = env.Agents[2];
+        var owned = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, owner: existing, lastActivity: Now.AddDays(-3));
+
+        var settings = new StalePhoneAssignmentOptions { Enabled = true, DryRun = false, DelayBetweenTicketsMs = 0, MaxAssignmentsPerRun = 2 };
+        var first = await PhoneJob(env, settings).RunAsync(default);
+
+        Assert.Equal(StalePhoneAssignmentRunStatus.Completed, first.Status);
+        Assert.Equal(2, first.Assigned);                                                         // throttled by MaxAssignmentsPerRun
+        Assert.True(first.LimitReached);
+        Assert.NotNull(stale1.CurrentOwnerEmployeeId);
+        Assert.NotNull(stale2.CurrentOwnerEmployeeId);
+        Assert.Null(stale3.CurrentOwnerEmployeeId);
+
+        var second = await PhoneJob(env, settings).RunAsync(default);                            // the next run finishes the backlog; assigned tickets are no longer candidates
+        Assert.Equal(1, second.Assigned);
+        Assert.NotNull(stale3.CurrentOwnerEmployeeId);
+
+        var third = await PhoneJob(env, settings).RunAsync(default);
+        Assert.Equal(0, third.Assigned);                                                         // idempotent
+
+        Assert.Null(recent.CurrentOwnerEmployeeId);
+        Assert.Null(chat.CurrentOwnerEmployeeId);
+        Assert.Null(plainUnowned.CurrentOwnerEmployeeId);
+        Assert.Null(aiEnded.CurrentOwnerEmployeeId);
+        Assert.Equal(existing, owned.CurrentOwnerEmployeeId);
+        Assert.Equal(3, env.Assignments.Added.Count);
+        Assert.All(env.Audit.Entries.Where(e => e.Action == "BackfillAssign"), e => Assert.Contains("Reason=StalePhoneAi", e.AfterValue!));
+        Assert.Empty(env.Events.All);
+    }
+
+    [Fact]
+    public async Task StalePhoneJob_Live_IsRefusedWithoutAnEligibleAgent_BeforeTouchingAnyTicket()
+    {
+        var env = new Env(0);
+        var ticket = await env.SeedAsync(env.Facilities, liveAi: true, phone: true, lastActivity: Now.AddHours(-10));
+
+        var result = await PhoneJob(env, new StalePhoneAssignmentOptions { Enabled = true, DryRun = false }).RunAsync(default);
+
+        Assert.Equal(StalePhoneAssignmentRunStatus.NoEligiblePool, result.Status);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(0, env.UnitOfWork.SaveChangesCallCount);
+    }
+
 
     /// <summary>Evidence whose ticket gains fresh customer activity after it has been read once (the race between listing and writing).</summary>
     private sealed class ActivityArrivesAfterFirstRead(
