@@ -31,18 +31,28 @@
     --color-border: #DDDDDD;
     --color-border-strong: #DDDDDD;
 
-    /* Primary accent: soft blue with a DARK label (white on #7BBADA is only 2.2:1; #263238 on it is 6.1:1). Gold stays a minor accent. */
-    --color-primary: #7BBADA;
-    --color-primary-hover: #68AACC;                /* one step deeper for hover / pressed; dark label stays 5.2:1 */
-    --color-on-primary: #263238;
-    --color-primary-ink: #1D6485;                  /* the primary hue as TEXT / focus ring on white or grey: 6.4:1 (the fill itself is 2.1:1 on white) */
+    /* Buttons. Primary: neutral grey with a white label (4.7:1); hover one step deeper (6.4:1). Disabled: light grey with a dark-grey label (4.7:1).
+       Secondary buttons stay white with a subtle border (.btn). */
+    --color-primary: #737373;
+    --color-primary-hover: #5F5F5F;
+    --color-on-primary: #FFFFFF;
+    --color-disabled-bg: #DDDDDD;
+    --color-disabled-text: #5F5F5F;
+
+    /* Accent: soft blue for selected / current states and the keyboard focus ring. It carries a DARK label (white on #7BBADA is only 2.2:1;
+       #263238 on it is 6.1:1). Not used for buttons. */
+    --color-accent: #7BBADA;
+    --color-accent-hover: #68AACC;
+    --color-on-accent: #263238;
+    --color-accent-ink: #1D6485;                   /* the accent hue as TEXT / focus ring on white or grey: 6.4:1 (the fill itself is 2.1:1 on white) */
+    --color-primary-ink: var(--color-accent-ink);
 
     /* Brand accent — branding, primary actions, selected navigation. */
-    --tiger-gold: #C5A15A;                        /* the one official brand accent — a subtle accent, never a large fill */
-    --tiger-gold-hover: #B38F47;                  /* the same hue, one step deeper, for hover / pressed */
-    --tiger-gold-tint: rgba(197, 161, 90, 0.16);  /* selected row / tab-count / focus halo */
+    --tiger-gold: #E8C88A;                        /* the one official brand accent — a subtle accent, never a large fill */
+    --tiger-gold-hover: #D9B66F;                  /* the same hue, one step deeper, for hover / pressed */
+    --tiger-gold-tint: rgba(232, 200, 138, 0.24);  /* selected row / tab-count / focus halo */
     --tiger-gold-pale: #FAF7F0;                   /* the faintest wash for a highlighted band */
-    --tiger-gold-line: #E7DABB;                   /* hairline on a gold wash */
+    --tiger-gold-line: #EFE2C2;                   /* hairline on a gold wash */
     --tiger-on-gold: #2A1F06;                     /* text on gold fills: 9.9:1 */
     --tiger-gold-ink: #7A5206;                    /* gold-family TEXT/ICON on white or a wash: 6.9:1 (gold itself is 1.9:1 on white) */
     /* Legacy names, kept so every existing rule follows the one brand colour. */
@@ -149,7 +159,7 @@ ul { margin: 0; padding: 0; list-style: none; }
 input, select, textarea { font-family: inherit; font-size: inherit; color: var(--color-text); }
 table { border-collapse: collapse; width: 100%; }
 
-:focus-visible { outline: 2px solid var(--color-primary-ink); outline-offset: 2px; border-radius: var(--radius-sm); }
+:focus-visible { outline: 2px solid var(--color-accent-ink); outline-offset: 2px; border-radius: var(--radius-sm); }
 
 .visually-hidden {
   position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
@@ -169,8 +179,12 @@ table { border-collapse: collapse; width: 100%; }
 .btn:hover { border-color: var(--color-text-secondary); background: var(--color-bg); }
 .btn:active { transform: translateY(1px); }
 .btn:disabled { opacity: .5; cursor: not-allowed; box-shadow: none; }
+/* A disabled primary control is light grey with a dark-grey label, not a faded grey fill. */
+.btn-gold:disabled, .tw-actions-btn:disabled, .tw-next__cta:disabled, .action-modal .btn-gold:disabled {
+  background: var(--color-disabled-bg); border-color: var(--color-disabled-bg); color: var(--color-disabled-text); opacity: 1; box-shadow: none; cursor: not-allowed;
+}
 
-/* .btn-gold is the primary action; the name is historical. Soft-blue fill with a dark label, not gold. */
+/* .btn-gold is the primary action; the name is historical. Grey fill with a white label, not gold. */
 .btn-gold { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary); }
 .btn-gold:hover { background: var(--color-primary-hover); border-color: var(--color-primary-hover); color: var(--color-on-primary); box-shadow: var(--shadow-sm); }
 
@@ -463,7 +477,7 @@ a.menu-item { color: inherit; text-decoration: none; }
   border-radius: var(--radius-sm); font-size: 13px; font-weight: var(--weight-strong); display: inline-flex; align-items: center; justify-content: center;
 }
 .pagination a:hover { border-color: var(--color-text-secondary); background: var(--color-bg); }
-.pagination .is-active { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary); }
+.pagination .is-active { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-on-accent); }
 .pagination .is-disabled { opacity: .4; pointer-events: none; }
 
 /* ---------- Login ----------
@@ -1142,7 +1156,7 @@ a.bar-row:hover .bar-fill { filter: saturate(1.25) brightness(0.92); }
 }
 .wizard-stepper__num svg { width: 14px; height: 14px; }
 .wizard-stepper__item.is-current { color: var(--color-text); }
-.wizard-stepper__item.is-current .wizard-stepper__num { border-color: var(--color-primary); background: var(--color-primary); color: var(--color-on-primary); box-shadow: 0 0 0 4px var(--color-gold-tint); }
+.wizard-stepper__item.is-current .wizard-stepper__num { border-color: var(--color-accent); background: var(--color-accent); color: var(--color-on-accent); box-shadow: 0 0 0 4px var(--color-gold-tint); }
 .wizard-stepper__item.is-complete { color: var(--color-text); }
 .wizard-stepper__item.is-complete .wizard-stepper__num { border-color: var(--color-success); background: var(--color-success); color: #fff; }
 .wizard-stepper__label small { display: block; font-weight: 400; font-size: 12px; color: var(--color-text-secondary); }
@@ -1934,7 +1948,7 @@ a.badge:hover { text-decoration: underline; }
   color: var(--color-text-secondary); font-weight: 700; font-size: var(--text-sm); font-variant-numeric: tabular-nums;
 }
 .designer-step--approval .designer-step__num { background: var(--color-ink); border-color: var(--color-ink); color: var(--color-gold); }
-.designer-step--editing .designer-step__num { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary); }
+.designer-step--editing .designer-step__num { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-on-accent); }
 .designer-step__card {
   padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: var(--radius-md);
   background: var(--color-surface); min-width: 0; transition: border-color .15s ease, box-shadow .15s ease;
@@ -2441,7 +2455,7 @@ a.customer-strip__name:hover { text-decoration: underline; }
   --tw-cream: var(--color-neutral-tint);
   --tw-tile: var(--color-neutral-tint);
   --tw-card-shadow: 0 1px 2px rgba(16, 26, 44, 0.05), 0 6px 18px rgba(16, 26, 44, 0.04);
-  --tw-btn-gold: var(--color-primary);   /* soft-blue primary, dark label */
+  --tw-btn-gold: var(--color-primary);   /* grey primary, white label */
   color: var(--tw-ink); font-size: 14px;
 }
 .ic { width: 1em; height: 1em; flex: none; }
@@ -2507,7 +2521,7 @@ a.customer-strip__name:hover { text-decoration: underline; }
 .tw-sla--met { background: #DDF0E4; color: #1F5E3B; }
 .tw-head__actions { flex: none; align-self: center; }
 
-/* Actions button: the primary (soft-blue) control in the header */
+/* Actions button: the primary (grey) control in the header */
 .tw-actions-btn, .tw-next__cta {
   height: 46px; padding: 0 20px 0 26px; gap: 10px; border: 0; border-radius: 11px; background: var(--tw-btn-gold); color: var(--color-on-primary);
   font-size: 13px; font-weight: 600; box-shadow: 0 1px 2px rgba(16, 26, 44, 0.12);
@@ -2802,16 +2816,16 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 /* Solid handset like the reference for the channel tile and the conversation row */
 .ic--tile.ic-phone, .ic--chan.ic-phone { fill: currentColor; }
 /* Ticket Details: inline Assign / Reassign beside "Assigned To" (Collections). */
-/* ---- Assign / Reassign beside "Assigned To": a blue button that opens a centred modal (<dialog>) ---- */
+/* ---- Assign / Reassign beside "Assigned To": a primary (grey) button that opens a centred modal (<dialog>) ---- */
 .tw-owner__row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
 .btn-reassign {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 8px;
-  background: #2563EB; color: #fff; font: inherit; font-size: 13px; font-weight: 600; line-height: 1; cursor: pointer; white-space: nowrap;
+  background: var(--color-primary); color: var(--color-on-primary); font: inherit; font-size: 13px; font-weight: 600; line-height: 1; cursor: pointer; white-space: nowrap;
   transition: background-color .15s ease, box-shadow .15s ease;
 }
-.btn-reassign:hover:not(:disabled) { background: #1D4ED8; box-shadow: 0 2px 6px rgba(37, 99, 235, .35); }
-.btn-reassign:focus-visible { outline: 2px solid #93C5FD; outline-offset: 2px; }
-.btn-reassign:disabled { background: #93B4F5; cursor: not-allowed; }
+.btn-reassign:hover:not(:disabled) { background: var(--color-primary-hover); box-shadow: var(--shadow-sm); }
+.btn-reassign:focus-visible { outline: 2px solid var(--color-accent-ink); outline-offset: 2px; }
+.btn-reassign:disabled { background: var(--color-disabled-bg); color: var(--color-disabled-text); cursor: not-allowed; }
 .btn-reassign .ic { width: 16px; height: 16px; stroke-width: 2; }
 .btn-reassign-cancel {
   height: 40px; padding: 0 18px; border: 1px solid #D1D5DB; border-radius: 8px; background: #F3F4F6; color: #374151;
@@ -2871,3 +2885,125 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .ct[hidden] { display: none; }
 .ct__req { color: var(--danger, #b42318); }
 .field-hint--error { color: var(--danger, #b42318); }
+
+/* ======================================================================================================================================
+   Ticket Details — compact refinement (presentation only).
+   One block, scoped to .page--workspace, loaded after the rules it refines. White cards, 1px #DDDDDD borders, no heavy shadows, the soft-blue
+   accent for selected/current states, gold only as a tiny mark. Nothing here changes what is shown, who may do what, or any behaviour.
+   ====================================================================================================================================== */
+.page--workspace {
+  --tw-card-shadow: none;
+  --tw-gold-text: var(--tiger-gold-ink);
+  padding-top: 12px;
+}
+.page--workspace .breadcrumb--compact { font-size: 13px; margin-bottom: 10px; }
+.page--workspace .breadcrumb a, .page--workspace .breadcrumb .sep { color: var(--tw-muted); }
+
+/* -- Header: one slim block. Line 1 = ticket number + status / priority / SLA, line 2 = title, then the info grid. -- */
+.page--workspace .tw-head { border-radius: 12px; margin-bottom: 12px; }
+.page--workspace .tw-head__top { gap: 12px; padding: 12px 16px 10px 12px; align-items: flex-start; }
+.page--workspace .tw-head__bar { width: 3px; margin-right: 0; align-self: stretch; }
+.page--workspace .tw-head__tile { width: 36px; height: 36px; border-radius: 10px; background: var(--color-neutral-tint); color: var(--tw-muted); }
+.page--workspace .ic--tile { width: 20px; height: 20px; }
+.page--workspace .tw-head__main { flex-direction: row; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
+.page--workspace .tw-head__id { order: 1; font-size: 13px; line-height: 22px; font-weight: 600; color: var(--tw-muted); letter-spacing: 0.01em; }
+.page--workspace .tw-head__ident { order: 2; margin: 0; gap: 6px; }
+.page--workspace .tw-head__title { order: 3; flex: 1 1 100%; font-size: 18px; line-height: 26px; }
+.page--workspace .tw-state, .page--workspace .tw-prio, .page--workspace .tw-sla { height: 22px; padding: 0 9px; gap: 6px; font-size: 12px; font-weight: 600; }
+.page--workspace .tw-state__dot { width: 6px; height: 6px; }
+.page--workspace .ic--chip { width: 13px; height: 13px; }
+.page--workspace .tw-actions-btn { height: 34px; padding: 0 12px 0 16px; border-radius: 8px; font-size: 13px; gap: 6px; box-shadow: none; }
+.page--workspace .ic--btn { width: 16px; height: 16px; }
+
+/* -- Information grid: Customer · Phone · Project/Unit · Assigned To. The name gets a double-width track so it reads on one line;
+      the grid wraps by available width instead of fixed column fractions, with no dividers. -- */
+.page--workspace .tw-head__people { padding: 10px 16px 12px; font-size: 13px; }
+.page--workspace .tw-who { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 10px 20px; }
+.page--workspace .tw-who .tw-fact, .page--workspace .tw-who .tw-fact:first-child, .page--workspace .tw-who .tw-fact:last-child,
+.page--workspace .tw-who .tw-fact:nth-child(odd), .page--workspace .tw-who .tw-fact:nth-child(even), .page--workspace .tw-who .tw-fact:nth-child(n+3) {
+  padding: 0; border: 0; gap: 8px; align-items: flex-start;
+}
+.page--workspace .tw-who .tw-fact--name { grid-column: span 2; }
+.page--workspace .tw-who .ic--fact { display: block; width: 18px; height: 18px; margin-top: 2px; color: var(--tw-muted); }
+.page--workspace .tw-fact__k { font-size: 12px; line-height: 18px; color: var(--tw-muted); }
+.page--workspace .tw-fact__v { font-size: 14px; line-height: 20px; min-height: 0; }
+.page--workspace .tw-fact__sub { font-size: 12px; line-height: 18px; color: var(--tw-muted); }
+.page--workspace .tw-who__name { font-size: 14px; }
+.page--workspace .tw-verif { line-height: 20px; padding: 0 8px; font-size: 12px; border-radius: 6px; }
+.page--workspace .tw-route { font-size: 12px; line-height: 18px; }
+.page--workspace .tw-route--awaiting { color: var(--color-warning-text); }
+.page--workspace .btn-reassign { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 6px; }
+@media (max-width: 720px) {
+  .page--workspace .tw-who { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .page--workspace .tw-who .tw-fact--name { grid-column: auto; }
+  .page--workspace .tw-head__top { flex-wrap: wrap; }
+}
+
+/* -- Next step: a slim toolbar, not a banner. The level is carried by a thin left rule in the existing status colours. -- */
+.page--workspace .tw-next { min-height: 0; gap: 10px; margin-bottom: 12px; padding: 6px 8px 6px 12px; background: var(--color-surface); border: 1px solid var(--tw-line); border-left: 3px solid var(--color-accent); border-radius: 8px; font-size: 13px; }
+.page--workspace .tw-next--info { background: var(--color-surface); }
+.page--workspace .tw-next--done { background: var(--color-surface); border-left-color: var(--color-success); }
+.page--workspace .tw-next--attention { border-left-color: var(--color-warning); }
+.page--workspace .tw-next--urgent { border-left-color: var(--color-critical); }
+.page--workspace .tw-next__icon { color: var(--tw-muted); }
+.page--workspace .ic--next { width: 16px; height: 16px; }
+.page--workspace .tw-next__text { font-size: 13px; font-weight: 500; line-height: 20px; }
+.page--workspace .tw-next__label { font-weight: 600; color: var(--tw-muted); }
+.page--workspace .tw-next__headline { font-weight: 600; }
+.page--workspace .tw-next__tools { gap: 8px; }
+.page--workspace .tw-next__secondary { height: 30px; padding: 0 12px; border: 1px solid var(--color-border-strong); border-radius: 8px; background: var(--color-surface); color: var(--tw-ink); box-shadow: none; }
+.page--workspace .tw-next__secondary:hover { background: var(--color-neutral-tint); border-color: var(--color-border-strong); color: var(--tw-ink); }
+.page--workspace .tw-next__cta { height: 30px; padding: 0 14px; border-radius: 8px; font-size: 13px; box-shadow: none; }
+.page--workspace .tw-link-btn { color: var(--color-accent-ink); }
+.page--workspace .tw-link-btn:hover { color: var(--tw-ink); }
+@media (max-width: 720px) { .page--workspace .tw-next { flex-wrap: wrap; } .page--workspace .tw-next__text { flex-basis: calc(100% - 28px); } }
+
+/* -- Status banners and alerts inside the page: neutral, one line of padding. -- */
+.page--workspace .status-banner { margin: 0 16px 10px; padding: 8px 12px; border-radius: 8px; background: var(--color-neutral-tint); border-color: var(--tw-line); font-size: 13px; }
+
+/* -- Tabs, conversation, activity: denser and quieter. -- */
+.page--workspace .tw-body { gap: 14px; grid-template-columns: minmax(0, 1fr) clamp(300px, 26vw, 400px); }
+@media (max-width: 1100px) { .page--workspace .tw-body { grid-template-columns: minmax(0, 1fr); } }
+.page--workspace .tw-main .tabs-card { border-radius: 12px; }
+.page--workspace .tw-main .tabs-card .tab-label { padding: 11px 12px 9px; gap: 7px; font-size: 13px; color: var(--tw-muted); }
+.page--workspace .tw-main .tabs-card .tab-input:first-of-type + .tab-label { margin-left: 8px; }
+.page--workspace .tw-main .tab-input:checked + .tab-label { color: var(--tw-ink); border-bottom-color: var(--color-accent); }
+.page--workspace .ic--tab { width: 16px; height: 16px; }
+.page--workspace .tw-main .tab-count { height: 18px; min-width: 20px; font-size: 12px; border-radius: 6px; background: var(--color-neutral-tint); border-color: var(--tw-line); color: var(--tw-muted); }
+.page--workspace .tw-main .tabs-card--page > .tabs-body > .tab-panel { padding: 14px 14px 12px; }
+.page--workspace .tw-stack { gap: 18px; }
+.page--workspace .tw-main .facts-section__title { margin-bottom: 8px; font-size: 12px; letter-spacing: 0.04em; color: var(--tw-muted); }
+.page--workspace .tw-main .convo-group { border-color: var(--tw-line); border-radius: 10px; }
+.page--workspace .tw-main .convo-group + .convo-group { margin-top: 8px; }
+.page--workspace .tw-main .convo-group__summary { min-height: 40px; padding: 8px 14px; background: var(--color-surface); }
+.page--workspace .tw-main .convo-group__body { padding: 10px 14px 12px; }
+.page--workspace .tw-main .chat-scroll { max-height: 420px; padding: 10px; background: var(--color-bg); gap: 6px; }
+.page--workspace .tw-main .chat-bubble { padding: 6px 10px 7px; }
+.page--workspace .tw-main .chat-bubble__text { font-size: 13px; line-height: 1.4; }
+.page--workspace .tw-main .chat-msg--customer .chat-bubble { background: var(--color-surface); border-color: var(--tw-line); }
+.page--workspace .tw-main .chat-msg--human .chat-bubble { border-left: 2px solid var(--color-accent); }
+.page--workspace .tw-main .composer { margin-top: 10px; padding-top: 10px; }
+.page--workspace .tw-feed .timeline-item { padding-bottom: 8px; }
+.page--workspace .tw-main .data-table th, .page--workspace .tw-main .data-table td { padding-top: 6px; padding-bottom: 6px; }
+
+/* -- Sidebar: Request Details · SLA Information · Customer. Compact cards, no shadow, small section titles. -- */
+.page--workspace .tw-side { gap: 12px; }
+.page--workspace .tw-sec, .page--workspace .tw-side > .more-details { border-radius: 12px; }
+.page--workspace .tw-sec { padding: 12px 16px 6px; }
+.page--workspace .tw-sec__title { gap: 8px; margin-bottom: 6px; font-size: 14px; }
+.page--workspace .ic--sec { width: 18px; height: 18px; margin-left: 0; color: var(--tw-muted); }
+.page--workspace .tw-props .facts-row { padding: 5px 0; line-height: 18px; }
+.page--workspace .tw-props .facts-row dt { color: var(--tw-muted); }
+.page--workspace .tw-side .more-details > summary { padding: 10px 16px; }
+.page--workspace .tw-side .more-details__body { padding: 0 16px 12px; }
+.page--workspace .tw-links__row, .page--workspace .tw-gold-link { min-height: 34px; font-size: 13px; }
+.page--workspace .ic--row { width: 18px; height: 18px; color: var(--tw-muted); }
+.page--workspace .tw-gold-link { color: var(--color-accent-ink); text-decoration-color: rgba(29, 100, 133, 0.35); }
+.page--workspace .tw-gold-link:hover { color: var(--tw-ink); }
+.page--workspace .tw-gold-link .tw-links__end .ic--row { color: var(--color-accent-ink); width: 16px; height: 16px; }
+
+/* -- The manual-entry / unverified note: a small neutral inline notice, not a yellow warning panel. -- */
+.page--workspace .tw-callout { gap: 8px; margin: 0 0 6px; padding: 6px 10px; border-radius: 8px; background: var(--color-neutral-tint); border: 1px solid var(--tw-line); align-items: center; }
+.page--workspace .ic--callout { width: 15px; height: 15px; margin-top: 0; color: var(--tw-muted); }
+.page--workspace .tw-callout__title { margin: 0; font-size: 12px; font-weight: 600; }
+.page--workspace .tw-callout__text { font-size: 12px; line-height: 1.4; color: var(--tw-muted); }
