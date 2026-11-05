@@ -16,6 +16,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
 {
     public string Stage { get; private set; } = "OverdueReminder";
     public DateOnly? BusinessDate { get; private set; }
+
+    /// <summary>"Auto" (default: the stage's policy schedule) or "Manual" (an authorized person chooses the send date; only the schedule is waived).</summary>
+    public string SendingMode { get; private set; } = CollectionsSendingModes.Auto;
+    public bool IsManual => SendingMode == CollectionsSendingModes.Manual;
     public DateOnly? DateFrom { get; private set; }
     public DateOnly? DateTo { get; private set; }
     /// <summary>Due, Overdue or Both (default). Sent to the API with every preview, page and export so they always agree.</summary>
@@ -51,9 +55,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>The page (filters + an empty results area) renders at once and never waits for data; results come from <see cref="OnGetResultsAsync"/>.</summary>
     public async Task OnGetAsync(string stage = "OverdueReminder", DateOnly? businessDate = null,
         string? search = null, [FromQuery(Name = "page")] int pageNumber = 1, DateOnly? dateFrom = null, DateOnly? dateTo = null,
-        int? month = null, int? year = null, string? render = null, string? load = null, string? paymentStatus = null, CancellationToken cancellationToken = default)
+        int? month = null, int? year = null, string? render = null, string? load = null, string? paymentStatus = null, string? sendingMode = null, CancellationToken cancellationToken = default)
     {
-        SetFilters(stage, businessDate, search, pageNumber, dateFrom, dateTo, month, year, load, paymentStatus);
+        SetFilters(stage, businessDate, search, pageNumber, dateFrom, dateTo, month, year, load, paymentStatus, sendingMode);
         RenderFull = render == "full";
         var towers = await api.GetTowersAsync(cancellationToken);
         Towers = towers.IsSuccess && towers.Value is { } list ? list : [];
@@ -92,7 +96,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         // Instalments due from the next month on are neither Due nor Overdue and never listed: a period that starts there has nothing to ask the API for.
         if (DateFrom is { } start && !CollectionsDueMonth.IsInScope(start, CollectionsDisplay.DubaiToday())) { NothingDueYet = true; return; }
         await EnsureTowersAsync(cancellationToken);
-        var result = await api.GetCampaignPreviewAsync(Stage, BusinessDate, null, Search, PageNumber, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds);
+        var result = await api.GetCampaignPreviewAsync(Stage, BusinessDate, null, Search, PageNumber, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode);
         Outcome = result.Outcome;
         Report = result.IsSuccess ? result.Value : null;
         Error = result.Detail;
@@ -111,13 +115,13 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
 
     public async Task<IActionResult> OnGetExportAsync(string stage = "OverdueReminder", string mode = "review",
         DateOnly? businessDate = null, string? search = null, DateOnly? dateFrom = null, DateOnly? dateTo = null,
-        int? month = null, int? year = null, string? paymentStatus = null, CancellationToken cancellationToken = default)
+        int? month = null, int? year = null, string? paymentStatus = null, string? sendingMode = null, CancellationToken cancellationToken = default)
     {
-        SetFilters(stage, businessDate, search, 1, dateFrom, dateTo, month, year, null, paymentStatus);
+        SetFilters(stage, businessDate, search, 1, dateFrom, dateTo, month, year, null, paymentStatus, sendingMode);
         if (!ModelState.IsValid) { Outcome = ApiOutcome.ValidationError; Error = "Choose valid filters and retry."; return Page(); }
         // Same stage, preview date, tower, dates, minimum amount and search as the preview: the file contains exactly the previewed units.
         await EnsureTowersAsync(cancellationToken);
-        var result = await api.GetCampaignExportAsync(Stage, mode, BusinessDate, null, Search, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds);
+        var result = await api.GetCampaignExportAsync(Stage, mode, BusinessDate, null, Search, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode);
         if (result.IsSuccess && result.Value is { } file)
         {
             // Review export: the simplified employee workbook. Genesys export: the unchanged machine CSV.
@@ -132,8 +136,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         return Page();
     }
 
-    private void SetFilters(string stage, DateOnly? date, string? search, int page, DateOnly? from, DateOnly? to, int? month, int? year, string? load, string? paymentStatus)
+    private void SetFilters(string stage, DateOnly? date, string? search, int page, DateOnly? from, DateOnly? to, int? month, int? year, string? load, string? paymentStatus, string? sendingMode = null)
     {
+        SendingMode = CollectionsSendingModes.TryParse(sendingMode, out var parsedMode) ? parsedMode : CollectionsSendingModes.Auto;
         PaymentStatus = CampaignPaymentFilters.TryParse(paymentStatus, out var payment) ? CampaignPaymentFilters.Name(payment) : paymentStatus!.Trim();
         Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
         MinTotal = ReceivablesModel.ParseMinTotal(Request.Query);
@@ -172,7 +177,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     }
 
     /// <summary>The less-used controls stay collapsed unless one of them holds a non-default value, so an applied filter is never hidden.</summary>
-    public bool AdvancedOpen => Period == "Custom" || BusinessDate is not null || MinTotal != ReceivablesModel.DefaultMinTotal;
+    public bool AdvancedOpen => Period == "Custom" || (BusinessDate is not null && !IsManual) || MinTotal != ReceivablesModel.DefaultMinTotal;
 
     /// <summary>Environment settings that stop any send to Genesys (switched off, missing credentials or contact lists); empty when configured or when it could not be read.</summary>
     public IReadOnlyList<string> DispatchBlockers { get; private set; } = [];
@@ -193,7 +198,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
             if (DispatchBlockers.Count > 0) return "Sending to Genesys is not configured in this environment. " + string.Join(" ", DispatchBlockers);
             if (report.Snapshot is { IsReady: false, ReadyProblem: { } problem }) return $"Financial data: {problem}";
             if (report.Crm is { Blocks: true } crm) return crm.Message ?? "CRM contacts are unavailable, so contacts are unconfirmed.";
-            if (ScheduleRestriction(StageName(report.Stage), report.ScheduledDates, report.BusinessDate, report.LiveBusinessDate, report.IsScheduledDate) is { } schedule) return schedule;
+            if (TimingRestriction(report) is { } timing) return timing;
             if (report.ReadyCount > 0) return null;
             return report.TotalCount - report.NotEligibleCount > 0
                 ? "No customers are Ready to send. The eligible customers need review or are blocked; see the reasons above."
@@ -224,7 +229,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (report.Snapshot is { IsReady: false } snapshot && snapshot.ReadyProblem is { } problem) reasons.Add($"Financial data: {problem}");
         if (!report.FinancialSourceValidated) reasons.Add("The financial source has not been reconciled against PACT.");
         if (report.Crm is { Blocks: true } crm) reasons.Add(crm.Message ?? "CRM contacts are unavailable, so contacts are unconfirmed.");
-        if (ScheduleRestriction(StageName(report.Stage), report.ScheduledDates, report.BusinessDate, report.LiveBusinessDate, report.IsScheduledDate) is { } schedule) reasons.Add(schedule);
+        if (TimingRestriction(report) is { } timing) reasons.Add(timing);
         return reasons;
     }
 
@@ -238,6 +243,30 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
             .GroupBy(r => r).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal);
         foreach (var g in counts) reasons.Add($"{ReasonText(g.Key)} ({g.Count():N0} on this page)");
         return reasons;
+    }
+
+    /// <summary>Why the list cannot be sent now because of WHEN: the send date in Manual mode, the stage's policy schedule in Auto mode (null = timing allows sending).</summary>
+    public static string? TimingRestriction(CollectionsCampaignPreviewDto report) =>
+        report.SendingMode == CollectionsSendingModes.Manual
+            ? ManualTimingRestriction(StageName(report.Stage), report.BusinessDate, report.LiveBusinessDate)
+            : ScheduleRestriction(StageName(report.Stage), report.ScheduledDates, report.BusinessDate, report.LiveBusinessDate, report.IsScheduledDate);
+
+    /// <summary>Manual mode: only the send date matters. A future date stays pending until that day (nothing is dispatched automatically); a past date is over.</summary>
+    public static string? ManualTimingRestriction(string stageName, DateOnly sendDate, DateOnly today) =>
+        CollectionsSendingModes.ManualTimingReason(sendDate, today) switch
+        {
+            CollectionsSendingModes.PendingSendDate => $"Pending: the send date ({sendDate:dd MMM yyyy}) is in the future. \"{stageName}\" stays unsent until an authorized user approves and sends it on that day; nothing is sent automatically.",
+            CollectionsSendingModes.SendDateInPast => $"Preview only: the send date ({sendDate:dd MMM yyyy}) has passed. Choose today ({today:dd MMM yyyy}, Dubai) to send now.",
+            _ => null
+        };
+
+    /// <summary>Auto mode: the stage's calculated policy schedule for the month of the preview date, in words.</summary>
+    public string PolicyScheduleText()
+    {
+        if (!CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage)) return "";
+        var anchor = BusinessDate ?? Report?.BusinessDate ?? CollectionsDisplay.DubaiToday();
+        var days = CollectionsCampaignPolicy.ScheduledDates(stage, anchor);
+        return $"\"{StageName(Stage)}\" is scheduled for {string.Join(" and ", days.Select(d => d.ToString("dd MMM yyyy", CultureInfo.InvariantCulture)))} (policy schedule for {anchor:MMMM yyyy}).";
     }
 
     /// <summary>
@@ -264,7 +293,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "CrmCompanyAmbiguous" => "CRM sale cannot be tied to one company",
         "ContactSourceConflict" => "CRM and PACT contacts differ",
         "CrmUnavailable" => "CRM unavailable: contacts unconfirmed",
-        "OutsideSchedule" => "Not a scheduled send day for this stage: preview only (sending is only possible on its scheduled days)",
+        "OutsideSchedule" => "Not a scheduled send day for this stage: preview only (Auto mode sends only on its scheduled days; Manual mode can send today)",
+        "PendingSendDate" => "Send date is in the future: pending until that day (nothing is sent automatically)",
+        "SendDateInPast" => "Send date has passed: preview only",
         "InternalLegalReferralOnly" => "Internal legal referral: never sent to customers",
         "LegalNoticeReleaseRequired" => "Legal notice sending has not been released",
         "AmbiguousInstalments" => "Ambiguous instalments",
@@ -304,7 +335,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public string SelectionMode { get; private set; } = ReviewQueryService.ModeSelectedUnits;
     public string UnitKeys { get; private set; } = "";
     public int ContactPage { get; private set; } = 1;
-    public static IReadOnlyList<string> FilterFieldNames => ["stage", "businessDate", "dateFrom", "dateTo", "towerId", "minTotal", "paymentStatus", "search"];
+    public static IReadOnlyList<string> FilterFieldNames => ["stage", "sendingMode", "businessDate", "dateFrom", "dateTo", "towerId", "minTotal", "paymentStatus", "search"];
 
     /// <summary>Progress / failure of the approval-data refresh and the latest sends, shown above the list. Never throws: a missing piece just hides its panel.</summary>
     private async Task LoadApprovalStateAsync(CancellationToken ct)
@@ -460,6 +491,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         DateOnly? Date(string name) => DateOnly.TryParse(Get(name), CultureInfo.InvariantCulture, out var d) ? d : null;
         PaymentStatus = CampaignPaymentFilters.TryParse(Get("paymentStatus"), out var payment) ? CampaignPaymentFilters.Name(payment) : "Both";
         Stage = Get("stage") is { Length: > 0 } st ? st : "OverdueReminder";
+        SendingMode = CollectionsSendingModes.TryParse(Get("sendingMode"), out var postedMode) ? postedMode : CollectionsSendingModes.Auto;
         BusinessDate = Date("businessDate"); DateFrom = Date("dateFrom"); DateTo = Date("dateTo");
         TowerIds = ParseTowerIds(form is not null && form.TryGetValue("towerId", out var towerValues) ? towerValues : default);
         Search = Get("search")?.Trim();
@@ -537,6 +569,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         var (from, to) = CollectionsDateRanges.LastSixMonths(preview);
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["stage"] = Stage;
+        if (IsManual) query["sendingMode"] = SendingMode;
         query["businessDate"] = preview.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -551,6 +584,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["stage"] = Stage;
+        if (IsManual) query["sendingMode"] = SendingMode;
         if (BusinessDate is { } date) query["businessDate"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -572,7 +606,8 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         string? reminderType = CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage)
             ? TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.FromStage(stage).ToString() : null;
         return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo,
-            MinRemaining: MinTotal ?? 0m, ReminderType: reminderType, DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds);
+            MinRemaining: MinTotal ?? 0m, ReminderType: reminderType, DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds,
+            SendingMode: SendingMode, SendDate: IsManual ? BusinessDate ?? CollectionsDisplay.DubaiToday() : null);
     }
 
     /// <summary>The stage's display name = the Genesys campaign name used when this list is sent.</summary>
@@ -614,6 +649,16 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "InternalReview" => "Internal review",
         "NotEligible" => row.Reason.Contains("BelowThreshold", StringComparison.Ordinal) ? "Not eligible: below this stage's threshold" : "Not eligible: no balance qualifies for this stage",
         _ => row.Status,
+    };
+
+    /// <summary>The one-word state shown on every row: Ready, Blocked (needs review / internal) or Preview only (+ why), so the three groups are never mixed up.</summary>
+    public static string RowState(CollectionsCampaignContactDto row) => row.Status switch
+    {
+        "Ready" => "Ready",
+        "PreviewOnly" => $"Preview only: {ReasonText(row.Reason.Split(';')[0])}",
+        "NeedsReview" or "InternalReview" => "Blocked",
+        "NotEligible" => "Not eligible",
+        _ => row.Status
     };
 
     public static string MoneyOrDash(decimal amount) => amount > 0 ? amount.ToString("N2", CultureInfo.InvariantCulture) : "—";

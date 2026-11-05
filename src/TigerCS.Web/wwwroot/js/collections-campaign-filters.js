@@ -20,6 +20,25 @@
     const iso = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
     const daysIn = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
+    // ---- Sending mode: Manual shows the date as "Send date" beside the mode; Auto keeps it as "Preview date" in Advanced filters. One input exists either way (it is moved, never copied),
+    // so exactly one businessDate is ever submitted. Changing the mode is a filter change like any other: the customers on screen are cleared until Preview Customers is pressed.
+    const modeSelect = form.querySelector('[data-sending-mode]');
+    const dateGroup = form.querySelector('[data-date-group]');
+    const dateSlot = form.querySelector('[data-date-slot]');
+    const advancedGrid = form.querySelector('.campaign-advanced__grid');
+    const applyMode = () => {
+        if (!modeSelect) return;
+        const manual = modeSelect.value === 'Manual';
+        if (dateGroup && dateSlot && advancedGrid) {
+            const label = dateGroup.querySelector('[data-date-label]');
+            if (label) label.textContent = manual ? 'Send date' : 'Preview date';
+            if (manual) { dateSlot.appendChild(dateGroup); if (date && !date.value && period) date.value = period.dataset.today || date.value; }
+            else advancedGrid.prepend(dateGroup);
+        }
+        form.querySelectorAll('[data-mode-hint]').forEach(h => { h.hidden = h.dataset.modeHint !== modeSelect.value; });
+    };
+    if (modeSelect) modeSelect.addEventListener('change', applyMode);
+
     // ---- Period -> From / To (same ranges as CollectionsDateRanges on the server)
     const anchor = () => {
         if (date && /^\d{4}-\d{2}-\d{2}$/.test(date.value)) return date.value;

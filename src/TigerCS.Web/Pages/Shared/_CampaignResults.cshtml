@@ -14,7 +14,7 @@ else if (Model.Report is { } report)
     <div hidden data-effective-filters data-from="@Model.DateFrom?.ToString("yyyy-MM-dd")" data-to="@report.DateTo?.ToString("yyyy-MM-dd")"></div>
     if (report.Snapshot is { NothingLoaded: true }) { <div class="panel"><p class="receivables-meta" data-nothing-loaded>No customers can be shown until the financial data has loaded. See the snapshot status above.</p></div> return; }
     <div class="panel" data-customer-results data-preview-current>
-        @{ var eligible = report.TotalCount - report.NotEligibleCount; var blockedCount = Math.Max(0, eligible - report.ReadyCount); var currency = report.Items.FirstOrDefault()?.Currency ?? "AED"; }
+        @{ var eligible = report.TotalCount - report.NotEligibleCount; var blockedCount = Math.Max(0, eligible - report.ReadyCount - report.PreviewOnlyCount); var currency = report.Items.FirstOrDefault()?.Currency ?? "AED"; }
         @{
             // Every explanation lives behind the Info icon next to its label; nothing is printed under the figures. The amount comparison is kept whole on both amount cards.
             var amountNote = report.EligibleTotalAmount is { } q && report.EligibleOutstandingAmount is { } o
@@ -36,6 +36,10 @@ else if (Model.Report is { } report)
                     <span class="campaign-card__label">Needs review / blocked<partial name="_InfoTip" model="@(new InfoTipModel("tip-blocked", "Needs review / blocked", "Eligible, but not yet safe to send."))" /></span>
                     <strong class="campaign-card__value" data-blocked-count>@blockedCount.ToString("N0")</strong>
                 </li>
+                <li class="campaign-card @(report.PreviewOnlyCount > 0 ? "campaign-card--preview" : "")">
+                    <span class="campaign-card__label">Preview only<partial name="_InfoTip" model="@(new InfoTipModel("tip-preview-only", "Preview only", report.SendingMode == "Manual" ? "Eligible and otherwise valid, but the chosen send date is not today. It stays pending: nothing is queued or sent." : "Eligible and otherwise valid, but today is not a scheduled send day for this stage."))" /></span>
+                    <strong class="campaign-card__value" data-preview-only-count>@report.PreviewOnlyCount.ToString("N0")</strong>
+                </li>
                 @if (report.EligibleTotalAmount is { } qualifying)
                 {
                     <li class="campaign-card">
@@ -56,10 +60,20 @@ else if (Model.Report is { } report)
             <h3 class="campaign-section__title" id="campaign-details-title">Campaign details</h3>
             <dl class="campaign-details">
                 @if (Model.CampaignName is { } campaignName) { <div><dt>Campaign name<partial name="_InfoTip" model="@(new InfoTipModel("tip-campaign-name", "Campaign name", "Stage / Genesys campaign name when sent"))" /></dt><dd><strong data-campaign-name>@campaignName</strong></dd></div> }
+                <div><dt>Sending mode</dt><dd><strong data-mode-name>@report.SendingMode</strong></dd></div>
+                @if (report.SendingMode == "Manual")
+                {
+                    <div><dt>Send date</dt><dd><strong data-send-date>@report.BusinessDate.ToString("dd MMM yyyy")</strong> <span class="receivables-meta" data-send-date-state>@(CampaignsModel.TimingRestriction(report) is null ? "today: can be sent after approval" : report.BusinessDate > report.LiveBusinessDate ? "pending: future date" : "passed")</span></dd></div>
+                }
+                else
+                {
+                    <div><dt>Policy schedule</dt><dd><strong data-policy-schedule-result>@string.Join(" and ", report.ScheduledDates.Select(d => d.ToString("dd MMM yyyy")))</strong> <span class="receivables-meta">@(report.IsScheduledDate ? "today is a scheduled day" : "today is not a scheduled day")</span></dd></div>
+                }
+                <div><dt>Automatic execution<partial name="_InfoTip" model="@(new InfoTipModel("tip-auto-sending", "Automatic execution", "A separate setting (Collections:Campaigns:AutoSendingEnabled), off by default. Nothing is dispatched without an authorized user pressing Approve & Send to Genesys."))" /></dt><dd><strong data-auto-sending>@(report.AutoSendingEnabled ? "On" : "Off")</strong></dd></div>
                 <div><dt>Payment status</dt><dd><strong>@(report.PaymentStatus == "Both" ? "Due and Overdue" : report.PaymentStatus)</strong></dd></div>
             </dl>
         </section>
-        @if (blockedCount > 0)
+        @if (blockedCount > 0 || report.PreviewOnlyCount > 0)
         {
             @* The blockers are safety information, not hints: the report-wide gates (financial data, reconciliation, CRM, schedule) are always listed in full. Only the long tail of
                per-customer reasons folds into an expandable list, and nothing here lives only inside an Info tooltip. *@
@@ -113,7 +127,7 @@ else if (Model.Report is { } report)
             {
                 if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
             <input type="hidden" name="@name" value="@(name switch {
-                    "stage" => Model.Stage, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
+                    "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
                     "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
             }
             <input type="hidden" name="unitKeys" value="" data-selected-units />
@@ -141,7 +155,7 @@ else if (Model.Report is { } report)
                 {
                     <tr data-campaign-status="@row.Status">
                         <td>@if (row.Status == "Ready") { <input type="checkbox" class="campaign-select" data-unit-key="@TigerCS.Application.Modules.Collections.Review.ReviewQueryService.UnitKey(row.CompanyId, row.TenantId, row.UnitCode)" aria-label="Select @row.CustomerName" /> }</td>
-                        <td><strong>@row.CustomerName</strong>@foreach (var note in CampaignsModel.ReviewNotes(row, report.Crm?.State)) { <span class="receivables-meta receivables-meta--review" data-unit-note>@note</span> }@if (row.Status == "NotEligible") { <span class="receivables-meta" data-campaign-readiness>@CampaignsModel.Readiness(row)</span> }</td>
+                        <td><strong>@row.CustomerName</strong><span class="campaign-row-state campaign-row-state--@row.Status.ToLowerInvariant()" data-row-state>@CampaignsModel.RowState(row)</span>@foreach (var note in CampaignsModel.ReviewNotes(row, report.Crm?.State)) { <span class="receivables-meta receivables-meta--review" data-unit-note>@note</span> }@if (row.Status == "NotEligible") { <span class="receivables-meta" data-campaign-readiness>@CampaignsModel.Readiness(row)</span> }</td>
                         <td>@(row.Phone.Length > 0 ? row.Phone : "—")@if (row.Phone.Length == 0) { <span class="receivables-meta receivables-meta--missing" data-unit-note>@CampaignsModel.NoMobileNote(row)</span> }</td>
                         <td>@(row.Email.Length > 0 ? row.Email : "—")@if (row.Email.Length == 0) { <span class="receivables-meta receivables-meta--missing" data-unit-note>No email: email not possible</span> }</td>
                         <td>@CollectionsDisplay.TowerCell(row.TowerName, row.TowerNumber, row.ProjectCode)</td>

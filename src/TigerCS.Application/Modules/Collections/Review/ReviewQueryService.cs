@@ -145,8 +145,9 @@ public sealed class ReviewQueryService(
         {
             var parsed = TryParse(request.Filter ?? new ReviewFilter());
             if (parsed.Error is not null) return new(run, [], 0, parsed.Error);
-            // Only Ready records can ever be approved, whatever the validation-status filter shows.
-            views = await store.ResolveAsync(run.CollectionsReviewRunId, parsed.Spec! with { ValidationStatus = ReviewValidationStatus.Ready }, null, stale, max, ct);
+            if (ManualProblem(request.Filter, parsed.Spec!, run) is { } manualProblem) return new(run, [], 0, manualProblem);
+            // Only Ready records can ever be approved, whatever the validation-status filter shows. (Manual mode adds the records that are Ready except for the schedule.)
+            views = await ResolveReadyAsync(run, parsed.Spec!, request.Filter, null, stale, max, ct);
             if (views.Count > max) return new(run, [], 0, $"More than {max} records match. Narrow the filters (for example by company or reminder type) and approve in parts.");
             var excluded = (request.ExcludedKeys ?? []).ToHashSet(StringComparer.Ordinal);
             if (excluded.Count > 0) views = views.Where(v => !excluded.Contains(v.Record.RecordKey)).ToList();
@@ -157,7 +158,8 @@ public sealed class ReviewQueryService(
             if (units.Count == 0) return new(run, [], 0, "Select at least one customer.");
             var parsed = TryParse(request.Filter ?? new ReviewFilter());
             if (parsed.Error is not null) return new(run, [], 0, parsed.Error);
-            views = await store.ResolveAsync(run.CollectionsReviewRunId, parsed.Spec! with { ValidationStatus = ReviewValidationStatus.Ready }, null, stale, max, ct, units);
+            if (ManualProblem(request.Filter, parsed.Spec!, run) is { } manualProblem) return new(run, [], 0, manualProblem);
+            views = await ResolveReadyAsync(run, parsed.Spec!, request.Filter, units, stale, max, ct);
             if (views.Count > max) return new(run, [], 0, $"At most {max} records can be approved at once.");
             // A ticked customer that has no Ready record any more (paid, already sent, changed) is counted as left out, never silently kept.
             skipped = units.Count(u => !views.Any(v => UnitKey(v.Record.CompanyId, v.Record.TenantId, v.Record.UnitCode) == u));
@@ -165,11 +167,57 @@ public sealed class ReviewQueryService(
         else return new(run, [], 0, "Choose a selection mode: SelectedKeys, SelectedUnits or AllMatching.");
 
         // The view must be Ready now (stale-adjusted, not already sent) and carry a confirmed amount.
-        var ready = views.Where(v => v.EffectiveStatus(stale) == ReviewValidationStatus.Ready
+        var ready = views.Where(v => (v.EffectiveStatus(stale) == ReviewValidationStatus.Ready || IsManualReady(v, stale, request.Filter))
             && v.Record.RemainingAmount is > 0 && v.Record.DueDate is not null)
             .Select(v => v.Record).OrderBy(r => r.RecordKey, StringComparer.Ordinal).ToList();
         skipped += views.Count - ready.Count;
         return new(run, ready, skipped, null);
+    }
+
+    /// <summary>
+    /// Manual mode only: why the selection cannot be sent now (null = it can, or it is Auto). Manual sending needs one campaign stage and today as the send date, and is only possible from
+    /// review data built today. Nothing about a future or past date is stored or queued: that list simply cannot be approved until its day.
+    /// </summary>
+    private string? ManualProblem(ReviewFilter? filter, ReviewQuerySpec spec, CollectionsReviewRun run)
+    {
+        if (!CollectionsSendingModes.IsManual(filter?.SendingMode)) return null;
+        if (spec.ReminderType is null || filter?.SendDate is not { } sendDate) return "Manual sending needs a campaign stage and a send date.";
+        var today = clock.BusinessDate;
+        if (CollectionsSendingModes.ManualTimingReason(sendDate, today) is { } timing)
+            return timing == CollectionsSendingModes.PendingSendDate
+                ? $"The send date ({sendDate:dd MMM yyyy}) is in the future. This campaign stays pending; an authorized user can approve and send it on that day ({sendDate:dd MMM yyyy})."
+                : $"The send date ({sendDate:dd MMM yyyy}) has passed. Choose today ({today:dd MMM yyyy}) to send now.";
+        if (run.AsOfDate != today) return $"The review data was built for {run.AsOfDate:dd MMM yyyy}, not today ({today:dd MMM yyyy}). Refresh it, then approve.";
+        return null;
+    }
+
+    /// <summary>Ready records of the selection and, in Manual mode, the Excluded ones that are only outside the schedule (checked again by <see cref="IsManualReady"/>).</summary>
+    private async Task<IReadOnlyList<ReviewRecordView>> ResolveReadyAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, int max, CancellationToken ct)
+    {
+        var ready = await store.ResolveAsync(run.CollectionsReviewRunId, spec with { ValidationStatus = ReviewValidationStatus.Ready }, null, stale, max, ct, units);
+        if (!CollectionsSendingModes.IsManual(filter?.SendingMode)) return ready;
+        var outside = await store.ResolveAsync(run.CollectionsReviewRunId, spec with { ValidationStatus = ReviewValidationStatus.Excluded }, null, stale, max, ct, units);
+        // Never call a unit twice on one day: a unit that already has a live or sent dispatch TODAY (for another reminder type) is held back from a manual send of this one.
+        var everything = new ReviewQuerySpec(null, null, null, null, null, null, null, null, null, null, null, null, null);
+        var sent = await store.ResolveAsync(run.CollectionsReviewRunId, everything with { ValidationStatus = ReviewValidationStatus.AlreadySent }, null, stale, max, ct, units);
+        var today = clock.BusinessDate;
+        var sentToday = sent.Where(v => v.PreviousDispatchAtUtc is { } at && clock.ToBusinessDate(at) == today)
+            .Select(v => UnitKey(v.Record.CompanyId, v.Record.TenantId, v.Record.UnitCode)).ToHashSet(StringComparer.Ordinal);
+        if (sentToday.Count > 0) outside = outside.Where(v => !sentToday.Contains(UnitKey(v.Record.CompanyId, v.Record.TenantId, v.Record.UnitCode))).ToList();
+        return [.. ready, .. outside];
+    }
+
+    /// <summary>
+    /// A record that the schedule alone keeps out and that Manual mode may send today. Every other check stays in force: it must be Excluded for exactly one reason (OutsideSchedule, so no
+    /// reconciliation, contact, CRM, amount, legal-release or repeated-call reason, including the Manual markers), of the chosen stage, in current data, and not already sent.
+    /// </summary>
+    private bool IsManualReady(ReviewRecordView v, bool stale, ReviewFilter? filter)
+    {
+        if (!CollectionsSendingModes.IsManual(filter?.SendingMode) || stale || v.AlreadySent) return false;
+        if (v.Record.ValidationStatus != ReviewValidationStatus.Excluded) return false;
+        var reasons = ReviewRecordBuilder.Parse(v.Record.Reasons);
+        return reasons.Count == 1 && reasons[0] == ReviewReasons.OutsideSchedule
+            && CollectionsEnums.TryParse<CampaignReminderType>(filter!.ReminderType, out var type) && v.Record.ReminderType == type;
     }
 
     public static string Fingerprint(IEnumerable<CollectionsReviewRecord> records)
