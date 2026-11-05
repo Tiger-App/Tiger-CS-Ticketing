@@ -96,6 +96,7 @@ public sealed class TicketsWorkspaceRenderTests : IDisposable
     [Theory]
     [InlineData("/Tickets", "Queue", "Tickets · Tiger Ticketing")]
     [InlineData("/Tickets?view=queue", "Queue", "Tickets · Tiger Ticketing")]
+    [InlineData("/Tickets?view=all", "All", "All &#xB7; Tickets · Tiger Ticketing")]
     [InlineData("/Tickets?view=pending", "Pending Interactions", "Pending Interactions &#xB7; Tickets · Tiger Ticketing")]
     [InlineData("/Tickets?view=my", "My Tickets", "My Tickets &#xB7; Tickets · Tiger Ticketing")]
     [InlineData("/Tickets?view=closed", "Closed", "Closed &#xB7; Tickets · Tiger Ticketing")]
@@ -108,8 +109,8 @@ public sealed class TicketsWorkspaceRenderTests : IDisposable
         Assert.Contains("<h1 class=\"page-title\">Tickets</h1>", html, StringComparison.Ordinal);
         Assert.Contains("+ New Ticket", html, StringComparison.Ordinal);
 
-        // Four tabs, exactly one selected, each with its own count.
-        Assert.Equal(4, Count(html, "class=\"view-tabs__link"));
+        // Five tabs (Queue, All, Pending Interactions, My Tickets, Closed), exactly one selected, each with its own count.
+        Assert.Equal(5, Count(html, "class=\"view-tabs__link"));
         Assert.Equal(1, Count(html, "class=\"view-tabs__link is-active\""));
         var activeStart = html.IndexOf("class=\"view-tabs__link is-active\"", StringComparison.Ordinal);
         var activeTab = html[activeStart..html.IndexOf("</a>", activeStart, StringComparison.Ordinal)];

@@ -60,6 +60,11 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
             filtered = filtered.Where(t => t.TicketStatus == ticketStatus);
         }
 
+        if (query.ExcludeClosed)
+        {
+            filtered = filtered.Where(t => t.TicketStatus != TicketStatus.Closed);
+        }
+
         if (query.VerificationStatus is { } verificationStatus)
         {
             filtered = filtered.Where(t => t.VerificationStatus == verificationStatus);
