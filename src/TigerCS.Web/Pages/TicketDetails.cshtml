@@ -601,33 +601,65 @@ else
                         @TicketIcons.Svg("users", "ic ic--fact")
                         <div class="tw-fact__body">
                             <span class="tw-fact__k">Assigned To</span>
+                            <div class="tw-owner__row">
                             <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
                             @if (Model.CanAssignInCollections && !isClosed)
                             {
-                                <details class="tw-assign" data-collections-assign data-post-url="@Url.Page("TicketDetails", "CollectionsAssign", new { id = t.TicketId })">
-                                    <summary class="btn btn-sm">@(t.CurrentOwnerEmployeeId is null ? "Assign" : "Reassign")</summary>
-                                    <form method="post" asp-page-handler="CollectionsAssign" asp-route-id="@t.TicketId" class="tw-assign__panel">
-                                        <input type="hidden" asp-for="CollectionsAssign.RowVersionBase64" data-assign-rowversion />
-                                        <p class="tw-assign__current">Current: <strong data-assign-current>@(t.CurrentOwnerEmployeeId is null ? "No one assigned" : Model.OwnerName ?? "Assigned")</strong></p>
-                                        <input type="search" class="field-input" placeholder="Search Collections team" autocomplete="off" aria-label="Search Collections team" data-assign-search />
-                                        <select class="field-select" asp-for="CollectionsAssign.EmployeeId" size="6" aria-label="Collections team member" data-assign-select>
-                                            @foreach (var member in Model.AssignableEmployees.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase))
-                                            {
-                                                <option value="@member.EmployeeId" selected="@(member.EmployeeId == t.CurrentOwnerEmployeeId)" disabled="@(member.EmployeeId == t.CurrentOwnerEmployeeId)">@member.DisplayName@(member.EmployeeId == t.CurrentOwnerEmployeeId ? " (current)" : "")</option>
-                                            }
-                                        </select>
-                                        @if (Model.AssignableEmployees.Count == 0)
-                                        {
-                                            <span class="field-hint">@(Model.AssignableEmployeesOutcome == ApiOutcome.Success ? "No active members found in Collections." : "The Collections team could not be loaded. Reload the page.")</span>
-                                        }
-                                        <input type="text" class="field-input" asp-for="CollectionsAssign.Reason" maxlength="500" placeholder="Reason (optional)" autocomplete="off" aria-label="Reason (optional)" />
-                                        <div class="tw-assign__buttons">
-                                            <button type="submit" class="btn btn-gold btn-sm">Save</button>
-                                            <span class="tw-assign__status" role="status" data-assign-status></span>
-                                        </div>
-                                    </form>
-                                </details>
+                                @* Assign / Reassign: one blue button beside the name opens a centred modal (a native <dialog>: focus trap, Escape, dimmed backdrop).
+                                   The list is exactly the members the page already loaded for this viewer; the post is the unchanged CollectionsAssign handler, so the
+                                   Api still decides who may assign whom and writes the same history. *@
+                                var hasOwner = t.CurrentOwnerEmployeeId is not null;
+                                var ownerLabel = hasOwner ? Model.OwnerName ?? "Assigned" : "No one assigned";
+                                <div class="tw-assign" data-collections-assign data-post-url="@Url.Page("TicketDetails", "CollectionsAssign", new { id = t.TicketId })">
+                                    <button type="button" class="btn-reassign" data-assign-open aria-haspopup="dialog">@TicketIcons.Svg("user-round-cog", "ic ic--btn")<span data-assign-open-label>@(hasOwner ? "Reassign" : "Assign")</span></button>
+                                    <dialog class="reassign-modal" data-assign-dialog aria-labelledby="reassign-title">
+                                        <form method="post" asp-page-handler="CollectionsAssign" asp-route-id="@t.TicketId" class="reassign-modal__form" novalidate>
+                                            <input type="hidden" asp-for="CollectionsAssign.RowVersionBase64" data-assign-rowversion />
+                                            <div class="reassign-modal__head">
+                                                <h2 class="reassign-modal__title" id="reassign-title" data-assign-title>@(hasOwner ? "Reassign ticket" : "Assign ticket")</h2>
+                                                <button type="button" class="reassign-modal__close" data-assign-cancel aria-label="Close">@TicketIcons.Svg("close")</button>
+                                            </div>
+                                            <div class="reassign-modal__body">
+                                                <dl class="reassign-modal__facts">
+                                                    <div><dt>Ticket</dt><dd>@t.TicketNumber</dd></div>
+                                                    <div><dt>Currently assigned to</dt><dd data-assign-current>@ownerLabel</dd></div>
+                                                </dl>
+                                                <div class="field-group">
+                                                    <label class="field-label" for="reassign-search">Assign to</label>
+                                                    <input type="search" id="reassign-search" class="field-input" placeholder="Search Collections team" autocomplete="off" aria-label="Search Collections team" data-assign-search />
+                                                    <div class="reassign-list" role="radiogroup" aria-label="Collections team member" data-assign-list>
+                                                        @foreach (var member in Model.AssignableEmployees.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase))
+                                                        {
+                                                            var isCurrent = member.EmployeeId == t.CurrentOwnerEmployeeId;
+                                                            <label class="reassign-option@(isCurrent ? " is-current" : "")">
+                                                                <input type="radio" name="CollectionsAssign.EmployeeId" value="@member.EmployeeId" disabled="@isCurrent" data-assign-option />
+                                                                <span class="reassign-option__name">@member.DisplayName</span>
+                                                                @if (isCurrent) { <span class="reassign-option__tag">Current</span> }
+                                                            </label>
+                                                        }
+                                                        <p class="reassign-list__empty" data-assign-nomatch hidden>No team member matches your search.</p>
+                                                    </div>
+                                                    @if (Model.AssignableEmployees.Count == 0)
+                                                    {
+                                                        <span class="field-hint">@(Model.AssignableEmployeesOutcome == ApiOutcome.Success ? "No active members found in Collections." : "The Collections team could not be loaded. Reload the page.")</span>
+                                                    }
+                                                    <p class="reassign-selected" data-assign-selected aria-live="polite">No one selected</p>
+                                                </div>
+                                                <div class="field-group">
+                                                    <label class="field-label" for="reassign-reason">Reason <span class="text-secondary">(optional)</span></label>
+                                                    <textarea id="reassign-reason" class="form-control" asp-for="CollectionsAssign.Reason" rows="2" maxlength="500" placeholder="Why is this ticket changing hands?"></textarea>
+                                                </div>
+                                                <p class="reassign-modal__status" role="status" data-assign-status></p>
+                                            </div>
+                                            <div class="reassign-modal__foot">
+                                                <button type="button" class="btn-reassign-cancel" data-assign-cancel>Cancel</button>
+                                                <button type="submit" class="btn-reassign" data-assign-submit disabled><span class="btn-spinner" aria-hidden="true"></span><span data-assign-submit-label>@(hasOwner ? "Reassign" : "Assign")</span></button>
+                                            </div>
+                                        </form>
+                                    </dialog>
+                                </div>
                             }
+                            </div>
                             <span class="tw-fact__sub"><span class="visually-hidden">Assigned Department: </span>@TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
                         </div>
                     </div>
