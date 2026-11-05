@@ -37,14 +37,17 @@ public sealed class CollectionsCampaignFilterFirstTests
         var html = await Get(client, "/Collections/Campaigns");
         var main = Between(html, "campaign-filters__main", "campaign-filters__footer");
         var labels = Regex.Matches(main, "<label class=\"field-label\"[^>]*>(.*?)</label>").Select(m => m.Groups[1].Value).ToList();
-        Assert.Equal(["Campaign stage", "Sending mode", "Project / Tower", "Payment status", "Period"], labels);
-        foreach (var option in new[] { ">Up to today<", ">This month<", ">Last 6 months<", ">Custom range<" }) Assert.Contains(option, main);
-        Assert.DoesNotContain("name=\"businessDate\"", main); Assert.DoesNotContain("name=\"dateFrom\"", main); Assert.DoesNotContain("name=\"minTotal\"", main);
+        Assert.Equal(["Campaign stage", "Project / Tower"], labels);                                          // plus the Manual / Auto toggle and Preview Customers; everything else is under More filters
+        Assert.Contains("name=\"sendingMode\" value=\"Manual\"", main); Assert.Contains("name=\"sendingMode\" value=\"Auto\"", main); Assert.Contains("data-preview-button", main);
+        foreach (var name in new[] { "businessDate", "dateFrom", "dateTo", "minTotal", "paymentStatus" }) Assert.DoesNotContain($"name=\"{name}\"", main);
+        Assert.DoesNotContain("data-period", main);
 
         var details = Regex.Match(html, "<details[^>]*data-advanced-filters[^>]*>.*?</details>", RegexOptions.Singleline).Value;
         Assert.DoesNotContain(" open", Regex.Match(details, "<details[^>]*>").Value);                       // collapsed while everything is at its default
-        foreach (var name in new[] { "businessDate", "dateFrom", "dateTo", "minTotal" }) Assert.Contains($"name=\"{name}\"", details);
-        Assert.Contains("Preview date", details); Assert.Contains("Minimum Total (AED)", details);
+        foreach (var name in new[] { "businessDate", "dateFrom", "dateTo", "minTotal", "paymentStatus" }) Assert.Contains($"name=\"{name}\"", details);
+        foreach (var option in new[] { ">Up to today<", ">This month<", ">Last 6 months<", ">Custom range<" }) Assert.Contains(option, details);
+        Assert.Contains("data-period", details); Assert.Contains(">More filters<", details);
+        Assert.Contains("Preview date", details); Assert.Contains("Minimum Total (AED)", details); Assert.Contains("Payment status", details);
         Assert.Contains("form=\"campaignFilters\"", html);                                                  // search stays next to the results
         Assert.True(html.IndexOf("id=\"campaignSearch\"", StringComparison.Ordinal) > html.IndexOf("</form>", StringComparison.Ordinal));
     }
@@ -53,6 +56,7 @@ public sealed class CollectionsCampaignFilterFirstTests
     [InlineData("minTotal=250")]
     [InlineData("businessDate=2026-10-14")]
     [InlineData("dateFrom=2026-03-05&dateTo=2026-04-09")]
+    [InlineData("paymentStatus=Overdue")]
     public async Task AdvancedFilters_OpenWhenOneHoldsANonDefaultValue_SoAnAppliedFilterIsNeverHidden(string query)
     {
         var api = new FakeCollectionsApi();
