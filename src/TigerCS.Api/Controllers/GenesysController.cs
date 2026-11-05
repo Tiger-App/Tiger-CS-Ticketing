@@ -1,6 +1,7 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
 using TigerCS.Application.Modules.GenesysIntegration.Services;
@@ -46,7 +47,8 @@ public class GenesysController(
     GenesysCustomerLookupAppService customerLookupAppService,
     GenesysCustomerUnitDetailsAppService unitDetailsAppService,
     GenesysAgentContextAppService agentContextAppService,
-    GenesysScreenPopAppService screenPopAppService) : ControllerBase
+    GenesysScreenPopAppService screenPopAppService,
+    ILogger<GenesysController> logger) : ControllerBase
 {
     /// <summary>Stable, machine-readable error codes for the agent identity mapping — carried as the <c>code</c> member of the standard ProblemDetails body.</summary>
     public static class ErrorCodes
@@ -200,6 +202,40 @@ public class GenesysController(
         };
     }
 
+    /// <summary>
+    /// One log line per <c>PATCH /api/genesys/tickets/{id}</c>, so a rejected or IGNORED update is visible: TigerCS otherwise stores nothing for either (a body whose
+    /// parts are all unrecognised, e.g. <c>endedAtUtc</c> at the top level instead of inside <c>ended</c>, is answered 200 and changes nothing). Logs the ticket id, the
+    /// conversation id, the outcome and WHICH parts were present - never the body, a transcript, a name, a phone number or a token.
+    /// </summary>
+    private void LogTicketUpdate(long ticketId, GenesysTicketUpdateRequest request, GenesysTicketUpdateResult result)
+    {
+        var hasRecognisedPart =
+            request.Ended is not null || request.Handoff is not null || request.Routing is not null || request.CustomerConfirmation is not null
+            || request.RequestType is not null || request.Transcript is { Count: > 0 } || request.AwaitingCustomerReply is not null
+            || request.CustomerActive is not null || request.ClosedByAi is not null || request.HumanFollowUpRequired is not null
+            || request.StartedAtUtc is not null || !string.IsNullOrWhiteSpace(request.AgentId) || !string.IsNullOrWhiteSpace(request.AgentName);
+
+        if (result.Outcome != GenesysTicketUpdateOutcome.Applied)
+        {
+            logger.LogWarning(
+                "Genesys ticket update REJECTED: ticket {TicketId}, conversation {ConversationId}, outcome {Outcome}; parts: ended={HasEnded}, routing={HasRouting}, handoff={HasHandoff}.",
+                ticketId, request.ConversationId, result.Outcome, request.Ended is not null, request.Routing is not null, request.Handoff is not null);
+        }
+        else if (!hasRecognisedPart)
+        {
+            logger.LogWarning(
+                "Genesys ticket update IGNORED: ticket {TicketId}, conversation {ConversationId} carried no recognised part (ended, routing, handoff, transcript, ...); nothing was changed. Check the body shape.",
+                ticketId, request.ConversationId);
+        }
+        else
+        {
+            logger.LogInformation(
+                "Genesys ticket update applied: ticket {TicketId}, conversation {ConversationId}; parts: ended={HasEnded}, routing={HasRouting}, handoff={HasHandoff}, transcript={TranscriptCount}; conversationEnded={ConversationEnded}.",
+                ticketId, request.ConversationId, request.Ended is not null, request.Routing is not null, request.Handoff is not null,
+                (request.Transcript?.Count ?? 0) + (request.Ended?.Transcript?.Count ?? 0), result.ConversationEnded);
+        }
+    }
+
     /// <summary>Update the Genesys-owned side of a ticket: agent context, conversation end and transcript, and human-handoff state.</summary>
     /// <remarks>
     /// The one update contract. Every part of the body is optional and
@@ -257,6 +293,8 @@ public class GenesysController(
 
         var result = await ticketUpdateAppService.UpdateAsync(
             employeeId.Value, ticketId, GenesysContractMapper.Map(request), cancellationToken);
+
+        LogTicketUpdate(ticketId, request, result);
 
         return result.Outcome switch
         {
