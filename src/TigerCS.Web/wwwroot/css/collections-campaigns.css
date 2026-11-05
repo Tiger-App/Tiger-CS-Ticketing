@@ -107,3 +107,11 @@
     .campaign-card__value { font-size: 20px; }
     .campaign-actions .btn, .campaign-approve__actions .btn { min-height: 40px; }
 }
+
+.campaign-date-slot { display: contents; }
+.campaign-mode-hints { margin-top: var(--space-3); }
+.campaign-card--preview { border-color: var(--color-info, #2563eb); }
+.campaign-row-state { display: inline-block; margin-right: var(--space-2); padding: 0 var(--space-2); border-radius: 999px; font-size: var(--font-size-xs, 0.75rem); border: 1px solid var(--color-border); }
+.campaign-row-state--ready { border-color: var(--color-success, #15803d); }
+.campaign-row-state--needsreview, .campaign-row-state--internalreview { border-color: var(--color-warning, #b45309); }
+.campaign-row-state--previewonly { border-color: var(--color-info, #2563eb); }

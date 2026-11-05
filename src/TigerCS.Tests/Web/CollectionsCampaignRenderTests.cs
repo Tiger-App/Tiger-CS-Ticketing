@@ -45,13 +45,13 @@ public sealed class CollectionsCampaignRenderTests
         Assert.Equal(["Customer", "Mobile", "Email", "Project / Tower", "Unit", "Due", "Overdue", "Total"], headers);
         var cells = Regex.Matches(Regex.Match(html, "<tbody>.*?</tbody>", RegexOptions.Singleline).Value, "<td[^>]*>(.*?)</td>", RegexOptions.Singleline)
             .Select(m => System.Net.WebUtility.HtmlDecode(Regex.Replace(m.Groups[1].Value, "<[^>]+>", "")).Trim()).Skip(1).ToList();
-        Assert.Equal(["Campaign Customer", "+971500003001", "— No email: email not possible", "Al Ghaf", "TP140-101", "—", "650.00", "650.00"], cells);   // no email -> a dash and the short reason; zero Due -> a dash; Total = Due + Overdue
+        Assert.Equal(["Campaign CustomerBlocked", "+971500003001", "— No email: email not possible", "Al Ghaf", "TP140-101", "—", "650.00", "650.00"], cells);   // no email -> a dash and the short reason; zero Due -> a dash; Total = Due + Overdue
         Assert.Contains("Export review CSV", html);
         Assert.DoesNotContain("Export Genesys CSV", html);
         // Eligible customers and the total qualifying amount, and the exact Genesys campaign name the stage will use.
         Assert.Contains("data-eligible-count", html); Assert.Contains("data-eligible-total", html);
         Assert.Contains("data-campaign-name>Current month reminder - day 14<", html);
-        foreach (var gone in new[] { "Earliest unpaid due date", "Qualifying balance", "Financial source reconciliation", "Data details", "Scheduled:", "Data refreshed", "campaign-summary", "Source:", "Preview only" })
+        foreach (var gone in new[] { "Earliest unpaid due date", "Qualifying balance", "Financial source reconciliation", "Data details", "Scheduled:", "Data refreshed", "campaign-summary", "Source:" })
             Assert.DoesNotContain(gone, html);
         // Export links carry exactly the previewed filters (incl. the minimum), so the file matches the list.
         Assert.Contains("handler=Export", html); Assert.Contains("minTotal=250.5", html); Assert.Contains("towerId=7", html); Assert.Contains("dateFrom=2026-10-01", html);

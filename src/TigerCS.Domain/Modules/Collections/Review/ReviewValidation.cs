@@ -8,7 +8,7 @@ public enum ReviewValidationStatus
     AlreadySent = 4
 }
 
-public enum ReasonKind { NeedsReview = 1, Exclusion = 2, Warning = 3 }
+public enum ReasonKind { NeedsReview = 1, Exclusion = 2, Warning = 3, ManualOnly = 4 }
 
 public sealed record ReviewReasonInfo(string Code, ReasonKind Kind, string Explanation);
 
@@ -33,6 +33,12 @@ public static class ReviewReasons
     public const string ContradictoryPaymentStatus = "ContradictoryPaymentStatus";
     public const string CurrencyNeedsReview = "CurrencyNeedsReview";
     public const string OutsideSchedule = "OutsideSchedule";
+    /// <summary>
+    /// Markers stored on an outside-schedule record. They change nothing in Auto mode (the record is outside the schedule either way); in Manual mode they hold the record back
+    /// because sending it on the manual date would call the same unit twice, or the same number for two units, on that day.
+    /// </summary>
+    public const string ManualReminderTypeOverlap = "ManualReminderTypeOverlap";
+    public const string ManualSharedPhone = "ManualSharedPhone";
     public const string LegalNoticeReleaseRequired = "LegalNoticeReleaseRequired";
     public const string LegalCaseNotApproved = "LegalCaseNotApproved";
     public const string SharedPhoneMultipleUnits = "SharedPhoneMultipleUnits";
@@ -58,7 +64,9 @@ public static class ReviewReasons
         new(ConflictingContactDetails, ReasonKind.NeedsReview, "The source rows for this unit carry different names, phones or emails."),
         new(ContradictoryPaymentStatus, ReasonKind.NeedsReview, "The source says Paid but still shows an amount remaining."),
         new(CurrencyNeedsReview, ReasonKind.NeedsReview, "The currency is not AED; amounts cannot be added or sent until reviewed."),
-        new(OutsideSchedule, ReasonKind.Exclusion, "Today is not a scheduled send day for this reminder type."),
+        new(OutsideSchedule, ReasonKind.Exclusion, "Today is not a scheduled send day for this reminder type. In Manual mode an authorized person can still send it today."),
+        new(ManualReminderTypeOverlap, ReasonKind.ManualOnly, "Manual sending is held back: this unit already qualifies for another reminder type that is scheduled today, so it would be called twice."),
+        new(ManualSharedPhone, ReasonKind.ManualOnly, "Manual sending is held back: the same phone number is on several units that would be sent today, so it would be called once per record."),
         new(LegalNoticeReleaseRequired, ReasonKind.Exclusion, "Sending legal notices to customers has not been released (needs an approved legal workflow)."),
         new(LegalCaseNotApproved, ReasonKind.Exclusion, "Legal Case records are internal Legal referrals; calling customers for them needs an explicit business decision."),
         new(SourceAmountsInconsistent, ReasonKind.NeedsReview, "The source's original amount, paid amount and remaining amount do not add up (original must equal paid plus remaining)."),

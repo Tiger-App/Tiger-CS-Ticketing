@@ -17,12 +17,16 @@ const PAGE = `<!doctype html><html><body>
   <select id="campaignTower" name="towerId" data-tower-select><option value="" selected>All</option><option value="7">T7</option></select>
   <select id="campaignPayment" name="paymentStatus" data-payment-status><option value="Both" selected>Both</option><option value="Overdue">Overdue</option></select>
   <select id="campaignPeriod" data-period data-today="2026-10-21"><option value="UpToToday" selected>Up to today</option><option value="ThisMonth">This month</option><option value="LastSixMonths">Last 6 months</option><option value="Custom">Custom</option></select>
-  <details data-advanced-filters>
-    <input id="campaignDate" name="businessDate" type="date" data-campaign-date value="" />
+  <select id="campaignMode" name="sendingMode" data-sending-mode><option value="Manual">Manual</option><option value="Auto" selected>Auto</option></select>
+  <div class="campaign-date-slot" data-date-slot></div>
+  <p data-mode-hint="Manual" hidden>manual hint</p><p data-mode-hint="Auto">auto hint</p>
+  <details data-advanced-filters><div class="campaign-advanced__grid">
+    <div class="field-group" data-date-group><label for="campaignDate" data-date-label>Preview date</label>
+    <input id="campaignDate" name="businessDate" type="date" data-campaign-date value="" /></div>
     <input id="campaignFrom" name="dateFrom" type="date" data-date-from value="" />
     <input id="campaignTo" name="dateTo" type="date" data-date-to value="2026-10-21" />
     <input id="campaignMin" name="minTotal" type="number" value="100" />
-  </details>
+  </div></details>
   <span class="receivables-loading" hidden></span><span class="receivables-timeout" hidden></span>
   <button type="submit" name="render" value="full" data-preview-button>Preview Customers</button>
 </form>
@@ -157,4 +161,31 @@ test('filters edited while customers are loading do not leave the old customers 
     ctx.change(ctx.q('#campaignStage'), 'LegalNotice');
     release(); await ctx.tick(); await ctx.tick();
     assert.equal(ctx.q('.campaign-select'), null); assert.ok(ctx.q('[data-results-stale]'));
+});
+
+test('Manual mode moves the one date input beside the mode as "Send date"; Auto puts it back as "Preview date"', async () => {
+    const { q, change, document } = await boot();
+    const date = q('#campaignDate');
+    assert.ok(q('[data-advanced-filters] [data-date-group]'), 'Auto: the date lives in Advanced filters');
+    change(q('#campaignMode'), 'Manual');
+    assert.ok(q('[data-date-slot] [data-date-group]'), 'Manual: the date picker moves next to the mode');
+    assert.equal(q('[data-date-label]').textContent, 'Send date');
+    assert.equal(date.value, '2026-10-21', 'defaults to today when empty');
+    assert.equal(q('[data-mode-hint="Manual"]').hidden, false); assert.equal(q('[data-mode-hint="Auto"]').hidden, true);
+    date.value = '2026-10-25';
+    change(q('#campaignMode'), 'Auto');
+    assert.ok(q('[data-advanced-filters] [data-date-group]')); assert.equal(q('[data-date-label]').textContent, 'Preview date');
+    assert.equal(date.value, '2026-10-25', 'the chosen date is kept, never duplicated');
+    assert.equal(document.querySelectorAll('input[name="businessDate"]').length, 1, 'exactly one businessDate is ever submitted');
+    assert.equal(q('[data-mode-hint="Auto"]').hidden, false); assert.equal(q('[data-mode-hint="Manual"]').hidden, true);
+});
+
+test('changing the sending mode after a preview clears the customers and the ticks like any filter', async () => {
+    const { q, preview, change } = await boot();
+    await preview();
+    assert.ok(q('[data-customer-results]'));
+    change(q('#campaignMode'), 'Manual');
+    assert.equal(q('[data-customer-results]'), null); assert.ok(q('[data-results-stale]'));
+    await preview();
+    assert.ok(q('[data-customer-results]'), 'Preview Customers loads the list for the new mode');
 });

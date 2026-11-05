@@ -8,7 +8,8 @@ public sealed record ReviewFilter(
     int? Year = null, int? Month = null, DateOnly? DueFrom = null, DateOnly? DueTo = null,
     string? PaymentStatus = null, decimal? MinRemaining = null, decimal? MaxRemaining = null,
     string? ReminderType = null, string? ValidationStatus = null, string? Reason = null,
-    string? DueStatus = null, int? TowerId = null, IReadOnlyList<int>? TowerIds = null);
+    string? DueStatus = null, int? TowerId = null, IReadOnlyList<int>? TowerIds = null,
+    string? SendingMode = null, DateOnly? SendDate = null);
 
 /// <summary>
 /// The normalized, validated filter the store understands. <see cref="PaymentStatuses"/> is null for "All".
