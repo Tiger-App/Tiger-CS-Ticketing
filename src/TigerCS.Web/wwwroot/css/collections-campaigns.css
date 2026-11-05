@@ -1,117 +1,142 @@
-.campaign-summary {
-    padding: var(--space-5);
-    border-bottom: 1px solid var(--color-border);
-    font-size: var(--text-sm);
-    line-height: 1.6;
-}
-.campaign-summary p { margin: 0 0 var(--space-3); }
-.campaign-summary p:last-child { margin: var(--space-3) 0 0; color: var(--color-text-secondary); }
-.campaign-summary .btn { margin-right: var(--space-2); }
-.campaign-summary [role="status"] { color: var(--color-text-secondary); }
+/* Collections Campaigns: one compact control bar, a slim snapshot strip, four KPI cards and ONE results section (search, actions, table).
+   Uses the TigerCS tokens only (neutral surfaces, the gold accent for the selected state, semantic colours only for state). */
 .receivables-workspace .receivables-table td:last-child { max-width: 340px; }
-
-/* Campaigns preview totals and the Review & approve snapshot */
-.campaign-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); align-items: stretch; gap: var(--space-3); margin: 0; padding: 0; list-style: none; }
 .review-snapshot { display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; margin: 0.5rem 0 1rem; }
 .review-snapshot dt { font-weight: 600; }
 .review-snapshot dd { margin: 0; }
 
-/* Filter-first layout: four main filters on one row (two rows when narrow), the less-used ones collapsed under Advanced filters */
-.campaign-filters { display: flex; flex-direction: column; gap: var(--space-4); padding: var(--space-4) var(--space-5); margin-bottom: var(--space-4); }
-.campaign-filters__main { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); }
-.campaign-filters .field-group { min-width: 0; }
+/* ---- Control bar: stage | Manual/Auto | send date or schedule | project / tower | Preview Customers */
+.campaign-filters { display: flex; flex-direction: column; gap: var(--space-2); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-3); }
+.campaign-filters__main { display: grid; grid-template-columns: minmax(180px, 1.2fr) auto minmax(150px, 0.9fr) minmax(200px, 1.4fr) auto; align-items: end; gap: var(--space-3); }
+.campaign-filters .field-group { min-width: 0; margin: 0; }
+.campaign-filters .field-label { margin-bottom: 3px; }
 .campaign-filters .field-select, .campaign-filters .field-input { width: 100%; min-width: 0; }
-.campaign-filters__footer { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); flex-wrap: wrap; }
-.campaign-filters__actions { display: flex; align-items: center; gap: var(--space-3); margin-left: auto; }
-.campaign-advanced { flex: 1 1 360px; min-width: 0; }
-.campaign-advanced > summary { cursor: pointer; display: inline-flex; align-items: center; min-height: 38px; font-size: var(--text-sm); font-weight: 600; color: var(--color-text-secondary); }
+.campaign-filters__actions { display: flex; align-items: center; }
+.campaign-date-slot { display: flex; align-items: end; min-width: 0; min-height: 36px; }
+.campaign-date-slot [data-date-group] { flex: 1; }
+.campaign-schedule { display: inline-flex; align-items: center; min-height: 36px; padding: 0 var(--space-2); font-size: var(--text-xs); color: var(--color-text-secondary); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.campaign-schedule[hidden] { display: none; }
+
+/* Manual / Auto segmented toggle (the selected side takes the gold accent, like the other selected states) */
+.segmented { display: inline-flex; height: 36px; padding: 2px; gap: 2px; border: 1px solid var(--color-border-strong, var(--color-border)); border-radius: var(--radius-sm); background: var(--color-bg); }
+.segmented__option { position: relative; display: inline-flex; margin: 0; cursor: pointer; }
+.segmented__option input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.segmented__option span { display: inline-flex; align-items: center; padding: 0 var(--space-3); border-radius: 5px; font-size: var(--text-sm); font-weight: 600; color: var(--color-text-secondary); transition: background .12s, color .12s; }
+.segmented__option:hover span { color: var(--color-text); }
+.segmented__option input:checked + span { background: var(--tiger-gold-tint); box-shadow: inset 0 0 0 1px var(--tiger-gold-line); color: var(--color-text); }
+.segmented__option input:focus-visible + span { outline: 2px solid var(--color-accent-ink, var(--color-info)); outline-offset: 1px; }
+
+/* More filters */
+.campaign-filters__footer { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.campaign-advanced { flex: 1 1 100%; min-width: 0; }
+.campaign-advanced > summary { list-style: none; cursor: pointer; display: inline-flex; align-items: center; min-height: 28px; font-size: var(--text-xs); font-weight: 600; color: var(--color-text-secondary); }
 .campaign-advanced > summary:hover { color: var(--color-text); }
-.campaign-advanced__grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-4); margin-top: var(--space-3); padding-top: var(--space-3); border-top: 1px solid var(--color-border); }
-
-.campaign-snapshot { padding: var(--space-3) var(--space-5); margin-bottom: var(--space-4); }
-.campaign-snapshot__title { margin: 0 0 var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--color-text-secondary); }
-.campaign-snapshot p { margin: 0; }
-.campaign-snapshot__idle { display: flex; align-items: center; gap: var(--space-1); }
-
-.campaign-search { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-3); }
-.campaign-search .field-label { margin: 0; white-space: nowrap; }
-.campaign-search .field-input { flex: 1 1 auto; max-width: 480px; min-width: 0; }
-
-.campaign-idle { padding: var(--space-6) var(--space-5); text-align: center; }
-.campaign-idle p { margin: 0 0 var(--space-2); }
-.campaign-approve [data-approve-button][disabled] { cursor: not-allowed; }
-
-@media (max-width: 1024px) {
-    .campaign-filters__main, .campaign-advanced__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@media (max-width: 640px) {
-    .campaign-filters { padding: var(--space-4); }
-    .campaign-filters__main, .campaign-advanced__grid { grid-template-columns: minmax(0, 1fr); }
-    .campaign-filters__actions { width: 100%; margin-left: 0; }
-    .campaign-filters__actions .btn { flex: 1; }
-    .campaign-search { flex-direction: column; align-items: stretch; }
-    .campaign-search .field-input { max-width: none; }
-}
-
-.campaign-advanced > summary { list-style: none; }
 .campaign-advanced > summary::before { content: "▸"; display: inline-block; width: 1em; transition: transform .15s; }
 .campaign-advanced[open] > summary::before { transform: rotate(90deg); }
 .campaign-advanced > summary::-webkit-details-marker { display: none; }
-.campaign-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: 0 0 var(--space-3); }
+.campaign-advanced__grid { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-3); margin-top: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--color-border); }
+.campaign-filters__footer .receivables-loading, .campaign-filters__footer .receivables-timeout { margin: 0; font-size: var(--text-xs); }
+
+/* ---- Snapshot strip */
+.campaign-snapshot { margin-bottom: var(--space-3); }
+.campaign-snapshot p { margin: 0; }
+.campaign-snapshot__idle { display: flex; align-items: center; gap: var(--space-1); }
+
+/* ---- KPI cards + notes */
+.campaign-kpi-box:empty { display: none; }
+.campaign-kpis { margin-bottom: var(--space-3); }
+.campaign-totals { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr)); align-items: stretch; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.campaign-card { display: flex; flex-direction: column; justify-content: space-between; min-width: 0; padding: var(--space-2) var(--space-3); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); }
+.campaign-card__label { display: block; font-size: var(--text-xs); color: var(--color-text-secondary); }
+.campaign-card__value { margin-top: auto; font-size: 20px; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.campaign-card__sub { display: block; font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+.campaign-card--ready { border-left: 3px solid var(--color-success, #15803d); }
+.campaign-card--blocked { border-left: 3px solid var(--color-warning, #b45309); }
+.campaign-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-4); margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--color-text-secondary); }
+.campaign-meta strong { color: var(--color-text); font-weight: 600; }
+.campaign-meta em { font-style: normal; }
+.campaign-meta .info-tip { margin-left: 2px; }
+.campaign-kpis .receivables-notice { margin: var(--space-2) 0 0; padding: var(--space-2) var(--space-3); }
+
+/* Blocking reasons: a small panel that expands on demand */
+.campaign-blockers { margin: var(--space-2) 0 0; border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); font-size: var(--text-sm); }
+.campaign-blockers > summary { list-style: none; cursor: pointer; display: flex; align-items: center; gap: var(--space-2); min-height: 32px; padding: 0 var(--space-3); font-size: var(--text-xs); font-weight: 600; color: var(--color-text-secondary); }
+.campaign-blockers > summary::-webkit-details-marker { display: none; }
+.campaign-blockers > summary::before { content: "▸"; width: 1em; transition: transform .15s; }
+.campaign-blockers[open] > summary::before { transform: rotate(90deg); }
+.campaign-blockers__count { display: inline-flex; align-items: center; justify-content: center; min-width: 20px; height: 18px; padding: 0 6px; border-radius: 999px; background: var(--color-bg); border: 1px solid var(--color-border); font-size: var(--text-xs); }
+.campaign-blockers > .receivables-meta, .campaign-blockers__list { margin: 0; padding: 0 var(--space-3) var(--space-2) var(--space-6, 1.5rem); }
+.campaign-blockers > .receivables-meta { padding-left: var(--space-3); }
+.campaign-blockers__list li { margin: 0 0 var(--space-1); }
+
+/* ---- Results section: search, actions and the table in one panel */
+.campaign-results { padding: var(--space-3) var(--space-4); }
+.campaign-search { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-2); }
+.campaign-search .field-label { margin: 0; white-space: nowrap; }
+.campaign-search .field-input { flex: 1 1 auto; max-width: 440px; min-width: 0; }
+.campaign-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-2) var(--space-3); margin: 0 0 var(--space-2); padding: var(--space-2) 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
+.campaign-approve { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); margin: 0; }
+.campaign-approve__modes { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); font-size: var(--text-sm); }
+.campaign-approve__modes label { display: inline-flex; align-items: center; gap: 4px; margin: 0; cursor: pointer; }
+.campaign-approve__actions, .campaign-actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: 0; }
+.campaign-actions { margin-left: auto; }
+.campaign-approve [data-approve-button][disabled] { cursor: not-allowed; }
 /* A button with its Info icon (the reason it is disabled, or what it does): one unit that wraps together */
 .campaign-action { display: inline-flex; align-items: center; gap: var(--space-1); }
 .campaign-action .info-tip { margin-left: 0; }
-.campaign-approve { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-2); margin: 0; }
-.campaign-approve__modes { display: flex; flex-direction: column; gap: var(--space-1); }
-.campaign-approve__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2) var(--space-3); }
+.campaign-idle { margin: 0; padding: var(--space-4) 0; text-align: center; font-size: var(--text-sm); color: var(--color-text-secondary); }
+.campaign-fragment .table-scroll { margin: 0; }
+.campaign-fragment .receivables-pagination { margin-top: var(--space-2); }
 
-/* Review & approve summary: cards, details, blockers and actions are separate blocks */
-.campaign-section { margin: 0 0 var(--space-4); }
-.campaign-section__title { margin: 0 0 var(--space-2); font-size: var(--text-sm); font-weight: 600; color: var(--color-text-secondary); }
-/* Metric card: label + Info icon on top, the value pinned to the bottom, so cards in a row are the same height and their figures line up even when a label wraps */
-.campaign-card { display: flex; flex-direction: column; justify-content: space-between; min-width: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: 8px; gap: var(--space-2); }
-.campaign-card__label { display: block; font-size: var(--text-sm); color: var(--color-text-secondary); }
-.campaign-card__value { margin-top: auto; font-size: 22px; line-height: 1.2; overflow-wrap: anywhere; }
-.campaign-card--blocked { border-color: var(--color-warning, #b45309); }
-.campaign-details { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-6); margin: 0; padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border); border-radius: 8px; }
-.campaign-details > div { min-width: 0; }
-.campaign-details dt { font-size: var(--text-sm); color: var(--color-text-secondary); }
-.campaign-details dd { margin: 0; overflow-wrap: anywhere; }
-.campaign-blockers { margin: 0 0 var(--space-4); padding: var(--space-3) var(--space-4); border: 1px solid var(--color-warning, #b45309); border-left-width: 4px; border-radius: 8px; }
-.campaign-blockers__title { margin: 0 0 var(--space-1); font-size: var(--text-base, 1rem); }
-.campaign-blockers p { margin: 0 0 var(--space-2); }
-.campaign-blockers__list { margin: 0; padding-left: 1.25rem; }
-.campaign-blockers__list li { margin: 0 0 var(--space-1); }
-.campaign-blockers__more { margin-top: var(--space-1); }
-.campaign-blockers__more > summary { cursor: pointer; min-height: 32px; display: flex; align-items: center; font-size: var(--text-sm); font-weight: 600; color: var(--color-text-secondary); }
+.campaign-row-state { display: inline-block; margin-left: var(--space-2); padding: 0 var(--space-2); border-radius: 999px; font-size: var(--text-xs); font-weight: 400; color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+.campaign-row-state--ready { border-color: var(--color-success, #15803d); }
+.campaign-row-state--needsreview, .campaign-row-state--internalreview { border-color: var(--color-warning, #b45309); }
+.campaign-row-state--previewonly { border-color: var(--color-border-strong, var(--color-border)); }
 
-/* Snapshot status: three state chips, the reconciliation blocker always visible, load and CRM detail expandable */
-.campaign-status__row { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-3); margin: 0 0 var(--space-2); padding: 0; list-style: none; }
-.campaign-status__item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); padding: var(--space-2) var(--space-4); border: 1px solid var(--color-border); border-radius: 8px; min-width: 0; }
-.campaign-status__label { min-width: 0; font-size: var(--text-sm); color: var(--color-text-secondary); }
-.campaign-pill { display: inline-flex; align-items: center; gap: .35rem; padding: .1rem .6rem; border-radius: 999px; font-size: var(--text-sm); font-weight: 600; white-space: nowrap; }
-.campaign-pill::before { content: ""; width: .5rem; height: .5rem; border-radius: 50%; background: currentColor; }
+/* ---- Snapshot status chips */
+.campaign-status__row { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0 0 var(--space-1); padding: 0; list-style: none; }
+.campaign-status__item { display: inline-flex; align-items: center; gap: var(--space-2); padding: 2px var(--space-3); border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface); }
+.campaign-status__label { min-width: 0; font-size: var(--text-xs); color: var(--color-text-secondary); }
+.campaign-pill { display: inline-flex; align-items: center; gap: .35rem; padding: .05rem .5rem; border-radius: 999px; font-size: var(--text-xs); font-weight: 600; white-space: nowrap; }
+.campaign-pill::before { content: ""; width: .45rem; height: .45rem; border-radius: 50%; background: currentColor; }
 .campaign-pill--ready { background: #e6f4ea; color: #1e6b34; }
 .campaign-pill--loading { background: #e8f0fe; color: #1a4fa0; }
 .campaign-pill--warning { background: #fff8e5; color: #765623; }
 .campaign-pill--idle { background: var(--color-neutral-tint); color: var(--color-text-secondary); }
 .campaign-pill--failed { background: #fde8e8; color: #7a2323; }
-.campaign-status .receivables-notice { margin: 0 0 var(--space-2); padding: var(--space-2) var(--space-3); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); }
-.campaign-status__details { margin: 0 0 var(--space-2); }
-.campaign-status__details > summary { cursor: pointer; font-size: var(--text-sm); font-weight: 600; color: var(--color-text-secondary); min-height: 32px; }
+.campaign-status .receivables-notice { margin: 0 0 var(--space-1); padding: var(--space-2) var(--space-3); display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-3); }
+.campaign-status__details { margin: 0 0 var(--space-1); }
+.campaign-status__details > summary { cursor: pointer; font-size: var(--text-xs); font-weight: 600; color: var(--color-text-secondary); min-height: 28px; }
 .campaign-status__details .receivables-notice { margin-top: var(--space-2); }
-@media (max-width: 640px) {
-    .campaign-status__row { grid-template-columns: minmax(0, 1fr); }
-    .campaign-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-2); }
-    .campaign-card { padding: var(--space-3); }
-    .campaign-card__value { font-size: 20px; }
+
+/* ---- Responsive */
+@media (max-width: 1100px) {
+    .campaign-filters__main { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .campaign-filters__actions { grid-column: span 1; }
+    .campaign-advanced__grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+    .campaign-filters { padding: var(--space-3); }
+    .campaign-filters__main, .campaign-advanced__grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .campaign-filters__actions { grid-column: 1 / -1; }
+    .campaign-filters__actions .btn { flex: 1; min-height: 40px; }
+    .campaign-search { flex-direction: column; align-items: stretch; gap: var(--space-1); }
+    .campaign-search .field-input { max-width: none; }
+    .campaign-results { padding: var(--space-3); }
+    .campaign-toolbar { flex-direction: column; align-items: stretch; }
+    .campaign-actions { margin-left: 0; }
     .campaign-actions .btn, .campaign-approve__actions .btn { min-height: 40px; }
+    .campaign-totals { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .campaign-card__value { font-size: 18px; }
+}
+@media (max-width: 460px) {
+    .campaign-filters__main, .campaign-advanced__grid { grid-template-columns: minmax(0, 1fr); }
 }
 
-.campaign-date-slot { display: contents; }
-.campaign-mode-hints { margin-top: var(--space-3); }
-.campaign-card--preview { border-color: var(--color-info, #2563eb); }
-.campaign-row-state { display: inline-block; margin-right: var(--space-2); padding: 0 var(--space-2); border-radius: 999px; font-size: var(--font-size-xs, 0.75rem); border: 1px solid var(--color-border); }
-.campaign-row-state--ready { border-color: var(--color-success, #15803d); }
-.campaign-row-state--needsreview, .campaign-row-state--internalreview { border-color: var(--color-warning, #b45309); }
-.campaign-row-state--previewonly { border-color: var(--color-info, #2563eb); }
+/* The customer column keeps a readable width inside the horizontally scrollable table on narrow screens */
+.campaigns-table th:nth-child(2), .campaigns-table td:nth-child(2) { min-width: 190px; }
+.campaign-row-state { white-space: nowrap; }
+
+.row-select-disabled { cursor: not-allowed; opacity: .45; }
+.campaign-tally { font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.campaigns-table th input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .45; }

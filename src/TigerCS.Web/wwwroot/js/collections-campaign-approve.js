@@ -15,7 +15,12 @@
         const hidden = document.querySelector('[data-selected-units]');
         if (hidden) hidden.value = [...selected].join(',');
         const all = document.querySelector('[data-select-page]');
-        if (all) { const boxes = [...document.querySelectorAll('.campaign-select')]; all.checked = boxes.length > 0 && boxes.every(b => b.checked); }
+        if (all) {
+            // Only Ready customers have an enabled box; Select all covers exactly those and is disabled (server-side, with its reason) when there are none.
+            const boxes = [...document.querySelectorAll('.campaign-select:not(:disabled)')];
+            const ticked = boxes.filter(b => b.checked).length;
+            all.checked = boxes.length > 0 && ticked === boxes.length; all.indeterminate = ticked > 0 && ticked < boxes.length;
+        }
         if (form) {
             const button = form.querySelector('[data-approve-button]');
             const mode = form.querySelector('input[name="selectionMode"]:checked');
@@ -23,6 +28,13 @@
             const blocked = !!button && button.dataset.blocked === 'true';
             const nothingTicked = !!mode && mode.value === 'SelectedUnits' && selected.size === 0;
             if (button) button.disabled = blocked || nothingTicked || !mode;
+            // The selection stays visible next to Approve & Send (written only when it changes: sync() also runs from a MutationObserver).
+            const summary = form.querySelector('[data-selected-summary]');
+            if (summary && mode) {
+                const allCount = (form.querySelector('[data-all-count]') || {}).textContent || '0';
+                const text = mode.value === 'AllMatching' ? `All ${allCount} eligible` : `${selected.size} selected`;
+                if (summary.textContent !== text) summary.textContent = text;
+            }
             const reason = form.querySelector('[data-approve-reason]');
             if (reason) {
                 if (!reason.dataset.default) reason.dataset.default = reason.textContent;
@@ -36,7 +48,7 @@
     document.addEventListener('change', event => {
         const t = event.target;
         if (t.classList && t.classList.contains('campaign-select')) { t.checked ? selected.add(t.dataset.unitKey) : selected.delete(t.dataset.unitKey); save(selected); sync(); }
-        else if (t.matches && t.matches('[data-select-page]')) { document.querySelectorAll('.campaign-select').forEach(b => { b.checked = t.checked; t.checked ? selected.add(b.dataset.unitKey) : selected.delete(b.dataset.unitKey); }); save(selected); sync(); }
+        else if (t.matches && t.matches('[data-select-page]')) { document.querySelectorAll('.campaign-select:not(:disabled)').forEach(b => { b.checked = t.checked; t.checked ? selected.add(b.dataset.unitKey) : selected.delete(b.dataset.unitKey); }); save(selected); sync(); }
         else if (t.matches && t.matches('input[name="selectionMode"]')) sync();
     });
     document.addEventListener('click', event => {

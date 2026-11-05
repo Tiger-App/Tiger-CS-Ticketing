@@ -140,6 +140,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     {
         SendingMode = CollectionsSendingModes.TryParse(sendingMode, out var parsedMode) ? parsedMode : CollectionsSendingModes.Auto;
         PaymentStatus = CampaignPaymentFilters.TryParse(paymentStatus, out var payment) ? CampaignPaymentFilters.Name(payment) : paymentStatus!.Trim();
+        RequestedBusinessDate = date; RequestedDateTo = to;   // what the person asked for; BusinessDate / DateTo are later filled with the report's own defaults
         Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
         MinTotal = ReceivablesModel.ParseMinTotal(Request.Query);
         LoadNotice = CollectionsDisplay.NoticeText(load) is { Length: > 0 } text ? text : null;
@@ -177,7 +178,16 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     }
 
     /// <summary>The less-used controls stay collapsed unless one of them holds a non-default value, so an applied filter is never hidden.</summary>
-    public bool AdvancedOpen => Period == "Custom" || (BusinessDate is not null && !IsManual) || MinTotal != ReceivablesModel.DefaultMinTotal;
+    private DateOnly? RequestedBusinessDate { get; set; }
+    private DateOnly? RequestedDateTo { get; set; }
+
+    /// <summary>"More filters" opens only for a filter the person actually changed (never for the defaults a preview writes back), so an applied filter is never hidden.</summary>
+    public bool AdvancedOpen =>
+        DateFrom is not null
+        || (RequestedDateTo is { } requestedTo && requestedTo != (RequestedBusinessDate ?? CollectionsDisplay.DubaiToday()))
+        || !PaymentStatus.Equals("Both", StringComparison.OrdinalIgnoreCase)
+        || (RequestedBusinessDate is { } requestedDate && !IsManual && requestedDate != CollectionsDisplay.DubaiToday())
+        || MinTotal != ReceivablesModel.DefaultMinTotal;
 
     /// <summary>Environment settings that stop any send to Genesys (switched off, missing credentials or contact lists); empty when configured or when it could not be read.</summary>
     public IReadOnlyList<string> DispatchBlockers { get; private set; } = [];
@@ -260,13 +270,12 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
             _ => null
         };
 
-    /// <summary>Auto mode: the stage's calculated policy schedule for the month of the preview date, in words.</summary>
-    public string PolicyScheduleText()
+    /// <summary>Auto mode, as a small label: the stage's calculated policy date(s) for the month of the preview date.</summary>
+    public string PolicyScheduleLabel()
     {
         if (!CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage)) return "";
         var anchor = BusinessDate ?? Report?.BusinessDate ?? CollectionsDisplay.DubaiToday();
-        var days = CollectionsCampaignPolicy.ScheduledDates(stage, anchor);
-        return $"\"{StageName(Stage)}\" is scheduled for {string.Join(" and ", days.Select(d => d.ToString("dd MMM yyyy", CultureInfo.InvariantCulture)))} (policy schedule for {anchor:MMMM yyyy}).";
+        return "Schedule: " + string.Join(" and ", CollectionsCampaignPolicy.ScheduledDates(stage, anchor).Select(d => d.ToString("dd MMM yyyy", CultureInfo.InvariantCulture)));
     }
 
     /// <summary>

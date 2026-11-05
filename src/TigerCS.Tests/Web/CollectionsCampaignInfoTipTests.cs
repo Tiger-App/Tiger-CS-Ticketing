@@ -88,7 +88,7 @@ public sealed partial class CollectionsCampaignInfoTipTests
         {
             Assert.Matches("^\\s*<span class=\"campaign-card__label\">[^<]+<span class=\"info-tip\"", card);   // label, then its Info icon on the same line
             Assert.Single(Regex.Matches(card, "data-info-tip-button"));
-            Assert.Matches("</span>\\s*<strong class=\"campaign-card__value\"[^>]*>[^<]+</strong>\\s*$", card); // then the value, and nothing below it
+            Assert.Matches("</span>\\s*<strong class=\"campaign-card__value\"[^>]*>[^<]+</strong>\\s*(<span class=\"campaign-card__sub\">Outstanding <span data-eligible-outstanding>[^<]+</span></span>\\s*)?$", card); // then the value (the amount card adds its one-line outstanding figure), nothing else
             Assert.DoesNotMatch("<p[\\s>]", card); Assert.DoesNotContain("campaign-card__hint", card);
         }
         Assert.DoesNotContain("campaign-card__hint", html); Assert.DoesNotContain("campaign-helper", html);
@@ -113,10 +113,10 @@ public sealed partial class CollectionsCampaignInfoTipTests
         const string due = "The outstanding balance is everything these customers owe that is Due or Overdue. The qualifying amount is only the part this stage's rule collects";
         Assert.DoesNotContain("everything these customers owe", WithoutTips(html));                          // not printed under the cards any more
         Assert.DoesNotContain("Neither is the customers' full contract balance", WithoutTips(html));
-        var qualifying = TipById(html, "tip-qualifying"); var outstanding = TipById(html, "tip-outstanding");
-        foreach (var tip in new[] { qualifying, outstanding }) { Assert.Contains(due, tip.Text); Assert.Contains("Neither is the customers' full contract balance.", tip.Text); }
+        var qualifying = TipById(html, "tip-qualifying");                                                      // one Total amount card; the outstanding balance is its one-line sub figure
+        Assert.Contains(due, qualifying.Text); Assert.Contains("Neither is the customers' full contract balance.", qualifying.Text);
         Assert.StartsWith("Stage amount of the eligible customers, as sent to Genesys.", qualifying.Text);
-        Assert.Contains("(AED 250.00 of the balance is not part of this stage)", outstanding.Text);
+        Assert.Contains("(AED 250.00 of the balance is not part of this stage)", qualifying.Text);
         Assert.Contains("data-amount-explanation", qualifying.ContentAttributes);                              // the existing hook now marks the explanation itself
         Assert.Contains("data-eligible-total>AED", html); Assert.Contains("data-eligible-outstanding>AED", html);    // the figures are unchanged
     }
@@ -124,32 +124,14 @@ public sealed partial class CollectionsCampaignInfoTipTests
     // ------------------------------------------------------------------ campaign details
 
     [Fact]
-    public async Task CampaignDetails_KeepTheirValues_AndMoveTheLongLabelIntoAnInfoIcon()
+    public async Task CampaignNotes_ArePartOfOneCompactLine_WithTheirHooks()
     {
         var html = await Results(new FakeCollectionsApi());
-        var details = Between(html, "<dl class=\"campaign-details\">", "</dl>");
-        Assert.Contains("data-campaign-name>Current month reminder - day 14<", details);
-        Assert.Contains("<dt>Campaign name<span class=\"info-tip\"", details);
-        Assert.Equal("Stage / Genesys campaign name when sent", TipById(html, "tip-campaign-name").Text);
-        Assert.Contains("<dt>Payment status</dt>", details);
-    }
-
-    // ------------------------------------------------------------------ disabled buttons
-
-    [Theory]
-    [InlineData(true, false, "300 minutes old (limit 90)")]
-    [InlineData(false, true, "does not have permission to export campaign lists")]
-    public async Task ADisabledExport_ShowsItsExactReasonInAPopover_NotBesideOrBelowTheButton(bool stale, bool forbidden, string reason)
-    {
-        var html = await Results(new FakeCollectionsApi { Stale = stale, ExportForbidden = forbidden });
-        var button = Regex.Match(html, "<button[^>]*data-export-review-unavailable[^>]*>").Value;
-        Assert.Contains("disabled", button); Assert.Contains("aria-disabled=\"true\"", button);
-        Assert.Contains("aria-describedby=\"tip-export-review-reason\"", button);                              // a screen reader announces the reason with the button
-        Assert.DoesNotContain("title=", button);                                                               // the native tooltip it used to rely on is gone
-        var tip = TipById(html, "tip-export-review-reason");
-        Assert.Contains(reason, tip.Text); Assert.Contains("data-export-review-reason", tip.ContentAttributes);
-        Assert.Matches("<span class=\"campaign-action\">\\s*<button[^>]*data-export-review-unavailable[^>]*>Export review CSV</button>\\s*<span class=\"info-tip\"", html);   // the icon sits right next to the button
-        Assert.DoesNotContain("receivables-meta\" data-export-review-reason", html);
+        var meta = Between(html, "<p class=\"campaign-meta\">", "</p>");
+        Assert.Contains("data-campaign-name>Current month reminder - day 14<", meta);
+        Assert.Contains("Payment <strong>", meta);
+        Assert.Contains("data-mode-name", meta); Assert.Contains("data-preview-only-count", meta); Assert.Contains("data-auto-sending", meta);
+        Assert.DoesNotContain("<dl class=\"campaign-details\">", html);                                           // no separate details block any more
     }
 
     [Fact]
@@ -247,7 +229,7 @@ public sealed partial class CollectionsCampaignInfoTipTests
     {
         var html = await Get(new FakeCollectionsApi(), "/Collections/Campaigns");
         var idle = Regex.Match(html, "<p class=\"campaign-snapshot__idle\" data-snapshot-idle>.*?</p>", RegexOptions.Singleline).Value;
-        Assert.Contains("campaign-pill--idle\">Not loaded yet</span>", idle);
+        Assert.Contains("campaign-pill--idle\">Snapshot not loaded yet</span>", idle);
         Assert.Equal("Its status appears here once customers are previewed, and stays visible while you change filters.", TipById(html, "tip-snapshot-idle").Text);
         Assert.Contains("tip-snapshot-idle", idle);                                                            // the script removes the whole idle node when the real status arrives
         Assert.DoesNotContain("Its status appears here", WithoutTips(html));
@@ -260,8 +242,8 @@ public sealed partial class CollectionsCampaignInfoTipTests
     {
         var html = await Results(new FakeCollectionsApi { SourceUnreconciled = true, Stale = true });
         var visible = WithoutTips(html);
-        var blockers = Regex.Match(visible, "data-not-ready-reasons.*?</div>", RegexOptions.Singleline).Value;
-        Assert.Contains("Why sending is blocked", blockers); Assert.Contains("role=\"status\"", Regex.Match(visible, "<div class=\"campaign-blockers\"[^>]*>").Value);
+        var blockers = Regex.Match(visible, "data-not-ready-reasons.*?</details>", RegexOptions.Singleline).Value;      // a small panel that expands on demand
+        Assert.Contains("Why sending is blocked", blockers); Assert.Matches("<details class=\"campaign-blockers\"", visible);
         var reasons = Regex.Matches(blockers, "data-not-ready-reason>(.*?)</li>", RegexOptions.Singleline).Select(m => WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
         Assert.Contains(reasons, r => r.StartsWith("Financial data:", StringComparison.Ordinal));
         Assert.Contains(reasons, r => r.Contains("has not been reconciled against PACT", StringComparison.Ordinal));
@@ -326,7 +308,7 @@ public sealed partial class CollectionsCampaignInfoTipTests
         var css = Asset("css/collections-campaigns.css");
         Assert.Contains("align-items: stretch", css);                                                                         // equal-height cards in a row
         Assert.Matches(@"\.campaign-card__value \{ margin-top: auto;", css);                                                   // figures line up at the bottom of the card
-        Assert.Contains(".campaign-action {", css); Assert.Contains(".campaign-approve__actions {", css);
+        Assert.Contains(".campaign-action {", css); Assert.Contains(".campaign-approve__actions", css);
         Assert.Contains("grid-template-columns: repeat(2, minmax(0, 1fr))", css);                                             // two cards per row on a phone
         Assert.DoesNotContain(".campaign-card__hint", css); Assert.DoesNotContain(".campaign-helper", css);
         Assert.DoesNotContain(".campaign-actions { display: flex; gap: .5rem", Asset("css/collections-snapshot.css"));         // the stale duplicate that overrode the layout is gone
