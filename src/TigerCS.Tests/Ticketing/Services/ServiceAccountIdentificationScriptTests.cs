@@ -36,6 +36,23 @@ public class ServiceAccountIdentificationScriptTests
     }
 
     [Fact]
+    public void TheGenesysIntegrationAccountScript_IsReadOnly_AndOnlyConfirmsOnTwoIndependentFacts()
+    {
+        var raw = Root("Identify_TigerCS_PROD_GenesysIntegrationAccount_ReadOnly.sql");
+        var sql = Regex.Replace(raw, @"/\*.*?\*/|--[^\r\n]*", string.Empty, RegexOptions.Singleline);
+
+        Assert.DoesNotMatch(WriteStatement, sql);
+        Assert.Contains("READ UNCOMMITTED", sql, StringComparison.Ordinal);
+        Assert.Contains("DB_NAME() <> @ExpectedDb", sql, StringComparison.Ordinal);
+
+        // The name is only a look-up key: an account is CONFIRMED only when the name matches AND it creates Genesys tickets AND no person handled a conversation as it.
+        Assert.Contains("NameMatch = 1 AND GenesysTicketsCreated > 0 AND InteractionsHandled = 0", sql, StringComparison.Ordinal);
+        Assert.Contains("Tickets", sql, StringComparison.Ordinal);
+        Assert.Contains("CreatedByEmployeeId", sql, StringComparison.Ordinal);
+        Assert.Contains("N'genesys.integration'", sql, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TheLiveBackfillGate_IsStillInPlace_NothingWasRelaxed()
     {
         var sql = Root("Backfill_TigerCS_PUBLISHED_ClassificationAndAssignment.sql");

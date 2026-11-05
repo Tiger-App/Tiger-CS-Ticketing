@@ -133,3 +133,11 @@ In Production these are API-pool environment variables (`Authorization__ServiceI
 
 The backfill itself enforces the same rules (Msg 50804 contradictory gates, 50805 ids listed but not confirmed, 50806 empty list without `@NoServiceAccountsExist`, 50807 an id that is not an employee). Re-run the assignment **dry run** with the final gate values first; `@ApprovedAssignmentCount` must still equal report 1 `AssignmentToApply`, and excluding a service account that was in the rotation can change who receives tickets (not how many).
 
+### Finding the Genesys integration account's EmployeeId
+
+The committed `appsettings.Production.json` lists are empty **by design**; an empty file says nothing about the live API pool, where the values are environment variables. The integration account is an ordinary user (one `AspNetUsers` row; its `Id` is also its `Employees.EmployeeId`) with the role CS Agent, created by hand and used by TigerGroupWeb (`Ticketing:Username`) to forward Genesys calls. Its user name is configuration, so the name is only a look-up key.
+
+Run `Identify_TigerCS_PROD_GenesysIntegrationAccount_ReadOnly.sql` (SELECT only). An account is `CONFIRMED_INTEGRATION_ACCOUNT` only when the name matches **and** it creates Genesys tickets (`Tickets.CreatedByEmployeeId`) **and** no person handled a conversation as it. Accounts that create Genesys tickets under another name are listed as candidates (result 3): confirm the real user name with the TigerGroupWeb owner, add it to `@KnownUserNames` and re-run. Result 4 shows whether the account is currently in the rotation pool, i.e. would be dealt tickets unless excluded. Nothing is added to `@ServiceIdentity` without sign-off from the owner of the API-pool configuration.
+
+If the live pool really has both lists empty, the integration account is also **not** being confined to the integration surface today; setting `Authorization__ServiceIdentity__EmployeeIds__0` is a separate, approved deployment change.
+
