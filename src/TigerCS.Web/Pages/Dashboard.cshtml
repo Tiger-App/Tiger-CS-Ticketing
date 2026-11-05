@@ -90,15 +90,26 @@
 }
 
 <div class="page dashboard-workspace">
-    <div class="page-header">
-        <div>
+    @{ var hf = Model.Overview?.Filters; }
+    <div class="page-header dash-head">
+        <div class="dash-head__title">
             <h1 class="page-title">Dashboard</h1>
             @if (Model.Overview is not null)
             {
                 <p class="page-subtitle">Volume for @Model.PeriodLabel · KPIs and backlog reflect the current open work in your scope.</p>
             }
         </div>
-        <div class="page-header__actions">
+        <div class="page-header__actions dash-head__actions">
+            @if (hf is not null)
+            {
+                @* The period pickers live in the header but belong to the filter form below (form="dashboardFilters"), so Apply submits them together with every other filter. *@
+                <div class="dash-range" role="group" aria-label="Date range">
+                    <input class="field-input" type="date" id="dateFrom" name="dateFrom" form="dashboardFilters" aria-label="Date from" value="@DateValue(Model.DateFrom ?? hf.DateFrom)" />
+                    <span class="dash-range__sep" aria-hidden="true">–</span>
+                    <input class="field-input" type="date" id="dateTo" name="dateTo" form="dashboardFilters" aria-label="Date to" value="@DateValue(Model.DateTo ?? hf.DateTo)" />
+                    <button type="submit" form="dashboardFilters" class="btn btn-sm">Apply</button>
+                </div>
+            }
             <a class="btn" href="/Tickets">Open Tickets workspace</a>
             <a class="btn btn-gold" href="/NewTicket">+ New Ticket</a>
         </div>
@@ -107,14 +118,13 @@
     <section class="dash-hero" aria-label="Quick actions">
         @* Quick action: the existing customer-first flow — the Customers directory searches name, phone, unit or ticket number; the cross-source phone lookup is one click further. Unchanged in behaviour. *@
         <div class="workspace-search">
-            <div class="workspace-search__title">Find a customer</div>
-            <form action="/Customers" method="get" class="workspace-search__form" role="search">
+            <form action="/Customers" method="get" class="workspace-search__form" role="search" title="See the customer's units, open tickets and history first — then open, reopen or create a ticket.">
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
                 <input type="search" name="phoneNumber" class="workspace-search__input"
-                       placeholder="Search customers by phone, name, unit or ticket number…" aria-label="Search customers" required />
+                       placeholder="Find a customer by phone, name, unit or ticket number…" aria-label="Search customers" required />
                 <button type="submit" class="btn btn-gold">Search Customer</button>
+                <a class="link-muted workspace-search__lookup" href="/Customers/Lookup">Look up in CRM / PACT / Tasleeh →</a>
             </form>
-            <p class="workspace-search__hint">See the customer's units, open tickets and history first — then open, reopen or create a ticket. <a class="link-muted" href="/Customers/Lookup">Look up a new customer in CRM / PACT / Tasleeh →</a></p>
         </div>
 
         <nav class="dash-shortcuts" aria-label="Tickets workspace">
@@ -151,7 +161,8 @@
     {
         var f = Model.Overview.Filters;
 
-        @* ---- KPI cards: current open work in scope; every card drills into the ticket queue. ---- *@
+        @* ---- KPI panel: the six primary counters (current open work in scope) above the four secondary closure counters; every card drills into the ticket queue. ---- *@
+        <div class="dash-kpi-panel">
         <section class="kpi-grid kpi-grid--six" aria-label="Operational counters">
             @foreach (var card in Model.Cards)
             {
@@ -166,6 +177,8 @@
         </section>
 
         @* ---- Closure KPIs: Closed tickets by latest closure date in the date range, split by customer feedback and by who closed them; same card, same drill-down. ---- *@
+        <div class="dash-kpi-secondary">
+        <span class="dash-kpi-secondary__caption">Closed in period</span>
         <section class="kpi-grid kpi-grid--four" aria-label="Closed ticket counters">
             @foreach (var card in Model.ClosureCards)
             {
@@ -178,6 +191,8 @@
                 </a>
             }
         </section>
+        </div>
+        </div>
 
         @* ---- Filters: a real GET form over the master data the Api returned for this caller's scope, folded behind a disclosure. ---- *@
         <details class="filter-disclosure" open="@(activeFilterCount > 0 ? "open" : null)">
@@ -190,14 +205,6 @@
                 }
             </summary>
             <form class="filter-bar dash-filters" id="dashboardFilters" method="get" action="/Dashboard" aria-label="Dashboard filters">
-                <div class="field-group">
-                    <label class="field-label" for="dateFrom">Date from</label>
-                    <input class="field-input" type="date" id="dateFrom" name="dateFrom" value="@DateValue(Model.DateFrom ?? f.DateFrom)" />
-                </div>
-                <div class="field-group">
-                    <label class="field-label" for="dateTo">Date to</label>
-                    <input class="field-input" type="date" id="dateTo" name="dateTo" value="@DateValue(Model.DateTo ?? f.DateTo)" />
-                </div>
                 <div class="field-group">
                     <label class="field-label" for="departmentId">Department</label>
                     <select class="field-select" id="departmentId" name="departmentId" data-autosubmit>
@@ -270,25 +277,25 @@
             </form>
         </details>
 
-        // Status and Department sit beside the attention list (the
-        // "department queue" view of the backlog); the other breakdowns
-        // follow below. Titles come from the model; nothing is re-computed.
-        var sideTitles = new[] { "Status", "Volume by Department" };
-        var sideCards = Model.BreakdownCards.Where(c => sideTitles.Contains(c.Title)).ToList();
-        var otherCards = Model.BreakdownCards.Where(c => !sideTitles.Contains(c.Title)).ToList();
-
-        @* ---- Operational breakdowns (Volume by Channel, Volume by Request Type, Open Backlog Ageing, Priority)
-             sit ABOVE the ticket table: filters and KPI cards → breakdown cards → ticket table. ---- *@
-        <section class="dash-grid" aria-label="Operational breakdown">
-            @foreach (var card in otherCards)
-            {
-                @await Html.PartialAsync("_DashboardBarCard", card)
-            }
-        </section>
+        // Status and Volume by Channel are the compact visual summaries above
+        // the attention table; the other four breakdowns form the grid below it.
+        // Titles come from the model; nothing is re-computed.
+        var sideTitles = new[] { "Status", "Volume by Channel" };
+        var gridTitles = new[] { "Volume by Request Type", "Open Backlog Ageing", "Priority", "Volume by Department" };
+        var sideCards = sideTitles.Select(t => Model.BreakdownCards.FirstOrDefault(c => c.Title == t)).OfType<DashboardBarCard>().ToList();
+        var gridCards = gridTitles.Select(t => Model.BreakdownCards.FirstOrDefault(c => c.Title == t)).OfType<DashboardBarCard>()
+            .Concat(Model.BreakdownCards.Where(c => !sideTitles.Contains(c.Title) && !gridTitles.Contains(c.Title))).ToList();
 
         <section class="dash-main" aria-label="Tickets requiring attention">
+            <div class="dash-side">
+                @foreach (var card in sideCards)
+                {
+                    @await Html.PartialAsync("_DashboardSummaryCard", card)
+                }
+            </div>
+
             @* ---- Tickets requiring attention: the 5 newest active tickets in scope (CreatedAt DESC, sorted server-side). ---- *@
-            <div class="panel panel--compact">
+            <div class="panel panel--compact dash-attention">
                 <div class="panel__header">
                     <span class="panel__title">Tickets Requiring Attention</span>
                     <a class="link-muted" href="@DashboardLinks.ViewAll(f)">View all</a>
@@ -334,13 +341,14 @@
                     </div>
                 }
             </div>
+        </section>
 
-            <div class="dash-side">
-                @foreach (var card in sideCards)
-                {
-                    @await Html.PartialAsync("_DashboardBarCard", card)
-                }
-            </div>
+        @* ---- Request types, backlog ageing, priority and department volume: a balanced, content-height grid. ---- *@
+        <section class="dash-grid" aria-label="Operational breakdown">
+            @foreach (var card in gridCards)
+            {
+                @await Html.PartialAsync("_DashboardBarCard", card)
+            }
         </section>
 
     }
