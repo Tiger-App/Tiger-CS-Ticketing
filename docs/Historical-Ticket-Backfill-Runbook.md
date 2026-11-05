@@ -109,3 +109,35 @@ Closed and Resolved tickets can be re-classified (a label only) but are never as
 
 It acts **only** on tickets this rule releases; every other unowned ticket remains the job of normal routing, the reconciler and the backfill. Going live needs `Enabled = true` **and** `DryRun = false` - not done without approval.
 
+## Live run stopped with Msg 50806 (service-account list is empty)
+
+The live backfill refuses to commit until it knows every service / integration account, so it never deals a ticket to one. **The gate must not be removed or bypassed.**
+
+**Where the answer is.** The application treats an employee as a service identity only if its id is in one of two *configuration* lists - they are not stored in the database, so SQL cannot derive them:
+
+- `Authorization:ServiceIdentity:EmployeeIds`
+- `Collections:Authorization:IntegrationEmployeeIds`
+
+In Production these are API-pool environment variables (`Authorization__ServiceIdentity__EmployeeIds__0`, `__1` ... and `Collections__Authorization__IntegrationEmployeeIds__0` ...) or the secret store. The ids to exclude are **exactly the union of the two lists**. The Genesys integration account is a service identity only if its id is in one of them.
+
+**Steps**
+1. Read both settings on the live API pool.
+2. Run `Identify_TigerCS_PROD_ServiceAccounts_ReadOnly.sql` (SELECT only). Paste the ids into `@ConfiguredIds` (one INSERT per id). It validates them (employee exists, active, locked, would otherwise be dealt tickets) and looks for database evidence of integration accounts that are *not* in your list (accounts that create Genesys tickets but never handle one and have no Genesys mapping). Evidence is a prompt to re-check the configuration; it is never added to the list for you.
+3. Read the single **Verdict** row, then apply exactly its values to the backfill script:
+
+| Situation | `@ServiceIdentity` | `@ServiceIdsConfirmed` | `@NoServiceAccountsExist` |
+|---|---|---|---|
+| One or more ids are configured | one `INSERT INTO @ServiceIdentity VALUES ('<id>');` per id (result 1b) | `1` | `0` |
+| Both settings verified empty **and** the script shows no TIER_A account | empty | `0` | `1` |
+| Anything else (list empty but TIER_A evidence, ids not found, settings not read) | do not run live | - | - |
+
+The backfill itself enforces the same rules (Msg 50804 contradictory gates, 50805 ids listed but not confirmed, 50806 empty list without `@NoServiceAccountsExist`, 50807 an id that is not an employee). Re-run the assignment **dry run** with the final gate values first; `@ApprovedAssignmentCount` must still equal report 1 `AssignmentToApply`, and excluding a service account that was in the rotation can change who receives tickets (not how many).
+
+### Finding the Genesys integration account's EmployeeId
+
+The committed `appsettings.Production.json` lists are empty **by design**; an empty file says nothing about the live API pool, where the values are environment variables. The integration account is an ordinary user (one `AspNetUsers` row; its `Id` is also its `Employees.EmployeeId`) with the role CS Agent, created by hand and used by TigerGroupWeb (`Ticketing:Username`) to forward Genesys calls. Its user name is configuration, so the name is only a look-up key.
+
+Run `Identify_TigerCS_PROD_GenesysIntegrationAccount_ReadOnly.sql` (SELECT only). An account is `CONFIRMED_INTEGRATION_ACCOUNT` only when the name matches **and** it creates Genesys tickets (`Tickets.CreatedByEmployeeId`) **and** no person handled a conversation as it. Accounts that create Genesys tickets under another name are listed as candidates (result 3): confirm the real user name with the TigerGroupWeb owner, add it to `@KnownUserNames` and re-run. Result 4 shows whether the account is currently in the rotation pool, i.e. would be dealt tickets unless excluded. Nothing is added to `@ServiceIdentity` without sign-off from the owner of the API-pool configuration.
+
+If the live pool really has both lists empty, the integration account is also **not** being confined to the integration surface today; setting `Authorization__ServiceIdentity__EmployeeIds__0` is a separate, approved deployment change.
+
