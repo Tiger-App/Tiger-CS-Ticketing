@@ -1,0 +1,138 @@
+@using TigerCS.Web.Pages.Collections
+@using TigerCS.Web.Services.Api
+@model CampaignsModel
+@* Direct Send: the customers the user may pick for a manual contact-list dispatch. The list is the stored review records (one per customer, no campaign stage, no stage dates). Every
+   mandatory check is already part of a record, so "Ready" here means exactly what it means for Manual and Auto; a held-back customer shows its exact reason and what to do about it. *@
+@if (Model.LoadNotice is { } directNotice) { <div class="receivables-notice" role="status" data-load-notice>@directNotice</div> }
+@if (Model.DirectPage is { } list)
+{
+    var counts = list.Counts;
+    var blocked = counts.NeedsReview + counts.Excluded;
+    var reason = Model.DirectSendBlockedReason();
+    var readyOnPage = list.Items.Count(i => i.ValidationStatus == "Ready");
+    var selectAllLabel = readyOnPage > 0 ? "Select all eligible customers on this page"
+        : counts.Ready == 0 ? "Nothing to select: no customer is eligible to send (see \"Why customers are held back\")."
+        : "No eligible customers on this list. Go to another list to select eligible customers.";
+    var today = CollectionsDisplay.DubaiToday();
+    var blockedRows = list.Items.Where(i => i.ValidationStatus != "Ready").ToList();
+    var reasonGroups = blockedRows.SelectMany(i => i.Reasons.Select(r => r.Code)).GroupBy(c => c).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
+    <div hidden data-effective-filters data-from="@Model.DateFrom?.ToString("yyyy-MM-dd")" data-to="@Model.DateTo?.ToString("yyyy-MM-dd")"></div>
+    <div class="campaign-fragment" data-customer-results data-preview-current data-direct-send>
+        <div class="campaign-kpis" data-campaign-kpis>
+            <ul class="campaign-totals" data-campaign-totals>
+                <li class="campaign-card">
+                    <span class="campaign-card__label">Customers<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-customers", "Customers", "Customers with a Due or Overdue balance that match the filters. No campaign stage or stage date is applied."))" /></span>
+                    <strong class="campaign-card__value" data-eligible-count>@counts.Total.ToString("N0")</strong>
+                </li>
+                <li class="campaign-card campaign-card--ready">
+                    <span class="campaign-card__label">Eligible<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-ready", "Eligible to send", "Passing every mandatory check: reconciliation, contact and identity, shared phone, legal stage, duplicate-send and contact-frequency limits."))" /></span>
+                    <strong class="campaign-card__value" data-ready-count>@counts.Ready.ToString("N0")</strong>
+                </li>
+                <li class="campaign-card @(blocked > 0 ? "campaign-card--blocked" : "")">
+                    <span class="campaign-card__label">Held back<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-blocked", "Held back", "Never sent. Each row states the exact reason and the review step."))" /></span>
+                    <strong class="campaign-card__value" data-blocked-count>@blocked.ToString("N0")</strong>
+                </li>
+                <li class="campaign-card">
+                    <span class="campaign-card__label">Already sent</span>
+                    <strong class="campaign-card__value" data-sent-count>@counts.AlreadySent.ToString("N0")</strong>
+                </li>
+            </ul>
+            <p class="campaign-meta">
+                <span>Mode <strong data-mode-name>Direct Send</strong></span>
+                <span>Purpose <strong data-campaign-name>@Model.CampaignName</strong></span>
+                <span>Destination list <strong data-direct-list>@(Model.DirectSendBlockers.Count == 0 ? "Dedicated Direct Send list" : "Not configured")</strong></span>
+                <span>Automatic execution <strong data-auto-sending>Off</strong><partial name="_InfoTip" model="@(new InfoTipModel("tip-auto-sending", "Automatic execution", "Direct Send never dispatches by itself. Nothing is sent until an authorized user confirms the exact count."))" /></span>
+                <span>Payment <strong>@(Model.PaymentStatus == "Both" ? "Due and Overdue" : Model.PaymentStatus)</strong></span>
+            </p>
+            @if (blockedRows.Count > 0 || counts.Ready == 0 || reason is not null)
+            {
+                <details class="campaign-blockers" data-not-ready-reasons>
+                    <summary>Why customers are held back <span class="campaign-blockers__count">@(reasonGroups.Count + (reason is null ? 0 : 1))</span></summary>
+                    <ul class="campaign-blockers__list">
+                        @if (reason is not null) { <li data-not-ready-reason>@reason</li> }
+                        @foreach (var g in reasonGroups)
+                        {
+                            <li data-not-ready-reason>@CampaignsModel.ReasonText(g.Key) (@g.Count().ToString("N0") on this list)</li>
+                            <li class="campaign-directsend__advice" data-review-workflow>@CampaignsModel.DirectSendAdvice(g.Key)</li>
+                        }
+                    </ul>
+                    <form method="post" asp-page-handler="RefreshApproval" class="campaign-directsend__advice">
+                        <input type="hidden" name="returnUrl" value="@Model.ReturnUrl()" />
+                        <button class="btn btn-sm" type="submit" data-refresh-approval>Refresh approval data</button>
+                    </form>
+                </details>
+            }
+        </div>
+        @{
+            var approveReason = reason is null
+                ? "Only eligible customers can be sent. Nothing is sent until you confirm the exact count and Genesys contact list."
+                : reason;
+        }
+        <div class="campaign-toolbar">
+            <form method="post" class="campaign-approve" data-approve-form asp-page-handler="Approve">
+                @foreach (var name in CampaignsModel.FilterFieldNames)
+                {
+                    if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
+                    <input type="hidden" name="@name" value="@(name switch {
+                        "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => "", "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
+                        "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
+                }
+                <input type="hidden" name="unitKeys" value="" data-selected-units />
+                @if (counts.Ready > 0)
+                {
+                    <div class="campaign-approve__modes">
+                        <label title="Only the customers you ticked, kept across pages"><input type="radio" name="selectionMode" value="SelectedUnits" checked /> Ticked (<span data-selected-count>0</span>)</label>
+                        <label title="Every eligible customer matching the filters, on every page"><input type="radio" name="selectionMode" value="AllMatching" data-all-matching /> All eligible (<span data-all-count>@counts.Ready.ToString("N0")</span>)</label>
+                    </div>
+                }
+                <div class="campaign-approve__actions">
+                    <span class="campaign-action">
+                        <button class="btn btn-primary" type="submit" aria-describedby="tip-approve-reason" data-approve-button data-send-to-genesys disabled="@(reason is not null)" data-blocked="@(reason is not null ? "true" : "false")">Send to Genesys</button>
+                        <partial name="_InfoTip" model="@(new InfoTipModel("tip-approve-reason", "Send to Genesys", approveReason, "data-approve-reason"))" />
+                    </span>
+                    <span class="campaign-tally" data-selected-summary aria-live="polite">@(counts.Ready > 0 ? "0 selected" : "No eligible customers")</span>
+                    @if (counts.Ready > 0) { <button class="btn" type="button" data-clear-selection>Clear ticks</button> }
+                </div>
+            </form>
+        </div>
+        <div class="table-scroll">
+            <table class="table receivables-table campaigns-table">
+                <thead><tr><th><input type="checkbox" data-select-page disabled="@(readyOnPage == 0)" aria-label="@selectAllLabel" title="@selectAllLabel" /></th><th>Customer</th><th>Mobile</th><th>Project / Tower</th><th>Unit</th><th class="num">Amount due</th><th>Earliest due</th></tr></thead>
+                <tbody>
+                @foreach (var row in list.Items)
+                {
+                    var ready = row.ValidationStatus == "Ready";
+                    var state = row.ValidationStatus switch { "Ready" => "Ready", "NeedsReview" => "Needs review", "Excluded" => "Held back", "AlreadySent" => "Already sent", _ => row.ValidationStatus };
+                    <tr data-campaign-status="@row.ValidationStatus">
+                        <td>@if (ready) { <input type="checkbox" class="campaign-select" data-unit-key="@TigerCS.Application.Modules.Collections.Review.ReviewQueryService.UnitKey(row.CompanyId, row.TenantId ?? "", row.UnitCode)" aria-label="Select @row.CustomerName" /> } else { <input type="checkbox" class="row-select-disabled" disabled aria-label="Cannot select @row.CustomerName" title="@state: cannot be selected" /> }</td>
+                        <td><strong>@row.CustomerName</strong><span class="campaign-row-state campaign-row-state--@(ready ? "ready" : row.ValidationStatus == "AlreadySent" ? "previewonly" : "needsreview")" data-row-state>@state</span>@if (!ready) { foreach (var why in row.Reasons) { <span class="receivables-meta receivables-meta--review" data-unit-note data-reason-code="@why.Code">@why.Explanation</span> } }</td>
+                        <td>@(row.Phone.Length > 0 ? row.Phone : "—")</td>
+                        <td>@CollectionsDisplay.TowerCell(row.TowerName, row.TowerNumber, row.ProjectCode)</td>
+                        <td>@row.UnitCode</td>
+                        <td class="num" data-unit-total>@row.Currency @CampaignsModel.Money(row.RemainingAmount)</td>
+                        <td>@(row.DueDate?.ToString("dd MMM yyyy") ?? "—")</td>
+                    </tr>
+                }
+                @if (list.TotalCount == 0)
+                { <tr><td colspan="7">@(list.Run is null ? "There is no approval data yet. Refresh the approval data." : "No customers match these filters.")</td></tr> }
+                </tbody>
+            </table>
+        </div>
+        <div class="receivables-pagination">
+            <span>Page @list.Page of @Model.DirectTotalPages · @(list.TotalCount == 1 ? "1 customer" : $"{list.TotalCount:N0} customers")</span>
+            <div>
+                @if (list.Page > 1) { <a class="btn btn-sm" data-results-link href="@Model.PageUrl(list.Page - 1)">Previous</a> }
+                @if (list.Page < Model.DirectTotalPages) { <a class="btn btn-sm" data-results-link href="@Model.PageUrl(list.Page + 1)">Next</a> }
+            </div>
+        </div>
+    </div>
+}
+else
+{
+    <div class="panel"><div class="error-state" role="alert" data-campaign-error>
+        @if (Model.Outcome == ApiOutcome.Forbidden) { <p>Your account does not have permission for this Collections operation.</p> }
+        else if (Model.Outcome == ApiOutcome.Unauthorized) { <p>Your session has expired. <a href="/Logout">Sign in again</a>.</p> }
+        else if (Model.Outcome == ApiOutcome.ValidationError) { <p>@(Model.Error ?? "Choose valid filters and retry.")</p> }
+        else { <p>@(Model.Error ?? "The customer list is unavailable.")</p><button class="btn" type="button" data-results-retry>Retry</button> }
+    </div></div>
+}

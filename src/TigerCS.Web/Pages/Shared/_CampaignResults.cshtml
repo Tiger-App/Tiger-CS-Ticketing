@@ -2,7 +2,11 @@
 @using TigerCS.Web.Services.Api
 @model CampaignsModel
 @if (Model.LoadNotice is { } notice) { <div class="receivables-notice" role="status" data-load-notice>@notice</div> }
-@if (Model.NothingDueYet)
+@if (Model.IsDirectSend)
+{
+    <partial name="_DirectSendResults" model="Model" />
+}
+else if (Model.NothingDueYet)
 {
     <div class="panel"><div class="empty-state"><p class="empty-state__title">Nothing is due in this period yet.</p></div></div>
 }

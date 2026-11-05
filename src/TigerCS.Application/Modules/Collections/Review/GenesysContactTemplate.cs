@@ -30,7 +30,7 @@ public static class GenesysContactTemplate
     private static readonly Regex Amount = new(@"^\d+\.\d{2}$", RegexOptions.Compiled);
 
     public static IReadOnlyList<string> ExpectedReminderTypes(GenesysOutboundOptions options) =>
-        Enum.GetValues<CampaignReminderType>().Select(options.LabelFor).ToList();
+        CampaignReminderTypes.StageTypes.Select(options.LabelFor).ToList();
 
     public static string WriteCsv(IEnumerable<GenesysContactPayload> contacts)
     {

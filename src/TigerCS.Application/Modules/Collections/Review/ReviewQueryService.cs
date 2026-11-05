@@ -146,6 +146,7 @@ public sealed class ReviewQueryService(
             var parsed = TryParse(request.Filter ?? new ReviewFilter());
             if (parsed.Error is not null) return new(run, [], 0, parsed.Error);
             if (ManualProblem(request.Filter, parsed.Spec!, run) is { } manualProblem) return new(run, [], 0, manualProblem);
+            if (DirectSendProblem(request.Filter, parsed.Spec!, run) is { } directProblem) return new(run, [], 0, directProblem);
             // Only Ready records can ever be approved, whatever the validation-status filter shows. (Manual mode adds the records that are Ready except for the schedule.)
             views = await ResolveReadyAsync(run, parsed.Spec!, request.Filter, null, stale, max, ct);
             if (views.Count > max) return new(run, [], 0, $"More than {max} records match. Narrow the filters (for example by company or reminder type) and approve in parts.");
@@ -159,6 +160,7 @@ public sealed class ReviewQueryService(
             var parsed = TryParse(request.Filter ?? new ReviewFilter());
             if (parsed.Error is not null) return new(run, [], 0, parsed.Error);
             if (ManualProblem(request.Filter, parsed.Spec!, run) is { } manualProblem) return new(run, [], 0, manualProblem);
+            if (DirectSendProblem(request.Filter, parsed.Spec!, run) is { } directProblem) return new(run, [], 0, directProblem);
             views = await ResolveReadyAsync(run, parsed.Spec!, request.Filter, units, stale, max, ct);
             if (views.Count > max) return new(run, [], 0, $"At most {max} records can be approved at once.");
             // A ticked customer that has no Ready record any more (paid, already sent, changed) is counted as left out, never silently kept.
@@ -188,6 +190,21 @@ public sealed class ReviewQueryService(
                 ? $"The send date ({sendDate:dd MMM yyyy}) is in the future. This campaign stays pending; an authorized user can approve and send it on that day ({sendDate:dd MMM yyyy})."
                 : $"The send date ({sendDate:dd MMM yyyy}) has passed. Choose today ({today:dd MMM yyyy}) to send now.";
         if (run.AsOfDate != today) return $"The review data was built for {run.AsOfDate:dd MMM yyyy}, not today ({today:dd MMM yyyy}). Refresh it, then approve.";
+        return null;
+    }
+
+    /// <summary>
+    /// Direct Send records are resolved only by an explicit Direct Send request, and a Direct Send request resolves nothing else: the mode and the reminder type must agree. There is no stage
+    /// and no send date to check; every Ready condition (reconciliation, contact, suppression, duplicates, shared phone, legal) is already part of the stored record.
+    /// </summary>
+    private string? DirectSendProblem(ReviewFilter? filter, ReviewQuerySpec spec, CollectionsReviewRun run)
+    {
+        var mode = CollectionsSendingModes.IsDirectSend(filter?.SendingMode);
+        var type = spec.ReminderType == CampaignReminderType.DirectSend;
+        if (mode != type) return "Direct Send is selected with the Direct Send mode only.";
+        // The legal-stage and scheduled-today checks are evaluated for the day the review data was built, so Direct Send needs data built today (like a Manual send).
+        if (mode && run.AsOfDate != clock.BusinessDate)
+            return $"The review data was built for {run.AsOfDate:dd MMM yyyy}, not today ({clock.BusinessDate:dd MMM yyyy}). Refresh it, then approve.";
         return null;
     }
 
@@ -297,10 +314,13 @@ public sealed class ReviewQueryService(
         var reasons = ReviewRecordBuilder.Parse(r.Reasons).ToList();
         if (stale && r.ValidationStatus == ReviewValidationStatus.Ready && !reasons.Contains(ReviewReasons.StaleSource))
             reasons.Add(ReviewReasons.StaleSource);
+        // Direct Send: held back because the customer was already added to a Genesys list today by ANOTHER record (the frequency limit); say so rather than "already sent".
+        if (r.ReminderType == CampaignReminderType.DirectSend && v.AlreadySent && v.PreviousDispatchStatus is null && !reasons.Contains(ReviewReasons.ContactedToday))
+            reasons.Add(ReviewReasons.ContactedToday);
         return new(r.RecordKey, r.ReminderType.ToString(), r.CompanyId, r.CustomerName, r.Phone, r.Email, r.ProjectCode, r.UnitCode,
             r.PaymentStatus.ToString(), r.RemainingAmount, r.Currency, r.DueDate, v.EffectiveStatus(stale).ToString(),
             reasons.Select(c => new ReviewReasonDto(c, (ReviewReasons.KindOf(c) ?? ReasonKind.NeedsReview).ToString(), ReviewReasons.Explain(c))).ToList(),
-            r.Source, r.SourceReadAtUtc, v.PreviousDispatchStatus, v.PreviousDispatchAtUtc, r.TowerNumber, r.TowerName);
+            r.Source, r.SourceReadAtUtc, v.PreviousDispatchStatus, v.PreviousDispatchAtUtc, r.TowerNumber, r.TowerName, r.TenantId);
     }
 
     public (ReviewQuerySpec? Spec, string? Error) TryParse(ReviewFilter f)
@@ -345,7 +365,7 @@ public sealed class ReviewQueryService(
         if (!string.IsNullOrWhiteSpace(f.ReminderType))
         {
             if (!CollectionsEnums.TryParse<CampaignReminderType>(f.ReminderType.Replace(" ", ""), out var t))
-                return (null, "Reminder type must be CurrentMonth, FollowUp, Overdue, LegalNotice or LegalCase.");
+                return (null, "Reminder type must be CurrentMonth, FollowUp, Overdue, LegalNotice, LegalCase or DirectSend.");
             type = t;
         }
         ReviewValidationStatus? validation = null;
@@ -362,6 +382,8 @@ public sealed class ReviewQueryService(
             if (ReviewReasons.KindOf(reason) is null) return (null, "Unknown validation reason.");
         }
 
+        if (type == CampaignReminderType.DirectSend && !CollectionsSendingModes.IsDirectSend(f.SendingMode))
+            return (null, "Direct Send records are listed with the Direct Send mode only.");
         var customer = f.Customer?.Trim();
         string? digits = null;
         if (!string.IsNullOrEmpty(customer) && !customer.Any(char.IsLetter))
@@ -371,7 +393,9 @@ public sealed class ReviewQueryService(
         }
         var towerSet = TowerSet(f);
         return (new ReviewQuerySpec(f.CompanyId, Blank(f.Project), Blank(f.Unit), Blank(customer), digits, dueFrom, dueTo, statuses,
-            f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, towerSet is { Count: 1 } onlyTower ? onlyTower[0] : null, towerSet is { Count: > 1 } manyTowers ? manyTowers : null), null);
+            f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, towerSet is { Count: 1 } onlyTower ? onlyTower[0] : null, towerSet is { Count: > 1 } manyTowers ? manyTowers : null,
+            // Direct Send's contact-frequency limit: a customer already added to a dispatch today is held back.
+            type == CampaignReminderType.DirectSend ? clock.BusinessDayStartUtc : null), null);
     }
 
     /// <summary>The distinct tower ids of a filter (the single id and the list together); empty = All projects.</summary>

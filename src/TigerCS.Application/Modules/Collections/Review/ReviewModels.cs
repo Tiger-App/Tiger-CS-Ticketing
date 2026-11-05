@@ -18,7 +18,8 @@ public sealed record ReviewQuerySpec(
     int? CompanyId, string? Project, string? Unit, string? CustomerText, string? PhoneDigits,
     DateOnly? DueFrom, DateOnly? DueTo, IReadOnlyList<ReviewPaymentStatus>? PaymentStatuses,
     decimal? MinRemaining, decimal? MaxRemaining, CampaignReminderType? ReminderType,
-    ReviewValidationStatus? ValidationStatus, string? Reason, int? TowerId = null, IReadOnlyList<int>? TowerIds = null);
+    ReviewValidationStatus? ValidationStatus, string? Reason, int? TowerId = null, IReadOnlyList<int>? TowerIds = null,
+    DateTime? ContactedSinceUtc = null);
 
 public sealed record ReviewRunDto(
     long RunId, string Status, string Phase, int ProgressPercent, DateOnly AsOfDate, int? CompanyId,
@@ -33,7 +34,7 @@ public sealed record ReviewRecordDto(
     string ProjectCode, string UnitCode, string PaymentStatus, decimal? RemainingAmount, string Currency,
     DateOnly? DueDate, string ValidationStatus, IReadOnlyList<ReviewReasonDto> Reasons,
     string Source, DateTime SourceReadAtUtc, string? PreviousDispatchStatus, DateTime? PreviousDispatchAtUtc,
-    string? TowerNumber = null, string? TowerName = null);
+    string? TowerNumber = null, string? TowerName = null, string? TenantId = null);
 
 public sealed record ReviewReasonDto(string Code, string Kind, string Explanation);
 
@@ -89,6 +90,7 @@ public sealed record ReconcileBatchRequest(string Resolution, string Note);
 
 /// <summary>
 /// Whether this environment is configured to send an approved list to Genesys, and if not exactly which settings are missing. Names settings only; never a secret, id or customer data.
+/// <c>DirectSendBlockers</c> are the extra settings only Direct Send needs (its own destination contact list); they never block Manual or Auto.
 /// A configuration problem here is a hard stop: it is shown before the person approves anything, and confirmation refuses again.
 /// </summary>
-public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Blockers);
+public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Blockers, IReadOnlyList<string>? DirectSendBlockers = null);

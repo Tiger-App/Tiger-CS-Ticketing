@@ -31,7 +31,15 @@
     const currentMode = () => (modeRadios.find(r => r.checked) || {}).value || 'Auto';
     const applyMode = () => {
         if (modeRadios.length === 0) return;
-        const mode = currentMode(), manual = mode === 'Manual';
+        const mode = currentMode(), manual = mode === 'Manual', direct = mode === 'DirectSend';
+        // Direct Send has no campaign stage and no stage/send date: those controls are hidden AND disabled, so neither is ever submitted.
+        const stageSelect = form.querySelector('[data-campaign-stage]');
+        if (stageSelect) stageSelect.disabled = direct;
+        if (date) date.disabled = direct;
+        if (dateGroup) dateGroup.hidden = direct;
+        form.querySelectorAll('[data-mode-not]').forEach(e => { e.hidden = e.dataset.modeNot === mode; });
+        form.querySelectorAll('[data-mode-only]').forEach(e => { e.hidden = e.dataset.modeOnly !== mode; });
+        if (direct && advanced) advanced.open = true;
         if (dateGroup && dateSlot && advancedGrid) {
             const label = dateGroup.querySelector('[data-date-label]');
             if (label) label.textContent = manual ? 'Send date' : 'Preview date';

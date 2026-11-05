@@ -2,22 +2,27 @@ namespace TigerCS.Domain.Modules.Collections;
 
 /// <summary>
 /// How a campaign is sent. <b>Auto</b> (default) follows the predefined schedule of the stage. <b>Manual</b> lets an authorized person choose the send date and bypasses ONLY that schedule:
-/// reconciliation, permissions, contact validation, suppression and duplicate-send protection apply unchanged. Neither mode dispatches by itself.
+/// reconciliation, permissions, contact validation, suppression and duplicate-send protection apply unchanged. <b>Direct Send</b> lets an authorized person pick customers for a
+/// manual contact-list dispatch with no campaign stage and no stage dates; every other safety rule applies unchanged. No mode dispatches by itself.
 /// </summary>
 public static class CollectionsSendingModes
 {
-    public const string Auto = "Auto", Manual = "Manual";
+    public const string Auto = "Auto", Manual = "Manual", DirectSend = "DirectSend";
 
-    /// <summary>Blank means Auto. Anything but Auto / Manual is refused (false).</summary>
+    /// <summary>Blank means Auto. Anything but Auto / Manual / DirectSend is refused (false).</summary>
     public static bool TryParse(string? value, out string mode)
     {
         mode = Auto;
         if (string.IsNullOrWhiteSpace(value)) return true;
-        if (string.Equals(value.Trim(), Manual, StringComparison.OrdinalIgnoreCase)) { mode = Manual; return true; }
-        return string.Equals(value.Trim(), Auto, StringComparison.OrdinalIgnoreCase);
+        var text = value.Trim();
+        if (string.Equals(text, Manual, StringComparison.OrdinalIgnoreCase)) { mode = Manual; return true; }
+        if (string.Equals(text, DirectSend, StringComparison.OrdinalIgnoreCase) || string.Equals(text, "Direct", StringComparison.OrdinalIgnoreCase)) { mode = DirectSend; return true; }
+        return string.Equals(text, Auto, StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsManual(string? value) => string.Equals(value?.Trim(), Manual, StringComparison.OrdinalIgnoreCase);
+
+    public static bool IsDirectSend(string? value) => TryParse(value, out var mode) && mode == DirectSend && !string.IsNullOrWhiteSpace(value);
 
     /// <summary>
     /// The one timing rule of Manual mode: the list can be sent only ON the chosen send date, which must be today (Dubai). A later date stays pending (nothing is queued or

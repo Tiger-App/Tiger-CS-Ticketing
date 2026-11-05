@@ -147,3 +147,9 @@
     .campaign-status__row { gap: var(--space-2); }
     .campaign-status__item { flex: 1 1 100%; justify-content: space-between; }
 }
+/* Direct Send: controls that belong to another sending mode are hidden by attribute; this keeps [hidden] winning over the layout rules above. */
+.campaign-filters [hidden] { display: none !important; }
+.campaign-directsend__advice { margin: 0; padding: 0 var(--space-3) var(--space-2); font-size: var(--text-xs); color: var(--color-text-secondary); }
+.direct-confirm { max-width: min(46rem, 94vw); width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px); background: var(--color-surface); color: inherit; padding: 0; }
+.direct-confirm::backdrop { background: rgba(0, 0, 0, .45); }
+.direct-confirm .review-confirm { margin: 0; border: 0; }

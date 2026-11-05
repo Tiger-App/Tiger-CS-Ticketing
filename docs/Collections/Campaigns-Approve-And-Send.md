@@ -59,3 +59,39 @@ phone numbers and emails are masked, formula-looking text is defused, the body c
 
 ## Database
 Migration `20261021120000_AddAdminEmailToCollectionsDispatch` (script `AddAdminEmailToCollectionsDispatch.sql` in the repository root) adds five columns to `CollectionsDispatches`.
+
+## Direct Send (third sending mode)
+
+**Sending mode** on Collections → Campaigns is now **Manual**, **Auto** or **Direct Send**. Manual and Auto are unchanged.
+
+Direct Send is for an authorized person who wants to send chosen customers to Genesys **without a campaign stage and without the Day 1 / 14 / 28 stage dates**:
+
+* No campaign stage and no send / preview date are asked for or submitted.
+* Filters: **Tower**, **Payment status** (Due / Overdue / Both), **Date range** and **Minimum amount**, plus the customer search.
+  *Payment status* and *Date range* act on the customer's earliest unpaid due date: **Overdue** = a balance due before this month, **Due** = the whole balance falls inside this month.
+  *Minimum amount* is "at least" the entered amount of the customer's whole Due + Overdue balance, which is also the AmountDue sent to Genesys.
+* The list shows the eligible customers with checkboxes, **Select all** on the page and **All eligible** across every page.
+* **Send to Genesys** opens a confirmation dialog with the selected count, total amount, campaign purpose and the destination contact list. Nothing is sent before the confirmation, and nothing is ever dispatched automatically.
+
+### Audit
+Confirming creates the same frozen, idempotent dispatch as Manual / Auto (who, when, the exact list and filter, totals). Its batch carries the campaign purpose **"Direct send - manual contact list"** and the destination contact list; the Genesys `ReminderType` column is **"Direct Send"**.
+
+### Destination contact list (configuration)
+Direct Send uses its **own** contact list, set with `Collections:GenesysOutbound:ContactListIds:DirectSend`. There is **no default**: until it is configured, Direct Send cannot be confirmed (the page and the readiness endpoint say so; Manual and Auto are not affected). The list must differ from every stage list, so that no scheduled Genesys campaign dials Direct Send customers. This setting is not part of any committed environment file; it is a deliberate, per-environment decision.
+
+### Safety rules that still apply (Direct Send waives only the stage schedule)
+| Rule | How |
+|---|---|
+| Authorization | Same send permission as Manual / Auto; read-only roles cannot select or confirm |
+| Financial reconciliation, fresh data | Unreconciled or stale approval data holds every record back (`SourceReconciliationRequired`, stale) |
+| Contact and identity validation | Same checks as the stage records (valid international phone, CRM/PACT conflicts, unit and customer identity, amount precision) |
+| Paid-after-upload suppression | The same sweep covers Direct Send uploads; balances are re-read before upload and paid customers are dropped |
+| Duplicate-send and idempotency | One Direct Send record per customer per month; a customer already in a live or uploaded dispatch is "Already sent"; the idempotency key replays safely |
+| Contact frequency | One contact per customer per business day across **all** modes (`ContactedToday`) |
+| Shared phone | A number used by several customers holds all of them back (`SharedPhoneMultipleUnits`) |
+| Already in today's campaign | A customer in a campaign scheduled today is held back (`DirectSendScheduledToday`) so they are not called twice |
+| Legal restrictions | A customer whose balance is in a legal stage (legal notice or legal referral) is never sent directly (`LegalStageCustomer`) |
+
+A held-back customer is never selectable. The row shows the exact reason, and the "Why customers are held back" panel gives the review step for each reason (fix the contact, wait a day, use the legal workflow, refresh the approval data).
+
+Direct Send needs approval data built **today** (the legal-stage and scheduled-today checks are evaluated for that day). Use **Refresh approval data** if the page says it is out of date.

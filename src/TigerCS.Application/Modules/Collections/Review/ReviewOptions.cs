@@ -94,6 +94,24 @@ public sealed class GenesysOutboundOptions
             ? parsed.ToString("D")
             : throw new InvalidOperationException($"No valid Genesys contact list id is configured for {type}.");
 
+    /// <summary>
+    /// The configured Direct Send contact list, or null when none is configured (Direct Send cannot be confirmed until one is: there is deliberately no default). It must be a list of its own:
+    /// a Direct Send customer must never land in a list that a scheduled campaign dials.
+    /// </summary>
+    public string? DirectSendContactListId =>
+        ContactListIds.TryGetValue(nameof(CampaignReminderType.DirectSend), out var id) && Guid.TryParse(id, out var parsed) ? parsed.ToString("D") : null;
+
+    /// <summary>Why Direct Send cannot use its contact list (null = it can): not configured, or shared with a campaign stage's list.</summary>
+    public string? DirectSendListProblem()
+    {
+        if (DirectSendContactListId is not { } list)
+            return $"No Genesys contact list is configured for Direct Send (Collections:GenesysOutbound:ContactListIds:{nameof(CampaignReminderType.DirectSend)}). Create a dedicated list in Genesys and configure its id; nothing was approved.";
+        foreach (var type in CampaignReminderTypes.StageTypes)
+            if (ContactListIds.TryGetValue(type.ToString(), out var other) && Guid.TryParse(other, out var parsed) && parsed.ToString("D") == list)
+                return $"The Direct Send contact list is the same as the {type} campaign list. Direct Send needs a list of its own so that no scheduled campaign dials these customers; nothing was approved.";
+        return null;
+    }
+
     public string LabelFor(CampaignReminderType type) =>
         ReminderTypeLabels.TryGetValue(type.ToString(), out var label) && !string.IsNullOrWhiteSpace(label)
             ? label.Trim() : CampaignReminderTypes.DefaultLabel(type);

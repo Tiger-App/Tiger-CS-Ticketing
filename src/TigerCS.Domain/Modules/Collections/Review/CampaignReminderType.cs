@@ -1,13 +1,17 @@
 namespace TigerCS.Domain.Modules.Collections.Review;
 
-/// <summary>The five Genesys contact-list reminder types, mapped one-to-one onto the approved campaign stages.</summary>
+/// <summary>
+/// The five Genesys contact-list reminder types, mapped one-to-one onto the approved campaign stages, plus <see cref="DirectSend"/>: a manual contact-list dispatch that belongs to no
+/// campaign stage and has no stage schedule. DirectSend records are only ever listed and approved when explicitly asked for (by the Direct Send mode).
+/// </summary>
 public enum CampaignReminderType
 {
     CurrentMonth = 1,
     FollowUp = 2,
     Overdue = 3,
     LegalNotice = 4,
-    LegalCase = 5
+    LegalCase = 5,
+    DirectSend = 6
 }
 
 public static class CampaignReminderTypes
@@ -29,8 +33,12 @@ public static class CampaignReminderTypes
         CampaignReminderType.Overdue => CollectionsCampaignStage.OverdueReminder,
         CampaignReminderType.LegalNotice => CollectionsCampaignStage.LegalNotice,
         CampaignReminderType.LegalCase => CollectionsCampaignStage.LegalReferral,
-        _ => throw new ArgumentOutOfRangeException(nameof(type))
+        _ => throw new ArgumentOutOfRangeException(nameof(type))   // DirectSend has no stage
     };
+
+    /// <summary>The reminder types that follow the approved campaign stages (every type except <see cref="CampaignReminderType.DirectSend"/>).</summary>
+    public static readonly IReadOnlyList<CampaignReminderType> StageTypes =
+        [CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp, CampaignReminderType.Overdue, CampaignReminderType.LegalNotice, CampaignReminderType.LegalCase];
 
     /// <summary>
     /// The stage's display name. It is used verbatim as the Genesys campaign name (and as the Campaigns page option text), so it must not be
@@ -43,6 +51,7 @@ public static class CampaignReminderTypes
         CampaignReminderType.Overdue => "Overdue reminder - day 1",
         CampaignReminderType.LegalNotice => "Legal notice - days 12 and 14",
         CampaignReminderType.LegalCase => "Internal Legal referral - day 30",
+        CampaignReminderType.DirectSend => "Direct send - manual contact list",
         _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
 
@@ -56,6 +65,7 @@ public static class CampaignReminderTypes
         CampaignReminderType.Overdue => "Overdue",
         CampaignReminderType.LegalNotice => "Legal Notice",
         CampaignReminderType.LegalCase => "Legal Case",
+        CampaignReminderType.DirectSend => "Direct Send",
         _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
 }

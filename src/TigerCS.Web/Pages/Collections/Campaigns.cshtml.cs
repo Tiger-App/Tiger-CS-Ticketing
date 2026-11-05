@@ -20,6 +20,8 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>"Auto" (default: the stage's policy schedule) or "Manual" (an authorized person chooses the send date; only the schedule is waived).</summary>
     public string SendingMode { get; private set; } = CollectionsSendingModes.Auto;
     public bool IsManual => SendingMode == CollectionsSendingModes.Manual;
+    /// <summary>"DirectSend": the user picks customers for a manual contact-list dispatch. No campaign stage, no stage dates, no send date; every other safety rule applies.</summary>
+    public bool IsDirectSend => SendingMode == CollectionsSendingModes.DirectSend;
     public DateOnly? DateFrom { get; private set; }
     public DateOnly? DateTo { get; private set; }
     /// <summary>Due, Overdue or Both (default). Sent to the API with every preview, page and export so they always agree.</summary>
@@ -39,6 +41,11 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public string? Error { get; private set; }
     public bool RenderFull { get; private set; }
     public CollectionsCampaignPreviewDto? Report { get; private set; }
+    /// <summary>Direct Send: the stored review records (one per customer) that match the filters, with their exact validation reasons.</summary>
+    public ReviewPageDto? DirectPage { get; private set; }
+    public int DirectTotalPages => DirectPage is null ? 1 : Math.Max(1, (int)Math.Ceiling(DirectPage.TotalCount / (double)DirectPage.PageSize));
+    /// <summary>Settings only Direct Send needs (its own destination contact list).</summary>
+    public IReadOnlyList<string> DirectSendBlockers { get; private set; } = [];
     public int TotalPages => Report is null ? 1 : Math.Max(1, (int)Math.Ceiling(Report.TotalCount / (double)Report.PageSize));
     /// <summary>Distinct, valid tower ids from repeated <c>towerId</c> values; blanks and junk are ignored (an empty result means All projects).</summary>
     public static IReadOnlyList<int> ParseTowerIds(Microsoft.Extensions.Primitives.StringValues values) => TowerSelection.Parse(values);
@@ -70,10 +77,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>The results area only (HTML fragment): summary, snapshot status, table, pagination and export links.</summary>
     public async Task<IActionResult> OnGetResultsAsync(string stage = "OverdueReminder", DateOnly? businessDate = null,
         string? search = null, [FromQuery(Name = "page")] int pageNumber = 1, DateOnly? dateFrom = null, DateOnly? dateTo = null,
-        int? month = null, int? year = null, string? load = null, string? paymentStatus = null, CancellationToken cancellationToken = default)
+        int? month = null, int? year = null, string? load = null, string? paymentStatus = null, string? sendingMode = null, CancellationToken cancellationToken = default)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
-        SetFilters(stage, businessDate, search, pageNumber, dateFrom, dateTo, month, year, load, paymentStatus);
+        SetFilters(stage, businessDate, search, pageNumber, dateFrom, dateTo, month, year, load, paymentStatus, sendingMode);
         await LoadReportAsync(cancellationToken);
         Response.Headers.CacheControl = "no-store";
         var t = Report?.Timings;
@@ -93,6 +100,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     private async Task LoadReportAsync(CancellationToken cancellationToken)
     {
         if (!ModelState.IsValid) { Outcome = ApiOutcome.ValidationError; Error = "Choose valid filters and retry."; return; }
+        if (IsDirectSend) { await EnsureTowersAsync(cancellationToken); await LoadDirectSendAsync(cancellationToken); return; }
         // Instalments due from the next month on are neither Due nor Overdue and never listed: a period that starts there has nothing to ask the API for.
         if (DateFrom is { } start && !CollectionsDueMonth.IsInScope(start, CollectionsDisplay.DubaiToday())) { NothingDueYet = true; return; }
         await EnsureTowersAsync(cancellationToken);
@@ -111,6 +119,22 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         // eligibility scope is unchanged. Writing the effective 2000-01-01 back into the input would turn the next page / export request into an explicit From
         // and widen the stage eligibility, so it is never done. The Period control (collections-campaign-filters.js) only fills the visible From / To inputs.
         DateTo ??= Report?.DateTo;
+    }
+
+    /// <summary>
+    /// Direct Send: the list comes from the stored review records, which already carry every mandatory check (reconciliation, contact and identity validation, shared phone, legal stage,
+    /// frequency limit, duplicate sends). The same filter is re-resolved at approval, so what is listed as eligible is exactly what can be sent.
+    /// </summary>
+    private async Task LoadDirectSendAsync(CancellationToken cancellationToken)
+    {
+        var result = await api.GetReviewPageAsync(ApprovalFilter(), PageNumber, cancellationToken);
+        Outcome = result.Outcome;
+        DirectPage = result.IsSuccess ? result.Value : null;
+        Error = result.Detail;
+        if (DirectPage is null) return;
+        var readiness = await api.GetDispatchReadinessAsync(cancellationToken);
+        DispatchBlockers = readiness.IsSuccess && readiness.Value is { Ready: false, Blockers: { } blockers } ? blockers : [];
+        DirectSendBlockers = readiness.IsSuccess && readiness.Value is { DirectSendBlockers: { } direct } ? direct : [];
     }
 
     public async Task<IActionResult> OnGetExportAsync(string stage = "OverdueReminder", string mode = "review",
@@ -158,7 +182,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// Before any preview the Period control starts on "Up to today" (From empty = the whole history, To = the preview date). The shown dates are exactly what is
     /// sent: nothing is substituted for another date field. After a preview the dates the user previewed with are shown unchanged.
     /// </summary>
-    public DateOnly? FormDateTo => DateTo ?? (DateFrom is null && Report is null && !RenderFull ? PeriodAnchor : null);
+    public DateOnly? FormDateTo => IsDirectSend ? DateTo : DateTo ?? (DateFrom is null && Report is null && !RenderFull ? PeriodAnchor : null);
 
     /// <summary>Which Period shortcut the From / To dates correspond to; anything else is a custom range.</summary>
     public string Period
@@ -183,7 +207,8 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
 
     /// <summary>"More filters" opens only for a filter the person actually changed (never for the defaults a preview writes back), so an applied filter is never hidden.</summary>
     public bool AdvancedOpen =>
-        DateFrom is not null
+        IsDirectSend
+        || DateFrom is not null
         || (RequestedDateTo is { } requestedTo && requestedTo != (RequestedBusinessDate ?? CollectionsDisplay.DubaiToday()))
         || !PaymentStatus.Equals("Both", StringComparison.OrdinalIgnoreCase)
         || (RequestedBusinessDate is { } requestedDate && !IsManual && requestedDate != CollectionsDisplay.DubaiToday())
@@ -201,6 +226,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     {
         get
         {
+            if (IsDirectSend) return DirectSendBlockedReason();
             if (Report is not { } report) return "Preview customers first.";
             if (!report.CanExportReview) return "Your account does not have permission to approve and send campaigns (Collections send permission required).";
             if (!report.FinancialSourceValidated)
@@ -215,6 +241,37 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
                 : "No customers are eligible in this preview.";
         }
     }
+
+    /// <summary>
+    /// Why Send to Genesys is unavailable in Direct Send (null = available). Checked in the order a person can act on: data, reconciliation, configuration (including Direct Send's own contact list),
+    /// freshness, then whether any customer is eligible. The API enforces every gate again at confirmation; this only names which one applies.
+    /// </summary>
+    public string? DirectSendBlockedReason()
+    {
+        if (DirectPage is not { } page) return "Preview customers first.";
+        if (page.Run is not { } run) return "There is no approval data yet. Refresh the approval data, then preview again.";
+        if (!run.SourceReconciled) return "The financial source is not reconciled, so nothing can be approved or sent.";
+        if (DispatchBlockers.Count > 0) return "Sending to Genesys is not configured in this environment. " + string.Join(" ", DispatchBlockers);
+        if (DirectSendBlockers.Count > 0) return string.Join(" ", DirectSendBlockers);
+        if (run.IsStale || run.Status != "Completed") return "The approval data is stale or still being prepared. Refresh the approval data, then preview again.";
+        if (run.AsOfDate != CollectionsDisplay.DubaiToday()) return $"The approval data was built for {run.AsOfDate:dd MMM yyyy}, not today. Refresh the approval data, then preview again.";
+        if (page.Counts.Ready == 0)
+            return page.Counts.Total == 0 ? "No customers match these filters." : "No customers are eligible to send. See the reasons below; blocked customers are never sent.";
+        return null;
+    }
+
+    /// <summary>What a person can do about a Direct Send hold: the review workflow behind each exact reason.</summary>
+    public static string DirectSendAdvice(string code) => code switch
+    {
+        "SharedPhoneMultipleUnits" => "Review: the same number is on several customers. Confirm the right owner in CRM, correct the contact, refresh the approval data and preview again.",
+        "DirectSendScheduledToday" => "Send this customer with today's scheduled campaign, or direct-send on a day without a scheduled campaign.",
+        "ContactedToday" => "Contact-frequency limit: one contact per customer per day. Try again tomorrow.",
+        "LegalStageCustomer" => "Refer to the legal workflow; Direct Send never sends legal-stage customers.",
+        "StaleSource" or "SourceReconciliationRequired" => "Refresh the approval data once the financial source is current and reconciled.",
+        "NoValidContact" or "CrmCustomerAmbiguous" or "CrmCompanyAmbiguous" or "ContactSourceConflict" or "CrmUnavailable" or "ConflictingContactDetails" =>
+            "Review: fix the customer's contact in CRM or PACT, refresh the approval data and preview again.",
+        _ => "Review: resolve the data problem at its source, refresh the approval data and preview again."
+    };
 
     /// <summary>Why the review export is unavailable for the current preview (null = available). Same two conditions the page always applied; the API enforces them again.</summary>
     public string? ExportReviewProblem =>
@@ -314,6 +371,14 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "UnitAllocationNeedsReview" => "Unit allocation needs review",
         "ContradictoryPaymentStatus" => "Contradictory payment status",
         "CurrencyNeedsReview" => "Currency needs review",
+        "SharedPhoneMultipleUnits" => "Phone number shared by several customers",
+        "DirectSendScheduledToday" => "Already in a campaign scheduled for today",
+        "ContactedToday" => "Already contacted today (frequency limit)",
+        "LegalStageCustomer" => "Legal-stage customer: not sent directly",
+        "PaymentStatusUnknown" => "Payment status unknown",
+        "MissingCustomerIdentity" => "Customer identity missing",
+        "DuplicateSourceRecord" => "Duplicate source record",
+        "SourceAmountsInconsistent" => "Source amounts inconsistent",
         _ => code
     };
 
@@ -522,7 +587,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
 
     public static string Label(string value) => value switch
     {
-        "CurrentMonth" => "Current Month", "FollowUp" => "Follow Up", "LegalNotice" => "Legal Notice", "LegalCase" => "Legal Case",
+        "CurrentMonth" => "Current Month", "FollowUp" => "Follow Up", "DirectSend" => "Direct Send", "LegalNotice" => "Legal Notice", "LegalCase" => "Legal Case",
         "UploadedToGenesys" => "Uploaded to Genesys", "UnknownOutcome" => "Unconfirmed", "CompletedWithErrors" => "Partial failure",
         "ReviewRequired" => "Review required", "NotConfigured" => "Not configured", _ => value
     };
@@ -578,7 +643,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         var (from, to) = CollectionsDateRanges.LastSixMonths(preview);
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["stage"] = Stage;
-        if (IsManual) query["sendingMode"] = SendingMode;
+        if (IsManual || IsDirectSend) query["sendingMode"] = SendingMode;
         query["businessDate"] = preview.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -593,7 +658,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["stage"] = Stage;
-        if (IsManual) query["sendingMode"] = SendingMode;
+        if (IsManual || IsDirectSend) query["sendingMode"] = SendingMode;
         if (BusinessDate is { } date) query["businessDate"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -612,6 +677,11 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// </summary>
     public ReviewFilter ApprovalFilter()
     {
+        // Direct Send: no stage and no send date. The customers are the Direct Send records matching Tower, Payment status, Date range, Minimum amount and search.
+        if (IsDirectSend)
+            return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo, MinRemaining: MinTotal ?? 0m,
+                ReminderType: nameof(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType.DirectSend), DueStatus: PaymentStatus is "Both" ? null : PaymentStatus,
+                TowerId: SingleTowerId, TowerIds: ManyTowerIds, SendingMode: CollectionsSendingModes.DirectSend);
         string? reminderType = CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage)
             ? TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.FromStage(stage).ToString() : null;
         return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo,
@@ -620,7 +690,8 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     }
 
     /// <summary>The stage's display name = the Genesys campaign name used when this list is sent.</summary>
-    public string? CampaignName => CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage)
+    public string? CampaignName => IsDirectSend ? TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.StageName(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType.DirectSend)
+        : CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage)
         ? TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.StageName(stage) : null;
 
     public string ResultsUrl(int page = 1) => PageUrl(page).Replace("render=full", "handler=Results");

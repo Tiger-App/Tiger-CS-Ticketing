@@ -78,7 +78,15 @@ public sealed class DispatchService(
         if (ReviewQueryService.SharedPhones(resolved.Records).Records > 0 || resolved.Records.Any(r => !IsVoiceEligible(r.Phone)))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
                 "The list contains records that share a phone number or have no callable phone. Repeated calls are blocked pending a business decision; review the current list.");
-        try { foreach (var type in resolved.Records.Select(r => r.ReminderType).Distinct()) _ = genesys.ContactListIdFor(type); }
+        var types = resolved.Records.Select(r => r.ReminderType).Distinct().ToList();
+        // Direct Send is its own dispatch: never mixed with campaign-stage records, and only into its own configured list.
+        if (types.Contains(CampaignReminderType.DirectSend))
+        {
+            if (types.Count > 1 || !CollectionsSendingModes.IsDirectSend(request.Selection.Filter?.SendingMode))
+                return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, "A Direct Send approval contains Direct Send records only.");
+            if (genesys.DirectSendListProblem() is { } listProblem) return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, listProblem);
+        }
+        try { foreach (var type in types) _ = genesys.ContactListIdFor(type); }
         catch (InvalidOperationException ex) { return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, ex.Message); }
 
         var now = clock.UtcNow;
@@ -138,12 +146,14 @@ public sealed class DispatchService(
         if (string.IsNullOrWhiteSpace(genesys.ClientId) || string.IsNullOrWhiteSpace(genesys.ClientSecret))
             blockers.Add("The Genesys OAuth client id or secret is not configured (Collections:GenesysOutbound:ClientId / ClientSecret, supplied as secrets).");
         if (!scheduler.IsAvailable) blockers.Add("Background jobs are switched off (BackgroundJobs:Enabled), so an approved send could not run.");
-        foreach (var type in Enum.GetValues<CampaignReminderType>())
+        foreach (var type in CampaignReminderTypes.StageTypes)
         {
             try { _ = genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { blockers.Add($"No valid Genesys contact list id is configured for {type} (Collections:GenesysOutbound:ContactListIds:{type})."); }
         }
-        return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers));
+        // Direct Send needs a list of its own; that is reported apart so it never blocks Manual or Auto.
+        var direct = genesys.DirectSendListProblem() is { } problem ? new List<string> { problem } : [];
+        return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers, direct));
     }
 
     // ---------------------------------------------------------------- read

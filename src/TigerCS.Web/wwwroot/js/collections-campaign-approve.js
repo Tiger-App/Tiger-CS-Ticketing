@@ -72,6 +72,10 @@
     if (results) new MutationObserver(sync).observe(results, { childList: true, subtree: true });
     sync();
 
+    // Direct Send confirmation: the server renders the dialog open; upgrade it to a modal so the count, amount and destination list are the only thing to act on.
+    const directConfirm = document.querySelector('dialog[data-direct-confirm]');
+    if (directConfirm && typeof directConfirm.showModal === 'function') { directConfirm.close(); directConfirm.showModal(); }
+
     // A chained, bounded poll: the next request is scheduled only after the previous answer, it ends when the server says the work is over, after maxMs, or after three failures in a row.
     // Ending without an answer is said on the page (never an endless "Queued"), and the person can look again by reloading.
     const boundedPoll = (url, firstMs, everyMs, maxMs, onState, giveUp) => {
