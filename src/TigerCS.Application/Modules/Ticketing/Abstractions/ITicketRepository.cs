@@ -80,7 +80,8 @@ public sealed record TicketQuery(
     bool IncludeClaimable = false,
     bool AvailableToTakeOnly = false,
     bool DepartmentFilterIncludesClaimable = false,
-    bool IncludeGenesysIntake = false);
+    bool IncludeGenesysIntake = false,
+    bool ExcludeClosed = false);
 
 public sealed record TicketQueryResult(IReadOnlyList<Ticket> Items, int TotalCount);
 

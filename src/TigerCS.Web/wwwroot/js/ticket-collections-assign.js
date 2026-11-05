@@ -1,51 +1,120 @@
-/* Ticket Details: Assign / Reassign beside "Assigned To" (Collections tickets). Posts the form with fetch, then updates "Assigned To", the Current line, the
-   row version and the assignment-history table in place; the page is never left. Without script the form is an ordinary post that redirects back. */
+/* Ticket Details: Assign / Reassign beside "Assigned To" (Collections tickets). A button opens a centred modal (<dialog>); the choice is posted with fetch to the
+   unchanged CollectionsAssign handler. The modal closes only once the server confirms; then "Assigned To", the Current line, the row version and the
+   assignment-history table are updated in place and the page is never left. */
 (() => {
     document.addEventListener('DOMContentLoaded', () => {
         const root = document.querySelector('[data-collections-assign]');
         if (!root) return;
-        const form = root.querySelector('form');
-        const select = root.querySelector('[data-assign-select]');
-        const search = root.querySelector('[data-assign-search]');
-        const status = root.querySelector('[data-assign-status]');
+        const dialog = root.querySelector('[data-assign-dialog]');
+        const openButton = root.querySelector('[data-assign-open]');
+        const form = dialog.querySelector('form');
+        const search = dialog.querySelector('[data-assign-search]');
+        const list = dialog.querySelector('[data-assign-list]');
+        const noMatch = dialog.querySelector('[data-assign-nomatch]');
+        const selectedText = dialog.querySelector('[data-assign-selected]');
+        const status = dialog.querySelector('[data-assign-status]');
+        const submit = dialog.querySelector('[data-assign-submit]');
+        const reason = form.querySelector('textarea');
+        const options = () => Array.from(list.querySelectorAll('.reassign-option'));
+        const checked = () => list.querySelector('input[data-assign-option]:checked');
+        let busy = false;
+
         const say = (text, bad) => { status.textContent = text; status.classList.toggle('is-error', !!bad); };
+
+        function refresh() {
+            const pick = checked();
+            submit.disabled = busy || !pick;
+            selectedText.textContent = '';
+            if (pick) {
+                const name = pick.closest('.reassign-option').querySelector('.reassign-option__name').textContent;
+                selectedText.append('Selected: ');
+                const strong = document.createElement('strong');
+                strong.textContent = name;
+                selectedText.append(strong);
+            } else {
+                selectedText.textContent = 'No one selected';
+            }
+        }
+
+        function setBusy(on) {
+            busy = on;
+            submit.classList.toggle('is-loading', on);
+            dialog.querySelectorAll('[data-assign-cancel], [data-assign-search], textarea').forEach(el => { el.disabled = on; });
+            list.querySelectorAll('input').forEach(el => { if (on) el.disabled = true; else el.disabled = el.closest('.reassign-option').classList.contains('is-current'); });
+            dialog.querySelector('[data-assign-submit-label]').textContent = on ? 'Reassigning…' : submit.dataset.label;
+            refresh();
+        }
+
+        function reset() {
+            list.querySelectorAll('input').forEach(el => { el.checked = false; });
+            search.value = '';
+            reason.value = '';
+            options().forEach(o => { o.hidden = false; });
+            noMatch.hidden = true;
+            say('');
+            refresh();
+        }
+
+        submit.dataset.label = dialog.querySelector('[data-assign-submit-label]').textContent;
+
+        openButton.addEventListener('click', () => { reset(); dialog.showModal(); search.focus(); });
+        dialog.querySelectorAll('[data-assign-cancel]').forEach(b => b.addEventListener('click', () => { if (!busy) dialog.close(); }));
+        // Escape and a click on the backdrop are cancels too, but never while a save is in flight.
+        dialog.addEventListener('cancel', e => { if (busy) e.preventDefault(); });
+        dialog.addEventListener('click', e => { if (e.target === dialog && !busy) dialog.close(); });
+        dialog.addEventListener('close', () => openButton.focus({ preventScroll: true }));
 
         search.addEventListener('keydown', e => { if (e.key === 'Enter') e.preventDefault(); });
         search.addEventListener('input', () => {
             const term = search.value.trim().toLowerCase();
-            Array.from(select.options).forEach(o => { o.hidden = term !== '' && !o.textContent.toLowerCase().includes(term); });
+            let shown = 0;
+            options().forEach(o => {
+                const match = term === '' || o.textContent.toLowerCase().includes(term);
+                o.hidden = !match;
+                if (match) shown++;
+            });
+            noMatch.hidden = shown > 0;
         });
+        list.addEventListener('change', () => { say(''); refresh(); });
 
         form.addEventListener('submit', async e => {
             e.preventDefault();
-            if (!select.value) { say('Choose a team member.', true); return; }
-            const button = form.querySelector('button[type=submit]');
-            button.disabled = true;
-            say('Saving…');
+            if (busy) return;
+            if (!checked()) { say('Choose a team member.', true); return; }
+            setBusy(true);
+            say('');
             try {
                 const response = await fetch(root.dataset.postUrl, { method: 'POST', body: new FormData(form), headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, credentials: 'same-origin' });
                 const data = await response.json();
                 if (!data.ok) { say(data.message || 'Could not save.', true); return; }
                 const label = document.querySelector('.tw-owner .tw-fact__v');
                 if (label) label.textContent = data.ownerName;
-                root.querySelector('[data-assign-current]').textContent = data.ownerName;
-                root.querySelector('summary').textContent = 'Reassign';
+                dialog.querySelector('[data-assign-current]').textContent = data.ownerName;
                 form.querySelector('[data-assign-rowversion]').value = data.rowVersion;
-                Array.from(select.options).forEach(o => {
-                    const wasCurrent = o.disabled;
-                    o.disabled = o.value === data.ownerId;
-                    o.textContent = o.textContent.replace(' (current)', '') + (o.value === data.ownerId ? ' (current)' : '');
-                    if (wasCurrent && o.value !== data.ownerId) o.selected = false;
+                openButton.querySelector('[data-assign-open-label]').textContent = 'Reassign';
+                dialog.querySelector('[data-assign-title]').textContent = 'Reassign ticket';
+                submit.dataset.label = 'Reassign';
+                options().forEach(o => {
+                    const input = o.querySelector('input');
+                    const isCurrent = input.value === data.ownerId;
+                    o.classList.toggle('is-current', isCurrent);
+                    const tag = o.querySelector('.reassign-option__tag');
+                    if (isCurrent && !tag) {
+                        const t = document.createElement('span');
+                        t.className = 'reassign-option__tag';
+                        t.textContent = 'Current';
+                        o.append(t);
+                    } else if (!isCurrent && tag) {
+                        tag.remove();
+                    }
                 });
-                select.selectedIndex = -1;
-                form.querySelector('input[type=text]').value = '';
                 renderHistory(data.history);
-                say('Ticket assigned.');
-                root.open = false;
+                setBusy(false); // the dialog closes only now that the server has confirmed
+                dialog.close();
             } catch {
                 say('Could not reach the server. Try again.', true);
             } finally {
-                button.disabled = false;
+                if (busy) setBusy(false);
             }
         });
 

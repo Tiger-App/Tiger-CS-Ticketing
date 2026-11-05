@@ -19,10 +19,11 @@ public sealed record TicketQueueRow(TicketSummaryDto Ticket, string? DepartmentN
 public sealed record PendingInteractionRow(AgentHandoffDto Handoff, string? DepartmentName, string? ChannelName);
 
 /// <summary>
-/// The unified Tickets workspace: one page, four views — Queue, Pending
+/// The unified Tickets workspace: one page, five views — Queue, All, Pending
 /// Interactions, My Tickets and Closed — selected by <c>?view=</c> (see
-/// <see cref="TicketsView"/>). Queue, My Tickets and Closed are the same
-/// ticket-queue query as ever (<c>GET api/tickets</c>), My Tickets with the
+/// <see cref="TicketsView"/>). Queue, All, My Tickets and Closed are the same
+/// ticket-queue query as ever (<c>GET api/tickets</c>): Queue with Closed left
+/// out (<c>excludeClosed</c>), All unrestricted, My Tickets with the
 /// owner fixed to the viewer and Closed with the status fixed to Closed;
 /// Pending Interactions is the same agent work list as ever
 /// (<c>GET api/pending-customer-interactions</c>) with its Start/Complete/
@@ -168,8 +169,11 @@ public sealed class TicketsModel(
     public int? ClosedCount { get; private set; }
 
     // ---- tab counts: each tab's own default total, from the query that tab runs ----
-    /// <summary>Every ticket the viewer may see (the Queue tab's unfiltered total).</summary>
+    /// <summary>Every ticket the viewer may see except Closed (the Queue tab's unfiltered total).</summary>
     public int? QueueCount { get; private set; }
+
+    /// <summary>Every ticket the viewer may see, Closed included (the All tab's unfiltered total).</summary>
+    public int? AllCount { get; private set; }
 
     /// <summary>Interactions still waiting for anyone to take them — the number the Pending Interactions page always led with.</summary>
     public int? PendingCount { get; private set; }
@@ -182,6 +186,7 @@ public sealed class TicketsModel(
         TicketsView.Pending => PendingCount,
         TicketsView.My => MyCount,
         TicketsView.Closed => ClosedCount,
+        TicketsView.All => AllCount,
         _ => QueueCount,
     };
 
@@ -408,7 +413,8 @@ public sealed class TicketsModel(
             ChannelId, RequestTypeId,
             ActiveOnly ? true : null, InDepartmentQueue ? true : null, SlaBreached ? true : null, DueToday ? true : null,
             BacklogAge, PendingApproval ? true : null, CreatedFrom, CreatedTo, Unclassified ? true : null, ClosureCategory, ClosedFrom, ClosedTo,
-            CreatedByMe ? true : null, Escalated ? true : null, AvailableToTake ? true : null);
+            CreatedByMe ? true : null, Escalated ? true : null, AvailableToTake ? true : null,
+            View == TicketsView.Queue ? true : null);
 
         var result = await ticketsApiClient.GetQueueAsync(request, cancellationToken);
 
@@ -530,7 +536,8 @@ public sealed class TicketsModel(
     /// <summary>Each tab's count is that tab's own query at page size 1 — the same endpoint and predicate the tab lists with, so a badge and its list never disagree. A failed count just shows no badge.</summary>
     private async Task LoadTabCountsAsync(CancellationToken cancellationToken)
     {
-        var queue = ticketsApiClient.GetQueueAsync(new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 1), cancellationToken);
+        var queue = ticketsApiClient.GetQueueAsync(new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 1, ExcludeClosed: true), cancellationToken);
+        var all = ticketsApiClient.GetQueueAsync(new TicketListRequestDto(null, null, null, null, null, null, null, null, null, 1, 1), cancellationToken);
         var mine = Viewer is null
             ? null
             : ticketsApiClient.GetQueueAsync(new TicketListRequestDto(null, null, null, null, null, Viewer.EmployeeId, null, null, null, 1, 1), cancellationToken);
@@ -538,6 +545,9 @@ public sealed class TicketsModel(
 
         var queueResult = await queue;
         QueueCount = queueResult.IsSuccess ? queueResult.Value?.TotalCount : null;
+
+        var allResult = await all;
+        AllCount = allResult.IsSuccess ? allResult.Value?.TotalCount : null;
 
         if (mine is not null)
         {
