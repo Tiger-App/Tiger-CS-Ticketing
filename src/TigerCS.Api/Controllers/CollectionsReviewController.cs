@@ -83,6 +83,13 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
         return Result(await dispatch.ConfirmAsync(caller, request with { IdempotencyKey = effective }, ct));
     }
 
+    /// <summary>Whether this environment can send to Genesys and, if not, which settings are missing. Names settings only, never secrets.</summary>
+    [HttpGet("dispatches/readiness")]
+    [RequirePermission(Permissions.CollectionsView)]
+    [ProducesResponseType<DispatchReadinessDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> DispatchReadiness(CancellationToken ct) =>
+        Caller() is { } caller ? Result(await dispatch.ReadinessAsync(caller, ct)) : Unauthorized();
+
     /// <summary>The latest approved sends with their batch results.</summary>
     [HttpGet("dispatches")]
     [RequirePermission(Permissions.CollectionsView)]

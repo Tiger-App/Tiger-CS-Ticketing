@@ -30,6 +30,8 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
     public bool NothingLoaded { get; set; }
     /// <summary>The campaign preview reports that the financial source is not reconciled against PACT.</summary>
     public bool SourceUnreconciled { get; set; }
+    /// <summary>Settings the readiness endpoint reports as blocking (empty = Genesys sending is configured).</summary>
+    public List<string> DispatchBlockers { get; } = [];
     /// <summary>The caller lacks the export / send permission (the preview's CanExportReview is false).</summary>
     public bool ExportForbidden { get; set; }
     public bool Stale { get; set; }
@@ -125,6 +127,8 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
             }
             case "/api/collections/review/runs/current":
                 return Json<TigerCS.Application.Modules.Collections.Review.ReviewRunDto?>(null);
+            case "/api/collections/review/dispatches/readiness":
+                return Json(new TigerCS.Application.Modules.Collections.Review.DispatchReadinessDto(DispatchBlockers.Count == 0, DispatchBlockers));
             case "/api/collections/review/dispatches":
                 return Json(new List<TigerCS.Application.Modules.Collections.Review.DispatchDto>());
             case "/api/collections/campaigns/export":

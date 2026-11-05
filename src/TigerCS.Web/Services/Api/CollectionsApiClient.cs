@@ -126,6 +126,10 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
     public Task<ApiResult<IReadOnlyList<DispatchDto>>> ListDispatchesAsync(CancellationToken cancellationToken) =>
         GetAsync<IReadOnlyList<DispatchDto>>($"{ReviewBase}/dispatches", cancellationToken);
 
+    /// <summary>Which Genesys / background-job settings still block sending in this environment (empty = configured).</summary>
+    public Task<ApiResult<DispatchReadinessDto>> GetDispatchReadinessAsync(CancellationToken cancellationToken) =>
+        GetAsync<DispatchReadinessDto>($"{ReviewBase}/dispatches/readiness", cancellationToken);
+
     public Task<ApiResult<DispatchDto>> GetDispatchAsync(Guid dispatchId, CancellationToken cancellationToken) =>
         GetAsync<DispatchDto>($"{ReviewBase}/dispatches/{dispatchId:D}", cancellationToken);
 

@@ -132,6 +132,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["POST /api/collections/review/selection/summary"] = nameof(Collections.Integration.CollectionsReviewEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryReviewRoute_ThroughTheOverride),
         ["POST /api/collections/review/dispatches"] = nameof(Collections.Integration.CollectionsReviewEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryReviewRoute_ThroughTheOverride),
         ["GET /api/collections/review/dispatches"] = nameof(Collections.Integration.CollectionsReviewEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryReviewRoute_ThroughTheOverride),
+        ["GET /api/collections/review/dispatches/readiness"] = nameof(Collections.Integration.CollectionsReviewEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryReviewRoute_ThroughTheOverride),
         ["GET /api/collections/review/dispatches/{dispatchId:guid}"] = nameof(Collections.Integration.CollectionsReviewEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryReviewRoute_ThroughTheOverride),
         ["POST /api/collections/review/dispatches/{dispatchId:guid}/batches/{batchId:long}/reconcile"] = nameof(Collections.Integration.CollectionsReviewEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryReviewRoute_ThroughTheOverride),
         ["GET /api/genesys/collections/customers/{crmCustomerId}/outstanding"] = nameof(Collections.Integration.CollectionsEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryCollectionsRoute_ThroughTheOverride),

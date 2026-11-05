@@ -85,3 +85,9 @@ public sealed record OverlapGroupDto(
 public sealed record OverlapPageDto(int TotalPhones, int Page, int PageSize, IReadOnlyList<OverlapGroupDto> Groups);
 
 public sealed record ReconcileBatchRequest(string Resolution, string Note);
+
+/// <summary>
+/// Whether this environment is configured to send an approved list to Genesys, and if not exactly which settings are missing. Names settings only; never a secret, id or customer data.
+/// A configuration problem here is a hard stop: it is shown before the person approves anything, and confirmation refuses again.
+/// </summary>
+public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Blockers);

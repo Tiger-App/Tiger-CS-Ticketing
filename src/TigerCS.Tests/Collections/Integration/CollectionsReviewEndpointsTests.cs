@@ -56,6 +56,7 @@ public sealed class CollectionsReviewEndpointsTests
         ["records"] = (await client.GetAsync("/api/collections/review/records")).StatusCode,
         ["reasons"] = (await client.GetAsync("/api/collections/review/reasons")).StatusCode,
         ["dispatches"] = (await client.GetAsync("/api/collections/review/dispatches")).StatusCode,
+        ["readiness"] = (await client.GetAsync("/api/collections/review/dispatches/readiness")).StatusCode,
         ["dispatches/{id}"] = (await client.GetAsync($"/api/collections/review/dispatches/{AnyDispatch}")).StatusCode,
         ["refresh"] = (await client.PostAsJsonAsync("/api/collections/review/refresh", new { companyId = (int?)null })).StatusCode,
         ["summary"] = (await client.PostAsJsonAsync("/api/collections/review/selection/summary", Selection)).StatusCode,
@@ -92,7 +93,7 @@ public sealed class CollectionsReviewEndpointsTests
         Assert.All(await CallEveryRouteAsync(anonymous), r => Assert.Equal(HttpStatusCode.Unauthorized, r.Value));
         using var reporter = await Client(factory, Roles.ReportingUser);
         var results = await CallEveryRouteAsync(reporter);
-        foreach (var route in new[] { "runs/current", "runs/{id}", "records", "dispatches", "dispatches/{id}", "refresh", "summary", "confirm", "reconcile", "cancel", "retry-email", "overlaps", "sweep", "contacts" })
+        foreach (var route in new[] { "runs/current", "runs/{id}", "records", "dispatches", "readiness", "dispatches/{id}", "refresh", "summary", "confirm", "reconcile", "cancel", "retry-email", "overlaps", "sweep", "contacts" })
             Assert.Equal(HttpStatusCode.Forbidden, results[route]);
         Assert.Equal(0, source.Reads);
     }

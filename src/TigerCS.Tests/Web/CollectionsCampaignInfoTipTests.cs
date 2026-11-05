@@ -173,6 +173,37 @@ public sealed partial class CollectionsCampaignInfoTipTests
     }
 
     [Fact]
+    public async Task ABlockedApprove_NamesMissingSendPermission_AndDoesNotBypassIt()
+    {
+        var html = await FullPage(new FakeCollectionsApi { IncludeNotEligible = true, ExportForbidden = true });
+        var button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
+        Assert.Contains("disabled", button); Assert.Contains("data-blocked=\"true\"", button);
+        Assert.StartsWith("Your account does not have permission to approve and send campaigns", TipById(html, "tip-approve-reason").Text);
+    }
+
+    [Fact]
+    public void TheScheduleReason_IsNamed_ForAPreviewThatIsNotASendDay()
+    {
+        var today = new DateOnly(2026, 10, 14);
+        Assert.Null(TigerCsWeb::TigerCS.Web.Pages.Collections.CampaignsModel.ScheduleRestriction("Current month", [today], today, today, true));
+        Assert.Contains("not today", TigerCsWeb::TigerCS.Web.Pages.Collections.CampaignsModel.ScheduleRestriction("Current month", [today], today.AddDays(1), today, true));
+        Assert.Contains("not one of those days", TigerCsWeb::TigerCS.Web.Pages.Collections.CampaignsModel.ScheduleRestriction("Current month", [today.AddDays(3)], today, today, false));
+    }
+
+    [Fact]
+    public async Task ABlockedApprove_NamesTheGenesysSettingsThatAreMissing_BeforeAnythingIsApproved()
+    {
+        var api = new FakeCollectionsApi { IncludeNotEligible = true };
+        api.DispatchBlockers.Add("Customer dispatch to Genesys is switched off (Collections:GenesysOutbound:LiveCustomerDispatchEnabled).");
+        var html = await FullPage(api);
+        var button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
+        Assert.Contains("disabled", button); Assert.Contains("data-blocked=\"true\"", button);
+        var text = TipById(html, "tip-approve-reason").Text;
+        Assert.StartsWith("Sending to Genesys is not configured in this environment.", text);
+        Assert.Contains("LiveCustomerDispatchEnabled", text);
+    }
+
+    [Fact]
     public async Task AnEnabledApprove_StillExplainsItself_InThePopover()
     {
         var html = await FullPage(new FakeCollectionsApi { IncludeNotEligible = true });
