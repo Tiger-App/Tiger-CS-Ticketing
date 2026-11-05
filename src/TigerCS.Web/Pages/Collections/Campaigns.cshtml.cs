@@ -168,14 +168,28 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>The less-used controls stay collapsed unless one of them holds a non-default value, so an applied filter is never hidden.</summary>
     public bool AdvancedOpen => Period == "Custom" || BusinessDate is not null || MinTotal != ReceivablesModel.DefaultMinTotal;
 
-    /// <summary>Why Approve &amp; Send is unavailable for the current preview (empty = it is available). The browser adds "nothing ticked" on top of this.</summary>
-    public string? ApproveBlockedReason =>
-        Report is not { } report ? "Preview customers first."
-        : !report.FinancialSourceValidated ? "The financial source is not reconciled, so nothing can be approved or sent."
-        : report.ReadyCount == 0 ? (report.TotalCount - report.NotEligibleCount > 0
-            ? "No customers are Ready to send. The eligible customers need review or are blocked; see the reasons above."
-            : "No customers are eligible in this preview.")
-        : null;
+    /// <summary>
+    /// The single, specific reason Approve &amp; Send is unavailable for the current preview (null = available). The browser adds "nothing ticked" on top of this. Checked in the order a person
+    /// can act on: permission, financial reconciliation, financial data freshness, CRM contacts, the stage's send schedule, then whether any customer is Ready. Every gate is fail-closed and the
+    /// API enforces the same ones again; this only names which one applies instead of a generic message.
+    /// </summary>
+    public string? ApproveBlockedReason
+    {
+        get
+        {
+            if (Report is not { } report) return "Preview customers first.";
+            if (!report.CanExportReview) return "Your account does not have permission to approve and send campaigns (Collections send permission required).";
+            if (!report.FinancialSourceValidated)
+                return "The financial source is not reconciled, so nothing can be approved or sent." + (report.SourceGate?.Message is { Length: > 0 } why ? $" {why}" : "");
+            if (report.Snapshot is { IsReady: false, ReadyProblem: { } problem }) return $"Financial data: {problem}";
+            if (report.Crm is { Blocks: true } crm) return crm.Message ?? "CRM contacts are unavailable, so contacts are unconfirmed.";
+            if (ScheduleRestriction(StageName(report.Stage), report.ScheduledDates, report.BusinessDate, report.LiveBusinessDate, report.IsScheduledDate) is { } schedule) return schedule;
+            if (report.ReadyCount > 0) return null;
+            return report.TotalCount - report.NotEligibleCount > 0
+                ? "No customers are Ready to send. The eligible customers need review or are blocked; see the reasons above."
+                : "No customers are eligible in this preview.";
+        }
+    }
 
     /// <summary>Why the review export is unavailable for the current preview (null = available). Same two conditions the page always applied; the API enforces them again.</summary>
     public string? ExportReviewProblem =>
