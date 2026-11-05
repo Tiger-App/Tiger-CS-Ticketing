@@ -1,5 +1,5 @@
 /* Searchable multi-select tower filter (Pages/Shared/_TowerMultiPicker.cshtml). Shared by Collections > Campaigns, Receivables and Tower Assignments.
-   Every rule is scoped to .tower-multi so no other select on the site is affected. Gold is the official --tiger-gold (#E7B95E) with dark text. */
+   Every rule is scoped to .tower-multi so no other select on the site is affected. Gold is the official --tiger-gold (#C5A15A) with dark text. */
 .tower-multi { position: relative; min-width: 190px; }
 
 /* The closed control: a select-looking field with a chevron, a gold focus / open ring. */

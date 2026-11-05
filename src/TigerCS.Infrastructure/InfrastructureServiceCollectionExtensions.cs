@@ -240,6 +240,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<CustomerProfileAppService>();
         services.AddScoped<ICustomerDirectoryRepository, CustomerDirectoryRepository>();
         services.AddScoped<CustomerDirectoryAppService>();
+        services.AddScoped<ICustomerContactDetailRepository, CustomerContactDetailRepository>();
+        services.AddScoped<CustomerContactAppService>();
+        services.AddScoped<IProjectCatalogRepository, ProjectCatalogRepository>();
+        services.AddScoped<ProjectCatalogAppService>();
 
         // Customer Workspace phase: standalone customer search (composes the
         // existing CRM Buyer + PACT/Tasleeh lookups), the Dashboard

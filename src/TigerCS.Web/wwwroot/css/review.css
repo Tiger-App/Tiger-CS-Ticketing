@@ -1,13 +1,13 @@
 /* Public customer review page — Tiger Properties branding (gold #C1A562). Same-origin CSS only: the Web app's CSP forbids inline styles. */
 :root {
-    --review-gold: #E7B95E;   /* --tiger-gold: this page does not load site.css */
+    --review-gold: #C5A15A;   /* --tiger-gold: this page does not load site.css */
     --review-gold-dark: #7A5206;
     --review-ink: #1f2933;
     --review-muted: #6b6552;
     --review-line: #e4e0d3;
 }
 
-.review-page { margin: 0; min-height: 100vh; background: #f2f2f2; font-family: Arial, Helvetica, sans-serif; color: var(--review-ink); display: flex; align-items: flex-start; justify-content: center; }
+.review-page { margin: 0; min-height: 100vh; background: #F7F7F8; font-family: Arial, Helvetica, sans-serif; color: var(--review-ink); display: flex; align-items: flex-start; justify-content: center; }
 
 .review-card { box-sizing: border-box; width: 100%; max-width: 650px; margin: 24px 12px; padding: 28px 32px 32px; background: #fff; border: 2px solid var(--review-gold); text-align: center; }
 .review-logo { display: block; margin: 0 auto 18px; height: auto; }

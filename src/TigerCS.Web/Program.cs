@@ -88,6 +88,10 @@ builder.Services.AddHttpClient<CustomerHistoryApiClient>(client => client.BaseAd
     .AddHttpMessageHandler<BearerTokenHandler>();
 builder.Services.AddHttpClient<CustomersApiClient>(client => client.BaseAddress = new Uri(apiBaseUrl))
     .AddHttpMessageHandler<BearerTokenHandler>();
+builder.Services.AddHttpClient<CustomerContactApiClient>(client => client.BaseAddress = new Uri(apiBaseUrl))
+    .AddHttpMessageHandler<BearerTokenHandler>();
+builder.Services.AddHttpClient<ProjectCatalogApiClient>(client => client.BaseAddress = new Uri(apiBaseUrl))
+    .AddHttpMessageHandler<BearerTokenHandler>();
 // The receivables read runs two PACT report procedures concurrently; the API's request budget is
 // CollectionsSource:PactReceivables:CommandTimeoutSeconds + 30 s (150 s by default), so the Web
 // timeout must exceed it or the Web client gives up before the API can answer.

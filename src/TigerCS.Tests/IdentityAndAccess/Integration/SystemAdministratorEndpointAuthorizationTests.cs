@@ -985,6 +985,48 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
+    public async Task CustomerContact_SaveAndGet_AreAuthorizedThroughTheOverride()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+
+        var missing = await client.GetAsync("/api/customers/contact?phoneNumber=%2B971500000777");
+        Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
+
+        var saved = await client.PutAsJsonAsync("/api/customers/contact", new SaveCustomerContactRequestDto("+971 50 000 0777", "Layla Hassan", "layla@example.com"));
+        Assert.Equal(HttpStatusCode.OK, saved.StatusCode);
+        Assert.True((await saved.Content.ReadFromJsonAsync<CustomerContactDto>())!.Created);
+
+        var found = await client.GetAsync("/api/customers/contact?phoneNumber=971500000777");
+        Assert.Equal(HttpStatusCode.OK, found.StatusCode);
+        Assert.Equal("Layla Hassan", (await found.Content.ReadFromJsonAsync<CustomerContactDto>())!.Name);
+
+        var invalid = await client.PutAsJsonAsync("/api/customers/contact", new SaveCustomerContactRequestDto("+971500000777", "", null));
+        Assert.Equal(HttpStatusCode.BadRequest, invalid.StatusCode);
+    }
+
+    [Fact]
+    public async Task ProjectCatalog_Projects_Returns200()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+
+        var response = await client.GetAsync("/api/projects");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(await response.Content.ReadFromJsonAsync<List<ProjectOptionDto>>());
+    }
+
+    [Fact]
+    public async Task ProjectCatalog_Units_Returns200()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+
+        var response = await client.GetAsync("/api/projects/units?project=Nowhere%20Tower");
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Empty((await response.Content.ReadFromJsonAsync<List<string>>())!);
+    }
+
+    [Fact]
     public async Task GetCustomerProfileByKey_Returns200()
     {
         var (client, _) = await CreateAdministratorAsync();

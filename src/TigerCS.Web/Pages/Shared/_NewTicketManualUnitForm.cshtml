@@ -3,17 +3,38 @@
     The manual property path — required together, never used to run another
     lookup, and carrying no external identity (a manual customer must never
     be associated with another customer's verified records).
+
+    Project and Unit are searchable lists (native <input list>, so no script is needed and the Content-Security-Policy is untouched)
+    over the projects and units Tiger Ticketing already knows. Typing a name that is not listed is still allowed — a project or unit
+    that is not in the system yet must not block the ticket — and a name that matches a known project case-insensitively is saved
+    under the known spelling, so a project never becomes two. Both stay required.
 *@
 <form method="post" asp-page-handler="UseManualUnit">
     <input type="hidden" name="intakeRecordId" value="@Model.IntakeRecordId" />
     <input type="hidden" name="phoneNumber" value="@Model.PhoneNumber" />
     <div class="form-group">
         <label class="form-label" asp-for="CreateStep.ManualProjectName">Project *</label>
-        <input class="form-control" asp-for="CreateStep.ManualProjectName" />
+        <input class="form-control" asp-for="CreateStep.ManualProjectName" list="project-options" placeholder="Select Project"
+               autocomplete="off" required aria-required="true" data-project-input data-units-url="/NewTicket?handler=Units" />
+        <datalist id="project-options">
+            @foreach (var project in Model.ProjectOptions)
+            {
+                <option value="@project.Name"></option>
+            }
+        </datalist>
+        <span class="field-hint">Start typing to search the list.</span>
     </div>
     <div class="form-group">
         <label class="form-label" asp-for="CreateStep.ManualUnitNumber">Unit Number *</label>
-        <input class="form-control" asp-for="CreateStep.ManualUnitNumber" />
+        <input class="form-control" asp-for="CreateStep.ManualUnitNumber" list="unit-options" placeholder="Select or enter Unit Number"
+               autocomplete="off" required aria-required="true" data-unit-input />
+        <datalist id="unit-options" data-unit-options>
+            @foreach (var unit in Model.UnitOptions)
+            {
+                <option value="@unit"></option>
+            }
+        </datalist>
+        <span class="field-hint">Pick a known unit, or type the unit number if it is not listed.</span>
     </div>
     <button type="submit" class="btn btn-gold">Use this property</button>
 </form>

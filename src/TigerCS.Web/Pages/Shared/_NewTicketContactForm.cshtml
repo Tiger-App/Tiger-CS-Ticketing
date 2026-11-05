@@ -1,0 +1,48 @@
+@model TigerCS.Web.Pages.NewTicketModel
+@*
+    Step 1 — Customer Name / Email / Phone, shown for "Continue with Manual Entry" (the customer was not found, or the agent chose it)
+    and for Edit on a customer the lookup found. Saved to Tiger Ticketing's own customer record, keyed by the phone number, so the same
+    number is never saved twice. Nothing here is sent to Tiger CRM, PACT or Tasleeh, and saving never changes verification.
+    The phone is shown, not editable: it is the number the search was run on.
+*@
+@{
+    var isManual = Model.CustomerKey == "manual";
+}
+<section class="section-card" aria-label="@(isManual ? "Enter customer details" : "Edit customer details")">
+    <header class="section-card__head">
+        <div>
+            <h3 class="section-card__heading">@(isManual ? "Customer details" : "Edit customer details")</h3>
+            <p class="section-card__lead">
+                @(isManual
+                    ? "No verified customer is attached to this ticket. Enter the customer's name and, if you have it, their email."
+                    : "Update or add the name and email held in Tiger Ticketing. Tiger CRM, PACT and Tasleeh are not changed.")
+            </p>
+        </div>
+    </header>
+    <form method="post" asp-page-handler="SaveContact" class="contact-form" novalidate>
+        <input type="hidden" name="intakeRecordId" value="@Model.IntakeRecordId" />
+        <input type="hidden" name="phoneNumber" value="@Model.PhoneNumber" />
+        <input type="hidden" name="customer" value="@(isManual ? "manual" : null)" />
+        <div class="form-group">
+            <label class="form-label" for="contactName">Customer Name *</label>
+            <input class="form-control" id="contactName" name="contactName" value="@Model.ContactFormName" maxlength="200" required
+                   autocomplete="off" aria-invalid="@(Model.ContactNameError is null ? null : "true")" />
+            @if (Model.ContactNameError is { } nameError) { <span class="field-error" role="alert">@nameError</span> }
+        </div>
+        <div class="form-group">
+            <label class="form-label" for="contactEmail">Email Address <span class="text-secondary">(optional)</span></label>
+            <input class="form-control" id="contactEmail" name="contactEmail" type="email" value="@Model.ContactFormEmail" maxlength="256"
+                   autocomplete="off" aria-invalid="@(Model.ContactEmailError is null ? null : "true")" />
+            @if (Model.ContactEmailError is { } emailError) { <span class="field-error" role="alert">@emailError</span> }
+        </div>
+        <div class="form-group">
+            <label class="form-label" for="contactPhone">Phone Number</label>
+            <input class="form-control" id="contactPhone" value="@Model.PhoneNumber" readonly aria-readonly="true" />
+        </div>
+        <div class="wizard-actions">
+            <a class="btn" asp-page="/NewTicket"
+               asp-route-step="@NewTicketModel.StepCustomer" asp-route-intakeRecordId="@Model.IntakeRecordId" asp-route-phoneNumber="@Model.PhoneNumber">@(isManual ? "Back to results" : "Cancel")</a>
+            <button type="submit" class="btn btn-gold">@(isManual ? "Save & continue" : "Save")</button>
+        </div>
+    </form>
+</section>
