@@ -92,6 +92,38 @@ public static class TicketDisplay
                 ? isAiVirtualAgent && isActive ? AiVirtualAgentLabel : isActive ? UnassignedCsAgentLabel : NoOwnerOnFinishedTicketLabel
                 : string.IsNullOrWhiteSpace(ownerName) ? UnknownEmployeeLabel : ownerName;
 
+    /// <summary>Shown under Assigned To when an active ticket is routed to a department but no individual owns it yet.</summary>
+    public const string AwaitingEmployeeAssignmentLabel = "Awaiting employee assignment";
+
+    /// <summary>
+    /// The destination of the ticket's most recent recorded transfer, from the existing workflow events — "Billing Dept (queue)" or
+    /// "Sara A. in Billing Dept". Null when the ticket was never transferred. Nothing is inferred: a transfer event with no
+    /// destination department and no employee yields null rather than an invented place.
+    /// </summary>
+    public static string? LatestTransferDestination(
+        IEnumerable<TigerCS.Application.Modules.Ticketing.Dto.TicketWorkflowEventDto> workflowEvents,
+        Func<Guid, string?> employeeName,
+        Func<int, string?> departmentName)
+    {
+        var latest = workflowEvents
+            .Where(e => string.Equals(e.EventType, "TicketTransferred", StringComparison.Ordinal))
+            .OrderByDescending(e => e.OccurredAtUtc)
+            .FirstOrDefault();
+        if (latest is null)
+        {
+            return null;
+        }
+
+        var department = latest.ToDepartmentId is { } toDepartment ? departmentName(toDepartment) : null;
+        if (latest.ToEmployeeId is { } toEmployee)
+        {
+            var person = latest.ToEmployeeName ?? employeeName(toEmployee) ?? UnknownEmployeeLabel;
+            return department is null ? person : $"{person} in {department}";
+        }
+
+        return department is null ? null : $"{department} (queue)";
+    }
+
     /// <summary>True when the ticket sits in its department queue rather than with a named employee — for styling only, never for the label text.</summary>
     public static bool IsDepartmentQueue(Guid? currentOwnerEmployeeId) => currentOwnerEmployeeId is null;
 

@@ -137,6 +137,9 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 || (m.Ticket.ExternalCustomerId != null && m.Ticket.ExternalCustomerId.Contains(search))
                 || (m.IntakePhone != null && m.IntakePhone.Contains(search))
                 || (searchIsPhoneShaped && m.CanonicalIntakePhone != null && m.CanonicalIntakePhone.Contains(searchDigits))
+                // A name or e-mail an agent typed in is searchable too (it is what the row will be shown under).
+                || (m.CanonicalIntakePhone != null && dbContext.CustomerContactDetails.Any(c =>
+                    c.PhoneKey == m.CanonicalIntakePhone && (c.Name.Contains(search) || (c.Email != null && c.Email.Contains(search)))))
                 || dbContext.TicketInteractions.Any(i => i.TicketId == m.Ticket.TicketId
                     && ((i.CustomerName != null && i.CustomerName.Contains(search))
                         || i.CustomerPhone.Contains(search)
@@ -234,6 +237,20 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             .ToDictionaryAsync(t => t.TicketId, cancellationToken);
         var snapshots = await LoadSnapshotsAsync(lastTicketIds, cancellationToken);
 
+        // Names/e-mails an agent entered by hand, one batched read for the whole page, matched on canonical phone.
+        var rowPhoneKeys = page
+            .Select(g => snapshots.GetValueOrDefault(g.LastTicketId) is var snap
+                ? CustomerPhoneNumber.Normalize(snap.IntakePhone ?? snap.InteractionPhone ?? g.Phone)
+                : string.Empty)
+            .Where(k => k.Length > 0)
+            .Distinct()
+            .ToList();
+        var manualContacts = rowPhoneKeys.Count == 0
+            ? new Dictionary<string, CustomerContactDetail>()
+            : await dbContext.CustomerContactDetails.AsNoTracking()
+                .Where(c => rowPhoneKeys.Contains(c.PhoneKey))
+                .ToDictionaryAsync(c => c.PhoneKey, cancellationToken);
+
         var rows = new List<CustomerDirectoryRowDto>(page.Count);
         foreach (var g in page)
         {
@@ -248,7 +265,9 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             // cannot do without a query per row; the row sees the latest
             // ticket's conversation name only, as it always has.
             var namedTicket = g.LastNamedTicketId is { } namedId ? lastTickets.GetValueOrDefault(namedId) : null;
-            var displayName = DisplayNameFor(last, snapshot)
+            var manual = manualContacts.GetValueOrDefault(CustomerPhoneNumber.Normalize(snapshot.IntakePhone ?? snapshot.InteractionPhone ?? g.Phone));
+            var displayName = manual?.Name
+                ?? DisplayNameFor(last, snapshot)
                 ?? CustomerNameResolver.Resolve(namedTicket?.CrmBuyerCustomerName, namedTicket?.ExternalCustomerName).Name;
 
             rows.Add(new CustomerDirectoryRowDto(
@@ -383,7 +402,19 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         // ticket first (tickets is already ordered that way), deduplicated
         // case-insensitively because "F.Noor@Example.com" and
         // "f.noor@example.com" are one mailbox.
-        var emails = tickets.Select(x => x.Ticket.ExternalCustomerEmail)
+        // An agent-entered record wins for the name and leads the e-mails: it is the most deliberate, most recent statement about
+        // who this is. Matched on the canonical form of every number the customer was seen on; the freshest record is used.
+        var phoneKeys = phones.Select(CustomerPhoneNumber.Normalize).Where(k => k.Length > 0).Distinct().ToList();
+        var manualContact = phoneKeys.Count == 0
+            ? null
+            : (await dbContext.CustomerContactDetails.AsNoTracking()
+                .Where(c => phoneKeys.Contains(c.PhoneKey))
+                .ToListAsync(cancellationToken))
+                .OrderByDescending(c => c.UpdatedAtUtc)
+                .FirstOrDefault();
+
+        var emails = (manualContact?.Email is { } manualEmail ? new string?[] { manualEmail } : Array.Empty<string?>())
+            .Concat(tickets.Select(x => x.Ticket.ExternalCustomerEmail))
             .Concat(interactions.Select(i => i.CustomerEmail))
             .Where(e => !string.IsNullOrWhiteSpace(e))
             .Select(e => e!.Trim())
@@ -394,7 +425,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         // The latest ticket first; then the same precedence widened across
         // every ticket this customer has, so a name captured once is not lost
         // because their most recent ticket happened not to carry one.
-        var displayName = DisplayNameFor(last, snapshots.GetValueOrDefault(last.TicketId))
+        var displayName = manualContact?.Name
+            ?? DisplayNameFor(last, snapshots.GetValueOrDefault(last.TicketId))
             ?? CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.CrmBuyerCustomerName).ToArray())
             ?? CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.ExternalCustomerName).ToArray())
             ?? CustomerNameResolver.FirstValid(interactions.Select(i => i.CustomerName).ToArray());

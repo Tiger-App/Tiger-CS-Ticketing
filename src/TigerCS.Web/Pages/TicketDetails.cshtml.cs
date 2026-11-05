@@ -109,6 +109,12 @@ public sealed class TicketDetailsModel(
     public string? DepartmentName { get; private set; }
     public string? OwnerName { get; private set; }
 
+    /// <summary>Where the ticket was last transferred to (from the recorded transfer events), or null when it never was.</summary>
+    public string? LatestTransferDestination { get; private set; }
+
+    /// <summary>When that transfer was recorded.</summary>
+    public DateTime? LatestTransferAtUtc { get; private set; }
+
     /// <summary>Names for the people the handling summary and transfer entries mention (first handler, resolver, receivers); anyone not resolvable falls back to a short id.</summary>
     public IReadOnlyDictionary<Guid, string> EmployeeNames { get; private set; } = new Dictionary<Guid, string>();
 
@@ -1234,6 +1240,13 @@ public sealed class TicketDetailsModel(
         // valid the page says "Unnamed caller" rather than printing a placeholder.
         var resolvedName = CustomerNameResolver.Resolve(
             Ticket.CrmBuyerCustomerName, Ticket.ExternalCustomerName, originating?.CustomerName, CustomerHistory?.CustomerDisplayName);
+        // A name an agent entered for this phone (New Ticket manual entry / Customer Details edit) is shown first. It is a submitted
+        // name, never a verified one, so the verification badge is unchanged.
+        if (CustomerNameResolver.FirstValid(CustomerHistory?.ManualCustomerName) is { } manualName)
+        {
+            resolvedName = new ResolvedCustomerName(manualName, CustomerNameSource.Submitted);
+        }
+
         CustomerDisplayName = resolvedName.Name;
         CustomerNameSource = resolvedName.Source;
         CustomerKey = CustomerHistory?.CustomerKey
@@ -1247,6 +1260,13 @@ public sealed class TicketDetailsModel(
             : null;
 
         EmployeeNames = BuildEmployeeNames(Ticket, Approvals?.Events ?? []);
+        LatestTransferDestination = TicketDisplay.LatestTransferDestination(
+            Approvals?.Events ?? [],
+            id => EmployeeNames.TryGetValue(id, out var known) ? known : null,
+            id => nameResolver.TryGetDepartmentName(id));
+        LatestTransferAtUtc = LatestTransferDestination is null
+            ? null
+            : (Approvals?.Events ?? []).Where(e => e.EventType == "TicketTransferred").Max(e => e.OccurredAtUtc);
 
         LoadActionAffordances(Ticket);
         await LoadClassifyOptionsAsync(Ticket, cancellationToken);

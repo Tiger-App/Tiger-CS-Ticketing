@@ -38,6 +38,14 @@
         return route.Where(kv => kv.Value is not null).ToDictionary(kv => kv.Key, kv => kv.Value!);
     }
 
+    // Opens Step 1's Customer Name / Email form for the customer(s) the lookup found (Edit).
+    Dictionary<string, string> EditContactRoute()
+    {
+        var route = StepRoute(NewTicketModel.StepCustomer, keepCustomer: false, keepUnit: false);
+        route["editContact"] = "true";
+        return route;
+    }
+
     // The Customer Workspace's selection token for "View all tickets" links.
     string? WorkspaceCustomerKey(TigerCS.Web.Pages.NewTicketCandidate candidate) =>
         candidate.Key == "crm" && Model.CrmBuyerMatch is { } match
@@ -140,8 +148,16 @@
                     </form>
                 </section>
 
-                @if (Model.IntakeRecordId is not null)
+                @if (Model.IntakeRecordId is not null && Model.ShowContactForm)
                 {
+                    @await Html.PartialAsync("_NewTicketContactForm", Model)
+                }
+                else if (Model.IntakeRecordId is not null)
+                {
+                    @if (Model.ContactSaved)
+                    {
+                        <div class="alert alert-success" role="status"><span>Customer details saved in Tiger Ticketing.</span></div>
+                    }
                     @* Service problems are distinct from "not found" — an
                        unavailable source is said quietly, never presented as
                        a missing customer. *@
@@ -245,6 +261,11 @@
                                             <a class="btn btn-sm" target="_blank" rel="noopener"
                                                href="/Customers/Payments?phoneNumber=@Uri.EscapeDataString(Model.PhoneNumber ?? "")&customerKey=@Uri.EscapeDataString(paymentKey)">Payments &amp; Fines</a>
                                         }
+                                        @if (Model.CanEditContact)
+                                        {
+                                            <a class="btn btn-sm" asp-page="/NewTicket" asp-all-route-data="@EditContactRoute()"
+                                               aria-label="Edit customer name and email">Edit</a>
+                                        }
                                         <a class="btn btn-gold" asp-page="/NewTicket"
                                            asp-all-route-data="@StepRoute(NewTicketModel.StepProperty, customerOverride: candidate.Key)">Use this customer</a>
                                         @if (WorkspaceCustomerKey(candidate) is { } workspaceKey && Model.PhoneNumber is not null)
@@ -259,7 +280,7 @@
                             }
                         </div>
                         <p class="wizard-quiet-action">
-                            <a asp-page="/NewTicket" asp-all-route-data="@StepRoute(NewTicketModel.StepProperty, customerOverride: "manual")">Not one of these? Continue with Manual Entry</a>
+                            <a asp-page="/NewTicket" asp-all-route-data="@StepRoute(NewTicketModel.StepCustomer, customerOverride: "manual")">Not one of these? Continue with Manual Entry</a>
                         </p>
                     }
                     else
@@ -270,7 +291,7 @@
                                 <p><strong>Customer not found</strong></p>
                                 <p>You can continue and enter the customer information manually.</p>
                                 <a class="btn btn-gold" asp-page="/NewTicket"
-                                   asp-all-route-data="@StepRoute(NewTicketModel.StepProperty, customerOverride: "manual")">Continue with Manual Entry</a>
+                                   asp-all-route-data="@StepRoute(NewTicketModel.StepCustomer, customerOverride: "manual")">Continue with Manual Entry</a>
                             </div>
                         </section>
                     }
@@ -600,6 +621,7 @@
                             <dd>
                                 <strong>@(Model.SummaryCustomerName ?? "—")</strong><br />
                                 @Model.PhoneNumber<br />
+                                @if (Model.SummaryCustomerEmail is { } reviewEmail) { @reviewEmail <br /> }
                                 @(Model.SummarySourceKey is { } srcKey && srcKey != "Manual"
                                     ? $"Verified via {Model.SummaryVerificationLabel}"
                                     : "Manual entry")
@@ -684,6 +706,13 @@
                         <dt>Customer</dt>
                         <dd>@if (Model.SummaryCustomerName is { } summaryName) { @summaryName } else { <span class="wizard-summary__empty">Not selected yet</span> }</dd>
                     </div>
+                    @if (Model.SummaryCustomerEmail is { } summaryEmail)
+                    {
+                        <div class="wizard-summary__row">
+                            <dt>Email</dt>
+                            <dd>@summaryEmail</dd>
+                        </div>
+                    }
                     <div class="wizard-summary__row">
                         <dt>Verification</dt>
                         <dd>

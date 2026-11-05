@@ -2429,6 +2429,51 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("Channels", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.CustomerContactDetail", b =>
+                {
+                    b.Property<long>("CustomerContactDetailId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("CustomerContactDetailId"));
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("PhoneKey")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("UpdatedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("CustomerContactDetailId");
+
+                    b.HasIndex("PhoneKey")
+                        .IsUnique();
+
+                    b.ToTable("CustomerContactDetails", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation", b =>
                 {
                     b.Property<int>("DepartmentId")

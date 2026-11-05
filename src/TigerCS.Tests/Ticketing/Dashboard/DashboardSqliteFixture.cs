@@ -37,6 +37,7 @@ public sealed class DashboardSqliteFixture : IDisposable
             base.OnModelCreating(builder);
             builder.Entity<Ticket>().Property(t => t.RowVersion).HasDefaultValueSql("X'0000000000000000'");
             builder.Entity<TicketAgentHandoff>().Property(h => h.RowVersion).HasDefaultValueSql("X'0000000000000000'");
+            builder.Entity<CustomerContactDetail>().Property(c => c.RowVersion).HasDefaultValueSql("X'0000000000000000'");
         }
     }
 

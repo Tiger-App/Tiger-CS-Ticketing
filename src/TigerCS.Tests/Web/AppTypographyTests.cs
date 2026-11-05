@@ -97,15 +97,15 @@ public sealed partial class AppTypographyTests
         }
     }
 
-    /// <summary>The one official brand gold, defined once as --tiger-gold, carried by dark text on filled controls.</summary>
+    /// <summary>The one official brand gold, defined once as --tiger-gold — a subtle accent; primary buttons are charcoal with a white label.</summary>
     [Fact]
     public void SiteCss_DefinesTheOfficialTigerGold_Once()
     {
         var css = SiteCss();
 
-        Assert.Contains("--tiger-gold: #E7B95E;", css, StringComparison.Ordinal);
+        Assert.Contains("--tiger-gold: #C5A15A;", css, StringComparison.Ordinal);
         Assert.Contains("--color-gold: var(--tiger-gold);", css, StringComparison.Ordinal);
-        Assert.Contains(".btn-gold { background: var(--tiger-gold); border-color: var(--tiger-gold); color: var(--tiger-on-gold); }", css, StringComparison.Ordinal);
+        Assert.Contains(".btn-gold { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary); }", css, StringComparison.Ordinal);
 
         // No second gold: the legacy browns / ambers that used to stand in for the accent are gone.
         foreach (var retired in new[] { "#C58D19", "#B8841B", "#A5740F", "#A56F0E", "#B98A21", "#dfae4a" })

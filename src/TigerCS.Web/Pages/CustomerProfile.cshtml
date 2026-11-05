@@ -11,7 +11,7 @@
     <nav class="breadcrumb" aria-label="Breadcrumb">
         <a href="@Model.CustomersHref">Customers</a>
         <span class="sep">/</span>
-        <span class="current">@Model.DisplayName</span>
+        <span class="current" data-contact-name>@Model.DisplayName</span>
     </nav>
 
     @if (Model.Profile is null)
@@ -42,8 +42,38 @@
         <header class="customer-header">
             <div class="customer-header__identity">
                 <span class="customer-header__avatar" aria-hidden="true">@TicketDisplay.Initials(Model.DisplayName)</span>
-                <div>
-                    <h1 class="customer-header__name">@Model.DisplayName</h1>
+                <div class="customer-header__body">
+                    <div class="customer-header__title">
+                        <h1 class="customer-header__name" data-contact-name>@Model.DisplayName</h1>
+                        @if (Model.CanEditContact)
+                        {
+                            <a class="icon-btn" href="/Customers/@Uri.EscapeDataString(Model.CustomerKey)?editContact=1" data-contact-edit-open aria-label="Edit customer name" title="Edit customer name"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Zm9-13 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg></a>
+                        }
+                    </div>
+                    @if (Model.CanEditContact)
+                    {
+                        <form method="post" asp-page-handler="EditContact" asp-route-customerKey="@Model.CustomerKey" class="contact-edit" data-contact-edit-form hidden="@(Model.EditingContact ? null : "hidden")" novalidate>
+                            <div class="contact-edit__fields">
+                                <label class="contact-edit__field">
+                                    <span class="field-label">Customer name</span>
+                                    <input class="form-control" name="name" value="@Model.Profile.DisplayName" maxlength="200" required autocomplete="off" data-contact-input-name />
+                                </label>
+                                <label class="contact-edit__field">
+                                    <span class="field-label">Email <span class="text-secondary">(optional)</span></span>
+                                    <input class="form-control" type="email" name="email" value="@Model.PrimaryEmail" maxlength="256" autocomplete="off" data-contact-input-email />
+                                </label>
+                            </div>
+                            <div class="contact-edit__actions">
+                                <button type="submit" class="btn btn-gold btn-sm" data-contact-save>Save</button>
+                                <a class="btn btn-sm" href="/Customers/@Uri.EscapeDataString(Model.CustomerKey)" data-contact-edit-cancel>Cancel</a>
+                                <span class="field-error" role="alert" data-contact-error>@(Model.ContactNoticeIsError ? Model.ContactNotice : null)</span>
+                            </div>
+                        </form>
+                    }
+                    @if (!Model.ContactNoticeIsError && Model.ContactNotice is { } contactNotice)
+                    {
+                        <p class="field-hint" role="status">@contactNotice</p>
+                    }
                     <div class="customer-header__meta">
                         <span class="badge badge-source-@CustomerProfileModel.SourceCssKey(profile.VerificationSource)">
                             @(profile.IdentityKind == "Phone" ? "Unverified · phone only" : $"Verified via {CustomerProfileModel.SourceLabel(profile.VerificationSource)}")
@@ -126,7 +156,7 @@
                         <div class="facts-panel facts-panel--flat">
                             <div class="facts-section__title">Customer</div>
                             <dl>
-                                <div class="facts-row"><dt>Customer Name</dt><dd>@Model.DisplayName</dd></div>
+                                <div class="facts-row"><dt>Customer Name</dt><dd data-contact-name>@Model.DisplayName</dd></div>
                                 <div class="facts-row"><dt>Phone</dt><dd class="text-mono">@(Model.PrimaryPhone ?? "—")</dd></div>
                                 <div class="facts-row"><dt>Verification</dt><dd>@(profile.IdentityKind == "Phone" ? "Unverified" : $"Verified via {CustomerProfileModel.SourceLabel(profile.VerificationSource)}")</dd></div>
                                 @if (profile.CrmBuyerCustomerId is { } overviewCrmId)
@@ -184,7 +214,7 @@
                                    Arabic comes from CRM alone — PACT and Tasleeh have no Arabic
                                    name field, so it stays blank rather than repeating the English
                                    name in an Arabic row. *@
-                                <div class="facts-row"><dt>Full Name English</dt><dd>@(crm?.FullNameEnglish ?? profile.DisplayName ?? "—")</dd></div>
+                                <div class="facts-row"><dt>Full Name English</dt><dd data-contact-name>@(profile.DisplayName ?? crm?.FullNameEnglish ?? "—")</dd></div>
                                 <div class="facts-row"><dt>Full Name Arabic</dt><dd>@(crm?.FullNameArabic ?? "—")</dd></div>
                                 <div class="facts-row"><dt>Verification source</dt><dd>@(profile.IdentityKind == "Phone" ? "None — identified by phone" : CustomerProfileModel.SourceLabel(profile.VerificationSource))</dd></div>
                                 @if (profile.CrmBuyerCustomerId is { } contactCrmId)
@@ -208,7 +238,7 @@
                                 {
                                     <div class="facts-row"><dt>Also called from</dt><dd class="text-mono">@otherPhone</dd></div>
                                 }
-                                <div class="facts-row"><dt>Email</dt><dd>@(Model.PrimaryEmail ?? "—")</dd></div>
+                                <div class="facts-row"><dt>Email</dt><dd data-contact-email>@(Model.PrimaryEmail ?? "—")</dd></div>
                                 @foreach (var otherEmail in Model.OtherEmails)
                                 {
                                     <div class="facts-row"><dt>Other email</dt><dd>@otherEmail</dd></div>
