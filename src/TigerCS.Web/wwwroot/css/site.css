@@ -3007,3 +3007,80 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .page--workspace .ic--callout { width: 15px; height: 15px; margin-top: 0; color: var(--tw-muted); }
 .page--workspace .tw-callout__title { margin: 0; font-size: 12px; font-weight: 600; }
 .page--workspace .tw-callout__text { font-size: 12px; line-height: 1.4; color: var(--tw-muted); }
+
+/* ---------- Dashboard: compact executive layout ----------
+   Scoped overrides: tighter spacing, smaller KPI cards, content-height
+   panels, Status + Volume by Department side by side. Markup, data and
+   drill-down links are unchanged. */
+.dashboard-workspace .page-header { margin-bottom: var(--space-3); align-items: center; }
+.dashboard-workspace .page-title { font-size: var(--text-xl, 22px); }
+.dashboard-workspace .page-subtitle { margin-top: 2px; font-size: var(--text-xs); line-height: 1.4; }
+.dashboard-workspace .dash-hero,
+.dashboard-workspace .kpi-grid,
+.dashboard-workspace .filter-disclosure,
+.dashboard-workspace .dash-grid,
+.dashboard-workspace .dash-main { margin-bottom: var(--space-3); }
+.dashboard-workspace .dash-hero { gap: var(--space-3); grid-template-columns: minmax(0, 1.6fr) minmax(300px, 1fr); }
+.dashboard-workspace .workspace-search { padding: var(--space-3) var(--space-4); box-shadow: none; }
+.dashboard-workspace .workspace-search__title { margin-bottom: var(--space-1); }
+.dashboard-workspace .workspace-search__input { height: 36px; }
+.dashboard-workspace .workspace-search__hint { margin-top: var(--space-2); }
+.dashboard-workspace .dash-shortcuts { gap: var(--space-2); }
+.dashboard-workspace .dash-shortcut { padding: var(--space-2) var(--space-3); gap: var(--space-2); box-shadow: none; }
+.dashboard-workspace .dash-shortcut__icon { width: 28px; height: 28px; }
+.dashboard-workspace .dash-shortcut__icon svg { width: 15px; height: 15px; }
+.dashboard-workspace .dash-shortcut__hint { display: none; }
+
+/* KPI cards: small, number-first. */
+.dashboard-workspace .kpi-grid { gap: var(--space-2); }
+.dashboard-workspace .kpi-card { padding: var(--space-2) var(--space-3); box-shadow: none; border-radius: var(--radius-sm); }
+.dashboard-workspace .kpi-card--icon { gap: var(--space-2); }
+.dashboard-workspace .kpi-card__icon { width: 28px; height: 28px; }
+.dashboard-workspace .kpi-card__icon svg { width: 15px; height: 15px; }
+.dashboard-workspace .kpi-card strong { font-size: 20px; }
+.dashboard-workspace .kpi-card span { font-size: 11px; line-height: 1.25; }
+.dashboard-workspace a.kpi-card:hover { transform: none; box-shadow: none; }
+.dashboard-workspace a.dash-shortcut:hover { transform: none; box-shadow: none; }
+
+/* Panels: tight headers, subtle borders, no stretching. */
+.dashboard-workspace .panel { box-shadow: none; padding: 0; margin-bottom: 0; overflow: hidden; }
+.dashboard-workspace .panel__header { padding: var(--space-2) var(--space-3); }
+.dashboard-workspace .panel__title,
+.dashboard-workspace .dash-card .panel__title { font-size: var(--text-sm); }
+.dashboard-workspace .dash-card__subtitle { margin-top: 0; line-height: 1.35; }
+.dashboard-workspace .empty-state { padding: var(--space-3); }
+
+/* Layout: attention table full width and as tall as its rows; Status and
+   Volume by Department share the next row (the side wrapper is transparent
+   to the grid); remaining breakdowns follow. */
+.dashboard-workspace .dash-main { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); align-items: start; }
+.dashboard-workspace .dash-main > .panel { grid-column: 1 / -1; height: auto; }
+.dashboard-workspace .dash-side { display: contents; }
+.dashboard-workspace .dash-grid { gap: var(--space-3); grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); align-items: start; }
+
+/* Bar lists: more room for labels, wrapped rather than truncated. */
+.dashboard-workspace .bar-list { padding: var(--space-1) var(--space-3) var(--space-2); }
+.dashboard-workspace .bar-row { grid-template-columns: minmax(0, 42%) minmax(40px, 1fr) 2.5em 3.25em; gap: var(--space-2); padding: 4px 0; }
+.dashboard-workspace .bar-row__label { white-space: normal; overflow: visible; text-overflow: clip; overflow-wrap: anywhere; line-height: 1.25; }
+.dashboard-workspace .bar-track { height: 6px; }
+.dashboard-workspace .bar-row__count { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; }
+.dashboard-workspace .bar-row__pct { text-align: right; color: var(--color-text-secondary); font-size: var(--text-xs); }
+
+/* Attention table: compact rows, full department names. */
+.dashboard-workspace .data-table--compact th,
+.dashboard-workspace .data-table--compact td { padding-top: 4px; padding-bottom: 4px; font-size: var(--text-sm); }
+.dashboard-workspace .data-table--compact th { font-size: var(--text-2xs); }
+.dashboard-workspace .dept-cell { display: flex; }
+.dashboard-workspace .dept-cell__name { overflow: visible; text-overflow: clip; white-space: normal; }
+.dashboard-workspace .dept-icon { width: 20px; height: 20px; border-radius: 6px; }
+.dashboard-workspace .dept-icon svg { width: 12px; height: 12px; }
+
+@media (max-width: 1180px) {
+  .dashboard-workspace .dash-hero { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) {
+  .dashboard-workspace .dash-main { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-workspace .dash-grid { grid-template-columns: minmax(0, 1fr); }
+  .dashboard-workspace .dash-shortcuts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .dashboard-workspace .kpi-card strong { font-size: 18px; }
+}
