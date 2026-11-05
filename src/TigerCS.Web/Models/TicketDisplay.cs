@@ -71,12 +71,26 @@ public static class TicketDisplay
     /// <summary>Shown for a finished (Resolved/Closed) ticket that has no owner: nobody is "awaited" any more, so it must not read as a failure.</summary>
     public const string NoOwnerOnFinishedTicketLabel = "No one assigned";
 
+    /// <summary>
+    /// Neutral wording for an owner whose employee record could not be found. It is a data problem to investigate (the assignment itself is kept) and
+    /// is never worded as a raw id or a short GUID.
+    /// </summary>
+    public const string UnknownEmployeeLabel = "Name unavailable";
+
+    /// <summary>The AI virtual agent as shown in Assigned To. Display only: there is no employee behind it.</summary>
+    public const string AiVirtualAgentLabel = "AI (virtual agent)";
+
     /// <param name="isActive">False for a Resolved or Closed ticket. An active ticket without a CS Agent is an assignment failure and says so; a finished one is simply unowned.</param>
+    /// <param name="isAiVirtualAgent">The Api established that the unowned ticket is still being served by the Genesys virtual agent (live AI, activity within 6 hours). Wins over "awaiting CS Agent" only; an owner is always shown by name.</param>
+    /// <param name="isClosed">A Closed ticket has no owner: the field is EMPTY (any leftover historical owner is not shown).</param>
     public static string AssignedToLabel(
-        Guid? currentOwnerEmployeeId, string? ownerName, int currentDepartmentId, string? departmentName, bool isActive = true)
-        => currentOwnerEmployeeId is not { } ownerId
-            ? isActive ? UnassignedCsAgentLabel : NoOwnerOnFinishedTicketLabel
-            : ownerName ?? $"Employee #{ownerId.ToString()[..8]}";
+        Guid? currentOwnerEmployeeId, string? ownerName, int currentDepartmentId, string? departmentName, bool isActive = true,
+        bool isAiVirtualAgent = false, bool isClosed = false)
+        => isClosed
+            ? string.Empty
+            : currentOwnerEmployeeId is null
+                ? isAiVirtualAgent && isActive ? AiVirtualAgentLabel : isActive ? UnassignedCsAgentLabel : NoOwnerOnFinishedTicketLabel
+                : string.IsNullOrWhiteSpace(ownerName) ? UnknownEmployeeLabel : ownerName;
 
     /// <summary>True when the ticket sits in its department queue rather than with a named employee — for styling only, never for the label text.</summary>
     public static bool IsDepartmentQueue(Guid? currentOwnerEmployeeId) => currentOwnerEmployeeId is null;

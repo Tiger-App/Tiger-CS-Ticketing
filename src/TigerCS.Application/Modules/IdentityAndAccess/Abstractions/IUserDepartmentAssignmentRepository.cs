@@ -26,6 +26,14 @@ public interface IUserDepartmentAssignmentRepository
     Task<bool> IsResponsibleCsAgentAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// <see cref="IsResponsibleCsAgentAsync"/> for a CLOSED ticket whose owner closure cleared: additionally requires that the ticket ever had an
+    /// assignment row (somebody worked it), so a ticket nobody was assigned to (e.g. closed by the virtual agent) opens no access through its creator.
+    /// The default asks only the responsibility question; the EF repository adds the assignment-history check.
+    /// </summary>
+    Task<bool> IsResponsibleForClosedTicketAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default) =>
+        IsResponsibleCsAgentAsync(ticketId, creatorEmployeeId, employeeId, cancellationToken);
+
+    /// <summary>
     /// Whether the ticket's CURRENT resolution is the chatbot inactivity closure, it was closed at or after <paramref name="closedNotBeforeUtc"/>
     /// (the start of the existing reopen window), and <paramref name="employeeId"/> is its responsible CS Agent
     /// (<see cref="IsResponsibleCsAgentAsync"/>). The one exception that lets the last responsible CS Agent see and reopen an

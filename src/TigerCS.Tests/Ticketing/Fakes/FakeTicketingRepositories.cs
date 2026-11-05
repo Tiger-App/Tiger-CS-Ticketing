@@ -207,7 +207,14 @@ public sealed class FakeTicketRepository : ITicketRepository
             ? t.CreatedByEmployeeId == agentId
             : t.CurrentOwnerEmployeeId == agentId
                 || FollowsDepartmentWork(t, agentId)
+                || FollowsClosedTicket(t, agentId)
                 || (departmentIds?.Contains(t.CurrentDepartmentId) ?? false);
+
+    private bool FollowsClosedTicket(Ticket t, Guid agentId) =>
+        Directory is { } directory
+        && t.TicketStatus == TigerCS.Domain.Modules.Ticketing.TicketStatus.Closed
+        && t.CurrentOwnerEmployeeId is null
+        && directory.IsResponsibleForClosedTicketAsync(t.TicketId, t.CreatedByEmployeeId, agentId).GetAwaiter().GetResult();
 
     private bool FollowsDepartmentWork(Ticket t, Guid agentId) =>
         Directory is { } directory

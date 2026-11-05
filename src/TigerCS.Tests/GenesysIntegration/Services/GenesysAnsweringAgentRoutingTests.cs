@@ -725,7 +725,9 @@ public class GenesysAnsweringAgentRoutingTests
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, late.Outcome);
 
         Assert.Equal(TicketStatus.Closed, w.Ticket(chat.TicketId).TicketStatus);
-        AssertSingleOwner(w, chat.TicketId, owner);
+        // Closure cleared the owner, and a late Genesys update must NOT hand a Closed ticket to anybody (no automatic reassignment).
+        Assert.Null(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
+        Assert.NotEqual(Guid.Empty, owner);
         Assert.Equal(assignmentsBefore, w.F.TicketAssignments.Added.Count);
         Assert.DoesNotContain(w.F.Audit.Entries.Skip(auditBefore), e => e.Action is "AssignOnAnswer" or "Transfer" or "Unassign" or "AnswerAssignmentSkipped");
         Assert.Equal(0, FlagCount(w, chat.TicketId));

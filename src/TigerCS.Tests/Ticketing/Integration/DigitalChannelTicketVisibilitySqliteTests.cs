@@ -50,15 +50,18 @@ public sealed class DigitalChannelTicketVisibilitySqliteTests : IDisposable
         using (var context = _db.CreateContext())
         {
             open = _db.AddTicket(context, _db.CustomerServiceId, owner: _owner, channelId: channelId).TicketId;
-            closed = _db.AddTicket(context, _db.CustomerServiceId, owner: _owner, channelId: channelId, status: TicketStatus.Closed).TicketId;
+            var closedTicket = _db.AddTicket(context, _db.CustomerServiceId, owner: _owner, channelId: channelId, status: TicketStatus.Closed);
+            closed = closedTicket.TicketId;
+            // Closure cleared the owner; the assignment history is what keeps the ticket in its former owner's views.
+            _db.AddAssignmentHistory(context, closedTicket, _owner);
             otherChannels = AllChannelIds.Where(c => c != channelId)
                 .Select(c => _db.AddTicket(context, _db.CustomerServiceId, owner: _owner, channelId: c).TicketId).ToArray();
         }
 
         // Tickets list filtered by channel: both the Open and the Closed ticket of that channel, none of any other channel.
         Assert.Equal([open, closed], await ListAsync(_owner, Request(channelId)));
-        // My Tickets (owner = viewer) + channel.
-        Assert.Equal([open, closed], await ListAsync(_owner, Request(channelId, owner: _owner)));
+        // My Tickets (owner = viewer) + channel: only what is assigned to the viewer NOW - closure cleared the owner of the closed one.
+        Assert.Equal([open], await ListAsync(_owner, Request(channelId, owner: _owner)));
         // Closed view + channel: only the closed one. Open ticket never appears in it.
         Assert.Equal([closed], await ListAsync(_owner, Request(channelId, status: "Closed")));
         Assert.Equal([open], await ListAsync(_owner, Request(channelId, status: "Open")));

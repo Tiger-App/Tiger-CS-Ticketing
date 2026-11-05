@@ -250,15 +250,18 @@ public sealed class CsAgentTicketVisibilitySqliteTests : IDisposable
 
             // An inactivity-closed ticket still assigned to B (the chatbot never closes owned tickets, but the predicate must not leak one).
             var owned = _db.AddInactivityClosedTicket(context, _db.CustomerServiceId, now.AddDays(-1), owner: _agentB);
+            // Historical data: closure now clears the owner, so a closed-but-owned ticket (not yet backfilled) is written straight to the row.
+            context.Database.ExecuteSqlInterpolated($"UPDATE Tickets SET CurrentOwnerEmployeeId = {_agentB} WHERE TicketId = {owned.TicketId}");
             _db.AddAssignmentHistory(context, owned, _agentA);
             assignedToB = owned.TicketId;
         }
 
         var seenByA = await QueueAsync(_agentA, Agent);
-        Assert.DoesNotContain(resolvedClosed, seenByA);
+        // A normally closed ticket (closure cleared its owner) stays with the CS Agent who last held it - the pre-closure access, not a new audience.
+        Assert.Contains(resolvedClosed, seenByA);
         Assert.DoesNotContain(handledAndCreatedByA, seenByA);
         Assert.DoesNotContain(assignedToB, seenByA);
-        Assert.Empty(seenByA);
+        Assert.Equal([resolvedClosed], seenByA);
     }
 
     [Fact]

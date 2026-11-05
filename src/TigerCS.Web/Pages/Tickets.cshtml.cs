@@ -569,8 +569,9 @@ public sealed class TicketsModel(
         {
             var ticket = items[i];
             var departmentName = nameResolver.TryGetDepartmentName(ticket.CurrentDepartmentId);
+            // The Api names the owner from the employee directory; the department roster is consulted only when it could not.
             var ownerName = ticket.CurrentOwnerEmployeeId is Guid ownerId
-                ? await nameResolver.ResolveOwnerNameAsync(ticket.CurrentDepartmentId, ownerId, cancellationToken)
+                ? ticket.CurrentOwnerName ?? await nameResolver.ResolveOwnerNameAsync(ticket.CurrentDepartmentId, ownerId, cancellationToken)
                 : null;
             rows.Add(new TicketQueueRow(ticket, departmentName, ownerName));
         }

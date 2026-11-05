@@ -123,10 +123,12 @@ public class TicketApprovalAppServiceTests
             (byte)PriorityLevel.Medium, "Reopen me", Now.AddDays(-30));
         await f.Tickets.AddAsync(ticket);
         ticket.ClassifyRequestType(requestType.RequestTypeId);
-        ticket.AssignTo(owner ?? Guid.NewGuid());
+        var assignee = owner ?? Guid.NewGuid();
+        ticket.AssignTo(assignee);
         ticket.ChangeStatus(TicketStatus.InProgress);
         ticket.Resolve(outcome, duplicateOfTicketId: null);
         ticket.Close();
+        f.DepartmentAssignments.LastAssigneeByClosedTicket[ticket.TicketId] = assignee;   // closure cleared the owner; the assignment history remembers who held it
 
         await f.StatusHistory.AddAsync(new TicketStatusHistory(
             ticket.TicketId, TicketStatusDimension.TicketStatus,
@@ -285,6 +287,7 @@ public class TicketApprovalAppServiceTests
         Assert.True(offered.CallerCanRequest);
 
         // A department colleague the ticket is not assigned to cannot open its approvals view.
+        f.DepartmentAssignments.NotResponsibleForClosedTicket.Add((ticket.TicketId, colleague));
         var colleagueView = await f.Service.GetApprovalsViewAsync(colleague, [Roles.DepartmentEmployee], ticket.TicketId);
         Assert.Equal(TigerCS.Application.Modules.Ticketing.Dto.TicketQueryOutcome.Forbidden, colleagueView.Outcome);
     }
@@ -302,6 +305,7 @@ public class TicketApprovalAppServiceTests
             requestTypeId, ApprovalType.CustomerServiceApproval, Roles.CsSupervisor));
         ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
         ticket.Close();
+        f.DepartmentAssignments.LastAssigneeByClosedTicket[ticket.TicketId] = owner;
 
         var result = await f.Service.RequestApprovalAsync(
             owner, [Roles.DepartmentEmployee], ticket.TicketId, new RequestApprovalRequestDto(approvalType, "Please."));

@@ -905,6 +905,47 @@ public class CsAgentBackfillTests
     }
 
     [Fact]
+    public void StalePhoneAssignment_IsRegisteredAsItsOwnHostedService_EvenWhenTheGlobalBackgroundJobsSwitchIsOff()
+    {
+        // BackgroundJobs:Enabled=false is the shipped default (no Hangfire). The stale-Phone process must still be wired - its own section, its own
+        // switch (StalePhoneAssignment:Enabled) - so enabling it never depends on turning the SLA/Hangfire jobs on. It stays inert until that switch is set.
+        var config = Microsoft.Extensions.Configuration.MemoryConfigurationBuilderExtensions.AddInMemoryCollection(new Microsoft.Extensions.Configuration.ConfigurationBuilder(), new Dictionary<string, string?>
+        {
+            ["BackgroundJobs:Enabled"] = "false",
+            ["StalePhoneAssignment:Enabled"] = "true",
+            ["StalePhoneAssignment:DryRun"] = "false",
+        }).Build();
+        var services = new ServiceCollection();
+
+        TigerCS.Infrastructure.BackgroundJobs.BackgroundJobServiceCollectionExtensions.AddTigerCsBackgroundJobs(services, config);
+
+        Assert.Contains(services, d => d.ServiceType == typeof(Microsoft.Extensions.Hosting.IHostedService)
+            && d.ImplementationType == typeof(TigerCS.Infrastructure.BackgroundJobs.StalePhoneAssignmentHostedService));
+        Assert.Contains(services, d => d.ServiceType == typeof(StalePhoneAssignmentJob));
+        Assert.DoesNotContain(services, d => d.ServiceType.FullName?.StartsWith("Hangfire.", StringComparison.Ordinal) == true);   // no Hangfire without the switch
+        using var provider = services.BuildServiceProvider();
+        var bound = provider.GetRequiredService<Microsoft.Extensions.Options.IOptions<StalePhoneAssignmentOptions>>().Value;
+        Assert.True(bound.Enabled);
+        Assert.False(bound.DryRun);
+        Assert.Equal(6, bound.StaleAfterHours);
+    }
+
+    [Fact]
+    public async Task StalePhoneJob_Live_NeverTouchesClosedOrResolvedTickets_AndWritesNoEndTimestamp()
+    {
+        var env = new Env(3);
+        var closed = await env.SeedAsync(env.Facilities, TicketStatus.Closed, liveAi: true, phone: true, lastActivity: Now.AddHours(-10));
+        var resolved = await env.SeedAsync(env.Facilities, TicketStatus.Resolved, liveAi: true, phone: true, lastActivity: Now.AddHours(-10));
+
+        var result = await PhoneJob(env, new StalePhoneAssignmentOptions { Enabled = true, DryRun = false, DelayBetweenTicketsMs = 0 }).RunAsync(default);
+
+        Assert.Equal(0, result.Assigned);
+        Assert.Null(closed.CurrentOwnerEmployeeId);
+        Assert.Null(resolved.CurrentOwnerEmployeeId);
+        Assert.Empty(env.Assignments.Added);
+    }
+
+    [Fact]
     public async Task StalePhoneJob_IsOffByDefault_AndDryRunWritesNothing()
     {
         var env = new Env(3);

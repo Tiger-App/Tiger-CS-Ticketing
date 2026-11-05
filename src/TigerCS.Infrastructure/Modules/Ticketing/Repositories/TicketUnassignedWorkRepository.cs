@@ -49,6 +49,21 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
         return (await BuildAsync(tickets, cancellationToken)).SingleOrDefault();
     }
 
+    public async Task<IReadOnlyList<UnassignedTicketEvidence>> ListEvidenceAsync(IReadOnlyCollection<long> ticketIds, CancellationToken cancellationToken = default)
+    {
+        if (ticketIds.Count == 0)
+        {
+            return [];
+        }
+
+        var wanted = ticketIds.Distinct().ToList();
+        var tickets = await db.Tickets.AsNoTracking()
+            .Where(t => wanted.Contains(t.TicketId))
+            .Select(t => new TicketRow(t.TicketId, t.TicketNumber, t.TicketStatus, t.CurrentOwnerEmployeeId, t.CurrentDepartmentId, t.OriginatingDepartmentId, t.CreatedAtUtc, t.FirstHumanResponseAtUtc))
+            .ToListAsync(cancellationToken);
+        return await BuildAsync(tickets, cancellationToken);
+    }
+
     private sealed record TicketRow(
         long TicketId, string TicketNumber, TicketStatus Status, Guid? Owner, int CurrentDepartmentId, int OriginatingDepartmentId,
         DateTime CreatedAtUtc, DateTime? FirstHumanResponseAtUtc);

@@ -649,6 +649,12 @@ public sealed class TicketApprovalAppService(
                 return true;
             }
 
+            // A Closed ticket has no owner; whoever held it last (the assignment history) keeps the standing they had on it.
+            if (await TicketVisibilityRule.CanFollowClosedTicketAsync(userDepartmentAssignmentRepository, callerEmployeeId, ticket, cancellationToken))
+            {
+                return true;
+            }
+
             if (callerRoles.Any(TicketRoleSets.CrossDepartmentSupervisory.Contains))
             {
                 return true;

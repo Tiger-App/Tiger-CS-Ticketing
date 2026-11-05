@@ -142,7 +142,7 @@ public static class TicketActivityTimelineBuilder
 
             return Sources.EmployeeNames.TryGetValue(known, out var name) && !string.IsNullOrWhiteSpace(name)
                 ? name
-                : $"{TimelineWording.Unknown} employee ({known.ToString()[..8]})";
+                : $"{TimelineWording.Unknown} employee";   // never a short GUID: an unresolvable employee is a data problem to investigate
         }
 
         public string Department(int? id) =>

@@ -16,4 +16,22 @@ public interface ITicketUnassignedWorkRepository
 
     /// <summary>The evidence for one ticket (null when it does not exist), whatever its state — used to re-check under the transaction before acting.</summary>
     Task<UnassignedTicketEvidence?> GetEvidenceAsync(long ticketId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The evidence for several tickets in one go (display paths: the queue). Tickets that do not exist are omitted. The default implementation
+    /// asks one ticket at a time; the EF repository overrides it with a single batched read.
+    /// </summary>
+    async Task<IReadOnlyList<UnassignedTicketEvidence>> ListEvidenceAsync(IReadOnlyCollection<long> ticketIds, CancellationToken cancellationToken = default)
+    {
+        var result = new List<UnassignedTicketEvidence>(ticketIds.Count);
+        foreach (var id in ticketIds)
+        {
+            if (await GetEvidenceAsync(id, cancellationToken) is { } evidence)
+            {
+                result.Add(evidence);
+            }
+        }
+
+        return result;
+    }
 }

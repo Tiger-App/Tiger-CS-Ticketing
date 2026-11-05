@@ -12,17 +12,17 @@
     <td class="col-subject">@t.RequestSummary</td>
     <td>@TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</td>
     <td>
-        @if (TicketDisplay.IsDepartmentQueue(t.CurrentOwnerEmployeeId))
+        @* Closed: empty by rule. No owner: the AI virtual agent or the awaiting-agent label (see TicketDisplay). Owned: the employee's full name, never an id. *@
+        @if (t.TicketStatus == "Closed")
         {
-            <span class="text-secondary">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName)</span>
         }
-        else if (Model.OwnerName is not null)
+        else if (TicketDisplay.IsDepartmentQueue(t.CurrentOwnerEmployeeId))
         {
-            @Model.OwnerName
+            <span class="text-secondary">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, null, t.CurrentDepartmentId, Model.DepartmentName, isActive: t.TicketStatus != "Resolved", isAiVirtualAgent: t.IsAiVirtualAgent)</span>
         }
         else
         {
-            <span class="id-fallback" title="@t.CurrentOwnerEmployeeId">Employee #@t.CurrentOwnerEmployeeId!.Value.ToString()[..8]</span>
+            @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, t.CurrentOwnerName ?? Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName)
         }
     </td>
     <td class="text-secondary text-mono">@t.CreatedAtUtc.ToLocalTime().ToString("MMM d, HH:mm")</td>

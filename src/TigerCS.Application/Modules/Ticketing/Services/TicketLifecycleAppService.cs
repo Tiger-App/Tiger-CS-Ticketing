@@ -413,7 +413,10 @@ public sealed class TicketLifecycleAppService(
         // used to own: ownership ended with the transfer/reassignment, so handling the interaction earlier no longer carries a right to act.
         // The one exception is the RESPONSIBLE CS Agent while a department employee holds the ticket: having handed the work to the department
         // is not a loss of ownership in this sense - they follow it up and close it (TicketVisibilityRule.CanFollowDepartmentWorkAsync).
-        if (!isCurrentOwner
+        // A Closed ticket has no owner: whoever held it last is not "a previous owner who lost it" - they keep the standing they had.
+        var followsClosedTicket = !isCurrentOwner
+            && await TicketVisibilityRule.CanFollowClosedTicketAsync(userDepartmentAssignmentRepository, callerEmployeeId, ticket, cancellationToken);
+        if (!isCurrentOwner && !followsClosedTicket
             && ((await TicketOwnershipRules.WasPreviousOwnerAsync(ticketAssignmentRepository, ticket, callerEmployeeId, cancellationToken)
                     && !await TicketVisibilityRule.CanFollowDepartmentWorkAsync(
                         userDepartmentAssignmentRepository, callerEmployeeId, ticket, cancellationToken))
@@ -447,6 +450,7 @@ public sealed class TicketLifecycleAppService(
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
+        var ownerBeforeClosure = ticket.CurrentOwnerEmployeeId;
         try
         {
             ticket.Close();
@@ -475,6 +479,7 @@ public sealed class TicketLifecycleAppService(
         await auditWriter.WriteAsync(
             callerEmployeeId, "Close", "Ticket", ticketId.ToString(),
             beforeValue: oldStatus.ToString(), afterValue: TicketStatus.Closed.ToString(), correlationId, cancellationToken);
+        await ReleaseAssignmentOnClosureAsync(ticket, ownerBeforeClosure, callerEmployeeId, correlationId, cancellationToken);
 
         await EnqueueLifecycleEventAsync(
             OutboxEventTypes.TicketClosed, OutboxEventTypes.TicketClosedVersion,
@@ -660,7 +665,9 @@ public sealed class TicketLifecycleAppService(
 
         var previousStatus = ticket.TicketStatus;
         var previousDepartmentId = ticket.CurrentDepartmentId;
-        var previousOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;
+        // Closure clears the owner, so the previous owner of a Closed ticket is read from the assignment history (the row closure marked not-current).
+        // A ticket closed before that rule still carries its owner and keeps the old path.
+        var previousOwnerEmployeeId = ticket.CurrentOwnerEmployeeId ?? await LastAssignedEmployeeAsync(ticket.TicketId, cancellationToken);
         var previousSlaState = ticket.SlaState;
         var reason = Truncate(request.Reason.Trim(), ReopenReasonMaxLength);
 
@@ -879,6 +886,7 @@ public sealed class TicketLifecycleAppService(
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
         TicketStatus oldStatus;
+        var ownerBeforeClosure = ticket.CurrentOwnerEmployeeId;
         try
         {
             oldStatus = ticket.CloseForCustomerInactivity();
@@ -928,6 +936,7 @@ public sealed class TicketLifecycleAppService(
             beforeValue: oldStatus.ToString(),
             afterValue: $"{TicketStatus.Closed};ResolutionOutcome={ResolutionOutcome.Cancelled};Reason={reason}",
             correlationId, cancellationToken);
+        await ReleaseAssignmentOnClosureAsync(ticket, ownerBeforeClosure, integrationEmployeeId, correlationId, cancellationToken);
 
         await EnqueueLifecycleEventAsync(
             OutboxEventTypes.TicketClosed, OutboxEventTypes.TicketClosedVersion,
@@ -997,6 +1006,44 @@ public sealed class TicketLifecycleAppService(
             },
             beforeCommit, cancellationToken);
 
+    /// <summary>
+    /// Closed tickets have no owner. The domain already cleared <see cref="Ticket.CurrentOwnerEmployeeId"/>; this ends the active
+    /// <see cref="TicketAssignment"/> row (superseded, never deleted or edited - the history stays) and records WHO owned the ticket in the audit trail,
+    /// in the same transaction as the closure. A ticket that had no owner writes no audit entry.
+    /// </summary>
+    private async Task ReleaseAssignmentOnClosureAsync(
+        Ticket ticket, Guid? previousOwnerEmployeeId, Guid actorEmployeeId, Guid correlationId, CancellationToken cancellationToken)
+    {
+        if (ticketAssignmentRepository is not null)
+        {
+            (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken))?.MarkSuperseded();
+        }
+
+        if (previousOwnerEmployeeId is { } previousOwner)
+        {
+            await auditWriter.WriteAsync(
+                actorEmployeeId, AssignmentClearedOnClosureAuditAction, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: $"CurrentOwnerEmployeeId={previousOwner}", afterValue: "CurrentOwnerEmployeeId=NULL", correlationId, cancellationToken);
+        }
+    }
+
+    /// <summary>The employee on the most recent assignment row of the ticket - who owned it last - or null when it never had an owner.</summary>
+    private async Task<Guid?> LastAssignedEmployeeAsync(long ticketId, CancellationToken cancellationToken)
+    {
+        if (ticketAssignmentRepository is null)
+        {
+            return null;
+        }
+
+        return (await ticketAssignmentRepository.ListByTicketIdAsync(ticketId, cancellationToken))
+            .OrderByDescending(a => a.TicketAssignmentId).ThenByDescending(a => a.AssignedAtUtc)
+            .Select(a => (Guid?)a.AssignedEmployeeId)
+            .FirstOrDefault();
+    }
+
+    /// <summary>Audit action written when a closure clears the owner; its before-value preserves the previous owner.</summary>
+    public const string AssignmentClearedOnClosureAuditAction = "ClearAssignmentOnClosure";
+
     private async Task<TicketMutationResult> CloseBySystemAsync(
         Guid integrationEmployeeId,
         long ticketId,
@@ -1028,6 +1075,7 @@ public sealed class TicketLifecycleAppService(
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
         TicketStatus oldStatus;
+        var ownerBeforeClosure = ticket.CurrentOwnerEmployeeId;
         try
         {
             oldStatus = close(ticket);
@@ -1075,6 +1123,7 @@ public sealed class TicketLifecycleAppService(
             beforeValue: oldStatus.ToString(),
             afterValue: $"{TicketStatus.Closed};ResolutionOutcome={outcome};Reason={reason};{detail};AtUtc={now:O}",
             correlationId, cancellationToken);
+        await ReleaseAssignmentOnClosureAsync(ticket, ownerBeforeClosure, integrationEmployeeId, correlationId, cancellationToken);
 
         if (outcome == ResolutionOutcome.Resolved)
         {
