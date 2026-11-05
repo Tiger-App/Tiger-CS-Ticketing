@@ -1,0 +1,60 @@
+@model TigerCS.Web.Pages.DashboardBarCard
+@{
+    // A compact visual summary of one breakdown (Status, Volume by Channel):
+    // a single stacked bar split by share, then a legend of linked rows with
+    // count and percentage. Same model, same drill-down links and same
+    // width classes as the full bar card — the segment widths are stylesheet
+    // classes, never inline styles (the Content-Security-Policy forbids them).
+    var tone = Model.Title switch
+    {
+        "Volume by Channel" => "info",
+        "Status" => "progress",
+        _ => "info",
+    };
+}
+<div class="panel dash-card tone-@tone dash-card--summary">
+    <div class="panel__header">
+        <span class="panel__title">@Model.Title</span>
+        <a class="link-muted" href="@Model.TotalHref" title="Open the matching tickets">@Model.Total total</a>
+    </div>
+    @if (Model.Rows.Count == 0 || (Model.Total == 0 && Model.Rows.All(r => r.Count == 0)))
+    {
+        <div class="empty-state empty-state--compact">
+            <p>@Model.EmptyText</p>
+        </div>
+    }
+    else
+    {
+        <div class="summary-bar" aria-hidden="true">
+            @foreach (var row in Model.Rows)
+            {
+                <span class="bar-fill @row.BarWidthClass"></span>
+            }
+        </div>
+        <ul class="summary-legend">
+            @foreach (var (row, index) in Model.Rows.Select((r, i) => (r, i)))
+            {
+                <li class="summary-legend__item summary-legend__item--@(Math.Min(index, 5))">
+                    @if (row.Href is not null)
+                    {
+                        <a class="summary-legend__row" href="@row.Href" title="Open these tickets">
+                            <span class="summary-legend__dot" aria-hidden="true"></span>
+                            <span class="summary-legend__label">@row.Label</span>
+                            <span class="summary-legend__count">@row.Count</span>
+                            <span class="summary-legend__pct">@row.PercentageText</span>
+                        </a>
+                    }
+                    else
+                    {
+                        <span class="summary-legend__row summary-legend__row--static">
+                            <span class="summary-legend__dot" aria-hidden="true"></span>
+                            <span class="summary-legend__label text-secondary">@row.Label</span>
+                            <span class="summary-legend__count">@row.Count</span>
+                            <span class="summary-legend__pct">@row.PercentageText</span>
+                        </span>
+                    }
+                </li>
+            }
+        </ul>
+    }
+</div>
