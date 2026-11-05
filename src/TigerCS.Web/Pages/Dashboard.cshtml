@@ -29,6 +29,23 @@
         _ => "info",
     };
 
+    // The stylesheet's per-card colour key, matched on the label — decoration
+    // only, like the tone and glyph; the number, label and link come from the model.
+    string KpiKey(string label) => label switch
+    {
+        "Open Tickets" => "open",
+        "My Tickets" => "mine",
+        "In Department Queue" => "queue",
+        "SLA Breached" => "sla",
+        "Due Today" => "due",
+        "Pending Approval" => "approval",
+        "Reviewed Tickets" => "reviewed",
+        "Not Reviewed" => "notreviewed",
+        "Closed by AI" => "ai",
+        "Closed by Agent" => "agent",
+        _ => "other",
+    };
+
     // A small leading glyph per KPI, keyed on the card's label — decoration
     // only; the number, label and drill-down link come from the model.
     string KpiIcon(string label) => label switch
@@ -123,7 +140,7 @@
                 <input type="search" name="phoneNumber" class="workspace-search__input"
                        placeholder="Find a customer by phone, name, unit or ticket number…" aria-label="Search customers" required />
                 <button type="submit" class="btn btn-gold">Search Customer</button>
-                <a class="link-muted workspace-search__lookup" href="/Customers/Lookup">Look up in CRM / PACT / Tasleeh →</a>
+                <a class="btn btn-sm workspace-search__lookup" href="/Customers/Lookup">Look up in CRM / PACT / Tasleeh →</a>
             </form>
         </div>
 
@@ -166,7 +183,7 @@
         <section class="kpi-grid kpi-grid--six" aria-label="Operational counters">
             @foreach (var card in Model.Cards)
             {
-                <a class="kpi-card kpi-card--icon tone-@KpiTone(card.Label) @(card.Emphasis is not null ? $"kpi-card--{card.Emphasis}" : "")" href="@card.Href" title="@card.Hint">
+                <a class="kpi-card kpi-card--icon tone-@KpiTone(card.Label) @(card.Emphasis is not null ? $"kpi-card--{card.Emphasis}" : "")" href="@card.Href" data-kpi="@KpiKey(card.Label)" title="@card.Hint">
                     <span class="kpi-card__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none">@Html.Raw(KpiIcon(card.Label))</svg></span>
                     <span class="kpi-card__body">
                         <strong>@card.Value</strong>
@@ -182,7 +199,7 @@
         <section class="kpi-grid kpi-grid--four" aria-label="Closed ticket counters">
             @foreach (var card in Model.ClosureCards)
             {
-                <a class="kpi-card kpi-card--icon tone-@KpiTone(card.Label)" href="@card.Href" title="@card.Hint">
+                <a class="kpi-card kpi-card--icon tone-@KpiTone(card.Label)" href="@card.Href" data-kpi="@KpiKey(card.Label)" title="@card.Hint">
                     <span class="kpi-card__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none">@Html.Raw(KpiIcon(card.Label))</svg></span>
                     <span class="kpi-card__body">
                         <strong>@card.Value</strong>
@@ -286,15 +303,26 @@
         var gridCards = gridTitles.Select(t => Model.BreakdownCards.FirstOrDefault(c => c.Title == t)).OfType<DashboardBarCard>()
             .Concat(Model.BreakdownCards.Where(c => !sideTitles.Contains(c.Title) && !gridTitles.Contains(c.Title))).ToList();
 
-        <section class="dash-main" aria-label="Tickets requiring attention">
+        <section class="dash-main" aria-label="Status and channel summaries">
             <div class="dash-side">
                 @foreach (var card in sideCards)
                 {
                     @await Html.PartialAsync("_DashboardSummaryCard", card)
                 }
             </div>
+        </section>
 
-            @* ---- Tickets requiring attention: the 5 newest active tickets in scope (CreatedAt DESC, sorted server-side). ---- *@
+        @* ---- Request types, backlog ageing, priority and department volume: a balanced, content-height grid. ---- *@
+        <section class="dash-grid" aria-label="Operational breakdown">
+            @foreach (var card in gridCards)
+            {
+                @await Html.PartialAsync("_DashboardBarCard", card)
+            }
+        </section>
+
+        @* ---- Tickets requiring attention: full width, last on the page, after all the analytics. ---- *@
+        <section class="dash-attention-section" aria-label="Tickets requiring attention">
+            @* The 5 newest active tickets in scope (CreatedAt DESC, sorted server-side). ---- *@
             <div class="panel panel--compact dash-attention">
                 <div class="panel__header">
                     <span class="panel__title">Tickets Requiring Attention</span>
@@ -341,14 +369,6 @@
                     </div>
                 }
             </div>
-        </section>
-
-        @* ---- Request types, backlog ageing, priority and department volume: a balanced, content-height grid. ---- *@
-        <section class="dash-grid" aria-label="Operational breakdown">
-            @foreach (var card in gridCards)
-            {
-                @await Html.PartialAsync("_DashboardBarCard", card)
-            }
         </section>
 
     }

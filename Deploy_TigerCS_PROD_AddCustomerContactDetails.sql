@@ -45,19 +45,23 @@ IF NOT EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId = @Prev
 IF EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory WHERE MigrationId > @MigrationId)
     THROW 50107, 'ABORTED: __EFMigrationsHistory contains a migration newer than this one. Investigate manually.', 1;
 
+-- The exact column shape EF defines (max_length is in BYTES: nvarchar(32) = 64, (200) = 400, (256) = 512).
+DECLARE @Expected TABLE (Col sysname, TypeName sysname, MaxLen smallint, Nullable bit, IsIdentity bit);
+INSERT @Expected VALUES
+    (N'CustomerContactDetailId', N'bigint',           8,   0, 1),
+    (N'PhoneKey',                N'nvarchar',         64,  0, 0),
+    (N'Name',                    N'nvarchar',         400, 0, 0),
+    (N'Email',                   N'nvarchar',         512, 1, 0),
+    (N'CreatedAtUtc',            N'datetime2',        8,   0, 0),
+    (N'UpdatedAtUtc',            N'datetime2',        8,   0, 0),
+    (N'UpdatedByEmployeeId',     N'uniqueidentifier', 16,  0, 0),
+    (N'RowVersion',              N'timestamp',        8,   0, 0);
+
 -- An existing table of this name must have exactly the EF shape; otherwise stop and let a human look.
 IF OBJECT_ID(N'dbo.CustomerContactDetails', N'U') IS NOT NULL
 BEGIN
     DECLARE @bad nvarchar(max) = N'';
-    SELECT @bad = @bad + e.Col + N' ' FROM (VALUES
-        (N'CustomerContactDetailId', N'bigint',           8,   0, 1),
-        (N'PhoneKey',                N'nvarchar',         64,  0, 0),   -- nvarchar(32) = 64 bytes
-        (N'Name',                    N'nvarchar',         400, 0, 0),   -- nvarchar(200)
-        (N'Email',                   N'nvarchar',         512, 1, 0),   -- nvarchar(256)
-        (N'CreatedAtUtc',            N'datetime2',        8,   0, 0),
-        (N'UpdatedAtUtc',            N'datetime2',        8,   0, 0),
-        (N'UpdatedByEmployeeId',     N'uniqueidentifier', 16,  0, 0),
-        (N'RowVersion',              N'timestamp',        8,   0, 0)) AS e(Col, TypeName, MaxLen, Nullable, IsIdentity)
+    SELECT @bad = @bad + e.Col + N' ' FROM @Expected e
       WHERE NOT EXISTS (
         SELECT 1 FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id
         WHERE c.object_id = OBJECT_ID(N'dbo.CustomerContactDetails') AND c.name = e.Col
@@ -100,6 +104,23 @@ BEGIN TRY
 
     -- Validation (inside the transaction: any failure rolls everything back)
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.CustomerContactDetails')
+                   AND name = N'PK_CustomerContactDetails' AND is_primary_key = 1 AND is_disabled = 0)
+        THROW 50110, 'VALIDATION FAILED: primary key PK_CustomerContactDetails missing.', 1;
+    IF NOT EXISTS (SELECT 1 FROM sys.index_columns ic JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                   WHERE ic.object_id = OBJECT_ID(N'dbo.CustomerContactDetails') AND ic.index_id = INDEXPROPERTY(ic.object_id, N'PK_CustomerContactDetails', 'IndexId')
+                   AND c.name = N'CustomerContactDetailId')
+        THROW 50115, 'VALIDATION FAILED: primary key is not on CustomerContactDetailId.', 1;
+    IF EXISTS (SELECT 1 FROM @Expected e WHERE NOT EXISTS (
+            SELECT 1 FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id
+            WHERE c.object_id = OBJECT_ID(N'dbo.CustomerContactDetails') AND c.name = e.Col
+              AND t.name = e.TypeName AND c.max_length = e.MaxLen AND c.is_nullable = e.Nullable AND c.is_identity = e.IsIdentity))
+       OR (SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.CustomerContactDetails')) <> 8
+        THROW 50116, 'VALIDATION FAILED: dbo.CustomerContactDetails columns differ from the EF model.', 1;
+    IF NOT EXISTS (SELECT 1 FROM sys.index_columns ic JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+                   WHERE ic.object_id = OBJECT_ID(N'dbo.CustomerContactDetails') AND ic.index_id = INDEXPROPERTY(ic.object_id, N'IX_CustomerContactDetails_PhoneKey', 'IndexId')
+                   AND c.name = N'PhoneKey')
+        THROW 50117, 'VALIDATION FAILED: unique index is not on PhoneKey.', 1;
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.CustomerContactDetails')
                    AND name = N'IX_CustomerContactDetails_PhoneKey' AND is_unique = 1 AND is_disabled = 0)
         THROW 50111, 'VALIDATION FAILED: unique index IX_CustomerContactDetails_PhoneKey missing.', 1;
     IF (SELECT COUNT(*) FROM dbo.__EFMigrationsHistory WHERE MigrationId = @MigrationId) <> 1
@@ -123,3 +144,24 @@ BEGIN CATCH
     PRINT 'FAILED - transaction rolled back, nothing was changed.';
     THROW;
 END CATCH;
+
+/* ---------------------------------------------------------------------------------------------
+   POST-DEPLOY VERIFICATION (read-only; run separately after a COMMITTED run)
+   1. Expect 1 row, Present = 1:
+        SELECT OBJECT_ID(N'dbo.CustomerContactDetails', N'U') IS NOT NULL AS Present;
+   2. Expect 8 columns, shape exactly as EF (max_length is bytes):
+        SELECT c.column_id, c.name, t.name AS type, c.max_length, c.is_nullable, c.is_identity
+        FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id
+        WHERE c.object_id = OBJECT_ID(N'dbo.CustomerContactDetails') ORDER BY c.column_id;
+   3. Expect PK_CustomerContactDetails (primary key) and IX_CustomerContactDetails_PhoneKey (unique):
+        SELECT name, is_primary_key, is_unique FROM sys.indexes WHERE object_id = OBJECT_ID(N'dbo.CustomerContactDetails') AND name IS NOT NULL;
+   4. Expect exactly 1 row, and no row newer than it:
+        SELECT MigrationId, ProductVersion FROM dbo.__EFMigrationsHistory WHERE MigrationId >= N'20261104130835_AddCollectionsTowerAssignments' ORDER BY MigrationId;
+   5. Expect 0 rows (table starts empty; every customer then shows exactly as before):
+        SELECT COUNT_BIG(*) FROM dbo.CustomerContactDetails;
+   6. Re-run Verify_TigerCS_PROD_PendingMigrations_ReadOnly.sql: no pending migration, CustomerContactDetails PRESENT.
+   7. Application: GET /Customers and GET /Customers/{key} load (the Api log has no "Invalid object name").
+
+   ROLLBACK is the block in the header. It is safe only while the table is empty/unused; once agents have saved names or e-mails,
+   dropping it DELETES that data - restore from the pre-deploy backup instead, or leave the table (the previous build ignores it).
+--------------------------------------------------------------------------------------------- */
