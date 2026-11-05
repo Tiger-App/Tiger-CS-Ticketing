@@ -44,6 +44,25 @@ public sealed class UserDepartmentAssignmentRepository(TigerCsDbContext dbContex
         dbContext.UserRoles.AnyAsync(
             ur => ur.UserId == employeeId && dbContext.Roles.Any(r => r.Id == ur.RoleId && r.Name == roleName), cancellationToken);
 
+    public async Task<bool> IsResponsibleForClosedTicketAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default)
+    {
+        // Closure clears the owner but keeps the assignment rows: whoever was assigned LAST (any role) keeps access to the ticket they worked, and the
+        // responsible CS Agent keeps following it. A ticket that was never assigned opens nothing through its creator.
+        // An inactivity closure keeps its own, windowed rule (IsResponsibleForInactivityClosureAsync); this one never overrides that window.
+        if (await dbContext.TicketResolutions.AnyAsync(r => r.TicketId == ticketId && r.IsCurrent && r.ClosedForCustomerInactivity, cancellationToken))
+        {
+            return false;
+        }
+
+        var last = await dbContext.TicketAssignments
+            .Where(a => a.TicketId == ticketId)
+            .OrderByDescending(a => a.TicketAssignmentId)
+            .Select(a => (Guid?)a.AssignedEmployeeId)
+            .FirstOrDefaultAsync(cancellationToken);
+        return last is not null
+            && (last == employeeId || await IsResponsibleCsAgentAsync(ticketId, creatorEmployeeId, employeeId, cancellationToken));
+    }
+
     public async Task<bool> IsResponsibleCsAgentAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default)
     {
         var csAgentRole = Roles.CsAgent;

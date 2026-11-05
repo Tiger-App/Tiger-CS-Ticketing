@@ -44,8 +44,13 @@ internal static class TicketQueryFilters
         {
             // A department-scoped employee ALWAYS sees the tickets currently assigned to them, whatever department those sit in now
             // (My Tickets). It adds only their own tickets — never anyone else's. Set-based twin of TicketVisibilityRule's owner rule.
+            // Closure clears the owner, so the LAST assignee of a Closed ticket keeps seeing it (twin of TicketVisibilityRule.CanFollowClosedTicketAsync).
             return departmentIds is not null && ownerEmployeeId is { } ownerId
-                ? tickets.Where(t => departmentIds.Contains(t.CurrentDepartmentId) || t.CurrentOwnerEmployeeId == ownerId)
+                ? tickets.Where(t => departmentIds.Contains(t.CurrentDepartmentId) || t.CurrentOwnerEmployeeId == ownerId
+                    || (t.TicketStatus == TicketStatus.Closed && t.CurrentOwnerEmployeeId == null
+                        && !dbContext.TicketResolutions.Any(r => r.TicketId == t.TicketId && r.IsCurrent && r.ClosedForCustomerInactivity)
+                        && dbContext.TicketAssignments.Where(a => a.TicketId == t.TicketId).OrderByDescending(a => a.TicketAssignmentId)
+                            .Select(a => a.AssignedEmployeeId).FirstOrDefault() == ownerId))
                 : tickets.InScope(departmentIds);
         }
 
@@ -84,6 +89,13 @@ internal static class TicketQueryFilters
         Expression<Func<Ticket, bool>> visible = ((Expression<Func<Ticket, bool>>)(t => t.CurrentOwnerEmployeeId == agentId))
             .OrElse(followsDepartmentWork.AndAlso(isResponsible))
             .OrElse(t => departments.Contains(t.CurrentDepartmentId));
+
+        // Set-based twin of TicketVisibilityRule.CanFollowClosedTicketAsync: closure clears the owner, so the CS Agent on the most recent CS-Agent
+        // assignment row (or, failing that, its creator) keeps seeing the closed ticket they were responsible for.
+        visible = visible.OrElse(((Expression<Func<Ticket, bool>>)(t => t.TicketStatus == TicketStatus.Closed && t.CurrentOwnerEmployeeId == null)).AndAlso(isResponsible.OrElse(t => dbContext.TicketAssignments.Where(a => a.TicketId == t.TicketId).OrderByDescending(a => a.TicketAssignmentId)
+                .Select(a => a.AssignedEmployeeId).FirstOrDefault() == agentId))
+            .AndAlso(t => dbContext.TicketAssignments.Any(a => a.TicketId == t.TicketId)
+                && !dbContext.TicketResolutions.Any(r => r.TicketId == t.TicketId && r.IsCurrent && r.ClosedForCustomerInactivity)));
 
         if (inactivityReopenCutoffUtc is { } cutoff)
         {

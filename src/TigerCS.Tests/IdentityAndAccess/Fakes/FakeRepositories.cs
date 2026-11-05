@@ -105,6 +105,18 @@ public sealed class FakeUserDepartmentAssignmentRepository : IUserDepartmentAssi
         Task.FromResult(EveryUserIsResponsible
             || (ResponsibleCsAgentByTicket.TryGetValue(ticketId, out var agent) && agent == employeeId));
 
+    /// <summary>The last assignee per CLOSED ticket (closure clears the owner but keeps the assignment rows), for <see cref="IsResponsibleForClosedTicketAsync"/>.</summary>
+    public readonly Dictionary<long, Guid> LastAssigneeByClosedTicket = [];
+
+    /// <summary>(ticket, employee) pairs explicitly NOT responsible for a closed ticket, even when <see cref="EveryUserIsResponsible"/> is on.</summary>
+    public readonly HashSet<(long TicketId, Guid EmployeeId)> NotResponsibleForClosedTicket = [];
+
+    public Task<bool> IsResponsibleForClosedTicketAsync(long ticketId, Guid? creatorEmployeeId, Guid employeeId, CancellationToken cancellationToken = default) =>
+        Task.FromResult(!NotResponsibleForClosedTicket.Contains((ticketId, employeeId))
+            && ((LastAssigneeByClosedTicket.TryGetValue(ticketId, out var last) && last == employeeId)
+                || EveryUserIsResponsible
+                || (ResponsibleCsAgentByTicket.TryGetValue(ticketId, out var agent) && agent == employeeId)));
+
     /// <summary>(ticket, employee) pairs that are the responsible CS Agent of an inactivity-closed ticket still inside the reopen window.</summary>
     public readonly HashSet<(long TicketId, Guid EmployeeId)> InactivityClosureResponsible = [];
 

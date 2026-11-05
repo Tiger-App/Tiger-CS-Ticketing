@@ -938,6 +938,7 @@ public class Ticket
         ResolutionOutcome = (byte)ResolutionOutcomeValue.Cancelled;
         DuplicateOfTicketId = null;
         TicketStatus = TicketStatus.Closed;
+        ClearOwnerOnClosure();
         return previous;
     }
 
@@ -979,6 +980,7 @@ public class Ticket
         ResolutionOutcome = (byte)outcome;
         DuplicateOfTicketId = null;
         TicketStatus = TicketStatus.Closed;
+        ClearOwnerOnClosure();
         return previous;
     }
 
@@ -1017,7 +1019,15 @@ public class Ticket
         }
 
         TicketStatus = TicketStatus.Closed;
+        ClearOwnerOnClosure();
     }
+
+    /// <summary>
+    /// A Closed ticket has no owner: nobody is working it any more. Called by every transition INTO <see cref="TicketStatus.Closed"/> (manual,
+    /// document delivery, AI completion, customer inactivity). The caller captures the previous owner BEFORE closing - for the audit trail - and
+    /// supersedes the current <see cref="TicketAssignment"/> row (history is kept). Open / InProgress / Resolved tickets are never touched by this.
+    /// </summary>
+    private void ClearOwnerOnClosure() => CurrentOwnerEmployeeId = null;
 
     /// <summary>
     /// FR-RES-04 / MVP-API-Contracts.md §3.11 — Reopen is a domain event,

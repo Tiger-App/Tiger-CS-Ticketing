@@ -602,14 +602,14 @@ else
                         <div class="tw-fact__body">
                             <span class="tw-fact__k">Assigned To</span>
                             <div class="tw-owner__row">
-                            <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
+                            <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved, t.IsAiVirtualAgent, isClosed)</span>
                             @if (Model.CanAssignInCollections && !isClosed)
                             {
                                 @* Assign / Reassign: one blue button beside the name opens a centred modal (a native <dialog>: focus trap, Escape, dimmed backdrop).
                                    The list is exactly the members the page already loaded for this viewer; the post is the unchanged CollectionsAssign handler, so the
                                    Api still decides who may assign whom and writes the same history. *@
                                 var hasOwner = t.CurrentOwnerEmployeeId is not null;
-                                var ownerLabel = hasOwner ? Model.OwnerName ?? "Assigned" : "No one assigned";
+                                var ownerLabel = hasOwner ? Model.OwnerName ?? TicketDisplay.UnknownEmployeeLabel : "No one assigned";
                                 <div class="tw-assign" data-collections-assign data-post-url="@Url.Page("TicketDetails", "CollectionsAssign", new { id = t.TicketId })">
                                     <button type="button" class="btn-reassign" data-assign-open aria-haspopup="dialog">@TicketIcons.Svg("user-round-cog", "ic ic--btn")<span data-assign-open-label>@(hasOwner ? "Reassign" : "Assign")</span></button>
                                     <dialog class="reassign-modal" data-assign-dialog aria-labelledby="reassign-title">

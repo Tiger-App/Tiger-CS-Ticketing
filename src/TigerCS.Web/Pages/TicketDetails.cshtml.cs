@@ -117,7 +117,7 @@ public sealed class TicketDetailsModel(
     public string? ResolvedByName => Ticket?.ResolvedByName ?? NameFor(Ticket?.ResolvedByEmployeeId);
 
     private string? NameFor(Guid? employeeId) =>
-        employeeId is { } id ? (EmployeeNames.TryGetValue(id, out var name) ? name : $"Employee #{id.ToString()[..8]}") : null;
+        employeeId is { } id ? (EmployeeNames.TryGetValue(id, out var name) ? name : TicketDisplay.UnknownEmployeeLabel) : null;
     public IReadOnlyList<DepartmentUserDto> AssignableEmployees { get; private set; } = [];
 
     /// <summary>
@@ -578,7 +578,7 @@ public sealed class TicketDetailsModel(
             }
 
             var ownerName = updated.CurrentOwnerEmployeeId is { } owner
-                ? await nameResolver.ResolveOwnerNameAsync(updated.CurrentDepartmentId, owner, cancellationToken)
+                ? updated.CurrentOwnerName ?? await nameResolver.ResolveOwnerNameAsync(updated.CurrentDepartmentId, owner, cancellationToken)
                 : null;
             var history = await ticketsApiClient.GetAssignmentHistoryAsync(id, cancellationToken);
             return new JsonResult(new
@@ -1241,8 +1241,9 @@ public sealed class TicketDetailsModel(
 
         DepartmentName = nameResolver.TryGetDepartmentName(Ticket.CurrentDepartmentId);
         AssignableByDepartment = GroupAssignableByDepartment(AssignableUsers, Ticket.CurrentDepartmentId, DepartmentName);
+        // The Api resolves the owner's full name from the employee directory by id; the department-roster lookup is only a fallback for an older Api.
         OwnerName = Ticket.CurrentOwnerEmployeeId is Guid ownerId
-            ? await nameResolver.ResolveOwnerNameAsync(Ticket.CurrentDepartmentId, ownerId, cancellationToken)
+            ? Ticket.CurrentOwnerName ?? await nameResolver.ResolveOwnerNameAsync(Ticket.CurrentDepartmentId, ownerId, cancellationToken)
             : null;
 
         EmployeeNames = BuildEmployeeNames(Ticket, Approvals?.Events ?? []);
@@ -1467,7 +1468,7 @@ public sealed class TicketDetailsModel(
 
         foreach (var note in notes)
         {
-            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? $"Employee #{note.AuthorEmployeeId.ToString()[..8]}";
+            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? TicketDisplay.UnknownEmployeeLabel;
             entries.Add(new ActivityEntry(note.CreatedAtUtc, "note", author, "added a note", note.NoteText, true));
         }
 
@@ -1506,7 +1507,7 @@ public sealed class TicketDetailsModel(
             }
 
             var actor = approvalEvent.ActorEmployeeId is { } approvalActorId
-                ? TicketNameResolver.ResolveSelfAuthorName(approvalActorId, viewer) ?? $"Employee #{approvalActorId.ToString()[..8]}"
+                ? TicketNameResolver.ResolveSelfAuthorName(approvalActorId, viewer) ?? TicketDisplay.UnknownEmployeeLabel
                 : "System";
 
             // A handoff request is worded from its stated trigger, so the feed
@@ -1540,7 +1541,7 @@ public sealed class TicketDetailsModel(
 
             var actor = change.ActorIsSystem || change.ActorEmployeeId is not { } actorId
                 ? "System"
-                : TicketNameResolver.ResolveSelfAuthorName(actorId, viewer) ?? $"Employee #{actorId.ToString()[..8]}";
+                : TicketNameResolver.ResolveSelfAuthorName(actorId, viewer) ?? TicketDisplay.UnknownEmployeeLabel;
 
             var isReopen = change is { Dimension: nameof(TicketStatusDimension.TicketStatus), NewValue: nameof(TicketStatus.InProgress) }
                 && change.OldValue == nameof(TicketStatus.Closed);
@@ -1600,7 +1601,7 @@ public sealed class TicketDetailsModel(
 
         foreach (var note in notes)
         {
-            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? $"Employee #{note.AuthorEmployeeId.ToString()[..8]}";
+            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? TicketDisplay.UnknownEmployeeLabel;
             entries.Add(new ActivityEntry(note.CreatedAtUtc, "note", author, "added a note", note.NoteText, true));
         }
 
@@ -1631,7 +1632,7 @@ public sealed class TicketDetailsModel(
             }
 
             var actor = approvalEvent.ActorEmployeeId is { } actorId
-                ? TicketNameResolver.ResolveSelfAuthorName(actorId, viewer) ?? approvalEvent.ActorName ?? $"Employee #{actorId.ToString()[..8]}"
+                ? TicketNameResolver.ResolveSelfAuthorName(actorId, viewer) ?? approvalEvent.ActorName ?? TicketDisplay.UnknownEmployeeLabel
                 : "System";
             entries.Add(new ActivityEntry(approvalEvent.OccurredAtUtc, "approval", actor, description, approvalEvent.Note, true));
         }
@@ -1649,7 +1650,7 @@ public sealed class TicketDetailsModel(
     {
         string NameOf(Guid id) =>
             TicketNameResolver.ResolveSelfAuthorName(id, viewer)
-            ?? (employeeNames is not null && employeeNames.TryGetValue(id, out var known) ? known : $"Employee #{id.ToString()[..8]}");
+            ?? (employeeNames is not null && employeeNames.TryGetValue(id, out var known) ? known : TicketDisplay.UnknownEmployeeLabel);
 
         string DepartmentOf(int? id) =>
             id is { } departmentId ? nameResolver.TryGetDepartmentName(departmentId) ?? $"Department #{departmentId}" : "a department";
@@ -1685,7 +1686,7 @@ public sealed class TicketDetailsModel(
     {
         string NameOf(Guid id) =>
             TicketNameResolver.ResolveSelfAuthorName(id, viewer)
-            ?? (employeeNames is not null && employeeNames.TryGetValue(id, out var known) ? known : $"Employee #{id.ToString()[..8]}");
+            ?? (employeeNames is not null && employeeNames.TryGetValue(id, out var known) ? known : TicketDisplay.UnknownEmployeeLabel);
 
         var receiver = agentEvent.ToEmployeeId is { } toId ? NameOf(toId) : null;
 
@@ -1721,6 +1722,7 @@ public sealed class TicketDetailsModel(
             }
         }
 
+        Add(ticket.CurrentOwnerEmployeeId, ticket.CurrentOwnerName);
         Add(ticket.FirstHandledByEmployeeId, ticket.FirstHandledByName);
         Add(ticket.ResolvedByEmployeeId, ticket.ResolvedByName);
         foreach (var workflowEvent in workflowEvents)

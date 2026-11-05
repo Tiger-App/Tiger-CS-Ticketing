@@ -313,13 +313,16 @@ public class TicketClassificationAppServiceTests
         var f = CreateService();
         var ticket = await SeedUnclassifiedTicketAsync(f);
         var category = f.Categories.Seed(ticket.CurrentDepartmentId);
-        ticket.AssignTo(Guid.NewGuid());
+        var assignee = Guid.NewGuid();
+        ticket.AssignTo(assignee);
         ticket.ChangeStatus(TicketStatus.InProgress);
         ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
         ticket.Close();
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                       // closure cleared the owner
+        f.DepartmentAssignments.LastAssigneeByClosedTicket[ticket.TicketId] = assignee;   // ...the assignment history keeps who held it
 
         var result = await f.Service.ClassifyAsync(
-            ticket.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
+            assignee, [Roles.CsAgent], ticket.TicketId, Request(category.CategoryId));
 
         Assert.Equal(TicketMutationOutcome.TicketClosed, result.Outcome);
         Assert.False(ticket.IsClassified);
