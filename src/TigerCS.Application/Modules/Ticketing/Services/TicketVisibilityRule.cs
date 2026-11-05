@@ -196,6 +196,13 @@ public static class TicketVisibilityRule
                 return TicketAccessLevel.Full;
             }
 
+            // A Closed ticket's owner is cleared by closure; whoever worked it last (or its responsible CS Agent) keeps the access they had.
+            if (!Roles.IsReadOnlyCaller(callerRoles)
+                && await CanFollowClosedTicketAsync(userDepartmentAssignmentRepository, callerEmployeeId, ticket, cancellationToken))
+            {
+                return TicketAccessLevel.Full;
+            }
+
             if (!IsRestrictedCsAgent(callerRoles, callerEmployeeId, serviceIdentities))
             {
                 // The employee a ticket is currently assigned to can always open and work it (read-only roles never own tickets).
@@ -248,6 +255,19 @@ public static class TicketVisibilityRule
         && owner != callerEmployeeId
         && !await userDepartmentAssignmentRepository.HoldsRoleAsync(owner, Roles.CsAgent, cancellationToken)
         && await userDepartmentAssignmentRepository.IsResponsibleCsAgentAsync(ticket.TicketId, ticket.CreatedByEmployeeId, callerEmployeeId, cancellationToken);
+
+    /// <summary>
+    /// A Closed ticket has no owner (closure clears it), so "assigned to me" can no longer carry a CS Agent's access to the ticket they just closed.
+    /// This keeps the access the ticket's RESPONSIBLE CS Agent had while it was open (the CS Agent on the most recent CS-Agent assignment row - kept
+    /// after closure, only marked not-current - or, when none was ever assigned, its creator): they still see, and with the Reopen role can reopen, the
+    /// closed ticket. Only Closed, unowned tickets are affected. Set-based twin: <c>TicketQueryFilters.VisibleTo</c>.
+    /// </summary>
+    public static async Task<bool> CanFollowClosedTicketAsync(
+        IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository, Guid callerEmployeeId, Ticket ticket,
+        CancellationToken cancellationToken = default) =>
+        ticket.TicketStatus == TicketStatus.Closed
+        && ticket.CurrentOwnerEmployeeId is null
+        && await userDepartmentAssignmentRepository.IsResponsibleForClosedTicketAsync(ticket.TicketId, ticket.CreatedByEmployeeId, callerEmployeeId, cancellationToken);
 
     /// <summary>
     /// The inactivity-closure exception: an UNOWNED ticket the chatbot closed for customer inactivity, still inside the reopen window

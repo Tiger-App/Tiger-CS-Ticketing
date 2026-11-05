@@ -601,14 +601,14 @@ else
                         @TicketIcons.Svg("users", "ic ic--fact")
                         <div class="tw-fact__body">
                             <span class="tw-fact__k">Assigned To</span>
-                            <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved)</span>
+                            <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved, t.IsAiVirtualAgent, isClosed)</span>
                             @if (Model.CanAssignInCollections && !isClosed)
                             {
                                 <details class="tw-assign" data-collections-assign data-post-url="@Url.Page("TicketDetails", "CollectionsAssign", new { id = t.TicketId })">
                                     <summary class="btn btn-sm">@(t.CurrentOwnerEmployeeId is null ? "Assign" : "Reassign")</summary>
                                     <form method="post" asp-page-handler="CollectionsAssign" asp-route-id="@t.TicketId" class="tw-assign__panel">
                                         <input type="hidden" asp-for="CollectionsAssign.RowVersionBase64" data-assign-rowversion />
-                                        <p class="tw-assign__current">Current: <strong data-assign-current>@(t.CurrentOwnerEmployeeId is null ? "No one assigned" : Model.OwnerName ?? "Assigned")</strong></p>
+                                        <p class="tw-assign__current">Current: <strong data-assign-current>@(t.CurrentOwnerEmployeeId is null ? "No one assigned" : Model.OwnerName ?? TicketDisplay.UnknownEmployeeLabel)</strong></p>
                                         <input type="search" class="field-input" placeholder="Search Collections team" autocomplete="off" aria-label="Search Collections team" data-assign-search />
                                         <select class="field-select" asp-for="CollectionsAssign.EmployeeId" size="6" aria-label="Collections team member" data-assign-select>
                                             @foreach (var member in Model.AssignableEmployees.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase))

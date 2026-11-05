@@ -1,4 +1,5 @@
-﻿using TigerCS.Application.Authorization;
+﻿using Microsoft.Extensions.Logging;
+using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Notifications;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -35,7 +36,9 @@ public sealed class TicketQueryAppService(
     IEmployeeRepository? employeeRepository = null,
     TicketClaimPolicy? claimPolicy = null,
     DefaultClassificationService? defaultClassification = null,
-    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTeam? collectionsTeam = null)
+    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTeam? collectionsTeam = null,
+    ITicketUnassignedWorkRepository? unassignedWorkRepository = null,
+    Microsoft.Extensions.Logging.ILogger<TicketQueryAppService>? logger = null)
 {
     /// <summary>Whether the caller may use the supervisor escalation-review filter (<c>escalated=true</c>).</summary>
     public static bool CanReviewEscalations(IReadOnlyCollection<string> callerRoles) =>
@@ -126,7 +129,68 @@ public sealed class TicketQueryAppService(
 
         var result = await ticketRepository.SearchAsync(query, cancellationToken);
 
-        return new TicketListResultDto(result.Items.Select(ToSummaryDto).ToList(), result.TotalCount, page, pageSize);
+        var summaries = await EnrichSummariesAsync(result.Items, cancellationToken);
+        return new TicketListResultDto(summaries, result.TotalCount, page, pageSize);
+    }
+
+    /// <summary>
+    /// Adds what the queue needs to word "Assigned To" correctly: each owner's FULL name straight from the employee directory (by id - not by paging
+    /// the ticket's department roster, which misses owners who sit in another department or past the first page), and the AI-virtual-agent display flag.
+    /// Read-only; ownership is never changed here. An owner whose employee row is missing is logged-by-absence (null name) for the caller to report.
+    /// </summary>
+    private async Task<List<TicketSummaryDto>> EnrichSummariesAsync(IReadOnlyList<Ticket> tickets, CancellationToken cancellationToken)
+    {
+        var names = await ResolveOwnerNamesAsync(tickets.Select(t => t.CurrentOwnerEmployeeId), cancellationToken);
+        var aiTicketIds = await ResolveAiVirtualAgentTicketIdsAsync(tickets, cancellationToken);
+        return tickets
+            .Select(t => ToSummaryDto(t) with
+            {
+                CurrentOwnerName = t.CurrentOwnerEmployeeId is { } id ? names.GetValueOrDefault(id) : null,
+                IsAiVirtualAgent = aiTicketIds.Contains(t.TicketId)
+            })
+            .ToList();
+    }
+
+    private async Task<Dictionary<Guid, string>> ResolveOwnerNamesAsync(IEnumerable<Guid?> ownerIds, CancellationToken cancellationToken)
+    {
+        var ids = ownerIds.OfType<Guid>().Distinct().ToList();
+        if (ids.Count == 0 || employeeRepository is null)
+        {
+            return [];
+        }
+
+        // One batched read for the whole page (never per ticket). Inactive employees are included: a deactivated agent still owns tickets.
+        var names = new Dictionary<Guid, string>(await employeeRepository.ResolveDisplayNamesAsync(ids, cancellationToken));
+
+        // Data inconsistency: a ticket points at an owner with no employee record. Reported only - the assignment is never changed.
+        var missing = ids.Where(id => !names.ContainsKey(id)).ToList();
+        if (missing.Count > 0)
+        {
+            logger?.LogWarning("Ticket owner(s) without an employee record or name: {MissingOwnerEmployeeIds}. Assignments left unchanged.", string.Join(", ", missing));
+        }
+
+        return names;
+    }
+
+    private async Task<HashSet<long>> ResolveAiVirtualAgentTicketIdsAsync(IEnumerable<Ticket> tickets, CancellationToken cancellationToken)
+    {
+        if (unassignedWorkRepository is null)
+        {
+            return [];
+        }
+
+        var candidates = tickets
+            .Where(t => t.CurrentOwnerEmployeeId is null && (t.TicketStatus is TicketStatus.Open or TicketStatus.InProgress))
+            .Select(t => t.TicketId)
+            .ToList();
+        if (candidates.Count == 0)
+        {
+            return [];
+        }
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var evidence = await unassignedWorkRepository.ListEvidenceAsync(candidates, cancellationToken);
+        return evidence.Where(e => AiVirtualAgentRule.IsActive(e, now)).Select(e => e.TicketId).ToHashSet();
     }
 
     public async Task<TicketQueryResultDto<TicketDetailDto>> GetDetailAsync(
@@ -186,8 +250,11 @@ public sealed class TicketQueryAppService(
                 currentResolution?.ClosedForCustomerInactivity == true)
         };
 
+        var ownerNames = await ResolveOwnerNamesAsync([ticket.CurrentOwnerEmployeeId], cancellationToken);
         detail = detail with
         {
+            CurrentOwnerName = ticket.CurrentOwnerEmployeeId is { } ownerId ? ownerNames.GetValueOrDefault(ownerId) : null,
+            IsAiVirtualAgent = (await ResolveAiVirtualAgentTicketIdsAsync([ticket], cancellationToken)).Contains(ticket.TicketId),
             CanCorrectClassification = ticket.TicketStatus != TicketStatus.Closed
                 && accessLevel == TicketAccessLevel.Full
                 && ticket.CurrentOwnerEmployeeId == callerEmployeeId

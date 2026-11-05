@@ -786,11 +786,11 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         var closed = await close.Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.Equal("Closed", closed!.TicketStatus);
 
-        // ...and still finds it, closed, while it stays assigned to the department employee; ownership was never touched.
+        // ...and still finds it, closed (its responsible CS Agent keeps following it); closure cleared the owner.
         Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(agent, ticket.TicketId));
         Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
-        Assert.Equal(workerId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
+        Assert.Null(await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
     }
 
     [Fact]

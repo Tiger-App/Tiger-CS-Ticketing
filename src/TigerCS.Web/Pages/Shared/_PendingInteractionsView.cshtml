@@ -192,7 +192,7 @@
                         <td>
                             @if (h.AssignedEmployeeId is Guid assigned)
                             {
-                                <span class="id-fallback" title="@assigned">Employee #@assigned.ToString()[..8]</span>
+                                <span class="text-secondary">@TicketDisplay.UnknownEmployeeLabel</span>
                             }
                             else if (h.GenesysAgentId is not null)
                             {

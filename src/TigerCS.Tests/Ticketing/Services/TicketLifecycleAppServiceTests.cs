@@ -76,7 +76,7 @@ public class TicketLifecycleAppServiceTests
             timeProvider ?? TimeProvider.System,
             pendingRecords, requestTypes, workflowTemplates, outbox,
             departments, departmentSettings, workflowEvents, autoAssignment, sla.DueDates,
-            new ReopenEligibilityService(statusHistory, requestTypes, workflowTemplates, reopenPolicy ?? ReopenPolicy.Default), handlerRepository: FakeTicketInteractionHandlerRepository.Permissive());
+            new ReopenEligibilityService(statusHistory, requestTypes, workflowTemplates, reopenPolicy ?? ReopenPolicy.Default), handlerRepository: FakeTicketInteractionHandlerRepository.Permissive(), ticketAssignmentRepository: assignments);
 
         return new Fixture(
             service, tickets, resolutions, statusHistory, departmentAssignments, audit, unitOfWork, sla,
@@ -324,10 +324,11 @@ public class TicketLifecycleAppServiceTests
     public async Task ChangeStatusAsync_OnClosedTicket_ReturnsTicketClosed_NoDatabaseWrites()
     {
         var f = CreateService();
-        var (ticket, owner) = await SeedClosedTicketAsync(f.Tickets);
+        var (ticket, _) = await SeedClosedTicketAsync(f.Tickets);
 
+        // Closure cleared the owner, so the former owner has no special access any more; a CS Manager probes the closed ticket instead.
         var result = await f.Service.ChangeStatusAsync(
-            owner, [Roles.DepartmentEmployee], ticket.TicketId,
+            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
             new ChangeStatusRequestDto("InProgress", []));
 
         Assert.Equal(TicketMutationOutcome.TicketClosed, result.Outcome);
@@ -341,11 +342,12 @@ public class TicketLifecycleAppServiceTests
     public async Task ResolveAsync_OnClosedTicket_ReturnsTicketClosed_NoDatabaseWrites()
     {
         var f = CreateService();
-        var (ticket, owner) = await SeedClosedTicketAsync(f.Tickets);
+        var (ticket, _) = await SeedClosedTicketAsync(f.Tickets);
         var resolutionsBefore = f.Resolutions.Added.Count;
 
+        // Closure cleared the owner, so nobody is "the assignee" any more; the System Administrator (who may resolve anything) probes immutability.
         var result = await f.Service.ResolveAsync(
-            owner, [Roles.DepartmentEmployee], ticket.TicketId,
+            Guid.NewGuid(), [Roles.SystemAdministrator], ticket.TicketId,
             new ResolveTicketRequestDto("Resolved", "Attempted re-resolution.", null, null, []));
 
         Assert.Equal(TicketMutationOutcome.TicketClosed, result.Outcome);
@@ -426,9 +428,14 @@ public class TicketLifecycleAppServiceTests
         await f.Resolutions.AddAsync(new TicketResolution(
             ticket.TicketId, outcome, "Replaced the compressor.", null, duplicateOf, owner, closedAtUtc));
 
+        // The history a real owned ticket carries: the owner's assignment row, marked not-current once closure ended it.
+        var ownerAssignment = new TicketAssignment(ticket.TicketId, owner, ClosingDepartmentId, closedAtUtc.AddDays(-2), assigningActorEmployeeId: null);
+        await f.Assignments.AddAsync(ownerAssignment);
+
         if (closed)
         {
             ticket.Close();
+            ownerAssignment.MarkSuperseded();
             await f.StatusHistory.AddAsync(new TicketStatusHistory(
                 ticket.TicketId, TicketStatusDimension.TicketStatus, (byte)TicketStatus.Resolved, (byte)TicketStatus.Closed,
                 owner, actorIsSystem: false, note: null, Guid.NewGuid(), closedAtUtc));
@@ -1379,5 +1386,134 @@ public class TicketLifecycleAppServiceTests
         var resolve = await f.Service.ResolveAsync(
             owner, [Roles.ChairmanCeo], ticket.TicketId, new ResolveTicketRequestDto("Resolved", "x", null, null, []));
         Assert.Equal(TicketMutationOutcome.Forbidden, resolve.Outcome);
+    }
+
+    // ---- Clear the assignment when a ticket closes (history and the previous owner are preserved) ----
+
+    private static async Task<(Ticket Ticket, Guid Owner, TicketAssignment Row)> SeedOwnedWithAssignmentRowAsync(Fixture f)
+    {
+        var owner = Guid.NewGuid();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, owner);
+        var row = new TicketAssignment(ticket.TicketId, owner, ticket.CurrentDepartmentId, DateTime.UtcNow.AddHours(-3), assigningActorEmployeeId: null);
+        await f.Assignments.AddAsync(row);
+        return (ticket, owner, row);
+    }
+
+    [Fact]
+    public async Task CloseAsync_ClearsTheOwner_EndsTheActiveAssignmentRow_AndKeepsThePreviousOwnerInTheAuditTrail()
+    {
+        var f = CreateService();
+        var (ticket, owner, row) = await SeedOwnedWithAssignmentRowAsync(f);
+        await f.Service.ResolveAsync(owner, [Roles.DepartmentEmployee], ticket.TicketId, new ResolveTicketRequestDto("Resolved", "Fixed it.", null, null, []));
+        Assert.Equal(owner, ticket.CurrentOwnerEmployeeId);                    // Resolved: the owner is NOT cleared
+        Assert.True(row.IsCurrent);
+
+        var result = await f.Service.CloseAsync(Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new CloseTicketRequestDto([]));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.False(row.IsCurrent);                                           // ended, never deleted
+        Assert.Equal(owner, row.AssignedEmployeeId);                           // ...and never edited
+        Assert.Contains(f.Assignments.Added, a => a == row);
+        var audit = Assert.Single(f.Audit.Entries, w => w.Action == TicketLifecycleAppService.AssignmentClearedOnClosureAuditAction);
+        Assert.Contains(owner.ToString(), audit.BeforeValue);                  // the previous owner is preserved
+    }
+
+    [Fact]
+    public async Task CloseAsync_OnATicketNobodyOwns_WritesNoClearingAuditEntry()
+    {
+        var f = CreateService();
+        var (ticket, _) = await SeedClosedTicketAsync(f.Tickets);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(f.Audit.Entries, w => w.Action == TicketLifecycleAppService.AssignmentClearedOnClosureAuditAction);
+    }
+
+    [Fact]
+    public async Task OpenInProgressAndResolvedTickets_KeepTheirOwner()
+    {
+        var f = CreateService();
+        var owner = Guid.NewGuid();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, owner);
+        Assert.Equal(owner, ticket.CurrentOwnerEmployeeId);
+        ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
+        Assert.Equal(TicketStatus.Resolved, ticket.TicketStatus);
+        Assert.Equal(owner, ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task ASystemClosure_ByDocumentDelivery_ClearsAHumanOwner_AndEndsTheirAssignmentRow()
+    {
+        var f = CreateService();
+        var (ticket, owner, row) = await SeedOwnedWithAssignmentRowAsync(f);
+
+        var result = await f.Service.CloseForDocumentDeliveryAsync(
+            Guid.NewGuid(), ticket.TicketId, ResolutionOutcome.Resolved, "Document delivered", "doc=1");
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.False(row.IsCurrent);
+        Assert.Contains(owner.ToString(), Assert.Single(f.Audit.Entries, w => w.Action == TicketLifecycleAppService.AssignmentClearedOnClosureAuditAction).BeforeValue);
+    }
+
+    [Fact]
+    public async Task AGenesysAiCompletion_ReleasingAnAutomaticOwner_ClosesWithNoOwner_AndEndsTheRow()
+    {
+        var f = CreateService();
+        var (ticket, owner, row) = await SeedOwnedWithAssignmentRowAsync(f);
+
+        var result = await f.Service.CloseForAiCompletionAsync(Guid.NewGuid(), ticket.TicketId, "Closed by AI", "conv=1", releaseAutomaticOwner: true);
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.False(row.IsCurrent);
+        Assert.Contains(owner.ToString(), Assert.Single(f.Audit.Entries, w => w.Action == TicketLifecycleAppService.AssignmentClearedOnClosureAuditAction).BeforeValue);
+    }
+
+    [Fact]
+    public async Task ACustomerInactivityClosure_LeavesNoOwner()
+    {
+        var f = CreateService();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, Guid.NewGuid());
+        ticket.ReleaseOwner();                      // the chatbot closes only ownerless tickets
+
+        var result = await f.Service.CloseForCustomerInactivityAsync(Guid.NewGuid(), ticket.TicketId, "Customer silent");
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task ATransferredTicket_ThatIsThenClosed_HasNoOwner_AndItsHistoryIsIntact()
+    {
+        var f = CreateService();
+        var (ticket, _, row) = await SeedOwnedWithAssignmentRowAsync(f);
+        ticket.TransferToDepartment(OtherDepartmentId, preserveOwner: true);
+        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
+
+        ticket.Close();
+
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(OtherDepartmentId, ticket.CurrentDepartmentId);
+        Assert.Throws<TicketClosedException>(() => ticket.AssignTo(Guid.NewGuid()));   // a Closed ticket can never be (re)assigned
+        Assert.Throws<TicketClosedException>(() => ticket.ReleaseOwner());
+        Assert.Single(f.Assignments.Added, a => a == row);
+    }
+
+    [Fact]
+    public async Task AClosedTicket_ThatIsReopened_ReturnsToThePreviousAgent_FromTheAssignmentHistory()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, previousAgent, _) = await ClosedTicketOwnedByCallCenterAgentAsync(f, now, previousStillCsAgent: true);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                              // closed: nobody owns it
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(previousAgent, ticket.CurrentOwnerEmployeeId);              // the owner is restored from the history, not from the cleared field
+        Assert.Contains(previousAgent.ToString(), Assert.Single(f.Audit.Entries, w => w.Action == "Reopen").BeforeValue);   // the audit names who held it before
     }
 }
