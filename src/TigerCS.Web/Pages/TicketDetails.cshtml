@@ -1341,10 +1341,7 @@ else
                         {
                             <p class="tw-callout__title">@customerNameNote</p>
                         }
-                        else if (customer.State is not (CustomerLookupState.VerifiedCrm or CustomerLookupState.VerifiedExternal))
-                        {
-                            <p class="tw-callout__title">@customer.StateLabel</p>
-                        }
+                        @* The state itself (e.g. "Manual entry") is already the badge beside the name in the header; the note below only explains it. *@
                         @if (customer.Hint is { } customerHint)
                         {
                             <p class="tw-callout__text">@customerHint</p>

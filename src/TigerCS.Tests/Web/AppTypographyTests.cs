@@ -103,7 +103,7 @@ public sealed partial class AppTypographyTests
     {
         var css = SiteCss();
 
-        Assert.Contains("--tiger-gold: #C5A15A;", css, StringComparison.Ordinal);
+        Assert.Contains("--tiger-gold: #E8C88A;", css, StringComparison.Ordinal);
         Assert.Contains("--color-gold: var(--tiger-gold);", css, StringComparison.Ordinal);
         Assert.Contains(".btn-gold { background: var(--color-primary); border-color: var(--color-primary); color: var(--color-on-primary); }", css, StringComparison.Ordinal);
 
