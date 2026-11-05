@@ -181,6 +181,48 @@ public sealed class TicketUnassignedWorkRepositorySqliteTests : IDisposable
     }
 
     [Fact]
+    public async Task LiveGenesysIsPhoneOnly_IsTrueOnlyWhenEveryLiveGenesysInteractionIsAPhoneCall()
+    {
+        long phoneLive, phoneEndedChatLive, phoneAndChatLive, chatLive, phoneEnded;
+        using (var context = _db.CreateContext())
+        {
+            var a = _db.AddTicket(context, _db.CustomerServiceId); phoneLive = a.TicketId;
+            context.TicketInteractions.Add(Genesys(a, WellKnownChannels.Phone, started: Now.AddHours(-9)));
+
+            var b = _db.AddTicket(context, _db.CustomerServiceId); phoneEndedChatLive = b.TicketId;
+            var endedCall = Genesys(b, WellKnownChannels.Phone, started: Now.AddHours(-9)); endedCall.End(Now.AddHours(-8), "Customer disconnect");
+            context.TicketInteractions.Add(endedCall);
+            context.TicketInteractions.Add(Genesys(b, WellKnownChannels.Website, started: Now.AddHours(-9)));
+
+            var c = _db.AddTicket(context, _db.CustomerServiceId); phoneAndChatLive = c.TicketId;
+            context.TicketInteractions.Add(Genesys(c, WellKnownChannels.Phone, started: Now.AddHours(-9)));
+            context.TicketInteractions.Add(Genesys(c, WellKnownChannels.Website, started: Now.AddHours(-9)));
+
+            var d = _db.AddTicket(context, _db.CustomerServiceId); chatLive = d.TicketId;
+            context.TicketInteractions.Add(Genesys(d, WellKnownChannels.Website, started: Now.AddHours(-9)));
+
+            var e = _db.AddTicket(context, _db.CustomerServiceId); phoneEnded = e.TicketId;
+            var ended = Genesys(e, WellKnownChannels.Phone, started: Now.AddHours(-9)); ended.End(Now.AddHours(-8), "Customer disconnect");
+            context.TicketInteractions.Add(ended);
+
+            context.SaveChanges();
+        }
+
+        using var read = _db.CreateContext();
+        var rows = (await new TicketUnassignedWorkRepository(read).ListActiveUnownedAsync(0, 500)).ToDictionary(r => r.TicketId);
+
+        Assert.True(rows[phoneLive].LiveGenesysIsPhoneOnly);
+        Assert.False(rows[phoneEndedChatLive].LiveGenesysIsPhoneOnly);   // the only live conversation is a chat: protected
+        Assert.False(rows[phoneAndChatLive].LiveGenesysIsPhoneOnly);     // a live chat next to the call: protected
+        Assert.False(rows[chatLive].LiveGenesysIsPhoneOnly);
+        Assert.False(rows[phoneEnded].LiveGenesysIsPhoneOnly);           // nothing live at all
+
+        var options = new CsAgentBackfillOptions { StalePhoneAiAfterHours = 6 };
+        Assert.True(CsAgentBackfillClassifier.IsStalePhoneAi(rows[phoneLive] with { LastActivityUtc = Now.AddHours(-9) }, Now, options));
+        Assert.False(CsAgentBackfillClassifier.IsStalePhoneAi(rows[phoneAndChatLive] with { LastActivityUtc = Now.AddHours(-9) }, Now, options));
+    }
+
+    [Fact]
     public async Task Paging_ByTicketId_NeverRepeatsOrSkips()
     {
         using (var context = _db.CreateContext()) for (var i = 0; i < 25; i++) _db.AddTicket(context, _db.CustomerServiceId);

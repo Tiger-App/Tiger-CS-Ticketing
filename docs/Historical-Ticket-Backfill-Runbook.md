@@ -74,3 +74,38 @@ Closed and Resolved tickets can be re-classified (a label only) but are never as
 **Rerun:** safe. Fixed tickets no longer match a candidate rule; unfixable ones are reported again. **Rollback:** each `ApplyDefaultClassification` audit row holds the previous category / request type / workflow template; each assignment is a superseded + new `TicketAssignments` pair under `CorrelationId = BatchId`; the batch row holds the cursor pre-image. No rollback script is shipped yet.
 
 **Run the dry run on a restored copy of Production, not on the live server:** it takes row locks (the Call Center rotation cursor, agent rows, planned tickets) inside its transaction before rolling back.
+
+## Stale Phone conversations (approved rule, 2026-11)
+
+**Rule.** A live Genesys **Phone** conversation with **no recorded activity for more than 6 hours** no longer blocks assignment. An **Open** or **In Progress**, unowned ticket in that state is treated as `STALE_AI` and dealt to the next CS Agent of the shared rotation.
+
+| Requirement | How it is met |
+|---|---|
+| Phone only | `UnassignedTicketEvidence.LiveGenesysIsPhoneOnly`: at least one live Genesys interaction and **every** live one is a Phone call. A live chat / website / other-channel conversation (even next to a call) stays `ACTIVE_AI`. |
+| Open / In Progress only | `CsAgentBackfillClassifier.IsStalePhoneAi`. Pending Customer / Pending Third Party, Closed and Resolved are never released by this rule. |
+| Last activity > 6 h | Strictly more than the threshold; exactly 6 h is still protected. Last activity = latest of ticket creation, interaction stamps, transcript lines and Genesys workflow events (`LastActivityUtc`). |
+| No end event needed, none invented | Nothing writes `TicketInteractions.EndedAtUtc` / `InactivityClosedAtUtc`. The SQL script proves the live-conversation count is unchanged (report 8). |
+| No auto-close, nothing moved | Only `CurrentOwnerEmployeeId`, one assignment row and audit rows are written. Department, classification, status, SLA and history are untouched (existing invariant checks). |
+| Never reassigns | Only unowned tickets are candidates; the owner is re-checked inside the per-ticket transaction. |
+| Recent / human work protected | Human evidence (follow-up flag, handoff, handler, human transcript line, phone pick-up) makes a ticket eligible as human work, not as stale. A call that shows new activity between listing and writing is protected again by the in-transaction re-check. |
+| Audit | `BackfillAssign` / `AutoAssign` audit rows carry `Reason=StalePhoneAi` (and `LastActivityUtc`). |
+
+**Where it applies**
+
+1. **Historical tickets, SQL.** `Backfill_TigerCS_PUBLISHED_ClassificationAndAssignment.sql`, parameter `@StalePhoneAfterHours` (default 6; NULL or <= 0 switches the rule off). Assignment-only dry run: `@RunClassification = 0`, `@RunAssignment = 1`, `@DryRun = 1`. Reports: **1** (`AssignmentToApply_StalePhone`), **5c** (every STALE_AI Phone ticket with its last activity and proposed owner), **11a** (outcome by Open / other active, with age), **11b** (what stays `ACTIVE_AI`, by department, channel mix and silence), **11c** (proposed distribution per CS Agent), **8** (invariants).
+2. **Historical tickets, application.** `CsAgentBackfill:StalePhoneAiAfterHours` (6) drives the admin preview / dry run (`GET api/admin/cs-agent-backfill/preview`, `POST .../run` with `dryRun: true`); rows carry `stalePhoneAi`. A live run still needs `CsAgentBackfill:Enabled = true`.
+3. **Future tickets, recurring process.** Its own section, hosted service and run lock (shared with the backfill and reconciler, so runs never overlap):
+
+```json
+"StalePhoneAssignment": {
+  "Enabled": false,        // off until approved
+  "DryRun": true,          // logs "would assign", writes nothing
+  "IntervalMinutes": 15,
+  "BatchSize": 100,
+  "MaxAssignmentsPerRun": 50,
+  "StaleAfterHours": 6
+}
+```
+
+It acts **only** on tickets this rule releases; every other unowned ticket remains the job of normal routing, the reconciler and the backfill. Going live needs `Enabled = true` **and** `DryRun = false` - not done without approval.
+

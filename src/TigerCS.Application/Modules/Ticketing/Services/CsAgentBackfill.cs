@@ -45,6 +45,21 @@ public sealed class CsAgentBackfillOptions
 
     /// <summary>The configured stale-AI silence as a span, or null when the rule is disabled (null / non-positive).</summary>
     public TimeSpan? StaleAiThreshold => StaleAiAfterHours is { } h and > 0 ? TimeSpan.FromHours(h) : null;
+
+    /// <summary>
+    /// Approved business rule - stale Genesys PHONE conversations. An Open / In Progress, unowned ticket whose only live Genesys conversations are Phone
+    /// calls, with no human need or handling and NO recorded activity for MORE than this many hours, no longer blocks assignment: it is treated as
+    /// STALE_AI and dealt to the next CS Agent of the shared rotation. No Genesys end event is required and none is invented (the interaction's EndedAtUtc
+    /// is never written); the ticket is not closed; department, classification, status, SLA and history are untouched. Chat / messaging / every other
+    /// channel is NOT affected (that is <see cref="StaleAiAfterHours"/>, off). Default 6; <c>null</c> or a value &lt;= 0 disables the rule.
+    /// </summary>
+    public int? StalePhoneAiAfterHours { get; set; } = DefaultStalePhoneAiAfterHours;
+
+    /// <summary>The approved Phone stale threshold.</summary>
+    public const int DefaultStalePhoneAiAfterHours = 6;
+
+    /// <summary>The configured Phone stale silence as a span, or null when the rule is disabled (null / non-positive).</summary>
+    public TimeSpan? StalePhoneAiThreshold => StalePhoneAiAfterHours is { } h and > 0 ? TimeSpan.FromHours(h) : null;
 }
 
 /// <summary>Why a ticket is, or is not, part of the backfill.</summary>
@@ -92,7 +107,11 @@ public static class CsAgentBackfillClassifier
         if (e.HasGenesysInteraction)
         {
             // A live AI conversation stays protected until it has been silent for MORE than the (opt-in) stale threshold.
-            if (e.HasLiveGenesysInteraction) return IsStaleAi(e, nowUtc, options) ? CsAgentBackfillClass.Eligible : CsAgentBackfillClass.ActiveAiConversation;
+            if (e.HasLiveGenesysInteraction)
+            {
+                return IsStaleAi(e, nowUtc, options) || IsStalePhoneAi(e, nowUtc, options) ? CsAgentBackfillClass.Eligible : CsAgentBackfillClass.ActiveAiConversation;
+            }
+
             if (!options.IncludeAiEndedWithoutHuman) return CsAgentBackfillClass.AiEndedNoHumanNeed;
         }
 
@@ -114,11 +133,29 @@ public static class CsAgentBackfillClassifier
             && e.HasGenesysInteraction && e.HasLiveGenesysInteraction && !HumanNeeded(e)
             && nowUtc - e.LastActivityUtc > threshold;
     }
+
+    /// <summary>
+    /// True when this ticket is released ONLY by the approved Phone stale rule: Open or In Progress, unowned, a live Genesys conversation whose live
+    /// interactions are ALL Phone calls, no human need or handling, and no recorded activity for MORE than
+    /// <see cref="CsAgentBackfillOptions.StalePhoneAiAfterHours"/> (exactly the threshold is not enough). Needs no end event. Pending Customer /
+    /// Pending Third Party tickets, recent calls and any live non-Phone conversation stay protected.
+    /// </summary>
+    public static bool IsStalePhoneAi(UnassignedTicketEvidence e, DateTime nowUtc, CsAgentBackfillOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(e);
+        ArgumentNullException.ThrowIfNull(options);
+        return options.StalePhoneAiThreshold is { } threshold
+            && e.OwnerEmployeeId is null
+            && (e.Status is TicketStatus.Open or TicketStatus.InProgress)
+            && e.HasGenesysInteraction && e.HasLiveGenesysInteraction && e.LiveGenesysIsPhoneOnly && !HumanNeeded(e)
+            && nowUtc - e.LastActivityUtc > threshold;
+    }
 }
 
 public sealed record CsAgentBackfillRow(
     long TicketId, string TicketNumber, TicketStatus Status, int DepartmentId, string? DepartmentName, DateTime CreatedAtUtc,
-    CsAgentBackfillClass Class, Guid? ProposedEmployeeId, string? ProposedSource = null, bool StaleAi = false, DateTime? LastActivityUtc = null);
+    CsAgentBackfillClass Class, Guid? ProposedEmployeeId, string? ProposedSource = null, bool StaleAi = false, DateTime? LastActivityUtc = null,
+    bool StalePhoneAi = false);
 
 /// <summary>The two ways the backfill picks an agent: <see cref="ConfirmedHandler"/> (priority 2) or <see cref="RoundRobin"/> (priority 4).</summary>
 public static class CsAgentBackfillSource
@@ -148,7 +185,8 @@ public enum CsAgentBackfillOutcome
 }
 
 public sealed record CsAgentBackfillTicketResult(
-    long TicketId, CsAgentBackfillOutcome Outcome, CsAgentBackfillClass Class, Guid? AssignedEmployeeId = null, string? Source = null, bool StaleAi = false);
+    long TicketId, CsAgentBackfillOutcome Outcome, CsAgentBackfillClass Class, Guid? AssignedEmployeeId = null, string? Source = null, bool StaleAi = false,
+    bool StalePhoneAi = false);
 
 /// <summary>
 /// The one-time backfill of active tickets that have no CS Agent. It runs the SAME engine as new tickets
@@ -211,7 +249,8 @@ public sealed class CsAgentBackfillService(
             }
 
             rows.Add(new CsAgentBackfillRow(e.TicketId, e.TicketNumber, e.Status, e.CurrentDepartmentId, departmentName, e.CreatedAtUtc, cls, proposed, source,
-                cls == CsAgentBackfillClass.Eligible && CsAgentBackfillClassifier.IsStaleAi(e, now, options), e.LastActivityUtc));
+                cls == CsAgentBackfillClass.Eligible && (CsAgentBackfillClassifier.IsStaleAi(e, now, options) || CsAgentBackfillClassifier.IsStalePhoneAi(e, now, options)),
+                e.LastActivityUtc, cls == CsAgentBackfillClass.Eligible && CsAgentBackfillClassifier.IsStalePhoneAi(e, now, options)));
         }
 
         return new CsAgentBackfillPreview(
@@ -254,7 +293,8 @@ public sealed class CsAgentBackfillService(
         {
             return new CsAgentBackfillTicketResult(
                 ticketId, CsAgentBackfillOutcome.WouldAssign, cls, handlerId, handlerId is null ? CsAgentBackfillSource.RoundRobin : CsAgentBackfillSource.ConfirmedHandler,
-                CsAgentBackfillClassifier.IsStaleAi(evidence, now, options));
+                CsAgentBackfillClassifier.IsStaleAi(evidence, now, options) || CsAgentBackfillClassifier.IsStalePhoneAi(evidence, now, options),
+                CsAgentBackfillClassifier.IsStalePhoneAi(evidence, now, options));
         }
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
@@ -279,7 +319,9 @@ public sealed class CsAgentBackfillService(
             evidence = fresh;
             now = freshNow;
             handlerId = await ConfirmedHandlerAsync(evidence, await autoAssignment.ResolveCallCenterAsync(cancellationToken), cancellationToken);
-            var staleAi = CsAgentBackfillClassifier.IsStaleAi(evidence, now, options);
+            var stalePhoneAi = CsAgentBackfillClassifier.IsStalePhoneAi(evidence, now, options);
+            var staleAi = stalePhoneAi || CsAgentBackfillClassifier.IsStaleAi(evidence, now, options);
+            var staleReason = stalePhoneAi ? "StalePhoneAi" : "StaleAi";
 
             var correlationId = Guid.NewGuid();
             var source = CsAgentBackfillSource.ConfirmedHandler;
@@ -303,12 +345,12 @@ public sealed class CsAgentBackfillService(
             await auditWriter.WriteAsync(
                 actorEmployeeId: null, "BackfillAssign", "Ticket", ticketId.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 beforeValue: "Unassigned",
-                afterValue: $"AssignedEmployeeId={employeeId};DepartmentId={ticket.CurrentDepartmentId};Status={ticket.TicketStatus};Source={source};BatchId={batchId}{(staleAi ? ";Reason=StaleAi;LastActivityUtc=" + evidence.LastActivityUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture) : string.Empty)}",
+                afterValue: $"AssignedEmployeeId={employeeId};DepartmentId={ticket.CurrentDepartmentId};Status={ticket.TicketStatus};Source={source};BatchId={batchId}{(staleAi ? ";Reason=" + staleReason + ";LastActivityUtc=" + evidence.LastActivityUtc.ToString("O", System.Globalization.CultureInfo.InvariantCulture) : string.Empty)}",
                 correlationId, cancellationToken);
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
-            return new CsAgentBackfillTicketResult(ticketId, CsAgentBackfillOutcome.Assigned, cls, employeeId, source, staleAi);
+            return new CsAgentBackfillTicketResult(ticketId, CsAgentBackfillOutcome.Assigned, cls, employeeId, source, staleAi, stalePhoneAi);
         }
         catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {
