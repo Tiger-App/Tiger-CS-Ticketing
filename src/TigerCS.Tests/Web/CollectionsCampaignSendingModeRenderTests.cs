@@ -104,4 +104,38 @@ public sealed class CollectionsCampaignSendingModeRenderTests
         Assert.Contains("Preview only <strong data-preview-only-count>", html);                                                 // preview-only sits in the one-line notes
         Assert.Contains("data-row-state>Ready<", html);
     }
+
+    // ------------------------------------------------------------ selection checkboxes
+
+    private static string Header(string html) => Regex.Match(html, "<input[^>]*data-select-page[^>]*>").Value;
+
+    [Fact]
+    public async Task OnlyReadyCustomers_GetAnEnabledCheckbox_AndSelectAllIsEnabled()
+    {
+        var (html, _) = await LoadAsync("Manual");
+        Assert.Single(Regex.Matches(html, "class=\"campaign-select\""));
+        Assert.DoesNotContain("disabled", Header(html)); Assert.Contains("Select all Ready customers on this page", Header(html));
+        Assert.Contains("data-selected-summary", html); Assert.Contains(">0 selected<", html);                      // the count sits next to Approve & Send
+        Assert.Contains("data-select-page", html);
+    }
+
+    [Fact]
+    public async Task PreviewOnlyAndBlockedCustomers_GetADisabledCheckbox_WithTheReason()
+    {
+        var (html, _) = await LoadAsync("Manual", a => a.PreviewOnlyCustomer = true);               // the only listed customer is Preview only
+        Assert.DoesNotContain("class=\"campaign-select\"", html);
+        var rowBox = Regex.Match(html, "<input[^>]*row-select-disabled[^>]*>").Value;
+        Assert.Contains("disabled", rowBox); Assert.Contains("cannot be selected", rowBox); Assert.Contains("Preview only", rowBox);
+        Assert.Contains("disabled", Header(html));                                                  // nothing Ready: Select all is disabled and says why
+        Assert.Contains("Nothing to select: no customer is Ready to send", System.Net.WebUtility.HtmlDecode(Header(html)));
+        Assert.Contains(">No Ready customers<", html);
+
+        var api = new FakeCollectionsApi();                                                         // one customer that needs review (blocked)
+        using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
+        var blocked = await (await client.GetAsync("/Collections/Campaigns?render=full&stage=CurrentMonthReminder&businessDate=2026-10-14")).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("class=\"campaign-select\"", blocked);
+        Assert.Contains("Blocked: cannot be selected", System.Net.WebUtility.HtmlDecode(Regex.Match(blocked, "<input[^>]*row-select-disabled[^>]*>").Value));
+        Assert.Contains("disabled", Header(blocked));
+    }
 }
+

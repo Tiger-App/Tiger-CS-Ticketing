@@ -136,3 +136,7 @@
 /* The customer column keeps a readable width inside the horizontally scrollable table on narrow screens */
 .campaigns-table th:nth-child(2), .campaigns-table td:nth-child(2) { min-width: 190px; }
 .campaign-row-state { white-space: nowrap; }
+
+.row-select-disabled { cursor: not-allowed; opacity: .45; }
+.campaign-tally { font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.campaigns-table th input[type="checkbox"]:disabled { cursor: not-allowed; opacity: .45; }

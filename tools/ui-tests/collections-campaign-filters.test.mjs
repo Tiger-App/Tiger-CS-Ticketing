@@ -45,11 +45,13 @@ const RESULTS = (blocked = false) => `
     <label><input type="radio" name="selectionMode" value="AllMatching" data-all-matching /> all (<span data-all-count>2</span>)</label>
     <button type="submit" data-approve-button data-blocked="${blocked}" ${blocked ? 'disabled' : ''}>Approve &amp; Send</button>
     <button type="button" data-clear-selection>Clear</button>
+    <span data-selected-summary>0 selected</span>
     <span data-approve-reason>Only Ready customers can be sent.</span>
   </form>
   <table><thead><tr><th><input type="checkbox" data-select-page /></th></tr></thead><tbody>
     <tr><td><input type="checkbox" class="campaign-select" data-unit-key="a" /></td></tr>
     <tr><td><input type="checkbox" class="campaign-select" data-unit-key="b" /></td></tr>
+    <tr><td><input type="checkbox" class="row-select-disabled" disabled title="Blocked: cannot be selected" /></td></tr>
   </tbody></table>
 </div>`;
 
@@ -196,4 +198,39 @@ test('changing the sending mode after a preview clears the customers, the KPI ca
     await preview();
     assert.ok(q('[data-customer-results]'), 'Preview Customers loads the list for the new mode');
     assert.ok(q('[data-kpi-box] [data-campaign-kpis]'));
+});
+
+test('Select all ticks only the enabled Ready customers, never a blocked row', async () => {
+    const { q, document, window, preview } = await boot();
+    await preview();
+    const all = q('[data-select-page]');
+    all.checked = true; all.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.deepEqual([...document.querySelectorAll('.campaign-select')].map(b => b.checked), [true, true]);
+    assert.equal(q('.row-select-disabled').checked, false, 'a blocked / preview-only row is never ticked');
+    assert.equal(q('[data-selected-count]').textContent, '2');
+    assert.equal(q('[data-selected-summary]').textContent, '2 selected', 'the count stays next to Approve & Send');
+    all.checked = false; all.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(q('[data-selected-summary]').textContent, '0 selected');
+});
+
+test('Select all shows a partial state, and the summary follows the selection mode', async () => {
+    const { q, document, window, preview } = await boot();
+    await preview();
+    const first = document.querySelector('.campaign-select'); first.checked = true; first.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(q('[data-select-page]').indeterminate, true); assert.equal(q('[data-select-page]').checked, false);
+    assert.equal(q('[data-selected-summary]').textContent, '1 selected');
+    const allMatching = q('[data-all-matching]'); allMatching.checked = true; allMatching.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(q('[data-selected-summary]').textContent, 'All 2 eligible');
+});
+
+test('a disabled Select all (nothing Ready) selects nothing and a disabled row box cannot be ticked', async () => {
+    const { q, document, window, preview } = await boot();
+    await preview();
+    q('[data-select-page]').disabled = true;
+    const blocked = q('.row-select-disabled');
+    blocked.click();                                                  // a disabled control ignores clicks
+    assert.equal(blocked.checked, false);
+    q('[data-select-page]').click();
+    assert.equal(document.querySelectorAll('.campaign-select:checked').length, 0);
+    assert.equal(q('[data-selected-count]').textContent, '0');
 });
