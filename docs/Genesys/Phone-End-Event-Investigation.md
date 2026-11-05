@@ -145,6 +145,8 @@ Run `Diagnose_TigerCS_PROD_PhoneEndAuditChannel_ReadOnly.sql` (SELECT only, CTEs
 | Pattern | Meaning |
 |---|---|
 | End audits: Chat yes, Phone ~0; phone calls mostly `NotEnded_ButRoutingPatchArrived` | The workflow runs for voice and takes the **"Update Routing" branch** → `disconnectType` empty for voice (§6 step 2b). |
+
+> **Correction (after the Production result: Chat 69 / Phone 2 ended; 0 phone calls with a routing audit and no end).** `GenesysRoutingChanged` is written only when the routing *changed* (`RecordRoutingAsync`: "an unchanged routing event writes nothing"). The "Update Routing" branch re-sends the queue the ticket was created with, so it leaves **no audit**. "No routing audit" therefore does **not** prove that no PATCH arrived, and it does **not** exclude the `disconnectType` Decision. Only the Genesys flow-instance history, the proxy/IIS status counts or the PR 193 log line can tell the cases apart. See [Phone-End-Architect-Verification-Checklist.md](Phone-End-Architect-Verification-Checklist.md).
 | End audits: Chat yes, Phone ~0; phone `NotEnded_NoPatchEvidenceAtAll` | No PATCH reaches TigerCS for voice: the trigger criteria exclude `voice`, or the workflow fails before its PATCH (e.g. Create step), or the proxy/auth drops it. Compare the proxy log with the TigerCS IIS log. |
 | End audits all phone and chat, but phone ends 0.5% | An intermittent failure (400 date, 401 token) — read the status mix in both logs. |
 
