@@ -30,6 +30,21 @@ Evidence (identical in the classification and assignment phases; a dry-run check
 
 Dry-run counts: report 1 `ClassificationToApply_AiEndedWithoutHuman` (and `_Other`, `AiEndedWithoutHuman_TicketsTotal`), report 1b row **A1**, report 3b (outcome x stored state x status), 3c (what was converted, by stored state), 5b (assignment outcome), report 4 column `AiEndedWithoutHuman`. `@ApprovedClassificationCount` is still the **total** `ClassificationToApply`.
 
+## Held back as ACTIVE_AI (live Genesys interaction, no end event)
+
+The live-AI protection stays **on**. A ticket is `ACTIVE_AI` only when a Genesys interaction has neither `EndedAtUtc` nor `InactivityClosedAtUtc` **and** there is no human evidence. The human evidence is the application's: follow-up flag, open handoff, first human response, `HumanAgent` line, handler row, handled-by user, human workflow event (11/12/18/19) or a phone pick-up by an agent id that maps to no user (the last two were added to the SQL to match `UnassignedTicketEvidence`; before that, such tickets were wrongly held back).
+
+**Find out whether they are really live:** run `Diagnose_TigerCS_PROD_BackfillActiveAi_ReadOnly.sql` (SELECT only). Result 2 shows whether end events arrive at all per channel and age, result 3 whether the inactivity job ever ran, result 4 classifies each held-back ticket:
+
+| Cause | Meaning | What to do |
+|---|---|---|
+| `GENUINELY_RECENT` | activity within 60 minutes | stays protected |
+| `CLOSE_RULE_OVERDUE` | a 10 min customer-inactivity / 5 min awaiting-reply clock is overdue outside the Call Center: the approved job should have closed the ticket | the inactivity job is not running (`BackgroundJobs:Enabled`); fix the configuration, do not write data |
+| `EXCLUDED_CALL_CENTER` | Call Center (voice): the inactivity rule never applies | only a Genesys end event can end it |
+| `NO_CLOCK_NO_END_EVENT` | no clock, no end | the Genesys end event never reached TigerCS |
+
+TigerCS cannot query Genesys (Genesys only calls TigerCS), so "still live" can only be proven from Genesys itself. **Reconciliation, only for tickets the diagnostic shows as stale and only after approval:** export the conversation ids (result 6) and their real end times from Genesys, then replay them through the existing, idempotent conversation-end operation (`GenesysConversationEndAppService`): write-once `EndedAtUtc`/`EndReason`, audited as `GenesysConversationEnded`, nothing on the ticket changes, safe to repeat. No end time is ever invented. A conversation Genesys reports as still connected stays excluded. The opt-in `CsAgentBackfill:StaleAiAfterHours` rule (null today, 24 h only proposed) is the alternative that writes nothing, but it needs a separate business approval.
+
 ## What is and is not written
 
 | Written | Never written |
