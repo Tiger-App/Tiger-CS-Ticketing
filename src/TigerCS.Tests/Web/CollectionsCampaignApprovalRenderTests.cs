@@ -85,6 +85,28 @@ public sealed class CollectionsCampaignApprovalRenderTests
     // ------------------------------------------------------------------ one page, no Review step
 
     [Fact]
+    public async Task ManualApproval_SendsTheModeAndTheSendDate_ToTheApi_AndAutoSendsNoDate()
+    {
+        var manualApi = NewApi();
+        using (var factory = Factory(manualApi)) using (var client = factory.CreateClient())
+        {
+            var html = await (await client.PostAsync("/Collections/Campaigns?handler=Approve", new FormUrlEncodedContent(Form(await TokenAsync(client),
+                ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1"), ("sendingMode", "Manual"))))).Content.ReadAsStringAsync();
+            Assert.Contains("\"sendingMode\":\"Manual\"", manualApi.LastSummaryBody); Assert.Contains("\"sendDate\":\"2026-10-14\"", manualApi.LastSummaryBody);
+            Assert.Contains("data-snapshot-mode>Manual, send date 14 Oct 2026 (today)<", html);
+            Assert.Null(manualApi.LastConfirmBody);                                          // approving never sends
+        }
+        var autoApi = NewApi();
+        using (var factory = Factory(autoApi)) using (var client = factory.CreateClient())
+        {
+            var html = await (await client.PostAsync("/Collections/Campaigns?handler=Approve", new FormUrlEncodedContent(Form(await TokenAsync(client),
+                ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1"))))).Content.ReadAsStringAsync();
+            Assert.Contains("\"sendingMode\":\"Auto\"", autoApi.LastSummaryBody); Assert.DoesNotContain("\"sendDate\":\"2", autoApi.LastSummaryBody);
+            Assert.Contains("data-snapshot-mode>Auto (campaign schedule)<", html);
+        }
+    }
+
+    [Fact]
     public async Task Campaigns_OffersApproveAndSend_OnlyForReadyCustomers_AndLinksToNoReviewPage()
     {
         using var factory = Factory(NewApi()); using var client = factory.CreateClient();

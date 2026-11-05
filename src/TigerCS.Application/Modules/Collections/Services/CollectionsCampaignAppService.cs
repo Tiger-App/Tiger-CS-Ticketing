@@ -27,7 +27,7 @@ public sealed class CollectionsCampaignAppService(
         CollectionsCaller caller, string? stage, DateOnly? businessDate = null, int? companyId = null,
         string? search = null, int page = 1, int pageSize = 25, bool forExport = false,
         CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null,
-        string? paymentStatus = null, IReadOnlyList<int>? towerIds = null)
+        string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null)
     {
         var total = Stopwatch.StartNew();
         // Project / Tower filter: any number of local tower ids (the single towerId is kept for old callers). None = All projects. One tower keeps the
@@ -41,6 +41,9 @@ public sealed class CollectionsCampaignAppService(
         if (!options.Enabled || !sourceOptions.Enabled)
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.Disabled);
         var date = businessDate ?? clock.BusinessDate;
+        if (!CollectionsSendingModes.TryParse(sendingMode, out var mode))
+            return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.InvalidRequest, "Sending mode must be Manual or Auto.");
+        var manual = mode == CollectionsSendingModes.Manual;   // Manual: businessDate is the send date. Only the stage SCHEDULE is replaced by "the send date is today"; every other check below is unchanged.
         if (!CampaignPaymentFilters.TryParse(paymentStatus, out var paymentFilter))
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.InvalidRequest, "Payment status must be Due, Overdue or Both.");
         if (!CollectionsEnums.TryParse<CollectionsCampaignStage>(stage, out var selected)
@@ -177,7 +180,7 @@ public sealed class CollectionsCampaignAppService(
         var coverageIncomplete = snapshotStatus is { RangeCovered: false };
         CollectionsCampaignContactDto ToContact(CampaignUnitFacts f)
         {
-            var (unitStatus, reasons) = Compose(f.Flags | (int)crmUnavailableFlag, fresh, coverageIncomplete, gate.Reconciled, selected, date, dates);
+            var (unitStatus, reasons) = Compose(f.Flags | (int)crmUnavailableFlag, fresh, coverageIncomplete, gate.Reconciled, selected, date, dates, manual);
             var identity = $"{f.CompanyId}:{f.TenantId}:{f.UnitId}:{f.UnitCode}:{cycle}";
             var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
             return new CollectionsCampaignContactDto(id, $"ext:Pact:{f.TenantId}", f.CompanyId, f.TenantId, f.FullName, f.Phone, f.Email,
@@ -185,7 +188,7 @@ public sealed class CollectionsCampaignAppService(
                 unitStatus, string.Join(";", reasons.Count == 0 ? ["Qualifies"] : reasons), f.TowerNumber, f.TowerName, f.DueAmount, f.OverdueAmount, f.CrmCustomerId);
         }
 
-        int count, ready, review, notEligible = 0;
+        int count, ready, review, previewOnly = 0, notEligible = 0;
         decimal? eligibleTotal = null, eligibleOutstanding = null;
         List<CollectionsCampaignContactDto> items;
         if (sqlPage is not null)
@@ -198,10 +201,11 @@ public sealed class CollectionsCampaignAppService(
                     "The export exceeds the row limit. Filter by company or customer; no partial file was created.");
             // Every unit-level reason makes a unit NeedsReview whatever the global gates are; a unit without one gets the status a hypothetical clean
             // unit would get, so Ready / NeedsReview counts are exact over the whole filtered set without materialising it.
-            var cleanStatus = Compose((int)crmUnavailableFlag, fresh, coverageIncomplete, gate.Reconciled, selected, date, dates).Status;
+            var cleanStatus = Compose((int)crmUnavailableFlag, fresh, coverageIncomplete, gate.Reconciled, selected, date, dates, manual).Status;
             count = sqlPage.Total;
             ready = cleanStatus == "Ready" ? sqlPage.Clean : 0;
             review = sqlPage.Review + (cleanStatus == "NeedsReview" ? sqlPage.Clean : 0);
+            previewOnly = cleanStatus == "PreviewOnly" ? sqlPage.Clean : 0;
             items = sqlPage.Units.Select(ToContact).ToList();
         }
         else
@@ -233,6 +237,7 @@ public sealed class CollectionsCampaignAppService(
             ready = contacts.Count(x => x.Status == "Ready");
             review = contacts.Count(x => x.Status == "NeedsReview");
             notEligible = contacts.Count(x => x.Status == "NotEligible");
+            previewOnly = contacts.Count(x => x.Status == "PreviewOnly");
             // The qualifying amount: Due + Overdue of the units the stage rule makes eligible, over the WHOLE filtered list (not just this page).
             // Total qualifying amount = the STAGE amount of every eligible unit over the whole filtered list: exactly what Review & approve shows and what Genesys receives as AmountDue.
             // It is not Due + Overdue (the balance columns): a stage amount is the part of the balance the stage rule selects. That balance is reported separately as the outstanding figure.
@@ -241,12 +246,13 @@ public sealed class CollectionsCampaignAppService(
             items = forExport ? contacts : contacts.Skip((page - 1) * pageSize).Take(pageSize).ToList();
         }
         return CollectionsResult<CollectionsCampaignPreviewDto>.Ok(new(date, clock.BusinessDate, readAtUtc,
-            "PACT receivables (companies 4 and 32)", selected.ToString(), cycle, dates, dates.Contains(date),
+            "PACT receivables (companies 4 and 32)", selected.ToString(), cycle, dates, manual ? date == today : dates.Contains(date),
             gate.Reconciled, sqlPage is null && snapshot!.LegacyExclusionsApplied, permissions.CanSendReminders,
             count, ready, review, page, pageSize, items,
             from, to, CollectionsCampaignPolicy.RangeNotes(selected, date, eligibleFrom, to), towerId, snapshotStatus, min,
             new ServerTimingsDto(sourceMs, total.Elapsed.TotalMilliseconds - sourceMs, total.Elapsed.TotalMilliseconds), CrmContactStatusDto.From(crmSet.Availability), notEligible,
-            CampaignPaymentFilters.Name(paymentFilter), eligibleTotal, eligibleOutstanding, PaymentStatusNote(paymentFilter, dateFrom, to, today), gate, towers.Count == 0 ? null : towers));
+            CampaignPaymentFilters.Name(paymentFilter), eligibleTotal, eligibleOutstanding, PaymentStatusNote(paymentFilter, dateFrom, to, today), gate, towers.Count == 0 ? null : towers,
+            mode, previewOnly, campaignOptions.AutoSendingEnabled));
     }
 
     /// <summary>
@@ -265,7 +271,7 @@ public sealed class CollectionsCampaignAppService(
 
     /// <summary>Review reasons and status of a candidate from its unit-level flags and the global (source / schedule / release) gates. Order is part of the contract.</summary>
     private (string Status, List<string> Reasons) Compose(int flags, bool fresh, bool coverageIncomplete, bool sourceReconciled, CollectionsCampaignStage selected,
-        DateOnly date, IReadOnlyList<DateOnly> dates)
+        DateOnly date, IReadOnlyList<DateOnly> dates, bool manual = false)
     {
         bool Has(CollectionsCampaignFlags flag) => (flags & (int)flag) != 0;
         // The stage rule found nothing to send for this unit: it stays listed with its real balances; only its readiness says NotEligible.
@@ -288,7 +294,12 @@ public sealed class CollectionsCampaignAppService(
         if (Has(CollectionsCampaignFlags.CrmCompanyAmbiguous)) reasons.Add("CrmCompanyAmbiguous");
         if (Has(CollectionsCampaignFlags.CrmUnavailable)) reasons.Add("CrmUnavailable");
         var status = reasons.Count > 0 ? "NeedsReview" : "Ready";
-        if (reasons.Count == 0 && (date != clock.BusinessDate || !dates.Contains(date)))
+        if (reasons.Count == 0 && manual)
+        {
+            // Manual: the stage schedule is replaced by the chosen send date. Only today can be sent; a later date stays pending (nothing is queued), an earlier one is over.
+            if (CollectionsSendingModes.ManualTimingReason(date, clock.BusinessDate) is { } timing) { status = "PreviewOnly"; reasons.Add(timing); }
+        }
+        else if (reasons.Count == 0 && (date != clock.BusinessDate || !dates.Contains(date)))
         { status = "PreviewOnly"; reasons.Add("OutsideSchedule"); }
         if (reasons.Count == 0 && selected == CollectionsCampaignStage.LegalNotice && !campaignOptions.LegalNoticeExportEnabled)
         { status = "NeedsReview"; reasons.Add("LegalNoticeReleaseRequired"); }
@@ -399,15 +410,18 @@ public sealed class CollectionsCampaignAppService(
 
     public async Task<CollectionsResult<CollectionsCampaignExportDto>> ExportAsync(CollectionsCaller caller,
         string? stage, string? mode, DateOnly? businessDate = null, int? companyId = null, string? search = null,
-        CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null)
+        CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null)
     {
         // No source read for an unauthorized export, including malformed requests.
         if (!(await authorization.ResolveAsync(caller, cancellationToken)).CanSendReminders)
             return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.Forbidden);
         if (mode is not ("review" or "genesys"))
             return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest, "Choose review or genesys export.");
+        // A manually dated list goes out only through Approve & Send (revalidation, suppression, duplicate-send protection); the raw Genesys file is for the scheduled day only.
+        if (mode == "genesys" && CollectionsSendingModes.IsManual(sendingMode))
+            return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest, "In Manual mode a list is sent with Approve & Send to Genesys, not exported as a Genesys file.");
         var result = await PreviewAsync(caller, stage, businessDate, companyId, search,
-            forExport: true, cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds);
+            forExport: true, cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds, sendingMode: sendingMode);
         if (!result.IsSuccess) return CollectionsResult<CollectionsCampaignExportDto>.Fail(result.Outcome, result.Detail);
         var report = result.Value!;
         // Freshness requirement (both export modes): the snapshot of every company in scope must be loaded and no older than

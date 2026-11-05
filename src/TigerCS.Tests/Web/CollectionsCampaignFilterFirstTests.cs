@@ -37,7 +37,7 @@ public sealed class CollectionsCampaignFilterFirstTests
         var html = await Get(client, "/Collections/Campaigns");
         var main = Between(html, "campaign-filters__main", "campaign-filters__footer");
         var labels = Regex.Matches(main, "<label class=\"field-label\"[^>]*>(.*?)</label>").Select(m => m.Groups[1].Value).ToList();
-        Assert.Equal(["Campaign stage", "Project / Tower", "Payment status", "Period"], labels);
+        Assert.Equal(["Campaign stage", "Sending mode", "Project / Tower", "Payment status", "Period"], labels);
         foreach (var option in new[] { ">Up to today<", ">This month<", ">Last 6 months<", ">Custom range<" }) Assert.Contains(option, main);
         Assert.DoesNotContain("name=\"businessDate\"", main); Assert.DoesNotContain("name=\"dateFrom\"", main); Assert.DoesNotContain("name=\"minTotal\"", main);
 

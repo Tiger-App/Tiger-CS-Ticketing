@@ -22,6 +22,12 @@
         <div class="page-header__actions"><a class="btn" href="/Collections/Receivables">Due &amp; Overdue Customers</a></div>
     </div>
     <partial name="_CampaignApproval" model="Model" />
+@{
+    Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> dateGroup = @<div class="field-group" data-date-group>
+        <label class="field-label" for="campaignDate" data-date-label>@(Model.IsManual ? "Send date" : "Preview date")</label>
+        <input class="field-input" id="campaignDate" name="businessDate" type="date" data-campaign-date min="2000-01-01" max="2100-12-31" value="@((Model.BusinessDate ?? (Model.IsManual ? CollectionsDisplay.DubaiToday() : null))?.ToString("yyyy-MM-dd"))" />
+    </div>;
+}
     @* Filter first: choosing filters never queries the campaign list. Customers load only when Preview Customers is clicked; changing a filter afterwards clears them again. *@
     <form id="campaignFilters" class="campaign-filters panel" method="get" action="/Collections/Campaigns" data-receivables-filter data-results-form data-campaign-filters>
         <div class="campaign-filters__main">
@@ -37,6 +43,15 @@
                     }
                 </select>
             </div>
+            <div class="field-group">
+                <label class="field-label" for="campaignMode">Sending mode</label>
+                <select class="field-select" id="campaignMode" name="sendingMode" data-sending-mode>
+                    <option value="Manual" selected="@Model.IsManual">Manual (choose the send date)</option>
+                    <option value="Auto" selected="@(!Model.IsManual)">Auto (follow the campaign schedule)</option>
+                </select>
+            </div>
+            @* Manual: the date picker lives here as "Send date"; Auto: it stays in Advanced filters as "Preview date". Exactly one date input exists either way (collections-campaign-filters.js moves it when the mode changes). *@
+            <div class="campaign-date-slot" data-date-slot>@if (Model.IsManual) { @dateGroup(null) }</div>
             <partial name="_TowerMultiPicker" model="@(new TowerMultiPickerModel("campaignTower", Model.Towers, Model.TowerIds, Model.TowersFailed))" />
             <div class="field-group">
                 <label class="field-label" for="campaignPayment">Payment status</label>
@@ -55,14 +70,15 @@
                 </select>
             </div>
         </div>
+        <div class="campaign-mode-hints" aria-live="polite">
+            <p class="receivables-meta" data-mode-hint="Manual" hidden="@(!Model.IsManual)">Manual: you choose the send date. Only the campaign schedule is waived; financial reconciliation, permissions, CRM / PACT contact checks, suppression and duplicate-send protection all still apply. A future date stays pending until an authorized user sends it on that day; nothing is sent automatically.</p>
+            <p class="receivables-meta" data-mode-hint="Auto" hidden="@Model.IsManual" data-policy-schedule>@Model.PolicyScheduleText() Automatic execution is a separate setting and is off by default.</p>
+        </div>
         <div class="campaign-filters__footer">
             <details class="campaign-advanced" open="@Model.AdvancedOpen" data-advanced-filters>
                 <summary>Advanced filters</summary>
                 <div class="campaign-advanced__grid">
-                    <div class="field-group">
-                        <label class="field-label" for="campaignDate">Preview date</label>
-                        <input class="field-input" id="campaignDate" name="businessDate" type="date" data-campaign-date min="2000-01-01" max="2100-12-31" value="@Model.BusinessDate?.ToString("yyyy-MM-dd")" />
-                    </div>
+                    @if (!Model.IsManual) { @dateGroup(null) }
                     <div class="field-group">
                         <label class="field-label" for="campaignFrom">From date (instalment due)</label>
                         <input class="field-input" id="campaignFrom" name="dateFrom" type="date" min="2000-01-01" max="2100-12-31" value="@Model.DateFrom?.ToString("yyyy-MM-dd")" data-date-from data-campaign-from />

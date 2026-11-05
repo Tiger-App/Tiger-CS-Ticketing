@@ -16,6 +16,21 @@ Select Customers -> Approve & Send -> Genesys + Admin Email, on **Collections Ca
 Nothing here bypasses financial reconciliation (`Collections:Campaigns:FinancialSourceValidated`), the dispatch restrictions, or `Collections:GenesysOutbound:LiveCustomerDispatchEnabled`
 (which stays off until someone enables it deliberately).
 
+## Sending mode: Manual or Auto
+The **Sending mode** selector on Collections Campaigns chooses how the schedule is treated. Neither mode dispatches anything by itself; a send always needs an authorized user to press **Approve & Send to Genesys** and confirm.
+
+| | **Auto** (default) | **Manual** |
+| --- | --- | --- |
+| Date | The stage's policy schedule (Overdue: the 1st, Current Month: the 14th, Follow Up: the 28th, Legal Notice: the 12th and 14th, Legal Referral: the 30th). The page shows the calculated dates. | **Send date** picker. Only the send date being **today (Dubai)** allows a send. |
+| Outside the date | *Preview only* (`OutsideSchedule`). | A later date is *Preview only / pending* (`PendingSendDate`): nothing is queued or sent, an authorized user comes back on that day. An earlier date is over (`SendDateInPast`). |
+| Automatic execution | Separate switch `Collections:Campaigns:AutoSendingEnabled`, **off by default**. Nothing in the application dispatches on its own today; any future automatic executor must check it in addition to `GenesysOutbound:LiveCustomerDispatchEnabled`, the reconciliation gate and the suppression sweep. | Never automatic. |
+
+**Manual bypasses only the stage schedule.** It does not touch: financial reconciliation and sign-off (`SourceGate`), the send permission (`CanSendReminders` / `Collections.Send`), CRM / PACT contact validation, the amount and identity checks, the shared-phone and repeated-reminder rules, the Genesys switches, the suppression sweep, the idempotency key, or duplicate-send protection (a customer already in a live or sent dispatch is left out; a unit that already has a dispatch **today** for another reminder type is held back from a manual send).
+
+How it works: the review data keeps the honest `OutsideSchedule` reason on every record. In Manual mode a record is sendable only if that is its **only** reason, it is of the chosen stage, the data is current and was built today, and the send date is today. Each outside-schedule record also stores `ManualReminderTypeOverlap` / `ManualSharedPhone` markers (what the repeated-call rules would say if it were sent today), which hold it back in Manual mode and change nothing in Auto mode. The mode and send date are recorded in the dispatch's stored filter. The raw *Export Genesys CSV* is not available in Manual mode (use Approve & Send); the review export is.
+
+The page shows **Ready**, **Needs review / blocked** and **Preview only** as three separate figures, a state on every row, and the exact reason when Approve & Send is unavailable.
+
 ## Retrying
 * **Genesys:** rejected or released customers are free again; preview the list and press Approve & Send (customers Genesys already accepted show as already sent and are left out).
   Unconfirmed batches: reconcile first.

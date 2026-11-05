@@ -1,5 +1,34 @@
 namespace TigerCS.Domain.Modules.Collections;
 
+/// <summary>
+/// How a campaign is sent. <b>Auto</b> (default) follows the predefined schedule of the stage. <b>Manual</b> lets an authorized person choose the send date and bypasses ONLY that schedule:
+/// reconciliation, permissions, contact validation, suppression and duplicate-send protection apply unchanged. Neither mode dispatches by itself.
+/// </summary>
+public static class CollectionsSendingModes
+{
+    public const string Auto = "Auto", Manual = "Manual";
+
+    /// <summary>Blank means Auto. Anything but Auto / Manual is refused (false).</summary>
+    public static bool TryParse(string? value, out string mode)
+    {
+        mode = Auto;
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        if (string.Equals(value.Trim(), Manual, StringComparison.OrdinalIgnoreCase)) { mode = Manual; return true; }
+        return string.Equals(value.Trim(), Auto, StringComparison.OrdinalIgnoreCase);
+    }
+
+    public static bool IsManual(string? value) => string.Equals(value?.Trim(), Manual, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// The one timing rule of Manual mode: the list can be sent only ON the chosen send date, which must be today (Dubai). A later date stays pending (nothing is queued or
+    /// dispatched for it); an earlier one is over. Returns null when sending is allowed today, otherwise the review reason code.
+    /// </summary>
+    public static string? ManualTimingReason(DateOnly sendDate, DateOnly today) =>
+        sendDate == today ? null : sendDate > today ? PendingSendDate : SendDateInPast;
+
+    public const string PendingSendDate = "PendingSendDate", SendDateInPast = "SendDateInPast";
+}
+
 public enum CollectionsCampaignStage
 {
     OverdueReminder = 1,

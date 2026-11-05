@@ -6,6 +6,12 @@ public sealed class CollectionsCampaignOptions
     /// <summary>Enable only after reconciling remaining amounts AND unit allocation against actual PACT records.
     /// A V2 procedure name alone does not prove the reconciliation succeeded.</summary>
     public bool FinancialSourceValidated { get; set; }
+    /// <summary>
+    /// Separate switch for AUTOMATIC execution of scheduled campaigns (Auto sending mode). False (default). Nothing in the application dispatches on its own today: this value is
+    /// reported on the Campaigns page so it is clear that Auto mode only computes the policy schedule and readiness, and any future automatic executor must check it, in addition to
+    /// <c>GenesysOutbound:LiveCustomerDispatchEnabled</c>, the reconciliation gate and the suppression sweep. It is never a way around any of them.
+    /// </summary>
+    public bool AutoSendingEnabled { get; set; }
     /// <summary>The <c>CollectionsSource:PactReceivables:ProcedureSuffix</c> that the reconciliation was performed against.
     /// The sign-off only counts while the configured procedure is the one that was reconciled; switching procedures
     /// (for example from the original to V2) requires a new reconciliation.</summary>

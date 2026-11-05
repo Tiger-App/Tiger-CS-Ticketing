@@ -175,6 +175,36 @@ public static class ReviewRecordBuilder
             record.Reasons = Serialize(all);
             record.ValidationStatus = ReviewReasons.StatusFor(all, alreadySent: false);
         }
+        MarkManualRepeatedCalls(records, candidates);
+    }
+
+    /// <summary>
+    /// For a record whose ONLY reason is <c>OutsideSchedule</c>, works out what the repeated-call rules would say if an authorized person sent that reminder type manually today, and
+    /// stores it as a marker (the record's status does not change: in Auto mode it is outside the schedule either way). The would-be send set is the records scheduled today plus the
+    /// outside-schedule records of the SAME reminder type, so manual sending never skips the duplicate-call protection that scheduled records get.
+    /// </summary>
+    private static void MarkManualRepeatedCalls(List<CollectionsReviewRecord> records, List<CollectionsReviewRecord> candidates)
+    {
+        static (int, string, int?, string) Unit(CollectionsReviewRecord r) => (r.CompanyId, r.TenantId, r.UnitId, r.UnitCode);
+        static bool OnlyOutsideSchedule(CollectionsReviewRecord r) { var p = Parse(r.Reasons); return p.Count == 1 && p[0] == ReviewReasons.OutsideSchedule; }
+        var manual = records.Where(OnlyOutsideSchedule).ToList();
+        if (manual.Count == 0) return;
+        var candidateUnits = candidates.Select(Unit).ToHashSet();
+        var candidatePhoneUnits = candidates.Where(r => r.Phone.Length > 0).GroupBy(r => r.Phone).ToDictionary(g => g.Key, g => g.Select(Unit).ToHashSet());
+        var sameTypePhoneUnits = manual.Where(r => r.Phone.Length > 0).GroupBy(r => (r.ReminderType, r.Phone)).ToDictionary(g => g.Key, g => g.Select(Unit).ToHashSet());
+        foreach (var record in manual)
+        {
+            var markers = new List<string>();
+            if (candidateUnits.Contains(Unit(record))) markers.Add(ReviewReasons.ManualReminderTypeOverlap);
+            if (record.Phone.Length > 0)
+            {
+                var others = new HashSet<(int, string, int?, string)>(sameTypePhoneUnits[(record.ReminderType, record.Phone)]);
+                if (candidatePhoneUnits.TryGetValue(record.Phone, out var scheduled)) others.UnionWith(scheduled);
+                others.Remove(Unit(record));
+                if (others.Count > 0) markers.Add(ReviewReasons.ManualSharedPhone);
+            }
+            if (markers.Count > 0) record.Reasons = Serialize(Parse(record.Reasons).Concat(markers));
+        }
     }
 
     public static string Serialize(IEnumerable<string> reasons)
