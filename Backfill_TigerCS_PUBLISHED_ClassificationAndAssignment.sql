@@ -18,7 +18,8 @@
        (run EnsureDefaultGeneralClassification.sql first). Nothing is created here and the department is never swapped for Customer Services'.
      * Writes Tickets.CategoryId / RequestTypeId / WorkflowTemplateId ONLY. Applies to every status (a Closed ticket is labelled, never reopened).
      * AI ENDED WITHOUT HUMAN INTERVENTION (a Genesys conversation exists, none is live, and there is no human evidence: no follow-up flag, handoff, first human
-       response, agent message, handler or handled-by user - the SAME evidence phase 2 uses) is a LABEL on the tickets above, not a new rule: such a ticket with no / invalid
+       response, agent message, handler or handled-by user, human workflow event (types 11/12/18/19) or unmapped phone pick-up - the SAME evidence phase 2 uses, and the
+       same as UnassignedTicketEvidence.HumanEvidence / PhonePickupByUnmappedAgent in the application) is a LABEL on the tickets above, not a new rule: such a ticket with no / invalid
        OR CATEGORY-ONLY classification becomes <originating department> / General / General + that department's Published workflow, or Customer Services / General when
        the department is unknown / inactive (classification target ONLY - the stored current / originating department is never written); a valid classification is preserved.
        Category-only is converted for THESE tickets only: @IncludeCategoryOnly keeps its meaning for every other ticket.
@@ -124,6 +125,7 @@ SELECT @missing += v.Tbl + N'.' + v.Col + N' ' FROM (VALUES
     (N'TicketApprovals', N'TicketId'), (N'TicketApprovals', N'Status'), (N'TicketAgentHandoffs', N'TicketId'), (N'TicketAgentHandoffs', N'Status'),
     (N'TicketInteractions', N'TicketInteractionId'), (N'TicketInteractions', N'TicketId'), (N'TicketInteractions', N'Source'), (N'TicketInteractions', N'EndedAtUtc'),
     (N'TicketInteractions', N'InactivityClosedAtUtc'), (N'TicketInteractions', N'RequiresHumanFollowUp'), (N'TicketInteractions', N'HandledByUserId'),
+    (N'TicketWorkflowEvents', N'TicketId'), (N'TicketWorkflowEvents', N'EventType'), (N'TicketInteractions', N'ChannelId'), (N'TicketInteractions', N'GenesysAgentId'),
     (N'TicketInteractionHandlers', N'TicketId'), (N'TicketInteractionHandlers', N'HandledByUserId'), (N'TicketInteractionHandlers', N'ConnectedAtUtc'),
     (N'TicketInteractionHandlers', N'RecordedAtUtc'),
     (N'TicketInteractionMessages', N'TicketInteractionId'), (N'TicketInteractionMessages', N'Sender'), (N'TicketInteractionMessages', N'SenderId'),
@@ -278,7 +280,11 @@ BEGIN TRY
                       OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i JOIN dbo.TicketInteractionMessages m ON m.TicketInteractionId = i.TicketInteractionId
                                  WHERE i.TicketId = k.TicketId AND m.Sender = 2)
                       OR EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = k.TicketId)
-                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.HandledByUserId IS NOT NULL) THEN 1 ELSE 0 END,
+                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.HandledByUserId IS NOT NULL)
+                      OR EXISTS (SELECT 1 FROM dbo.TicketWorkflowEvents ev WHERE ev.TicketId = k.TicketId AND ev.EventType IN (11, 12, 18, 19))   -- HandoffAssigned / HandoffStarted / GenesysAgentConnected / GenesysCallTransferred
+                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.Source = 2 AND i.ChannelId = 1
+                                 AND NULLIF(LTRIM(RTRIM(i.GenesysAgentId)), N'') IS NOT NULL AND i.HandledByUserId IS NULL)                  -- phone picked up by an agent id that maps to no user
+                      THEN 1 ELSE 0 END,
         EvGenesys     = CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.Source = 2) THEN 1 ELSE 0 END,
         EvLiveGenesys = CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = k.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL AND i.InactivityClosedAtUtc IS NULL) THEN 1 ELSE 0 END
     FROM @Cls k JOIN dbo.Tickets t ON t.TicketId = k.TicketId;
@@ -391,7 +397,11 @@ BEGIN TRY
                       OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i JOIN dbo.TicketInteractionMessages m ON m.TicketInteractionId = i.TicketInteractionId
                                  WHERE i.TicketId = t.TicketId AND m.Sender = 2)
                       OR EXISTS (SELECT 1 FROM dbo.TicketInteractionHandlers h WHERE h.TicketId = t.TicketId)
-                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.HandledByUserId IS NOT NULL) THEN 1 ELSE 0 END,
+                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.HandledByUserId IS NOT NULL)
+                      OR EXISTS (SELECT 1 FROM dbo.TicketWorkflowEvents ev WHERE ev.TicketId = t.TicketId AND ev.EventType IN (11, 12, 18, 19))   -- HandoffAssigned / HandoffStarted / GenesysAgentConnected / GenesysCallTransferred
+                      OR EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.ChannelId = 1
+                                 AND NULLIF(LTRIM(RTRIM(i.GenesysAgentId)), N'') IS NOT NULL AND i.HandledByUserId IS NULL)                  -- phone picked up by an agent id that maps to no user
+                      THEN 1 ELSE 0 END,
                CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2) THEN 1 ELSE 0 END,
                CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = t.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL AND i.InactivityClosedAtUtc IS NULL) THEN 1 ELSE 0 END,
                -- the agent who actually answered: latest handler row, else the interaction's resolved handler, else the first mapped person who wrote a HumanAgent line
