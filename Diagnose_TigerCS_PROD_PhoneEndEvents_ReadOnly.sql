@@ -40,7 +40,7 @@ DECLARE @ColId int = (SELECT DepartmentId FROM dbo.Departments WHERE Code = N'CO
 --    ConversationEndedUtc = the conversation's end time (UTC) as Genesys reports it; leave NULL when Genesys shows the conversation as still connected.
 --    DisconnectType = Genesys' disconnect type (peer / endpoint / system / transfer ...), optional.
 -- ============================================================================================================================
-DECLARE @GenesysExport TABLE (ConversationId nvarchar(64) NOT NULL PRIMARY KEY, ConversationEndedUtc datetime2 NULL, DisconnectType nvarchar(50) NULL);
+DECLARE @GenesysExport TABLE (ConversationId nvarchar(64) COLLATE DATABASE_DEFAULT NOT NULL PRIMARY KEY, ConversationEndedUtc datetime2 NULL, DisconnectType nvarchar(50) COLLATE DATABASE_DEFAULT NULL);
 -- INSERT @GenesysExport (ConversationId, ConversationEndedUtc, DisconnectType) VALUES
 --     (N'00000000-0000-0000-0000-000000000000', '2026-11-04T10:15:30', N'peer'),
 --     (N'00000000-0000-0000-0000-000000000001', NULL, NULL);          -- still connected in Genesys
@@ -94,16 +94,26 @@ ORDER BY Channel, Interactions DESC;
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- D. Phone calls: ended vs not ended, and what other PATCH-borne evidence they carry
 -- ---------------------------------------------------------------------------------------------------------------------------
-SELECT CASE WHEN i.EndedAtUtc IS NOT NULL THEN N'Ended' WHEN i.InactivityClosedAtUtc IS NOT NULL THEN N'ClosedForInactivity' ELSE N'NoEndRecorded' END AS PhoneCallState,
+-- The per-call flags (which use subqueries) are computed first in a derived table; the outer query only aggregates plain columns
+-- (SQL Server rejects an aggregate over an expression that contains a subquery, Msg 130).
+SELECT x.PhoneCallState,
        COUNT(*) AS Interactions,
-       SUM(CASE WHEN i.GenesysQueueId IS NOT NULL THEN 1 ELSE 0 END) AS WithQueue,
-       SUM(CASE WHEN NULLIF(LTRIM(RTRIM(i.GenesysAgentId)), N'') IS NOT NULL THEN 1 ELSE 0 END) AS WithGenesysAgentId,
-       SUM(CASE WHEN i.HandledByUserId IS NOT NULL THEN 1 ELSE 0 END) AS WithMappedHandler,
-       SUM(CASE WHEN EXISTS (SELECT 1 FROM dbo.AuditEntries a WHERE a.Action = N'GenesysRoutingChanged' AND a.EntityId = i.GenesysConversationId) THEN 1 ELSE 0 END) AS WithRoutingPatchAudit,
-       SUM(CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractionMessages mm WHERE mm.TicketInteractionId = i.TicketInteractionId) THEN 1 ELSE 0 END) AS WithTranscript
-FROM dbo.TicketInteractions i WHERE i.Source = 2 AND i.ChannelId = 1
-GROUP BY CASE WHEN i.EndedAtUtc IS NOT NULL THEN N'Ended' WHEN i.InactivityClosedAtUtc IS NOT NULL THEN N'ClosedForInactivity' ELSE N'NoEndRecorded' END
-ORDER BY PhoneCallState;
+       SUM(x.HasQueue) AS WithQueue,
+       SUM(x.HasGenesysAgentId) AS WithGenesysAgentId,
+       SUM(x.HasMappedHandler) AS WithMappedHandler,
+       SUM(x.HasRoutingPatchAudit) AS WithRoutingPatchAudit,
+       SUM(x.HasTranscript) AS WithTranscript
+FROM (
+    SELECT CASE WHEN i.EndedAtUtc IS NOT NULL THEN N'Ended' WHEN i.InactivityClosedAtUtc IS NOT NULL THEN N'ClosedForInactivity' ELSE N'NoEndRecorded' END AS PhoneCallState,
+           CASE WHEN i.GenesysQueueId IS NOT NULL THEN 1 ELSE 0 END AS HasQueue,
+           CASE WHEN NULLIF(LTRIM(RTRIM(i.GenesysAgentId)), N'') IS NOT NULL THEN 1 ELSE 0 END AS HasGenesysAgentId,
+           CASE WHEN i.HandledByUserId IS NOT NULL THEN 1 ELSE 0 END AS HasMappedHandler,
+           CASE WHEN EXISTS (SELECT 1 FROM dbo.AuditEntries a WHERE a.Action = N'GenesysRoutingChanged' AND a.EntityId = i.GenesysConversationId) THEN 1 ELSE 0 END AS HasRoutingPatchAudit,
+           CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractionMessages mm WHERE mm.TicketInteractionId = i.TicketInteractionId) THEN 1 ELSE 0 END AS HasTranscript
+    FROM dbo.TicketInteractions i WHERE i.Source = 2 AND i.ChannelId = 1
+) x
+GROUP BY x.PhoneCallState
+ORDER BY x.PhoneCallState;
 
 -- ---------------------------------------------------------------------------------------------------------------------------
 -- E. The ACTIVE_AI set (same definition as the backfill and Diagnose_TigerCS_PROD_BackfillActiveAi_ReadOnly.sql)
