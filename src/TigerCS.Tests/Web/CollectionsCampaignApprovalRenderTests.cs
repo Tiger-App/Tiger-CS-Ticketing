@@ -48,6 +48,7 @@ public sealed class CollectionsCampaignApprovalRenderTests
             if (path.EndsWith("/selection/summary")) { LastSummaryBody = await request.Content!.ReadAsStringAsync(cancellationToken); return Json(Summary); }
             if (path.EndsWith("/overlaps")) return Json(new OverlapPageDto(0, 1, 25, []));
             if (path.EndsWith("/admin-email/retry")) { EmailRetries++; Sent = Dispatch(email: "Sent"); return Json(Sent); }
+            if (path.EndsWith("/dispatches/readiness")) return Json(new DispatchReadinessDto(true, []));
             if (path.EndsWith("/dispatches") && request.Method == HttpMethod.Post) { LastConfirmBody = await request.Content!.ReadAsStringAsync(cancellationToken); return Json(Dispatch("Queued", 0), HttpStatusCode.Accepted); }
             if (path.EndsWith("/dispatches")) return Json(Sent is null ? new List<DispatchDto>() : new List<DispatchDto> { Sent });
             if (path.Contains("/dispatches/")) return Sent is null ? new HttpResponseMessage(HttpStatusCode.NotFound) : Json(Sent);

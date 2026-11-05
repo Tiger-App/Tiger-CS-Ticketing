@@ -106,7 +106,7 @@ else if (Model.Report is { } report)
             // The always-available explanation of the button and, when it is disabled, the exact reason (collections-campaign-approve.js swaps in "tick at least one customer" while nothing is ticked).
             var approveReason = blocked is null
                 ? "Only Ready customers can be sent. Nothing is sent until you confirm the exact count, amount and Genesys contact list."
-                : $"{blocked} Sending is disabled until reconciliation and schedule checks pass.";
+                : blocked;
         }
         <form method="post" class="campaign-approve" data-approve-form asp-page-handler="Approve">
             @foreach (var name in CampaignsModel.FilterFieldNames)
