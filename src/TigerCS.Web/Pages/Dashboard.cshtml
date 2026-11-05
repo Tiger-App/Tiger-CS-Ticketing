@@ -325,7 +325,10 @@
             @* The 5 newest active tickets in scope (CreatedAt DESC, sorted server-side). ---- *@
             <div class="panel panel--compact dash-attention">
                 <div class="panel__header">
-                    <span class="panel__title">Tickets Requiring Attention</span>
+                    <div class="panel__lead">
+                        <span class="panel__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 9v4M12 17h.01M10.3 3.9 2.5 18a1.6 1.6 0 0 0 1.4 2.4h16.2a1.6 1.6 0 0 0 1.4-2.4L13.7 3.9a1.6 1.6 0 0 0-2.8 0Z" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" /></svg></span>
+                        <span class="panel__title">Tickets Requiring Attention</span>
+                    </div>
                     <a class="link-muted" href="@DashboardLinks.ViewAll(f)">View all</a>
                 </div>
                 @if (Model.Overview.RecentTickets.Count == 0)
