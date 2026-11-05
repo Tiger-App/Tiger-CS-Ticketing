@@ -7,6 +7,32 @@
     ViewData["Title"] = Model.View == TicketsView.Queue ? "Tickets" : $"{Model.View.Label()} · Tickets";
     ViewData["ActiveNav"] = "tickets";
     Layout = "_Layout";
+
+    // Tabs keep the filters the agent has set: each tab link carries the current
+    // filter query, minus paging and the few controls a target view fixes itself
+    // (My Tickets fixes the owner, Closed fixes the status). Sorting and page size
+    // ride along; the page number does not, since the result set changes.
+    var carriedKeys = new[]
+    {
+        "search", "departmentId", "priorityId", "ticketStatus", "verificationStatus", "sla", "assignee",
+        "ownerEmployeeId", "inDepartmentQueue", "availableToTake", "channelId", "unclassified", "escalated",
+        "createdByMe", "createdFrom", "createdTo", "sortBy", "sortDir", "pageSize",
+        "mineOnly", "unassignedOnly", "includeResolved",
+    };
+    string TabHref(TicketsView target)
+    {
+        var pairs = new List<KeyValuePair<string, string?>>();
+        foreach (var key in carriedKeys)
+        {
+            if (target == TicketsView.My && key is "ownerEmployeeId" or "assignee" or "inDepartmentQueue") continue;
+            if (target == TicketsView.Closed && key is "ticketStatus" or "sla") continue;
+            var value = Model.Request.Query[key].ToString();
+            if (!string.IsNullOrEmpty(value)) pairs.Add(new(key, value));
+        }
+        if (pairs.Count == 0) return target.Href();
+        var qs = string.Join("&", pairs.Select(kv => $"{Uri.EscapeDataString(kv.Key)}={Uri.EscapeDataString(kv.Value!)}"));
+        return target == TicketsView.Queue ? $"/Tickets?{qs}" : $"/Tickets?{TicketsViews.QueryKey}={target.Key()}&{qs}";
+    }
 }
 
 <div class="page tickets-workspace">
@@ -60,7 +86,7 @@
                 var isActive = view == Model.View;
                 var count = Model.TabCount(view);
                 <li>
-                    <a class="view-tabs__link @(isActive ? "is-active" : "")" href="@view.Href()" aria-current="@(isActive ? "page" : null)">
+                    <a class="view-tabs__link @(isActive ? "is-active" : "")" href="@TabHref(view)" aria-current="@(isActive ? "page" : null)">
                         @view.Label()
                         @if (count is not null)
                         {

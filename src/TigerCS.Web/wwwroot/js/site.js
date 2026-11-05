@@ -51,6 +51,28 @@
     });
   });
 
+  // Toolbar popovers (Tickets Filters / Date): one open at a time, closed by
+  // Escape (focus returns to the toggle) or a click outside.
+  var popovers = Array.prototype.slice.call(document.querySelectorAll("details[data-popover]"));
+  popovers.forEach(function (pop) {
+    pop.addEventListener("toggle", function () {
+      if (!pop.open) return;
+      popovers.forEach(function (other) { if (other !== pop) other.open = false; });
+    });
+  });
+  document.addEventListener("click", function (event) {
+    popovers.forEach(function (pop) { if (pop.open && !pop.contains(event.target)) pop.open = false; });
+  });
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Escape") return;
+    popovers.forEach(function (pop) {
+      if (!pop.open) return;
+      pop.open = false;
+      var summary = pop.querySelector("summary");
+      if (summary) summary.focus();
+    });
+  });
+
   // Clickable table rows (Customers directory, customer ticket lists): the
   // first cell carries a real link; with JS the whole row follows it, except
   // when the click was on another link, button or form control in the row.

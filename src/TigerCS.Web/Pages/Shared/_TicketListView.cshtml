@@ -43,161 +43,217 @@
     });
 }
 
-<form class="filter-bar" id="ticketFilters" method="get">
+@{
+    // Compact toolbar: search + a Filters popover + a Date popover + Reset. It
+    // is still ONE GET form with the same field names, so every parameter,
+    // permission check and backend predicate is unchanged. The badge counts
+    // only the controls the popover actually shows for this view.
+    var filterCount = 0;
+    if (Model.DepartmentId is not null && Model.NameResolver.OwnDepartments.Count > 0) filterCount++;
+    if (!isClosedView && !string.IsNullOrEmpty(Model.TicketStatus)) filterCount++;
+    if (Model.PriorityId is not null) filterCount++;
+    if (!isClosedView && !string.IsNullOrEmpty(Model.SlaFilterValue)) filterCount++;
+    if (Model.OffersAvailableToTakeFilter && Model.AvailableToTake) filterCount++;
+    if (showAssigneeFilter && !string.IsNullOrEmpty(Model.AssigneeFilterValue)) filterCount++;
+    if (Model.Channels.Count > 0 && Model.ChannelId is not null) filterCount++;
+    if (!string.IsNullOrEmpty(Model.VerificationStatus)) filterCount++;
+    if (Model.Unclassified) filterCount++;
+    if (Model.Escalated && TicketActions.CanReviewEscalations(Model.Viewer?.Roles)) filterCount++;
+    if (Model.CreatedByMe) filterCount++;
+    var dateCount = (Model.CreatedFrom is not null ? 1 : 0) + (Model.CreatedTo is not null ? 1 : 0);
+    var anyActive = filterCount > 0 || dateCount > 0 || !string.IsNullOrWhiteSpace(Model.Search);
+    var chevron = "<svg class=\"tkt-pop__chev\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M6 9l6 6 6-6\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>";
+}
+
+<form class="filter-bar tkt-toolbar" id="ticketFilters" method="get" role="search" aria-label="Filter tickets">
     <input type="hidden" name="view" value="@viewKey" />
     <div class="search-field filter-bar__search">
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
         <input type="search" name="search" value="@Model.Search" placeholder="Search ticket number, customer, phone, unit or summary…" aria-label="Search tickets" />
     </div>
 
-    @if (Model.NameResolver.OwnDepartments.Count > 0)
-    {
-        <div class="field-group">
-            <label class="field-label" for="departmentId">Department</label>
-            <select class="field-select" id="departmentId" name="departmentId" data-autosubmit>
-                <option value="">All my departments</option>
-                @foreach (var d in Model.NameResolver.OwnDepartments)
+    <details class="tkt-pop" data-popover>
+        <summary class="btn btn-sm tkt-pop__toggle">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 6h16M7 12h10M10 18h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+            Filters
+            @if (filterCount > 0) { <span class="tkt-pop__badge" aria-label="@filterCount active">@filterCount</span> }
+            @Html.Raw(chevron)
+        </summary>
+        <div class="tkt-pop__panel tkt-pop__panel--wide" role="group" aria-label="Ticket filters">
+            <div class="tkt-pop__grid">
+                @if (Model.NameResolver.OwnDepartments.Count > 0)
                 {
-                    <option value="@d.DepartmentId" selected="@(Model.DepartmentId == d.DepartmentId)">@d.Name</option>
+                    <div class="field-group">
+                        <label class="field-label" for="departmentId">Department</label>
+                        <select class="field-select" id="departmentId" name="departmentId">
+                            <option value="">All my departments</option>
+                            @foreach (var d in Model.NameResolver.OwnDepartments)
+                            {
+                                <option value="@d.DepartmentId" selected="@(Model.DepartmentId == d.DepartmentId)">@d.Name</option>
+                            }
+                        </select>
+                    </div>
                 }
-            </select>
-        </div>
-    }
 
-    @if (!isClosedView)
-    {
-        <div class="field-group">
-            <label class="field-label" for="ticketStatus">Status</label>
-            <select class="field-select" id="ticketStatus" name="ticketStatus" data-autosubmit>
-                <option value="">All statuses</option>
-                @* The lifecycle's active statuses, from the domain — the retired
-                   PendingThirdParty is not an operational filter any more. A historical
-                   ticket still in it keeps showing its real status in its own row. *@
-                @foreach (var s in TicketStatusTransitions.ActiveStatuses.Select(v => v.ToString()))
-                {
-                    <option value="@s" selected="@(Model.TicketStatus == s)">@TicketDisplay.TicketStatusLabel(s)</option>
-                }
-            </select>
-        </div>
-    }
-
-    <div class="field-group">
-        <label class="field-label" for="priorityId">Priority</label>
-        <select class="field-select" id="priorityId" name="priorityId" data-autosubmit>
-            <option value="">All priorities</option>
-            @for (byte p = 1; p <= 4; p++)
-            {
-                <option value="@p" selected="@(Model.PriorityId == p)">@TicketDisplay.PriorityLabel(p)</option>
-            }
-        </select>
-    </div>
-
-    @if (!isClosedView)
-    {
-        @* SLA status rides the queue endpoint's own slaBreached/dueToday
-           predicates (the ones the dashboard counts with); both apply to
-           active tickets only, so the control is not offered on Closed. *@
-        <div class="field-group">
-            <label class="field-label" for="sla">SLA status</label>
-            <select class="field-select" id="sla" name="sla" data-autosubmit>
-                <option value="">Any SLA</option>
-                <option value="breached" selected="@(Model.SlaFilterValue == "breached")">Breached</option>
-                <option value="dueToday" selected="@(Model.SlaFilterValue == "dueToday")">Due today</option>
-            </select>
-        </div>
-    }
-
-    @if (Model.OffersAvailableToTakeFilter)
-    {
-        <div class="field-group">
-            <label class="field-label" for="availableToTake">Ownership</label>
-            <select class="field-select" id="availableToTake" name="availableToTake" data-autosubmit>
-                <option value="">All tickets I can see</option>
-                <option value="true" selected="@Model.AvailableToTake">Available to take (no assignee)</option>
-            </select>
-        </div>
-    }
-
-    @if (showAssigneeFilter)
-    {
-        <div class="field-group">
-            <label class="field-label" for="assignee">Assignee</label>
-            <select class="field-select" id="assignee" name="assignee" data-autosubmit>
-                <option value="">Anyone</option>
                 @if (!isClosedView)
                 {
-                    <option value="queue" selected="@(Model.AssigneeFilterValue == "queue")">Department queue (unassigned)</option>
+                    <div class="field-group">
+                        <label class="field-label" for="ticketStatus">Status</label>
+                        <select class="field-select" id="ticketStatus" name="ticketStatus">
+                            <option value="">All statuses</option>
+                            @* The lifecycle's active statuses, from the domain — the retired
+                               PendingThirdParty is not an operational filter any more. A historical
+                               ticket still in it keeps showing its real status in its own row. *@
+                            @foreach (var s in TicketStatusTransitions.ActiveStatuses.Select(v => v.ToString()))
+                            {
+                                <option value="@s" selected="@(Model.TicketStatus == s)">@TicketDisplay.TicketStatusLabel(s)</option>
+                            }
+                        </select>
+                    </div>
                 }
-                @foreach (var member in Model.AssigneeOptions)
+
+                <div class="field-group">
+                    <label class="field-label" for="priorityId">Priority</label>
+                    <select class="field-select" id="priorityId" name="priorityId">
+                        <option value="">All priorities</option>
+                        @for (byte p = 1; p <= 4; p++)
+                        {
+                            <option value="@p" selected="@(Model.PriorityId == p)">@TicketDisplay.PriorityLabel(p)</option>
+                        }
+                    </select>
+                </div>
+
+                @if (!isClosedView)
                 {
-                    <option value="@member.EmployeeId" selected="@(Model.OwnerEmployeeId == member.EmployeeId)">@member.DisplayName</option>
+                    @* SLA status rides the queue endpoint's own slaBreached/dueToday
+                       predicates (the ones the dashboard counts with); both apply to
+                       active tickets only, so the control is not offered on Closed. *@
+                    <div class="field-group">
+                        <label class="field-label" for="sla">SLA status</label>
+                        <select class="field-select" id="sla" name="sla">
+                            <option value="">Any SLA</option>
+                            <option value="breached" selected="@(Model.SlaFilterValue == "breached")">Breached</option>
+                            <option value="dueToday" selected="@(Model.SlaFilterValue == "dueToday")">Due today</option>
+                        </select>
+                    </div>
                 }
-            </select>
-        </div>
-    }
 
-    @if (Model.Channels.Count > 0)
-    {
-        @* The channel the ticket ENTERED on (its originating interaction): Phone, WhatsApp, Live Chat, Instagram, Facebook, ... *@
-        <div class="field-group">
-            <label class="field-label" for="channelId">Channel</label>
-            <select class="field-select" id="channelId" name="channelId" data-autosubmit>
-                <option value="">All channels</option>
-                @foreach (var channel in Model.Channels.OrderByDescending(c => c.IsActive).ThenBy(c => c.DisplayOrder).ThenBy(c => c.Name))
+                @if (Model.OffersAvailableToTakeFilter)
                 {
-                    <option value="@channel.ChannelId" selected="@(Model.ChannelId == channel.ChannelId)">@channel.Name@(channel.IsActive ? "" : " (inactive)")</option>
+                    <div class="field-group">
+                        <label class="field-label" for="availableToTake">Ownership</label>
+                        <select class="field-select" id="availableToTake" name="availableToTake">
+                            <option value="">All tickets I can see</option>
+                            <option value="true" selected="@Model.AvailableToTake">Available to take (no assignee)</option>
+                        </select>
+                    </div>
                 }
-            </select>
+
+                @if (showAssigneeFilter)
+                {
+                    <div class="field-group">
+                        <label class="field-label" for="assignee">Assignee</label>
+                        <select class="field-select" id="assignee" name="assignee">
+                            <option value="">Anyone</option>
+                            @if (!isClosedView)
+                            {
+                                <option value="queue" selected="@(Model.AssigneeFilterValue == "queue")">Department queue (unassigned)</option>
+                            }
+                            @foreach (var member in Model.AssigneeOptions)
+                            {
+                                <option value="@member.EmployeeId" selected="@(Model.OwnerEmployeeId == member.EmployeeId)">@member.DisplayName</option>
+                            }
+                        </select>
+                    </div>
+                }
+
+                @if (Model.Channels.Count > 0)
+                {
+                    @* The channel the ticket ENTERED on (its originating interaction): Phone, WhatsApp, Live Chat, Instagram, Facebook, ... *@
+                    <div class="field-group">
+                        <label class="field-label" for="channelId">Channel</label>
+                        <select class="field-select" id="channelId" name="channelId">
+                            <option value="">All channels</option>
+                            @foreach (var channel in Model.Channels.OrderByDescending(c => c.IsActive).ThenBy(c => c.DisplayOrder).ThenBy(c => c.Name))
+                            {
+                                <option value="@channel.ChannelId" selected="@(Model.ChannelId == channel.ChannelId)">@channel.Name@(channel.IsActive ? "" : " (inactive)")</option>
+                            }
+                        </select>
+                    </div>
+                }
+
+                <div class="field-group">
+                    <label class="field-label" for="verificationStatus">Verification</label>
+                    <select class="field-select" id="verificationStatus" name="verificationStatus">
+                        <option value="">All</option>
+                        @foreach (var v in new[] { "Unverified", "PendingCrmVerification", "Verified" })
+                        {
+                            <option value="@v" selected="@(Model.VerificationStatus == v)">@TicketDisplay.VerificationStatusLabel(v)</option>
+                        }
+                    </select>
+                </div>
+
+                <div class="field-group">
+                    <label class="field-label" for="unclassified">Classification</label>
+                    <select class="field-select" id="unclassified" name="unclassified">
+                        <option value="">All</option>
+                        <option value="true" selected="@Model.Unclassified">Unclassified</option>
+                    </select>
+                </div>
+
+                @if (TicketActions.CanReviewEscalations(Model.Viewer?.Roles))
+                {
+                    <div class="field-group">
+                        <label class="field-label" for="escalated">Escalation</label>
+                        <select class="field-select" id="escalated" name="escalated">
+                            <option value="">All</option>
+                            <option value="true" selected="@Model.Escalated">Escalated — unable to resolve</option>
+                        </select>
+                    </div>
+                }
+
+                <div class="field-group">
+                    <label class="field-label" for="createdByMe">Created by</label>
+                    <select class="field-select" id="createdByMe" name="createdByMe">
+                        <option value="">Anyone</option>
+                        <option value="true" selected="@Model.CreatedByMe">Created by me</option>
+                    </select>
+                </div>
+            </div>
+            <div class="tkt-pop__footer">
+                <button type="submit" class="btn btn-sm btn-gold">Apply filters</button>
+            </div>
         </div>
-    }
+    </details>
 
-    <div class="field-group">
-        <label class="field-label" for="verificationStatus">Verification</label>
-        <select class="field-select" id="verificationStatus" name="verificationStatus" data-autosubmit>
-            <option value="">All</option>
-            @foreach (var v in new[] { "Unverified", "PendingCrmVerification", "Verified" })
-            {
-                <option value="@v" selected="@(Model.VerificationStatus == v)">@TicketDisplay.VerificationStatusLabel(v)</option>
-            }
-        </select>
-    </div>
-
-    <div class="field-group">
-        <label class="field-label" for="unclassified">Classification</label>
-        <select class="field-select" id="unclassified" name="unclassified" data-autosubmit>
-            <option value="">All</option>
-            <option value="true" selected="@Model.Unclassified">Unclassified</option>
-        </select>
-    </div>
-
-    @if (TicketActions.CanReviewEscalations(Model.Viewer?.Roles))
-    {
-        <div class="field-group">
-            <label class="field-label" for="escalated">Escalation</label>
-            <select class="field-select" id="escalated" name="escalated" data-autosubmit>
-                <option value="">All</option>
-                <option value="true" selected="@Model.Escalated">Escalated — unable to resolve</option>
-            </select>
+    <details class="tkt-pop" data-popover>
+        <summary class="btn btn-sm tkt-pop__toggle">
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" stroke-width="1.8" /><path d="M4 10h16M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
+            Date
+            @if (dateCount > 0) { <span class="tkt-pop__badge" aria-label="@dateCount active">@dateCount</span> }
+            @Html.Raw(chevron)
+        </summary>
+        <div class="tkt-pop__panel" role="group" aria-label="Created date range">
+            <div class="tkt-pop__grid tkt-pop__grid--dates">
+                <div class="field-group">
+                    <label class="field-label" for="createdFrom">Created from</label>
+                    <input class="field-input" type="date" id="createdFrom" name="createdFrom" value="@Model.CreatedFrom?.ToString("yyyy-MM-dd")" />
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="createdTo">Created to</label>
+                    <input class="field-input" type="date" id="createdTo" name="createdTo" value="@Model.CreatedTo?.ToString("yyyy-MM-dd")" />
+                </div>
+            </div>
+            <div class="tkt-pop__footer">
+                <button type="submit" class="btn btn-sm btn-gold">Apply dates</button>
+            </div>
         </div>
-    }
+    </details>
 
-    <div class="field-group">
-        <label class="field-label" for="createdByMe">Created by</label>
-        <select class="field-select" id="createdByMe" name="createdByMe" data-autosubmit>
-            <option value="">Anyone</option>
-            <option value="true" selected="@Model.CreatedByMe">Created by me</option>
-        </select>
-    </div>
-
-    <div class="field-group">
-        <label class="field-label" for="createdFrom">Created from</label>
-        <input class="field-input" type="date" id="createdFrom" name="createdFrom" value="@Model.CreatedFrom?.ToString("yyyy-MM-dd")" />
-    </div>
-    <div class="field-group">
-        <label class="field-label" for="createdTo">Created to</label>
-        <input class="field-input" type="date" id="createdTo" name="createdTo" value="@Model.CreatedTo?.ToString("yyyy-MM-dd")" />
-    </div>
-
+    <a class="btn btn-ghost btn-sm tkt-reset @(anyActive || Model.HasDrilldown ? "" : "is-idle")" href="@Model.View.Href()" title="Reset all filters">
+        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M4 4v6h6M20 20v-6h-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /><path d="M20 9A8 8 0 0 0 6 6L4 10M4 15a8 8 0 0 0 14 3l2-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+        Reset
+    </a>
     <input type="hidden" name="pageSize" value="@Model.PageSize" />
     @* Dashboard drill-down criteria survive a re-filter on this page; the
        "Clear" action drops everything, drill-down included. The SLA and
@@ -216,10 +272,6 @@
     @if (Model.ClosureCategory is { } closureCategory) { <input type="hidden" name="closureCategory" value="@closureCategory" /> }
     @if (Model.ClosedFrom is { } closedFrom) { <input type="hidden" name="closedFrom" value="@closedFrom.ToString("yyyy-MM-dd")" /> }
     @if (Model.ClosedTo is { } closedTo) { <input type="hidden" name="closedTo" value="@closedTo.ToString("yyyy-MM-dd")" /> }
-    <div class="filter-bar__submit">
-        <button type="submit" class="btn btn-sm">Apply</button>
-        <a class="btn btn-ghost btn-sm" href="@Model.View.Href()">Clear</a>
-    </div>
 </form>
 
 @if (Model.HasDrilldown)
