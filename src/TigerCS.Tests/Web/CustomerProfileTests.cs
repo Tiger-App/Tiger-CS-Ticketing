@@ -61,7 +61,7 @@ public sealed class CustomerProfileTests
         var html = ViewHtml();
 
         Assert.Contains("class=\"customer-header\"", html);
-        Assert.Contains("<h1 class=\"customer-header__name\">@Model.DisplayName</h1>", html);
+        Assert.Contains("<h1 class=\"customer-header__name\" data-contact-name>@Model.DisplayName</h1>", html);
         Assert.Contains("Model.PrimaryPhone is { } phone", html);
         Assert.Contains("badge-source-@CustomerProfileModel.SourceCssKey(profile.VerificationSource)", html);
         Assert.Contains("primaryUnit.UnitNumber", html);
@@ -131,7 +131,7 @@ public sealed class CustomerProfileTests
         Assert.Contains("<dt>Mobile Number</dt>", panel);
         Assert.Contains("<dt>Email</dt>", panel);
         Assert.Contains("<dt>CRM Customer ID</dt>", panel);
-        Assert.Contains("crm?.FullNameEnglish ?? profile.DisplayName", panel);
+        Assert.Contains("profile.DisplayName ?? crm?.FullNameEnglish", panel);
         // Reach comes from the page model, which picks the primary and the
         // genuinely-different aliases canonically — the view no longer
         // string-compares raw phone numbers.

@@ -136,7 +136,7 @@ public sealed class CustomerWorkspaceRenderTests : IDisposable
     {
         var html = await Ok(await Client().GetAsync("/Customers/crm%3A9001"));
 
-        Assert.Contains("<h1 class=\"customer-header__name\">Mariam Al Falasi</h1>", html, StringComparison.Ordinal);
+        Assert.Contains("<h1 class=\"customer-header__name\" data-contact-name>Mariam Al Falasi</h1>", html, StringComparison.Ordinal);
         Assert.Contains("Verified via Tiger CRM", html, StringComparison.Ordinal);
         Assert.Contains("&#x2B;971501234567", html, StringComparison.Ordinal);
         Assert.Contains("T-1310 &#xB7; Tiger Tower", html, StringComparison.Ordinal);
@@ -205,7 +205,7 @@ public sealed class CustomerWorkspaceRenderTests : IDisposable
         // The placeholder the page falls back to is "PACT customer" (the
         // source label); with a real name on file it must not appear at all.
         Assert.DoesNotContain("PACT customer", html, StringComparison.Ordinal);
-        Assert.Contains("<dd>fatima@example.com</dd>", html, StringComparison.Ordinal);
+        Assert.Contains("<dd data-contact-email>fatima@example.com</dd>", html, StringComparison.Ordinal);
 
         // PACT has no Arabic name field, so the Arabic row stays blank —
         // the English name is never copied across to fill it.
@@ -245,7 +245,7 @@ public sealed class CustomerWorkspaceRenderTests : IDisposable
         var html = await Ok(await Client().GetAsync("/Customers/ext%3APact%3A7002"));
 
         Assert.Contains("PACT customer", html, StringComparison.Ordinal);
-        Assert.Contains("<dt>Email</dt><dd>&#x2014;</dd>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>Email</dt><dd data-contact-email>&#x2014;</dd>", html, StringComparison.Ordinal);
         // Arabic stays blank — PACT has no Arabic name and the English one is never copied into it.
         Assert.Contains("<dt>Full Name Arabic</dt><dd>&#x2014;</dd>", html, StringComparison.Ordinal);
         Assert.DoesNotContain("<dt>Other email</dt>", html, StringComparison.Ordinal);

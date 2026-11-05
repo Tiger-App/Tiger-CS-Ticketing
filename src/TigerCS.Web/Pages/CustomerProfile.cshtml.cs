@@ -30,7 +30,8 @@ public sealed class CustomerProfileModel(
     CollectionsApiClient collectionsApiClient,
     CustomerPaymentPanelLoader paymentPanelLoader,
     CustomerDocumentsApiClient documentsApiClient,
-    CustomerDocumentsPanelLoader documentsPanelLoader) : PageModel
+    CustomerDocumentsPanelLoader documentsPanelLoader,
+    CustomerContactApiClient? customerContactClient = null) : PageModel
 {
     public const string PaymentTab = "payment";
 
@@ -64,6 +65,21 @@ public sealed class CustomerProfileModel(
 
     [TempData]
     public bool DocumentsNoticeIsError { get; set; }
+
+    [TempData]
+    public string? ContactNotice { get; set; }
+
+    [TempData]
+    public bool ContactNoticeIsError { get; set; }
+
+    /// <summary>True when the viewer may edit the customer's name/e-mail (the same CS Agent / CS Supervisor roles that create tickets) and the customer has a phone to key the record on.</summary>
+    public bool CanEditContact { get; private set; }
+
+    /// <summary>The number the saved name/e-mail is keyed on: the customer's most recently captured phone, always one the profile already shows (never taken from the request).</summary>
+    public string? EditPhone => Profile?.PhoneNumbers.FirstOrDefault();
+
+    /// <summary>True when the page was opened with <c>?editContact=1</c> — the no-JavaScript path to the inline edit form.</summary>
+    public bool EditingContact { get; private set; }
 
     public string CustomerKey { get; private set; } = string.Empty;
     public ApiOutcome Outcome { get; private set; }
@@ -138,6 +154,8 @@ public sealed class CustomerProfileModel(
         }
 
         Profile = result.Value;
+        CanEditContact = customerContactClient is not null && TicketCreationPolicy.AppliesTo(Viewer) && EditPhone is not null;
+        EditingContact = CanEditContact && Request.Query.ContainsKey("editContact");
         FromTicketNumber = FromTicketId is { } fromId ? Profile.Tickets.FirstOrDefault(t => t.TicketId == fromId)?.TicketNumber : null;
 
         if (Profile.IdentityKind == "Crm")
@@ -159,6 +177,70 @@ public sealed class CustomerProfileModel(
             : CustomerDocumentsPanelLoader.Deferred(customerKey, unit);
 
         return Page();
+    }
+
+    /// <summary>
+    /// Edit Customer Name / Email. The phone is taken from the customer's own profile (which the Api has already scoped to what
+    /// the viewer may see), never from the request, and the save goes to Tiger Ticketing's own contact record: no CRM, PACT or
+    /// Tasleeh call, no change to verification, phone or units. Answers JSON for the inline editor (fetch) and redirects with a
+    /// notice otherwise.
+    /// </summary>
+    public async Task<IActionResult> OnPostEditContactAsync(string customerKey, string? name, string? email, CancellationToken cancellationToken)
+    {
+        var wantsJson = string.Equals(Request.Headers["X-Requested-With"], "fetch", StringComparison.Ordinal);
+        Viewer = CurrentUser.FromPrincipal(User);
+
+        IActionResult Fail(string message, int status)
+        {
+            if (wantsJson)
+            {
+                return new JsonResult(new { ok = false, message }) { StatusCode = status };
+            }
+
+            ContactNotice = message;
+            ContactNoticeIsError = true;
+            return RedirectToPage(null, null, new { customerKey, editContact = 1 });
+        }
+
+        if (!TicketCreationPolicy.AppliesTo(Viewer) || customerContactClient is null)
+        {
+            return Fail("You don't have permission to edit this customer.", StatusCodes.Status403Forbidden);
+        }
+
+        var profile = await customersApiClient.GetProfileAsync(customerKey, cancellationToken);
+        if (!profile.IsSuccess || profile.Value is null)
+        {
+            return profile.Outcome is ApiOutcome.NotFound or ApiOutcome.ValidationError or ApiOutcome.Forbidden
+                ? Fail("This customer could not be found.", StatusCodes.Status404NotFound)
+                : Fail("Tiger Ticketing System could not reach the ticketing service.", StatusCodes.Status502BadGateway);
+        }
+
+        var phone = profile.Value.PhoneNumbers.FirstOrDefault();
+        if (string.IsNullOrWhiteSpace(phone))
+        {
+            return Fail("This customer has no phone number on record to save the details against.", StatusCodes.Status422UnprocessableEntity);
+        }
+
+        var saved = await customerContactClient.SaveAsync(new SaveCustomerContactRequestDto(phone, name, email), cancellationToken);
+        if (!saved.IsSuccess || saved.Value is null)
+        {
+            var message = saved.Outcome switch
+            {
+                ApiOutcome.ValidationError => saved.Detail ?? "Check the name and email and try again.",
+                ApiOutcome.Forbidden or ApiOutcome.Unauthorized => "You don't have permission to edit this customer.",
+                _ => "The change could not be saved. Try again."
+            };
+            return Fail(message, saved.Outcome == ApiOutcome.ValidationError ? StatusCodes.Status400BadRequest : StatusCodes.Status502BadGateway);
+        }
+
+        if (wantsJson)
+        {
+            return new JsonResult(new { ok = true, name = saved.Value.Name, email = saved.Value.Email, message = "Customer details saved." });
+        }
+
+        ContactNotice = "Customer details saved.";
+        ContactNoticeIsError = false;
+        return RedirectToPage(null, null, new { customerKey });
     }
 
     /// <summary>

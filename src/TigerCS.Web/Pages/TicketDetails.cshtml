@@ -149,6 +149,7 @@ else
                                 <div class="action-modal__body">
                                 <form method="post" asp-page-handler="Assign" class="action-form">
                                     <input type="hidden" asp-for="Assign.RowVersionBase64" />
+                                    <p class="action-destination" data-destination-for="Assign_Target" data-destination-template="This ticket will be assigned to {0}." data-destination-fallback="Currently: @(Model.OwnerName ?? "not assigned to anyone") in @Model.DepartmentName. Choose a person to see the destination." aria-live="polite"></p>
                                     @if (Model.CanAssignAcrossDepartments)
                                     {
                                         @* CS Manager: the whole directory, grouped by department, the
@@ -333,6 +334,7 @@ else
                                 <div class="action-modal__body">
                                     <form method="post" asp-page-handler="Transfer" class="action-form">
                                         <input type="hidden" asp-for="Transfer.RowVersionBase64" />
+                                        <p class="action-destination" data-destination-for="Transfer_TargetDepartmentId" data-destination-template="This ticket will be transferred to the {0} queue, awaiting employee assignment." data-destination-fallback="Currently routed to @Model.DepartmentName." aria-live="polite"></p>
                                         <div class="field-group">
                                             <label class="field-label" asp-for="Transfer.TargetDepartmentId">Transfer to department</label>
                                             <select class="field-select" asp-for="Transfer.TargetDepartmentId">
@@ -660,7 +662,15 @@ else
                                 </div>
                             }
                             </div>
-                            <span class="tw-fact__sub"><span class="visually-hidden">Assigned Department: </span>@TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</span>
+                            <span class="tw-route"><span class="visually-hidden">Assigned Department: </span>Routed to <strong>@TicketDisplay.AssignedDepartmentLabel(t.CurrentDepartmentId, Model.DepartmentName)</strong></span>
+                            @if (t.CurrentOwnerEmployeeId is null && !isClosed && !isResolved && !t.IsAiVirtualAgent)
+                            {
+                                <span class="tw-route tw-route--awaiting">@TicketDisplay.AwaitingEmployeeAssignmentLabel</span>
+                            }
+                            @if (Model.LatestTransferDestination is { } lastTransfer)
+                            {
+                                <span class="tw-route">Last transferred to <strong>@lastTransfer</strong>@if (Model.LatestTransferAtUtc is { } transferredAt) { <text> · @transferredAt.ToString("d MMM yyyy")</text> }</span>
+                            }
                         </div>
                     </div>
                 </div>

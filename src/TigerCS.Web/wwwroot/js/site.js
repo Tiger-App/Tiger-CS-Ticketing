@@ -498,6 +498,102 @@
     });
   });
 
+  // New Ticket Step 2: when the Project changes, refill the Unit list with the units known for that project (the Web handler proxies
+  // the read-only Api call). The Unit stays free text, so a unit that is not in the system can still be typed in.
+  (function () {
+    var project = document.querySelector("[data-project-input]");
+    var unitList = document.querySelector("[data-unit-options]");
+    if (!project || !unitList) return;
+    var timer = null;
+    function load() {
+      var name = project.value.trim();
+      if (!name) { unitList.innerHTML = ""; return; }
+      fetch(project.getAttribute("data-units-url") + "&project=" + encodeURIComponent(name), { credentials: "same-origin", headers: { "Accept": "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (units) {
+          if (project.value.trim() !== name) return;
+          unitList.innerHTML = "";
+          units.forEach(function (u) { var o = document.createElement("option"); o.value = u; unitList.appendChild(o); });
+        })
+        .catch(function () { /* the Unit field stays free text */ });
+    }
+    project.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(load, 250); });
+    project.addEventListener("change", load);
+  })();
+
+  // Customer Details: inline edit of the customer's name/e-mail. The pencil swaps the heading for a small form; Save posts to the
+  // EditContact handler with fetch and, once the server confirms, updates every place the name is shown on the page without a
+  // reload. Without JavaScript the pencil is a link to ?editContact=1 and the form posts normally.
+  (function () {
+    var form = document.querySelector("[data-contact-edit-form]");
+    var openLink = document.querySelector("[data-contact-edit-open]");
+    if (!form || !openLink) return;
+    var title = openLink.closest(".customer-header__title");
+    var nameInput = form.querySelector("[data-contact-input-name]");
+    var emailInput = form.querySelector("[data-contact-input-email]");
+    var errorBox = form.querySelector("[data-contact-error]");
+    var saveButton = form.querySelector("[data-contact-save]");
+    var cancelLink = form.querySelector("[data-contact-edit-cancel]");
+    var initial = { name: nameInput.value, email: emailInput.value };
+
+    function show(editing) {
+      form.hidden = !editing;
+      if (title) title.hidden = editing;
+      if (editing) { nameInput.focus(); nameInput.select(); }
+    }
+    function say(text) { errorBox.textContent = text || ""; }
+    function initials(name) {
+      var parts = name.trim().split(/\s+/).filter(Boolean);
+      return ((parts[0] || "")[0] || "").concat(parts.length > 1 ? parts[parts.length - 1][0] : "").toUpperCase();
+    }
+
+    if (!form.hidden) show(true);
+    openLink.addEventListener("click", function (e) { e.preventDefault(); say(""); show(true); });
+    cancelLink.addEventListener("click", function (e) {
+      e.preventDefault();
+      nameInput.value = initial.name; emailInput.value = initial.email; say(""); show(false);
+    });
+    form.addEventListener("keydown", function (e) { if (e.key === "Escape") cancelLink.click(); });
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (!nameInput.value.trim()) { say("Customer name is required."); nameInput.focus(); return; }
+      saveButton.disabled = true; say("");
+      fetch(form.action, { method: "POST", body: new FormData(form), credentials: "same-origin", headers: { "X-Requested-With": "fetch", "Accept": "application/json" } })
+        .then(function (response) { return response.json().catch(function () { return { ok: false, message: "The change could not be saved." }; }); })
+        .then(function (result) {
+          if (!result.ok) { say(result.message || "The change could not be saved."); return; }
+          document.querySelectorAll("[data-contact-name]").forEach(function (el) { el.textContent = result.name; });
+          document.querySelectorAll("[data-contact-email]").forEach(function (el) { el.textContent = result.email || "\u2014"; });
+          var avatar = document.querySelector(".customer-header__avatar");
+          if (avatar) avatar.textContent = initials(result.name);
+          document.title = result.name + " \u00b7 Customer";
+          initial = { name: result.name, email: result.email || "" };
+          nameInput.value = initial.name; emailInput.value = initial.email;
+          show(false);
+        })
+        .catch(function () { say("Tiger Ticketing System could not reach the ticketing service."); })
+        .then(function () { saveButton.disabled = false; });
+    });
+  })();
+
+  // Ticket Details Assign / Transfer: state the destination in words before the agent confirms. The text follows the select
+  // beside it (the option's label up to " — ", i.e. just the person's or department's name); nothing is posted from here.
+  document.querySelectorAll("[data-destination-for]").forEach(function (note) {
+    var select = document.getElementById(note.getAttribute("data-destination-for"));
+    if (!select) { note.hidden = true; return; }
+    var template = note.getAttribute("data-destination-template") || "{0}";
+    var fallback = note.getAttribute("data-destination-fallback") || "";
+    function update() {
+      var option = select.options[select.selectedIndex];
+      var label = option && option.value ? option.text.split(" \u2014 ")[0].trim() : "";
+      note.textContent = label ? template.replace("{0}", label) : fallback;
+      note.hidden = note.textContent === "";
+    }
+    select.addEventListener("change", update);
+    update();
+  });
+
   // Back/forward can restore this page from the browser's cache exactly as
   // it was left — mid-submit, with the guard set and the buttons disabled.
   // Release it, or the agent returns to a filter bar that refuses to apply.

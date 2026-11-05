@@ -105,7 +105,9 @@ public sealed class NewTicketModel(
     RequestTypesApiClient? requestTypesClient = null,
     ChannelsApiClient? channelsClient = null,
     CustomerPaymentPanelLoader? paymentPanelLoader = null,
-    TimeProvider? timeProvider = null) : PageModel
+    TimeProvider? timeProvider = null,
+    CustomerContactApiClient? customerContactClient = null,
+    ProjectCatalogApiClient? projectCatalogClient = null) : PageModel
 {
     public const string StepCustomer = "customer";
     public const string StepProperty = "property";
@@ -349,6 +351,33 @@ public sealed class NewTicketModel(
     /// </summary>
     public CustomerHistoryDto? RelatedTickets { get; private set; }
 
+    // ---- Manual customer entry / Edit customer (Step 1) — Tiger Ticketing's own record, keyed by the intake phone ----
+
+    /// <summary>The name/e-mail an agent already saved for this phone (Tiger Ticketing's own record), or null. Wins over any looked-up name in the summary and cards: it is what the agent told us, and never changes verification.</summary>
+    public CustomerContactDto? SavedContact { get; private set; }
+
+    /// <summary>Step 1 shows the Customer Name / Email / Phone form instead of the lookup results — manual entry, or Edit on an existing customer.</summary>
+    public bool ShowContactForm { get; private set; }
+
+    /// <summary>True when the form was opened to edit an existing (looked-up) customer rather than to enter a new one by hand.</summary>
+    public bool ContactFormIsEdit { get; private set; }
+
+    /// <summary>The Edit button on a matched customer's card is offered only when the contact endpoint is available.</summary>
+    public bool CanEditContact => customerContactClient is not null;
+
+    /// <summary>A flash after Save on an existing customer.</summary>
+    public bool ContactSaved { get; private set; }
+
+    public string? ContactFormName { get; private set; }
+    public string? ContactFormEmail { get; private set; }
+    public string? ContactNameError { get; private set; }
+    public string? ContactEmailError { get; private set; }
+
+    // ---- Step 2 project / unit options (Tiger Ticketing's own known projects and units) ----
+
+    public IReadOnlyList<ProjectOptionDto> ProjectOptions { get; private set; } = [];
+    public IReadOnlyList<string> UnitOptions { get; private set; } = [];
+
     public long? CreatedTicketId { get; private set; }
     public string? CreatedTicketNumber { get; private set; }
 
@@ -399,7 +428,8 @@ public sealed class NewTicketModel(
         || (!string.IsNullOrWhiteSpace(ManualProjectName) && !string.IsNullOrWhiteSpace(ManualUnitNumber));
 
     public string? SummaryCustomerName =>
-        CrmBuyerCustomerName
+        SavedContact?.Name
+        ?? CrmBuyerCustomerName
         ?? ExternalCustomerName
         ?? SelectedCandidate?.DisplayName
         ?? (CustomerKey == "manual" ? "Manual entry" : null);
@@ -421,6 +451,8 @@ public sealed class NewTicketModel(
         { } source => TicketDisplay.LookupSourceLabel(source),
         _ => null
     };
+
+    public string? SummaryCustomerEmail => SavedContact?.Email ?? ExternalCustomerEmail ?? SelectedCandidate?.Email;
 
     public string? SummaryProjectName => CrmBuyerProjectName ?? ExternalProjectName ?? ManualProjectName;
     public string? SummaryUnitNumber => CrmBuyerUnitNumber ?? ExternalUnitNumber ?? ManualUnitNumber;
@@ -474,7 +506,8 @@ public sealed class NewTicketModel(
         string? crmBuyerCustomerName, string? crmBuyerProjectName, string? crmBuyerUnitNumber,
         string? externalSelection, string? manualProjectName, string? manualUnitNumber,
         int? departmentId, long? createdTicketId, string? createdTicketNumber,
-        CancellationToken cancellationToken, string? paymentAccount = null, string? linkedPaymentAccount = null)
+        CancellationToken cancellationToken, string? paymentAccount = null, string? linkedPaymentAccount = null,
+        bool editContact = false, bool contactSaved = false)
     {
         ApplyWizardState(
             step ?? StepCustomer, intakeRecordId, phoneNumber, customer,
@@ -484,14 +517,32 @@ public sealed class NewTicketModel(
         PaymentAccount = string.IsNullOrWhiteSpace(paymentAccount) ? null : paymentAccount;
         LinkedPaymentAccount = string.IsNullOrWhiteSpace(linkedPaymentAccount) ? null : linkedPaymentAccount;
 
+        ContactSaved = contactSaved;
+        ShowContactForm = Step == StepCustomer && (CustomerKey == "manual" || editContact);
+        ContactFormIsEdit = Step == StepCustomer && CustomerKey != "manual" && editContact;
+
         switch (Step)
         {
             case StepProperty:
+                // A manually entered customer needs a name before a property: if none was saved for this phone yet (deep link, or
+                // "Enter property manually" from a looked-up customer), collect it first.
+                if (CustomerKey == "manual" && customerContactClient is not null && !string.IsNullOrWhiteSpace(PhoneNumber))
+                {
+                    await LoadSavedContactAsync(cancellationToken);
+                    if (SavedContact is null)
+                    {
+                        return RedirectToPage(new { step = StepCustomer, intakeRecordId, phoneNumber, customer = "manual" });
+                    }
+                }
+
+                CreateStep.ManualProjectName ??= ManualProjectName;
+                CreateStep.ManualUnitNumber ??= ManualUnitNumber;
                 await LoadPropertyStepAsync(cancellationToken);
                 await LoadPaymentPanelsAsync(readOnly: false, cancellationToken);
                 break;
 
             case StepIssue:
+                await LoadSavedContactAsync(cancellationToken);
                 CreateStep.DepartmentId = departmentId;
                 CreateStep.ManualProjectName = ManualProjectName;
                 CreateStep.ManualUnitNumber = ManualUnitNumber;
@@ -611,8 +662,25 @@ public sealed class NewTicketModel(
             return;
         }
 
+        await LoadSavedContactAsync(cancellationToken);
+        if (ShowContactForm && CustomerKey == "manual")
+        {
+            // Manual entry searches nothing: the form is the whole step.
+            ContactFormName ??= SavedContact?.Name;
+            ContactFormEmail ??= SavedContact?.Email;
+            return;
+        }
+
         await RunLookupsAsync(cancellationToken);
         BuildCandidates();
+        if (ShowContactForm)
+        {
+            var first = Candidates.FirstOrDefault();
+            ContactFormName ??= SavedContact?.Name ?? first?.DisplayName;
+            ContactFormEmail ??= SavedContact?.Email ?? first?.Email;
+            return;
+        }
+
         await LoadCandidateHistoriesAsync(cancellationToken);
     }
 
@@ -751,6 +819,15 @@ public sealed class NewTicketModel(
             _ => 2
         }).ToList();
         SelectedCandidate = CustomerKey is { } key ? candidates.FirstOrDefault(c => c.Key == key) : null;
+
+        // The name/e-mail an agent saved for this phone is what the cards (and the summary) show.
+        if (SavedContact is { } saved)
+        {
+            Candidates = Candidates
+                .Select(c => c with { DisplayName = saved.Name, Email = saved.Email ?? c.Email })
+                .ToList();
+            SelectedCandidate = CustomerKey is { } selectedKey ? Candidates.FirstOrDefault(c => c.Key == selectedKey) : null;
+        }
     }
 
     /// <summary>
@@ -813,10 +890,15 @@ public sealed class NewTicketModel(
         // results, so those results are re-read here (idempotent reads);
         // once a unit is selected its packed value carries forward and no
         // further lookup runs on later steps.
+        await LoadSavedContactAsync(cancellationToken);
         if (CustomerKey == "crm" || CustomerKey?.StartsWith("ext:", StringComparison.Ordinal) == true)
         {
             await RunLookupsAsync(cancellationToken);
             BuildCandidates();
+        }
+        else
+        {
+            await LoadProjectOptionsAsync(cancellationToken);
         }
 
         if (HasUnitSelection && CustomerKey != "manual")
@@ -906,15 +988,125 @@ public sealed class NewTicketModel(
             return Page();
         }
 
+        // One project, one spelling: a typed name that matches a known project (case-insensitively) is saved as that project's own
+        // spelling, so "marina tower" and "Marina Tower" can never become two projects.
+        var projectName = CreateStep.ManualProjectName.Trim();
+        if (projectCatalogClient is not null)
+        {
+            var known = await projectCatalogClient.ListProjectsAsync(cancellationToken);
+            if (known is { IsSuccess: true, Value: not null }
+                && known.Value.FirstOrDefault(p => string.Equals(p.Name, projectName, StringComparison.OrdinalIgnoreCase)) is { } match)
+            {
+                projectName = match.Name;
+            }
+        }
+
         return RedirectToPage(new
         {
             step = StepProperty,
             intakeRecordId,
             phoneNumber,
             customer = "manual",
-            manualProjectName = CreateStep.ManualProjectName,
-            manualUnitNumber = CreateStep.ManualUnitNumber
+            manualProjectName = projectName,
+            manualUnitNumber = CreateStep.ManualUnitNumber.Trim()
         });
+    }
+
+    /// <summary>The known units for a project, for the Unit dropdown (fetched when the Project changes). Read-only; an empty list means "type it in".</summary>
+    public async Task<IActionResult> OnGetUnitsAsync(string? project, CancellationToken cancellationToken)
+    {
+        if (projectCatalogClient is null || string.IsNullOrWhiteSpace(project))
+        {
+            return new JsonResult(Array.Empty<string>());
+        }
+
+        var result = await projectCatalogClient.ListUnitsAsync(project.Trim(), cancellationToken);
+        return new JsonResult(result.IsSuccess && result.Value is not null ? result.Value : []);
+    }
+
+    private async Task LoadProjectOptionsAsync(CancellationToken cancellationToken)
+    {
+        if (projectCatalogClient is null)
+        {
+            return;
+        }
+
+        var projects = await projectCatalogClient.ListProjectsAsync(cancellationToken);
+        ProjectOptions = projects is { IsSuccess: true, Value: not null } ? projects.Value : [];
+
+        var selected = CreateStep.ManualProjectName ?? ManualProjectName;
+        if (!string.IsNullOrWhiteSpace(selected))
+        {
+            var units = await projectCatalogClient.ListUnitsAsync(selected.Trim(), cancellationToken);
+            UnitOptions = units is { IsSuccess: true, Value: not null } ? units.Value : [];
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Step 1 — manual customer entry / edit (Tiger Ticketing's own record only)
+    // ---------------------------------------------------------------
+
+    private async Task LoadSavedContactAsync(CancellationToken cancellationToken)
+    {
+        if (customerContactClient is null || string.IsNullOrWhiteSpace(PhoneNumber) || SavedContact is not null)
+        {
+            return;
+        }
+
+        var result = await customerContactClient.FindAsync(PhoneNumber, cancellationToken);
+        SavedContact = result.IsSuccess ? result.Value : null;
+    }
+
+    /// <summary>
+    /// Saves the customer's name and e-mail for this phone — creating the record, or updating the existing one (the Api matches on the
+    /// canonical phone, so no duplicate can be made). Local to Tiger Ticketing: nothing is sent to CRM, PACT or Tasleeh and the
+    /// verification state is untouched. A manual customer continues to Step 2; an existing customer returns to the results.
+    /// </summary>
+    public async Task<IActionResult> OnPostSaveContactAsync(
+        long intakeRecordId, string? phoneNumber, string? customer, string? contactName, string? contactEmail,
+        CancellationToken cancellationToken)
+    {
+        var isManual = customer == "manual";
+        ApplyWizardState(StepCustomer, intakeRecordId, phoneNumber, customer, null, null, null, null, null, null, null, null, null, null);
+        ShowContactForm = true;
+        ContactFormIsEdit = !isManual;
+        ContactFormName = contactName;
+        ContactFormEmail = contactEmail;
+
+        async Task<IActionResult> ReRenderAsync(string message)
+        {
+            ErrorMessage = message;
+            await LoadCustomerStepAsync(cancellationToken);
+            return Page();
+        }
+
+        if (customerContactClient is null || string.IsNullOrWhiteSpace(phoneNumber))
+        {
+            return await ReRenderAsync("Customer details could not be saved right now. Try again.");
+        }
+
+        if (string.IsNullOrWhiteSpace(contactName))
+        {
+            ContactNameError = "Customer name is required.";
+            return await ReRenderAsync("Enter the customer's name to continue.");
+        }
+
+        var saved = await customerContactClient.SaveAsync(new SaveCustomerContactRequestDto(phoneNumber, contactName, contactEmail), cancellationToken);
+        if (!saved.IsSuccess || saved.Value is null)
+        {
+            var detail = saved.Detail ?? DescribeFailure(saved.Outcome, "Customer details could not be saved.");
+            if (saved.Outcome == ApiOutcome.ValidationError)
+            {
+                ContactEmailError = detail.Contains("email", StringComparison.OrdinalIgnoreCase) ? detail : null;
+                ContactNameError = ContactEmailError is null ? detail : null;
+            }
+
+            return await ReRenderAsync(detail);
+        }
+
+        return isManual
+            ? RedirectToPage(new { step = StepProperty, intakeRecordId, phoneNumber, customer = "manual" })
+            : RedirectToPage(new { step = StepCustomer, intakeRecordId, phoneNumber, contactSaved = true });
     }
 
     /// <summary>
@@ -981,6 +1173,7 @@ public sealed class NewTicketModel(
 
     private async Task LoadIssueStepAsync(CancellationToken cancellationToken)
     {
+        await LoadSavedContactAsync(cancellationToken);
         await LoadDepartmentsAsync(cancellationToken);
         await LoadCategoriesAsync(CreateStep.DepartmentId, cancellationToken);
         await LoadRequestTypeOptionsAsync(CreateStep.DepartmentId, cancellationToken);

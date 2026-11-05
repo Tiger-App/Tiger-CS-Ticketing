@@ -44,7 +44,8 @@ public sealed class CustomerHistoryAppService(
     ITicketStatusHistoryRepository statusHistoryRepository,
     TicketQueryAppService ticketQueryAppService,
     ReopenPolicy reopenPolicy,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ICustomerContactDetailRepository? contactDetailRepository = null)
 {
     /// <summary>The New Ticket preview's default page size — a "reasonable latest-ticket limit", never the customer's unbounded history.</summary>
     public const int DefaultLimit = 5;
@@ -137,6 +138,34 @@ public sealed class CustomerHistoryAppService(
         long ticketId,
         int? limit = null,
         CancellationToken cancellationToken = default)
+    {
+        var result = await GetForTicketCoreAsync(callerEmployeeId, callerRoles, ticketId, limit, cancellationToken);
+        if (result is not { Outcome: CustomerHistoryOutcome.Success, Response: { } history } || contactDetailRepository is null)
+        {
+            return result;
+        }
+
+        // The name/e-mail an agent typed in for this ticket's phone (New Ticket manual entry, Customer Details edit). Looked up by
+        // the canonical form of the intake phone — the one fact every ticket carries — after the visibility check above.
+        var intake = await intakeRecordRepository.GetByLinkedTicketIdAsync(ticketId, cancellationToken);
+        var phoneKey = CustomerPhoneNumber.Normalize(intake?.PhoneNumber ?? history.PhoneNumberSnapshot);
+        if (phoneKey.Length == 0)
+        {
+            return result;
+        }
+
+        var manual = (await contactDetailRepository.ListByPhoneKeysAsync([phoneKey], cancellationToken)).GetValueOrDefault(phoneKey);
+        return manual is null
+            ? result
+            : CustomerHistoryResult.Success(history with { ManualCustomerName = manual.Name, ManualCustomerEmail = manual.Email });
+    }
+
+    private async Task<CustomerHistoryResult> GetForTicketCoreAsync(
+        Guid callerEmployeeId,
+        IReadOnlyCollection<string> callerRoles,
+        long ticketId,
+        int? limit,
+        CancellationToken cancellationToken)
     {
         var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
         if (ticket is null)
