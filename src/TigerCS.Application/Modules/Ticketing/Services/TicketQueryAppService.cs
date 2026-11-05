@@ -122,7 +122,8 @@ public sealed class TicketQueryAppService(
             IncludeClaimable: seesClaimablePool,
             AvailableToTakeOnly: request.AvailableToTake == true,
             DepartmentFilterIncludesClaimable: callCenterFilter,
-            IncludeGenesysIntake: await SeesGenesysIntakeAsync(callerEmployeeId, callerRoles, cancellationToken));
+            IncludeGenesysIntake: await SeesGenesysIntakeAsync(callerEmployeeId, callerRoles, cancellationToken),
+            ExcludeClosed: request.ExcludeClosed == true);
 
         var result = await ticketRepository.SearchAsync(query, cancellationToken);
 

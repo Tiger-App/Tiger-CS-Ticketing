@@ -1,8 +1,8 @@
 @page "/Tickets"
 @model TigerCS.Web.Pages.TicketsModel
 @{
-    // One workspace, four views. The primary navigation has a single
-    // "Tickets" item; Queue / Pending Interactions / My Tickets / Closed are
+    // One workspace, five views. The primary navigation has a single
+    // "Tickets" item; Queue / All / Pending Interactions / My Tickets / Closed are
     // the tabs below, each a bookmarkable ?view= of this same page.
     ViewData["Title"] = Model.View == TicketsView.Queue ? "Tickets" : $"{Model.View.Label()} · Tickets";
     ViewData["ActiveNav"] = "tickets";
@@ -17,9 +17,10 @@
                 @(Model.View switch
                 {
                     TicketsView.Pending => "Customer interactions waiting for a human agent — on every channel. Genesys still delivers the reply; this list is what is waiting and who is on it.",
+                    TicketsView.All => "Every ticket you can see, including Closed.",
                     TicketsView.My => "Tickets assigned to you, in every status.",
                     TicketsView.Closed => "Tickets that have been closed.",
-                    _ => "Every ticket you can see, across your departments."
+                    _ => "Every open ticket you can see, across your departments (Closed tickets are on the All and Closed tabs)."
                 })
             </p>
         </div>

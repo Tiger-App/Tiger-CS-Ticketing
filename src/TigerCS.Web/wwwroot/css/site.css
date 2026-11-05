@@ -2772,14 +2772,67 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 /* Solid handset like the reference for the channel tile and the conversation row */
 .ic--tile.ic-phone, .ic--chan.ic-phone { fill: currentColor; }
 /* Ticket Details: inline Assign / Reassign beside "Assigned To" (Collections). */
-.tw-assign { position: relative; display: inline-block; margin-left: .4rem; font-weight: 400; }
-.tw-assign > summary { cursor: pointer; list-style: none; display: inline-block; }
-.tw-assign > summary::-webkit-details-marker { display: none; }
-.tw-assign__panel { position: absolute; z-index: 30; top: calc(100% + 4px); left: 0; width: 18rem; max-width: 80vw; display: flex; flex-direction: column; gap: .4rem; padding: .6rem; background: var(--surface, #fff); border: 1px solid var(--border, #d0d5dd); border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, .12); }
-.tw-assign__current { margin: 0; font-size: 13px; }
-.tw-assign__buttons { display: flex; align-items: center; gap: .6rem; }
-.tw-assign__status { font-size: 12px; color: var(--color-text-secondary); }
-.tw-assign__status.is-error { color: var(--danger, #b42318); }
+/* ---- Assign / Reassign beside "Assigned To": a blue button that opens a centred modal (<dialog>) ---- */
+.tw-owner__row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 10px; min-width: 0; }
+.btn-reassign {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 0; border-radius: 8px;
+  background: #2563EB; color: #fff; font: inherit; font-size: 13px; font-weight: 600; line-height: 1; cursor: pointer; white-space: nowrap;
+  transition: background-color .15s ease, box-shadow .15s ease;
+}
+.btn-reassign:hover:not(:disabled) { background: #1D4ED8; box-shadow: 0 2px 6px rgba(37, 99, 235, .35); }
+.btn-reassign:focus-visible { outline: 2px solid #93C5FD; outline-offset: 2px; }
+.btn-reassign:disabled { background: #93B4F5; cursor: not-allowed; }
+.btn-reassign .ic { width: 16px; height: 16px; stroke-width: 2; }
+.btn-reassign-cancel {
+  height: 40px; padding: 0 18px; border: 1px solid #D1D5DB; border-radius: 8px; background: #F3F4F6; color: #374151;
+  font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; transition: background-color .15s ease;
+}
+.btn-reassign-cancel:hover:not(:disabled) { background: #E5E7EB; }
+.btn-reassign-cancel:disabled { opacity: .6; cursor: not-allowed; }
+.reassign-modal .btn-reassign { height: 40px; padding: 0 20px; font-size: 14px; }
+.btn-spinner { display: none; width: 14px; height: 14px; border: 2px solid rgba(255, 255, 255, .45); border-top-color: #fff; border-radius: 50%; animation: reassign-spin .7s linear infinite; }
+.is-loading > .btn-spinner { display: inline-block; }
+@keyframes reassign-spin { to { transform: rotate(360deg); } }
+
+.reassign-modal {
+  width: min(480px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); margin: auto; padding: 0; border: 0; border-radius: 14px;
+  background: var(--color-surface, #fff); color: var(--tw-ink, #1b2430); box-shadow: 0 24px 60px rgba(15, 20, 30, .30); overflow: hidden;
+}
+.reassign-modal[open] { display: flex; flex-direction: column; }
+.reassign-modal::backdrop { background: rgba(16, 26, 44, .45); }
+.reassign-modal__form { display: flex; flex-direction: column; min-height: 0; margin: 0; }
+.reassign-modal__head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 14px 14px 20px; border-bottom: 1px solid var(--tw-line, #e4e7ec); }
+.reassign-modal__title { margin: 0; font-size: 16px; font-weight: 700; }
+.reassign-modal__close { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border: 0; border-radius: 8px; background: transparent; color: var(--tw-muted, #667085); cursor: pointer; }
+.reassign-modal__close:hover { background: var(--color-neutral-tint, #f2f4f7); }
+.reassign-modal__close .ic { width: 18px; height: 18px; }
+.reassign-modal__body { padding: 16px 20px 4px; }
+.reassign-modal__facts { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin: 0 0 16px; padding: 12px 14px; border-radius: 10px; background: var(--color-neutral-tint, #f2f4f7); }
+.reassign-modal__facts dt { font-size: 12px; color: var(--tw-muted, #667085); }
+.reassign-modal__facts dd { margin: 2px 0 0; font-size: 14px; font-weight: 600; overflow-wrap: anywhere; }
+.reassign-modal .field-group { margin-bottom: 14px; }
+.reassign-modal .field-input, .reassign-modal .form-control { width: 100%; min-width: 0; font-size: 14px; }
+.reassign-modal textarea.form-control { min-height: 64px; resize: vertical; }
+.reassign-list { margin-top: 8px; max-height: min(30dvh, 220px); overflow-y: auto; border: 1px solid var(--tw-line, #d0d5dd); border-radius: 10px; }
+.reassign-option { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; font-size: 14px; }
+.reassign-option + .reassign-option { border-top: 1px solid var(--tw-line, #eef0f4); }
+.reassign-option:hover { background: var(--color-neutral-tint, #f2f4f7); }
+.reassign-option:has(input:checked) { background: #EFF4FF; }
+.reassign-option input { accent-color: #2563EB; }
+.reassign-option.is-current { cursor: not-allowed; color: var(--tw-muted, #667085); }
+.reassign-option__name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.reassign-option__tag { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #E5E7EB; color: #374151; }
+.reassign-list__empty { margin: 0; padding: 12px; font-size: 13px; color: var(--tw-muted, #667085); }
+.reassign-selected { margin: 8px 0 0; font-size: 13px; color: var(--tw-muted, #667085); }
+.reassign-selected strong { color: #1D4ED8; }
+.reassign-modal__status { min-height: 18px; margin: 0 0 8px; font-size: 13px; color: var(--tw-muted, #667085); }
+.reassign-modal__status.is-error { color: var(--danger, #b42318); }
+.reassign-modal__foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 20px 16px; border-top: 1px solid var(--tw-line, #e4e7ec); }
+.btn-reassign.is-loading { cursor: progress; }
+@media (max-width: 480px) {
+  .reassign-modal__facts { grid-template-columns: 1fr; }
+  .reassign-modal__foot > button { flex: 1 1 0; }
+}
 .assign-history { width: 100%; border-collapse: collapse; font-size: 13px; }
 .assign-history th, .assign-history td { text-align: left; padding: .3rem .5rem; border-bottom: 1px solid var(--border, #e4e7ec); vertical-align: top; }
 

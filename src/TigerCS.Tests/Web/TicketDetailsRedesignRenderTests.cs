@@ -121,12 +121,20 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         var offered = Dec(await Page(220, Roles.DepartmentEmployee));
 
         Assert.Equal(1, Count(offered, "data-collections-assign"));
-        var control = Section(offered, "data-collections-assign", "</details>");
+        var control = Section(offered, "data-collections-assign", "</dialog>");
         Assert.Contains("Reassign", control);                                   // the ticket has an owner
+        Assert.Contains("class=\"btn-reassign\" data-assign-open", control);     // the blue button beside the name opens the modal
+        Assert.Contains("<dialog class=\"reassign-modal\"", offered);            // a real modal, not the old popover
         Assert.Contains("Search Collections team", control);                    // searchable list of the team
         Assert.Contains("name=\"CollectionsAssign.EmployeeId\"", control);
-        Assert.Contains("Reason (optional)", control);
-        Assert.Contains("Current: <strong data-assign-current>", control);
+        Assert.Contains("Reason <span", control);                               // optional reason
+        Assert.Contains("(optional)", control);
+        Assert.Contains("TG-", control);                                        // the ticket number is shown
+        Assert.Contains("<dd data-assign-current>", control);                   // and the current assignee
+        Assert.Contains("data-assign-submit disabled", control);                // nothing selected: cannot submit
+        Assert.Contains("btn-reassign-cancel", control);
+        Assert.DoesNotContain("tw-assign__panel", offered);                     // the old popover is gone
+        Assert.DoesNotContain("<summary class=\"btn btn-sm\">Reassign", offered);
         Assert.Equal(1, Count(offered, "<span class=\"tw-fact__k\">Assigned To</span>"));   // still shown once, with the control inside it
 
         Assert.DoesNotContain("data-collections-assign", await Page(212, Roles.CsManager));   // not a Collections ticket for this viewer

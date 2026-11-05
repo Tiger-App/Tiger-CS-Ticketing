@@ -34,6 +34,7 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// <param name="CreatedByMe">True ("Created by Me"): only tickets the caller created — including ones that have since moved to another department, which a CS Agent keeps read-only access to. Never widens visibility: it only narrows the caller's own scope.</param>
 /// <param name="Escalated">Supervisor review: only tickets an agent passed up as UnableToResolve or NeedsEscalation. Requires a supervisory role (CS Supervisor, CS Manager, Department Head, General Manager, Chairman/CEO); other callers get 403. Narrows the caller's normal visibility, never widens it.</param>
 /// <param name="AvailableToTake">Only the unassigned, human-handling tickets a Call Center agent may take ownership of (active, no owner, no pending approval, no active AI conversation). Narrows the caller's normal visibility, never widens it. The Call Center agent's default list and Call Center department filter already include these tickets (read-only until taken).</param>
+/// <param name="ExcludeClosed">True: leave out Closed tickets (TicketStatus = Closed) — the Tickets page Queue tab. Only narrows the caller's normal visibility, never widens it; an explicit <c>ticketStatus</c> still applies on top (ticketStatus=Closed with this set returns nothing).</param>
 public sealed record TicketListRequestDto(
     int? DepartmentId,
     int? CategoryId,
@@ -62,7 +63,8 @@ public sealed record TicketListRequestDto(
     DateOnly? ClosedTo = null,
     bool? CreatedByMe = null,
     bool? Escalated = null,
-    bool? AvailableToTake = null);
+    bool? AvailableToTake = null,
+    bool? ExcludeClosed = null);
 
 /// <summary>One row of the ticket queue (MVP-API-Contracts.md §3.2).</summary>
 /// <param name="TicketId">The ticket.</param>

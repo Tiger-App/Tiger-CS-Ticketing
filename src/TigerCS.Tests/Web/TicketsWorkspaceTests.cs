@@ -107,7 +107,7 @@ public sealed class TicketsWorkspaceTests
         {
             // Distinct totals per predicate, so each tab's badge can be traced to its own query.
             var q = Query(pathAndQuery);
-            var total = q.ContainsKey("ownerEmployeeId") ? 3 : q.TryGetValue("ticketStatus", out var status) ? status == "Closed" ? 7 : 1 : 42;
+            var total = q.ContainsKey("ownerEmployeeId") ? 3 : q.TryGetValue("ticketStatus", out var status) ? status == "Closed" ? 7 : 1 : q.ContainsKey("excludeClosed") ? 40 : 42;
             return FakeApiHandler.JsonResponse(HttpStatusCode.OK, new TicketListResultDto([], total, 1, 1));
         }
 
@@ -128,9 +128,9 @@ public sealed class TicketsWorkspaceTests
     }
 
     private static Task GetAsync(TicketsModel model, string? view = null, Guid? ownerEmployeeId = null, string? ticketStatus = null,
-        string? sla = null, string? assignee = null, int? departmentId = null, bool mineOnly = false, byte? channelId = null, int page = 1) =>
+        string? sla = null, string? assignee = null, int? departmentId = null, bool mineOnly = false, byte? channelId = null, int page = 1, string? search = null, byte? priorityId = null) =>
         model.OnGetAsync(
-            departmentId, null, ticketStatus, null, ownerEmployeeId, null, null, null, page, 20, CancellationToken.None,
+            departmentId, priorityId, ticketStatus, null, ownerEmployeeId, search, null, null, page, 20, CancellationToken.None,
             channelId: channelId, view: view, sla: sla, assignee: assignee, mineOnly: mineOnly);
 
     // ---------------------------------------------------------------
@@ -285,6 +285,8 @@ public sealed class TicketsWorkspaceTests
     [Theory]
     [InlineData(null, TicketsView.Queue)]
     [InlineData("queue", TicketsView.Queue)]
+    [InlineData("all", TicketsView.All)]
+    [InlineData("ALL", TicketsView.All)]
     [InlineData("pending", TicketsView.Pending)]
     [InlineData("my", TicketsView.My)]
     [InlineData("closed", TicketsView.Closed)]
@@ -316,10 +318,11 @@ public sealed class TicketsWorkspaceTests
         await GetAsync(model);
 
         Assert.Equal(TicketsView.Queue, model.View);
-        Assert.Equal(42, model.TotalCount);
+        Assert.Equal(40, model.TotalCount);
 
-        // Tab badges: Queue = unfiltered total, My = ownerEmployeeId=viewer, Closed = ticketStatus=Closed, Pending = unassigned handoffs.
-        Assert.Equal(42, model.TabCount(TicketsView.Queue));
+        // Tab badges: Queue = everything but Closed, All = unfiltered total, My = ownerEmployeeId=viewer, Closed = ticketStatus=Closed, Pending = unassigned handoffs.
+        Assert.Equal(40, model.TabCount(TicketsView.Queue));
+        Assert.Equal(42, model.TabCount(TicketsView.All));
         Assert.Equal(3, model.TabCount(TicketsView.My));
         Assert.Equal(7, model.TabCount(TicketsView.Closed));
         Assert.Equal(5, model.TabCount(TicketsView.Pending));
@@ -327,6 +330,52 @@ public sealed class TicketsWorkspaceTests
         var pendingCount = Assert.Single(handler.Requests, r => r.RequestUri.Contains("/api/pending-customer-interactions?", StringComparison.Ordinal));
         Assert.Equal("true", Query(pendingCount.RequestUri)["unassignedOnly"]);
         Assert.Equal("1", Query(pendingCount.RequestUri)["pageSize"]);
+    }
+
+    [Fact]
+    public async Task QueueView_ExcludesClosed_ButKeepsSearchFiltersAndPaging()
+    {
+        var (model, handler) = CreateModel();
+        GivePageContext(model, Principal(Roles.CsAgent));
+
+        await GetAsync(model, view: "queue", search: "lease", priorityId: 2);
+
+        var list = handler.Requests.First(r => r.RequestUri.Contains("/api/tickets?", StringComparison.Ordinal) && r.RequestUri.Contains("pageSize=20", StringComparison.Ordinal));
+        var q = Query(list.RequestUri);
+        Assert.Equal("true", q["excludeClosed"]);
+        Assert.Equal("lease", q["search"]);
+        Assert.Equal("2", q["priorityId"]);
+        Assert.Equal("1", q["page"]);
+        Assert.False(q.ContainsKey("ticketStatus"));
+    }
+
+    [Fact]
+    public async Task AllView_ListsEveryVisibleTicket_IncludingClosed_WithNoStatusRestriction()
+    {
+        var (model, handler) = CreateModel();
+        GivePageContext(model, Principal(Roles.CsAgent));
+
+        await GetAsync(model, view: "all");
+
+        Assert.Equal(TicketsView.All, model.View);
+        Assert.Equal(42, model.TotalCount);
+        var list = handler.Requests.First(r => r.RequestUri.Contains("/api/tickets?", StringComparison.Ordinal) && r.RequestUri.Contains("pageSize=20", StringComparison.Ordinal));
+        var q = Query(list.RequestUri);
+        Assert.False(q.ContainsKey("excludeClosed"));
+        Assert.False(q.ContainsKey("ticketStatus"));
+        Assert.False(q.ContainsKey("ownerEmployeeId"));
+    }
+
+    [Fact]
+    public async Task MyTicketsAndPendingViews_DoNotExcludeClosed()
+    {
+        var (model, handler) = CreateModel();
+        GivePageContext(model, Principal(Roles.CsAgent));
+
+        await GetAsync(model, view: "my");
+
+        var list = handler.Requests.First(r => r.RequestUri.Contains("/api/tickets?", StringComparison.Ordinal) && r.RequestUri.Contains("pageSize=20", StringComparison.Ordinal));
+        Assert.False(Query(list.RequestUri).ContainsKey("excludeClosed"));
     }
 
     [Fact]

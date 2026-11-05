@@ -6,14 +6,16 @@ namespace TigerCS.Web.Models;
 /// <summary>
 /// The views of the unified Tickets workspace (<c>/Tickets</c>). What used to
 /// be four primary-navigation items — Queue, Pending Interactions, My Tickets
-/// and Closed — are now tabs of one page, each still backed by the query it
-/// always was: the ticket queue endpoint for Queue/My Tickets/Closed (with the
-/// owner or status fixed), and the pending-customer-interactions endpoint for
+/// and Closed — are now tabs of one page (plus All), each still backed by the query it
+/// always was: the ticket queue endpoint for Queue/All/My Tickets/Closed (Queue
+/// leaves Closed out, All leaves nothing out, My Tickets fixes the owner and
+/// Closed fixes the status), and the pending-customer-interactions endpoint for
 /// Pending Interactions.
 /// </summary>
 public enum TicketsView
 {
     Queue,
+    All,
     Pending,
     My,
     Closed,
@@ -25,10 +27,11 @@ public static class TicketsViews
     /// <summary>The query-string parameter that selects a view — so a bookmark or a browser refresh lands on the same tab.</summary>
     public const string QueryKey = "view";
 
-    public static readonly IReadOnlyList<TicketsView> All = [TicketsView.Queue, TicketsView.Pending, TicketsView.My, TicketsView.Closed];
+    public static readonly IReadOnlyList<TicketsView> All = [TicketsView.Queue, TicketsView.All, TicketsView.Pending, TicketsView.My, TicketsView.Closed];
 
     public static string Key(this TicketsView view) => view switch
     {
+        TicketsView.All => "all",
         TicketsView.Pending => "pending",
         TicketsView.My => "my",
         TicketsView.Closed => "closed",
@@ -37,6 +40,7 @@ public static class TicketsViews
 
     public static string Label(this TicketsView view) => view switch
     {
+        TicketsView.All => "All",
         TicketsView.Pending => "Pending Interactions",
         TicketsView.My => "My Tickets",
         TicketsView.Closed => "Closed",
@@ -55,6 +59,7 @@ public static class TicketsViews
         switch (key?.Trim().ToLowerInvariant())
         {
             case "queue": view = TicketsView.Queue; return true;
+            case "all": view = TicketsView.All; return true;
             case "pending": view = TicketsView.Pending; return true;
             case "my": view = TicketsView.My; return true;
             case "closed": view = TicketsView.Closed; return true;
