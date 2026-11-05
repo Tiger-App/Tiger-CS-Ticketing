@@ -1,4 +1,4 @@
-using TigerCS.Application.Modules.Ticketing.CustomerNames;
+﻿using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using Microsoft.EntityFrameworkCore;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
@@ -56,18 +56,40 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         var tickets = dbContext.Tickets.AsNoTracking().VisibleTo(
             dbContext, visibleDepartmentIds, agentScopeEmployeeId, ownerEmployeeId: ownerEmployeeId, inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
 
-        var withPhone = tickets.Select(t => new
-        {
-            Ticket = t,
-            IntakePhone = dbContext.IntakeRecords
-                .Where(i => i.LinkedTicketId == t.TicketId && i.PhoneNumber != "")
-                .OrderBy(i => i.IntakeRecordId)
-                .Select(i => (string?)i.PhoneNumber)
-                .FirstOrDefault(),
-            LastInteractionAtUtc = dbContext.TicketInteractions
-                .Where(i => i.TicketId == t.TicketId)
-                .Max(i => (DateTime?)i.CreatedAtUtc),
-        });
+        // Each ticket's captured number is its FIRST linked intake with a
+        // non-empty phone (lowest IntakeRecordId). It is resolved ONCE, as a
+        // single pre-aggregated derived table LEFT JOINed to Tickets — not as
+        // a correlated TOP(1) subquery in the projection. EF Core inlines a
+        // projected subquery everywhere the projection is referenced, and the
+        // identity Kind/Phone columns, the WHERE and the canonicalization
+        // reference it ~14 times, so the correlated form cost ~14 IntakeRecords
+        // look-ups per ticket across EVERY visible ticket — for the list's
+        // count query, its page query and, because the phone-keyed profile can
+        // only filter after the identity is computed, for a profile too. That
+        // grew with the ticket table until the default 30 s command timeout
+        // failed both /Customers and /Customers/phone:… (see
+        // docs/Customers-Pages-Failure-Investigation.md). Same row, same
+        // result, one join.
+        var firstIntakePhones =
+            from first in dbContext.IntakeRecords
+                .Where(i => i.LinkedTicketId != null && i.PhoneNumber != "")
+                .GroupBy(i => i.LinkedTicketId!.Value)
+                .Select(g => new { TicketId = g.Key, IntakeRecordId = g.Min(i => i.IntakeRecordId) })
+            join intake in dbContext.IntakeRecords on first.IntakeRecordId equals intake.IntakeRecordId
+            select new { first.TicketId, intake.PhoneNumber };
+
+        var withPhone =
+            from t in tickets
+            join p in firstIntakePhones on t.TicketId equals p.TicketId into phones
+            from p in phones.DefaultIfEmpty()
+            select new
+            {
+                Ticket = t,
+                IntakePhone = p.PhoneNumber,
+                LastInteractionAtUtc = dbContext.TicketInteractions
+                    .Where(i => i.TicketId == t.TicketId)
+                    .Max(i => (DateTime?)i.CreatedAtUtc),
+            };
 
         // The captured number, canonicalized in SQL. This is what the phone
         // fallback groups, filters and searches on — never the raw column,
