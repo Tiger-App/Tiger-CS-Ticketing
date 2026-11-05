@@ -59,6 +59,11 @@ public sealed class DispatchService(
         var existing = await store.FindDispatchByKeyAsync(key, ct);
         if (existing is not null) return Replay(existing, caller, request.ExpectedFingerprint);
 
+        // Nothing would ever pick the job up: do not create an approval that sits in Queued and holds its customers.
+        if (!scheduler.IsAvailable)
+            return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.Disabled,
+                "Background jobs are switched off in this environment (BackgroundJobs:Enabled), so an approved send could not run. Nothing was approved.");
+
         var resolved = await query.ResolveAsync(request.Selection, ct);
         if (resolved.Error is not null) return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, resolved.Error);
         if (resolved.Records.Count == 0)
@@ -117,6 +122,29 @@ public sealed class DispatchService(
         && string.Equals(existing.Fingerprint, expectedFingerprint, StringComparison.OrdinalIgnoreCase)
             ? CollectionsResult<DispatchDto>.Ok(ToDto(existing), CollectionsOutcome.Replayed)
             : CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.IdempotencyConflict, "This idempotency key was already used for a different approval.");
+
+    // ---------------------------------------------------------------- readiness
+
+    /// <summary>The configuration gates Confirm enforces, plus the credentials and contact lists the upload needs. Read-only; sends nothing and calls nothing.</summary>
+    public async Task<CollectionsResult<DispatchReadinessDto>> ReadinessAsync(CollectionsCaller caller, CancellationToken ct)
+    {
+        if (!(await authorization.ResolveAsync(caller, ct)).CanReadFinancials)
+            return CollectionsResult<DispatchReadinessDto>.Fail(CollectionsOutcome.Forbidden);
+        var blockers = new List<string>();
+        if (!options.Enabled) blockers.Add("Collections is switched off in this environment (Collections:Enabled).");
+        if (!genesys.Enabled) blockers.Add("The Genesys outbound integration is switched off (Collections:GenesysOutbound:Enabled).");
+        if (!genesys.LiveCustomerDispatchEnabled) blockers.Add("Customer dispatch to Genesys is switched off (Collections:GenesysOutbound:LiveCustomerDispatchEnabled).");
+        if (!genesys.SuppressionEnabled) blockers.Add("The paid-after-upload suppression sweep is not enabled (Collections:GenesysOutbound:SuppressionEnabled); it is required before any send.");
+        if (string.IsNullOrWhiteSpace(genesys.ClientId) || string.IsNullOrWhiteSpace(genesys.ClientSecret))
+            blockers.Add("The Genesys OAuth client id or secret is not configured (Collections:GenesysOutbound:ClientId / ClientSecret, supplied as secrets).");
+        if (!scheduler.IsAvailable) blockers.Add("Background jobs are switched off (BackgroundJobs:Enabled), so an approved send could not run.");
+        foreach (var type in Enum.GetValues<CampaignReminderType>())
+        {
+            try { _ = genesys.ContactListIdFor(type); }
+            catch (InvalidOperationException) { blockers.Add($"No valid Genesys contact list id is configured for {type} (Collections:GenesysOutbound:ContactListIds:{type})."); }
+        }
+        return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers));
+    }
 
     // ---------------------------------------------------------------- read
 

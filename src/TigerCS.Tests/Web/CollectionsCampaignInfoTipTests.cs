@@ -191,6 +191,19 @@ public sealed partial class CollectionsCampaignInfoTipTests
     }
 
     [Fact]
+    public async Task ABlockedApprove_NamesTheGenesysSettingsThatAreMissing_BeforeAnythingIsApproved()
+    {
+        var api = new FakeCollectionsApi { IncludeNotEligible = true };
+        api.DispatchBlockers.Add("Customer dispatch to Genesys is switched off (Collections:GenesysOutbound:LiveCustomerDispatchEnabled).");
+        var html = await FullPage(api);
+        var button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
+        Assert.Contains("disabled", button); Assert.Contains("data-blocked=\"true\"", button);
+        var text = TipById(html, "tip-approve-reason").Text;
+        Assert.StartsWith("Sending to Genesys is not configured in this environment.", text);
+        Assert.Contains("LiveCustomerDispatchEnabled", text);
+    }
+
+    [Fact]
     public async Task AnEnabledApprove_StillExplainsItself_InThePopover()
     {
         var html = await FullPage(new FakeCollectionsApi { IncludeNotEligible = true });

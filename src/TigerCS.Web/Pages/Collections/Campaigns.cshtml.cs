@@ -96,6 +96,12 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         Outcome = result.Outcome;
         Report = result.IsSuccess ? result.Value : null;
         Error = result.Detail;
+        if (Report is not null)
+        {
+            // Environment readiness is advisory for the button only (the API refuses again at confirmation); a failed read must never block or hide the list.
+            var readiness = await api.GetDispatchReadinessAsync(cancellationToken);
+            DispatchBlockers = readiness.IsSuccess && readiness.Value is { Ready: false, Blockers: { } blockers } ? blockers : [];
+        }
         BusinessDate ??= Report?.BusinessDate;
         // To shows the effective end. From stays EMPTY unless the user chose it: empty = All months = the whole history up to the end of the current month (the read scope); the stage
         // eligibility scope is unchanged. Writing the effective 2000-01-01 back into the input would turn the next page / export request into an explicit From
@@ -168,9 +174,12 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>The less-used controls stay collapsed unless one of them holds a non-default value, so an applied filter is never hidden.</summary>
     public bool AdvancedOpen => Period == "Custom" || BusinessDate is not null || MinTotal != ReceivablesModel.DefaultMinTotal;
 
+    /// <summary>Environment settings that stop any send to Genesys (switched off, missing credentials or contact lists); empty when configured or when it could not be read.</summary>
+    public IReadOnlyList<string> DispatchBlockers { get; private set; } = [];
+
     /// <summary>
     /// The single, specific reason Approve &amp; Send is unavailable for the current preview (null = available). The browser adds "nothing ticked" on top of this. Checked in the order a person
-    /// can act on: permission, financial reconciliation, financial data freshness, CRM contacts, the stage's send schedule, then whether any customer is Ready. Every gate is fail-closed and the
+    /// can act on: permission, financial reconciliation, Genesys/background-job configuration, financial data freshness, CRM contacts, the stage's send schedule, then whether any customer is Ready. Every gate is fail-closed and the
     /// API enforces the same ones again; this only names which one applies instead of a generic message.
     /// </summary>
     public string? ApproveBlockedReason
@@ -181,6 +190,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
             if (!report.CanExportReview) return "Your account does not have permission to approve and send campaigns (Collections send permission required).";
             if (!report.FinancialSourceValidated)
                 return "The financial source is not reconciled, so nothing can be approved or sent." + (report.SourceGate?.Message is { Length: > 0 } why ? $" {why}" : "");
+            if (DispatchBlockers.Count > 0) return "Sending to Genesys is not configured in this environment. " + string.Join(" ", DispatchBlockers);
             if (report.Snapshot is { IsReady: false, ReadyProblem: { } problem }) return $"Financial data: {problem}";
             if (report.Crm is { Blocks: true } crm) return crm.Message ?? "CRM contacts are unavailable, so contacts are unconfirmed.";
             if (ScheduleRestriction(StageName(report.Stage), report.ScheduledDates, report.BusinessDate, report.LiveBusinessDate, report.IsScheduledDate) is { } schedule) return schedule;
