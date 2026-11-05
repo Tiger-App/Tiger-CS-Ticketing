@@ -1,4 +1,4 @@
-using TigerCS.Application.Modules.Ticketing.Dto;
+﻿using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.SlaAndEscalation;
@@ -486,6 +486,40 @@ public sealed class CustomerDirectorySqliteTests : IDisposable
         // The row still shows the number as the latest ticket captured it.
         Assert.Equal("971-50-123-4567", row.PhoneNumber);
         Assert.Equal("M-401", row.UnitNumber);
+    }
+
+    /// <summary>
+    /// The identity phone is the ticket's FIRST linked intake with a non-empty number (lowest IntakeRecordId) — resolved in SQL by
+    /// a single pre-aggregated join (see <see cref="CustomerDirectoryQueryShapeTests"/>). A blank first intake is skipped, a later
+    /// intake never re-homes the ticket, and a ticket with no usable intake is nobody — for the list AND the profile, so the
+    /// row's key always opens the profile it names (the ticket-to-profile link depends on it).
+    /// </summary>
+    [Fact]
+    public async Task PhoneIdentity_IsTheFirstNonEmptyLinkedIntake_ForTheListAndTheProfile()
+    {
+        long ticketId;
+        using (var context = _db.CreateContext())
+        {
+            var ticket = AddPhoneTicket(context, phone: null, createdAtUtc: Now.AddDays(-2));
+            ticketId = ticket.TicketId;
+            LinkIntakePhone(context, ticket, "");                 // blank: skipped
+            LinkIntakePhone(context, ticket, "+971 50 123 4567"); // first usable: the identity
+            LinkIntakePhone(context, ticket, "+971509999999");    // later capture: never re-homes the ticket
+            AddPhoneTicket(context, phone: null, createdAtUtc: Now.AddDays(-1)); // no intake at all: nobody
+        }
+
+        var list = await ListAsync();
+        var row = Assert.Single(list.Items);
+        Assert.Equal("phone:971501234567", row.CustomerKey);
+        Assert.Equal(1, row.TotalTickets);
+        Assert.Equal(ticketId, row.LastTicketId);
+
+        var profile = await ProfileAsync(row.CustomerKey);
+        Assert.Equal(CustomerDirectoryProfileOutcome.Success, profile.Outcome);
+        Assert.Equal(ticketId, Assert.Single(profile.Response!.Tickets).TicketId);
+
+        var other = await ProfileAsync("phone:971509999999");
+        Assert.Equal(CustomerDirectoryProfileOutcome.NotFound, other.Outcome);
     }
 
     /// <summary>

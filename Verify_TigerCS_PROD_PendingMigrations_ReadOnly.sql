@@ -60,7 +60,8 @@ INSERT @Repo (MigrationId) VALUES
     (N'20261030073857_AddTicketCreatedBy'),
     (N'20261031094748_AddDepartmentAssignmentRotation'),
     (N'20261102065459_AddUserPermissionOverrides'),
-    (N'20261104130835_AddCollectionsTowerAssignments');
+    (N'20261104130835_AddCollectionsTowerAssignments'),
+    (N'20261105094644_AddCustomerContactDetails');
 
 SELECT r.MigrationId AS PendingMigration FROM @Repo r
 WHERE NOT EXISTS (SELECT 1 FROM dbo.__EFMigrationsHistory h WHERE h.MigrationId = r.MigrationId) ORDER BY r.MigrationId;
@@ -73,6 +74,7 @@ SELECT v.Item, CASE WHEN v.Present = 1 THEN 'PRESENT' ELSE 'MISSING (deploy the 
     (N'dbo.TicketInteractionHandlers',     CASE WHEN OBJECT_ID(N'dbo.TicketInteractionHandlers', N'U') IS NOT NULL THEN 1 ELSE 0 END),
     (N'dbo.UserPermissionOverrides',       CASE WHEN OBJECT_ID(N'dbo.UserPermissionOverrides', N'U') IS NOT NULL THEN 1 ELSE 0 END),
     (N'dbo.CollectionsTowerAssignments (new in this release)', CASE WHEN OBJECT_ID(N'dbo.CollectionsTowerAssignments', N'U') IS NOT NULL THEN 1 ELSE 0 END),
+    (N'dbo.CustomerContactDetails (read by BOTH the Customers directory and the Customer Profile)', CASE WHEN OBJECT_ID(N'dbo.CustomerContactDetails', N'U') IS NOT NULL THEN 1 ELSE 0 END),
     (N'dbo.Tickets.WorkflowTemplateId',    CASE WHEN COL_LENGTH(N'dbo.Tickets', N'WorkflowTemplateId') IS NOT NULL THEN 1 ELSE 0 END),
     (N'dbo.Tickets.CreatedByEmployeeId',   CASE WHEN COL_LENGTH(N'dbo.Tickets', N'CreatedByEmployeeId') IS NOT NULL THEN 1 ELSE 0 END),
     (N'dbo.TicketWorkflowEvents.TransferReasonCode', CASE WHEN COL_LENGTH(N'dbo.TicketWorkflowEvents', N'TransferReasonCode') IS NOT NULL THEN 1 ELSE 0 END),
