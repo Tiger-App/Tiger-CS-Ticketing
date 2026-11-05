@@ -45,6 +45,8 @@ The live-AI protection stays **on**. A ticket is `ACTIVE_AI` only when a Genesys
 
 TigerCS cannot query Genesys (Genesys only calls TigerCS), so "still live" can only be proven from Genesys itself. **Reconciliation, only for tickets the diagnostic shows as stale and only after approval:** export the conversation ids (result 6) and their real end times from Genesys, then replay them through the existing, idempotent conversation-end operation (`GenesysConversationEndAppService`): write-once `EndedAtUtc`/`EndReason`, audited as `GenesysConversationEnded`, nothing on the ticket changes, safe to repeat. No end time is ever invented. A conversation Genesys reports as still connected stays excluded. The opt-in `CsAgentBackfill:StaleAiAfterHours` rule (null today, 24 h only proposed) is the alternative that writes nothing, but it needs a separate business approval.
 
+**Production finding (all 181 held-back tickets are live *Phone* interactions with no end event):** see [Genesys/Phone-End-Event-Investigation.md](Genesys/Phone-End-Event-Investigation.md) and run `Diagnose_TigerCS_PROD_PhoneEndEvents_ReadOnly.sql` (SELECT only; section F compares with a Genesys export). They stay protected until each conversation's real state is verified; nothing is closed and BackgroundJobs stays off.
+
 ## What is and is not written
 
 | Written | Never written |
