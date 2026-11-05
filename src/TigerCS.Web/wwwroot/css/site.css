@@ -2821,7 +2821,7 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .reassign-option input { accent-color: #2563EB; }
 .reassign-option.is-current { cursor: not-allowed; color: var(--tw-muted, #667085); }
 .reassign-option__name { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
-.reassign-option__tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #E5E7EB; color: #374151; }
+.reassign-option__tag { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; background: #E5E7EB; color: #374151; }
 .reassign-list__empty { margin: 0; padding: 12px; font-size: 13px; color: var(--tw-muted, #667085); }
 .reassign-selected { margin: 8px 0 0; font-size: 13px; color: var(--tw-muted, #667085); }
 .reassign-selected strong { color: #1D4ED8; }
