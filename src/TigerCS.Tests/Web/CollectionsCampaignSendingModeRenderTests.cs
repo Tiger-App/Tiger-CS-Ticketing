@@ -19,15 +19,19 @@ public sealed class CollectionsCampaignSendingModeRenderTests
 
     private static string Between(string html, string start, string end) { var a = html.IndexOf(start, StringComparison.Ordinal); return a < 0 ? "" : html[a..html.IndexOf(end, a, StringComparison.Ordinal)]; }
     private static string Reason(string html) => System.Net.WebUtility.HtmlDecode(Regex.Match(html, "data-approve-reason[^>]*>(.*?)</span>", RegexOptions.Singleline).Groups[1].Value);
+    private static string TipById(string html, string id) => System.Net.WebUtility.HtmlDecode(Regex.Match(html, $"id=\"{id}\"[^>]*>(.*?)</span>", RegexOptions.Singleline).Groups[1].Value);
     private static string Button(string html) => Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
 
     [Fact]
-    public async Task TheSelector_OffersManualAndAuto_AndAutoIsTheDefault()
+    public async Task TheSelector_IsACompactManualAutoToggle_AndAutoIsTheDefault()
     {
         var (html, _) = await LoadAsync("");
-        var select = Regex.Match(html, "<select[^>]*data-sending-mode[^>]*>.*?</select>", RegexOptions.Singleline).Value;
-        Assert.Contains("value=\"Manual\"", select); Assert.Contains("value=\"Auto\" selected", select); Assert.DoesNotContain("value=\"Manual\" selected", select);
-        Assert.Contains(">Sending mode<", html);
+        var toggle = Regex.Match(html, "<div class=\"segmented\"[^>]*data-sending-mode[^>]*>.*?</div>", RegexOptions.Singleline).Value;
+        Assert.Contains("role=\"radiogroup\"", toggle);
+        Assert.Matches("name=\"sendingMode\" value=\"Manual\"(?![^>]*checked)", toggle);              // Manual is not the default
+        Assert.Matches("name=\"sendingMode\" value=\"Auto\"[^>]*checked", toggle);
+        Assert.DoesNotContain("<select", Regex.Match(html, "id=\"campaignModeLabel\".*?</div>\\s*</div>", RegexOptions.Singleline).Value);   // no dropdown
+        Assert.Contains(">Sending mode", html);
     }
 
     [Fact]
@@ -38,8 +42,9 @@ public sealed class CollectionsCampaignSendingModeRenderTests
         var advanced = Regex.Match(html, "<details[^>]*data-advanced-filters[^>]*>.*?</details>", RegexOptions.Singleline).Value;
         Assert.Contains("Preview date", advanced); Assert.DoesNotContain("name=\"businessDate\"", Regex.Match(main, "campaign-date-slot.*?</div>", RegexOptions.Singleline).Value);
         Assert.Single(Regex.Matches(html, "name=\"businessDate\" type=\"date\""));                    // exactly one date input
-        var hint = Regex.Match(html, "<p[^>]*data-policy-schedule[^>]*>(.*?)</p>", RegexOptions.Singleline).Groups[1].Value;
-        Assert.Contains("is scheduled for 14 Oct 2026", hint); Assert.Contains("off by default", hint);
+        var label = Regex.Match(html, "<span[^>]*data-policy-schedule[^>]*>(.*?)</span>", RegexOptions.Singleline);
+        Assert.Equal("Schedule: 14 Oct 2026", label.Groups[1].Value); Assert.DoesNotContain("hidden", label.Value);          // a small label, not a paragraph
+        Assert.Contains("automatic execution is a separate setting, off by default", TipById(html, "tip-sending-mode"));
         Assert.Contains("data-policy-schedule-result>14 Oct 2026<", html); Assert.DoesNotContain("data-send-date>", html);
         Assert.Contains("data-auto-sending>Off<", html);                                               // automatic execution is its own switch, off by default
         Assert.Contains("sendingMode=Auto", Assert.Single(api.Calls("/campaigns/preview")));
@@ -56,7 +61,8 @@ public sealed class CollectionsCampaignSendingModeRenderTests
         Assert.DoesNotContain("businessDate", advanced);
         Assert.Single(Regex.Matches(html, "name=\"businessDate\" type=\"date\""));
         Assert.Contains("value=\"2026-10-14\"", Regex.Match(main, "<input[^>]*name=\"businessDate\"[^>]*>").Value);
-        Assert.Contains("Manual: you choose the send date", html);
+        Assert.Contains("Manual: you choose the send date", TipById(html, "tip-sending-mode"));                              // explained in a tooltip, not a paragraph
+        Assert.DoesNotContain("data-mode-hint=\"Manual\"", html);
         Assert.Contains("data-mode-name>Manual<", html); Assert.Contains("data-send-date>14 Oct 2026<", html); Assert.Contains("today: can be sent after approval", html);
         Assert.Contains("sendingMode=Manual", Assert.Single(api.Calls("/campaigns/preview")));
         Assert.Contains("Approve &amp; Send to Genesys", html); Assert.DoesNotContain("disabled", Button(html));
@@ -94,7 +100,8 @@ public sealed class CollectionsCampaignSendingModeRenderTests
     {
         var (html, _) = await LoadAsync("Manual");
         foreach (var hook in new[] { "data-ready-count", "data-blocked-count", "data-preview-only-count" }) Assert.Contains(hook, html);
-        Assert.Contains(">Ready to send<", html); Assert.Contains(">Needs review / blocked<", html); Assert.Contains(">Preview only<", html);
+        foreach (var label in new[] { ">Customers<", ">Ready<", ">Blocked<", ">Total amount<" }) Assert.Contains(label, html);      // four compact KPI cards
+        Assert.Contains("Preview only <strong data-preview-only-count>", html);                                                 // preview-only sits in the one-line notes
         Assert.Contains("data-row-state>Ready<", html);
     }
 }

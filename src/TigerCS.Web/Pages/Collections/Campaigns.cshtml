@@ -27,8 +27,10 @@
         <label class="field-label" for="campaignDate" data-date-label>@(Model.IsManual ? "Send date" : "Preview date")</label>
         <input class="field-input" id="campaignDate" name="businessDate" type="date" data-campaign-date min="2000-01-01" max="2100-12-31" value="@((Model.BusinessDate ?? (Model.IsManual ? CollectionsDisplay.DubaiToday() : null))?.ToString("yyyy-MM-dd"))" />
     </div>;
+    const string modeTip = "Manual: you choose the send date; only the campaign schedule is waived. A future date stays pending and nothing is sent automatically. Auto: follows the stage's policy schedule; automatic execution is a separate setting, off by default. In both modes reconciliation, permissions, contact checks, suppression and duplicate-send protection apply.";
 }
-    @* Filter first: choosing filters never queries the campaign list. Customers load only when Preview Customers is clicked; changing a filter afterwards clears them again. *@
+    @* Filter first: choosing filters never queries the campaign list. Customers load only when Preview Customers is clicked; changing a filter afterwards clears them again.
+       One compact control bar: stage, Manual / Auto, the send date (Manual) or the policy schedule label (Auto), Project / Tower and Preview Customers. Everything else is under More filters. *@
     <form id="campaignFilters" class="campaign-filters panel" method="get" action="/Collections/Campaigns" data-receivables-filter data-results-form data-campaign-filters>
         <div class="campaign-filters__main">
             <div class="field-group">
@@ -43,41 +45,44 @@
                     }
                 </select>
             </div>
-            <div class="field-group">
-                <label class="field-label" for="campaignMode">Sending mode</label>
-                <select class="field-select" id="campaignMode" name="sendingMode" data-sending-mode>
-                    <option value="Manual" selected="@Model.IsManual">Manual (choose the send date)</option>
-                    <option value="Auto" selected="@(!Model.IsManual)">Auto (follow the campaign schedule)</option>
-                </select>
+            <div class="field-group campaign-mode">
+                <span class="field-label" id="campaignModeLabel">Sending mode<partial name="_InfoTip" model="@(new InfoTipModel("tip-sending-mode", "Sending mode", modeTip))" /></span>
+                <div class="segmented" role="radiogroup" aria-labelledby="campaignModeLabel" data-sending-mode>
+                    <label class="segmented__option"><input type="radio" name="sendingMode" value="Manual" checked="@Model.IsManual" /><span>Manual</span></label>
+                    <label class="segmented__option"><input type="radio" name="sendingMode" value="Auto" checked="@(!Model.IsManual)" /><span>Auto</span></label>
+                </div>
             </div>
-            @* Manual: the date picker lives here as "Send date"; Auto: it stays in Advanced filters as "Preview date". Exactly one date input exists either way (collections-campaign-filters.js moves it when the mode changes). *@
-            <div class="campaign-date-slot" data-date-slot>@if (Model.IsManual) { @dateGroup(null) }</div>
+            @* Manual: the date picker lives here as "Send date". Auto: it stays under More filters as "Preview date" and this cell shows the policy schedule as a small label. Exactly one date input
+               exists either way (collections-campaign-filters.js moves it when the mode changes). *@
+            <div class="campaign-date-slot" data-date-slot>
+                @if (Model.IsManual) { @dateGroup(null) }
+                <span class="campaign-schedule" data-mode-hint="Auto" data-policy-schedule hidden="@Model.IsManual">@Model.PolicyScheduleLabel()</span>
+            </div>
             <partial name="_TowerMultiPicker" model="@(new TowerMultiPickerModel("campaignTower", Model.Towers, Model.TowerIds, Model.TowersFailed))" />
-            <div class="field-group">
-                <label class="field-label" for="campaignPayment">Payment status</label>
-                <select class="field-select" id="campaignPayment" name="paymentStatus" data-payment-status>
-                    @foreach (var choice in CampaignsModel.PaymentStatusChoices) { <option value="@choice" selected="@(Model.PaymentStatus.Equals(choice, StringComparison.OrdinalIgnoreCase))">@(choice == "Both" ? "Due and Overdue (both)" : choice)</option> }
-                </select>
+            <div class="campaign-filters__actions">
+                <button class="btn btn-primary" type="submit" name="render" value="full" data-preview-button>Preview Customers</button>
             </div>
-            @* Period only fills the From / To dates below (it has no name, so it is never sent): the dates stay the single source of the range. *@
-            <div class="field-group">
-                <label class="field-label" for="campaignPeriod">Period</label>
-                <select class="field-select" id="campaignPeriod" data-period data-today="@CollectionsDisplay.DubaiToday().ToString("yyyy-MM-dd")">
-                    <option value="UpToToday" selected="@(Model.Period == "UpToToday")">Up to today</option>
-                    <option value="ThisMonth" selected="@(Model.Period == "ThisMonth")">This month</option>
-                    <option value="LastSixMonths" selected="@(Model.Period == "LastSixMonths")">Last 6 months</option>
-                    <option value="Custom" selected="@(Model.Period == "Custom")">Custom range</option>
-                </select>
-            </div>
-        </div>
-        <div class="campaign-mode-hints" aria-live="polite">
-            <p class="receivables-meta" data-mode-hint="Manual" hidden="@(!Model.IsManual)">Manual: you choose the send date. Only the campaign schedule is waived; financial reconciliation, permissions, CRM / PACT contact checks, suppression and duplicate-send protection all still apply. A future date stays pending until an authorized user sends it on that day; nothing is sent automatically.</p>
-            <p class="receivables-meta" data-mode-hint="Auto" hidden="@Model.IsManual" data-policy-schedule>@Model.PolicyScheduleText() Automatic execution is a separate setting and is off by default.</p>
         </div>
         <div class="campaign-filters__footer">
             <details class="campaign-advanced" open="@Model.AdvancedOpen" data-advanced-filters>
-                <summary>Advanced filters</summary>
+                <summary>More filters</summary>
                 <div class="campaign-advanced__grid">
+                    <div class="field-group">
+                        <label class="field-label" for="campaignPayment">Payment status</label>
+                        <select class="field-select" id="campaignPayment" name="paymentStatus" data-payment-status>
+                            @foreach (var choice in CampaignsModel.PaymentStatusChoices) { <option value="@choice" selected="@(Model.PaymentStatus.Equals(choice, StringComparison.OrdinalIgnoreCase))">@(choice == "Both" ? "Due and Overdue (both)" : choice)</option> }
+                        </select>
+                    </div>
+                    @* Period only fills the From / To dates (it has no name, so it is never sent): the dates stay the single source of the range. *@
+                    <div class="field-group">
+                        <label class="field-label" for="campaignPeriod">Period</label>
+                        <select class="field-select" id="campaignPeriod" data-period data-today="@CollectionsDisplay.DubaiToday().ToString("yyyy-MM-dd")">
+                            <option value="UpToToday" selected="@(Model.Period == "UpToToday")">Up to today</option>
+                            <option value="ThisMonth" selected="@(Model.Period == "ThisMonth")">This month</option>
+                            <option value="LastSixMonths" selected="@(Model.Period == "LastSixMonths")">Last 6 months</option>
+                            <option value="Custom" selected="@(Model.Period == "Custom")">Custom range</option>
+                        </select>
+                    </div>
                     @if (!Model.IsManual) { @dateGroup(null) }
                     <div class="field-group">
                         <label class="field-label" for="campaignFrom">From date (instalment due)</label>
@@ -93,39 +98,38 @@
                     </div>
                 </div>
             </details>
-            <div class="campaign-filters__actions">
-                <span class="receivables-loading" role="status" hidden>Loading customers…</span>
-                <span class="receivables-timeout" role="alert" hidden>The list is taking too long. Retry or choose one tower.</span>
-                <button class="btn btn-primary" type="submit" name="render" value="full" data-preview-button>Preview Customers</button>
-            </div>
+            <span class="receivables-loading" role="status" hidden>Loading customers…</span>
+            <span class="receivables-timeout" role="alert" hidden>The list is taking too long. Retry or choose one tower.</span>
         </div>
     </form>
-    <section class="campaign-snapshot panel" data-snapshot-box aria-label="Financial snapshot status" aria-live="polite">
-        <h2 class="campaign-snapshot__title">Financial snapshot</h2>
+    @* A slim status strip: the three state chips of the financial snapshot (reconciliation, data, CRM). A reconciliation blocker inside it is never collapsed. *@
+    <section class="campaign-snapshot" data-snapshot-box aria-label="Financial snapshot status" aria-live="polite">
         @if (Model.RenderFull) { <partial name="_CampaignSnapshotStatus" model="Model" /> }
         else
         {
             <p class="campaign-snapshot__idle" data-snapshot-idle>
-                <span class="campaign-pill campaign-pill--idle">Not loaded yet</span>
+                <span class="campaign-pill campaign-pill--idle">Snapshot not loaded yet</span>
                 <partial name="_InfoTip" model="@(new InfoTipModel("tip-snapshot-idle", "Financial snapshot status", "Its status appears here once customers are previewed, and stays visible while you change filters."))" />
             </p>
         }
     </section>
-    <div class="campaign-search">
-        @* Part of the filter form (form attribute) but placed with the results it narrows. *@
-        <label class="field-label" for="campaignSearch">Search customers</label>
-        <input class="field-input" form="campaignFilters" type="search" id="campaignSearch" name="search" maxlength="200" value="@Model.Search" placeholder="Customer name, mobile, tower or apartment" />
-    </div>
-    <div class="receivables-results" data-results data-results-url="/Collections/Campaigns" aria-live="polite">
-        @if (Model.RenderFull) { <partial name="_CampaignResults" model="Model" /> }
-        else
-        {
-            <div class="panel campaign-idle" role="status" data-results-idle>
-                <p class="empty-state__title">No customers loaded yet.</p>
-                <p class="receivables-meta">Choose the filters above, then click <strong>Preview Customers</strong>. Nothing is queried or sent until you do.</p>
-            </div>
-        }
-    </div>
+    @* The KPI cards and the compact notes of the last preview. collections-campaign-filters.js lifts them here out of every results fragment; they are cleared with the customers. *@
+    <div class="campaign-kpi-box" data-kpi-box></div>
+    @* One results section: the customer search, the actions (Approve & Send to Genesys, exports) and the table. *@
+    <section class="panel campaign-results">
+        <div class="campaign-search">
+            @* Part of the filter form (form attribute) but placed with the results it narrows. *@
+            <label class="field-label" for="campaignSearch">Search customers</label>
+            <input class="field-input" form="campaignFilters" type="search" id="campaignSearch" name="search" maxlength="200" value="@Model.Search" placeholder="Customer name, mobile, tower or apartment" />
+        </div>
+        <div class="receivables-results" data-results data-results-url="/Collections/Campaigns" aria-live="polite">
+            @if (Model.RenderFull) { <partial name="_CampaignResults" model="Model" /> }
+            else
+            {
+                <p class="campaign-idle" role="status" data-results-idle>No customers loaded yet. Choose the filters, then click <strong>Preview Customers</strong>; nothing is queried or sent until you do.</p>
+            }
+        </div>
+    </section>
 </div>
 <script src="~/js/info-tip.js" asp-append-version="true"></script>
 <script src="~/js/receivables-load-monitor.js" asp-append-version="true"></script>

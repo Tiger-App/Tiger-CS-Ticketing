@@ -16,28 +16,31 @@
     const date = form.querySelector('[data-campaign-date]');
     const advanced = form.querySelector('[data-advanced-filters]');
     const snapshotBox = document.querySelector('[data-snapshot-box]');
+    const kpiBox = document.querySelector('[data-kpi-box]');
     const pad = n => String(n).padStart(2, '0');
     const iso = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
     const daysIn = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
-    // ---- Sending mode: Manual shows the date as "Send date" beside the mode; Auto keeps it as "Preview date" in Advanced filters. One input exists either way (it is moved, never copied),
-    // so exactly one businessDate is ever submitted. Changing the mode is a filter change like any other: the customers on screen are cleared until Preview Customers is pressed.
-    const modeSelect = form.querySelector('[data-sending-mode]');
+    // ---- Sending mode (a Manual / Auto segmented toggle): Manual shows the date beside the toggle as "Send date"; Auto keeps it as "Preview date" under More filters and shows the policy
+    // schedule as a small label. One input exists either way (it is moved, never copied), so exactly one businessDate is ever submitted. Changing the mode is a filter change like any
+    // other: the customers on screen are cleared until Preview Customers is pressed.
+    const modeRadios = [...form.querySelectorAll('input[name="sendingMode"]')];
     const dateGroup = form.querySelector('[data-date-group]');
     const dateSlot = form.querySelector('[data-date-slot]');
     const advancedGrid = form.querySelector('.campaign-advanced__grid');
+    const currentMode = () => (modeRadios.find(r => r.checked) || {}).value || 'Auto';
     const applyMode = () => {
-        if (!modeSelect) return;
-        const manual = modeSelect.value === 'Manual';
+        if (modeRadios.length === 0) return;
+        const mode = currentMode(), manual = mode === 'Manual';
         if (dateGroup && dateSlot && advancedGrid) {
             const label = dateGroup.querySelector('[data-date-label]');
             if (label) label.textContent = manual ? 'Send date' : 'Preview date';
-            if (manual) { dateSlot.appendChild(dateGroup); if (date && !date.value && period) date.value = period.dataset.today || date.value; }
+            if (manual) { dateSlot.prepend(dateGroup); if (date && !date.value && period) date.value = period.dataset.today || date.value; }
             else advancedGrid.prepend(dateGroup);
         }
-        form.querySelectorAll('[data-mode-hint]').forEach(h => { h.hidden = h.dataset.modeHint !== modeSelect.value; });
+        form.querySelectorAll('[data-mode-hint]').forEach(h => { h.hidden = h.dataset.modeHint !== mode; });
     };
-    if (modeSelect) modeSelect.addEventListener('change', applyMode);
+    modeRadios.forEach(r => r.addEventListener('change', applyMode));
 
     // ---- Period -> From / To (same ranges as CollectionsDateRanges on the server)
     const anchor = () => {
@@ -79,6 +82,7 @@
     const clearSelection = () => { try { sessionStorage.removeItem(SELECTION_KEY); } catch { /* storage unavailable */ } };
     const showStale = () => {
         box.innerHTML = '';
+        if (kpiBox) kpiBox.innerHTML = '';
         const panel = document.createElement('div'); panel.className = 'panel campaign-idle'; panel.setAttribute('role', 'status'); panel.setAttribute('data-results-stale', '');
         const title = document.createElement('p'); title.className = 'empty-state__title'; title.textContent = 'Filters changed.';
         const hint = document.createElement('p'); hint.className = 'receivables-meta'; hint.textContent = 'The previous customers and ticks were cleared. Click Preview Customers to load the list for the new filters.';
@@ -106,6 +110,11 @@
             snapshotBox.querySelectorAll('[data-snapshot-status], [data-snapshot-idle]').forEach(n => n.remove());
             snapshotBox.appendChild(status);
         }
+        // The KPI cards belong to the customers on screen: lifted above the results section with them; removed when the preview is stale or a fragment arrives without any (an error, nothing loaded).
+        const kpis = box.querySelector('[data-campaign-kpis]');
+        if (stale) { if (kpiBox) kpiBox.innerHTML = ''; }
+        else if (kpis && kpiBox) kpiBox.replaceChildren(kpis);
+        else if (kpiBox && box.querySelector('[data-campaign-error], [data-nothing-loaded]')) kpiBox.innerHTML = '';
         if (!box.querySelector('[data-preview-current], [data-campaign-error], [data-nothing-loaded]') || stale) return;
         // A filter edited while the request was in flight: those customers do not match the filters on screen.
         if (serialize() !== submitted) { stale = true; clearSelection(); showStale(); window.dispatchEvent(new CustomEvent('campaign-preview-invalidated')); return; }

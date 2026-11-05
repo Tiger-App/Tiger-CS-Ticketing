@@ -17,9 +17,8 @@ const PAGE = `<!doctype html><html><body>
   <select id="campaignTower" name="towerId" data-tower-select><option value="" selected>All</option><option value="7">T7</option></select>
   <select id="campaignPayment" name="paymentStatus" data-payment-status><option value="Both" selected>Both</option><option value="Overdue">Overdue</option></select>
   <select id="campaignPeriod" data-period data-today="2026-10-21"><option value="UpToToday" selected>Up to today</option><option value="ThisMonth">This month</option><option value="LastSixMonths">Last 6 months</option><option value="Custom">Custom</option></select>
-  <select id="campaignMode" name="sendingMode" data-sending-mode><option value="Manual">Manual</option><option value="Auto" selected>Auto</option></select>
-  <div class="campaign-date-slot" data-date-slot></div>
-  <p data-mode-hint="Manual" hidden>manual hint</p><p data-mode-hint="Auto">auto hint</p>
+  <div role="radiogroup" data-sending-mode><label><input type="radio" name="sendingMode" value="Manual" id="modeManual" />Manual</label><label><input type="radio" name="sendingMode" value="Auto" id="modeAuto" checked />Auto</label></div>
+  <div class="campaign-date-slot" data-date-slot><span data-mode-hint="Auto" data-policy-schedule>Schedule: 01 Nov 2026</span></div>
   <details data-advanced-filters><div class="campaign-advanced__grid">
     <div class="field-group" data-date-group><label for="campaignDate" data-date-label>Preview date</label>
     <input id="campaignDate" name="businessDate" type="date" data-campaign-date value="" /></div>
@@ -31,6 +30,7 @@ const PAGE = `<!doctype html><html><body>
   <button type="submit" name="render" value="full" data-preview-button>Preview Customers</button>
 </form>
 <section data-snapshot-box><p data-snapshot-idle>idle</p></section>
+<div data-kpi-box></div>
 <input form="campaignFilters" type="search" id="campaignSearch" name="search" value="" />
 <div data-results data-results-url="/Collections/Campaigns"><div data-results-idle>No customers loaded yet.</div></div>
 </div></body></html>`;
@@ -38,6 +38,7 @@ const PAGE = `<!doctype html><html><body>
 const RESULTS = (blocked = false) => `
 <div data-snapshot-status><div data-load-problem>Could not load data for Tiger Group Sharjah</div><p>Financial source: <strong>Reconciled</strong></p></div>
 <div class="panel" data-customer-results data-preview-current>
+  <div data-campaign-kpis><ul><li data-ready-count>2</li></ul></div>
   <form data-approve-form>
     <input type="hidden" name="unitKeys" value="" data-selected-units />
     <label><input type="radio" name="selectionMode" value="SelectedUnits" checked /> ticked (<span data-selected-count>0</span>)</label>
@@ -163,29 +164,36 @@ test('filters edited while customers are loading do not leave the old customers 
     assert.equal(ctx.q('.campaign-select'), null); assert.ok(ctx.q('[data-results-stale]'));
 });
 
-test('Manual mode moves the one date input beside the mode as "Send date"; Auto puts it back as "Preview date"', async () => {
-    const { q, change, document } = await boot();
+const pick = (ctx, mode) => { const r = ctx.q(mode === 'Manual' ? '#modeManual' : '#modeAuto'); r.checked = true; r.dispatchEvent(new ctx.window.Event('change', { bubbles: true })); };
+
+test('Manual mode moves the one date input beside the toggle as "Send date"; Auto puts it back as "Preview date" with the schedule label', async () => {
+    const ctx = await boot(); const { q, document } = ctx;
     const date = q('#campaignDate');
-    assert.ok(q('[data-advanced-filters] [data-date-group]'), 'Auto: the date lives in Advanced filters');
-    change(q('#campaignMode'), 'Manual');
-    assert.ok(q('[data-date-slot] [data-date-group]'), 'Manual: the date picker moves next to the mode');
+    assert.ok(q('[data-advanced-filters] [data-date-group]'), 'Auto: the date lives under More filters');
+    assert.equal(q('[data-policy-schedule]').hidden, false, 'Auto: the policy schedule label is shown');
+    pick(ctx, 'Manual');
+    assert.ok(q('[data-date-slot] [data-date-group]'), 'Manual: the date picker moves next to the toggle');
     assert.equal(q('[data-date-label]').textContent, 'Send date');
     assert.equal(date.value, '2026-10-21', 'defaults to today when empty');
-    assert.equal(q('[data-mode-hint="Manual"]').hidden, false); assert.equal(q('[data-mode-hint="Auto"]').hidden, true);
+    assert.equal(q('[data-policy-schedule]').hidden, true, 'Manual: no schedule label');
     date.value = '2026-10-25';
-    change(q('#campaignMode'), 'Auto');
+    pick(ctx, 'Auto');
     assert.ok(q('[data-advanced-filters] [data-date-group]')); assert.equal(q('[data-date-label]').textContent, 'Preview date');
     assert.equal(date.value, '2026-10-25', 'the chosen date is kept, never duplicated');
     assert.equal(document.querySelectorAll('input[name="businessDate"]').length, 1, 'exactly one businessDate is ever submitted');
-    assert.equal(q('[data-mode-hint="Auto"]').hidden, false); assert.equal(q('[data-mode-hint="Manual"]').hidden, true);
+    assert.equal(q('[data-policy-schedule]').hidden, false);
 });
 
-test('changing the sending mode after a preview clears the customers and the ticks like any filter', async () => {
-    const { q, preview, change } = await boot();
+test('changing the sending mode after a preview clears the customers, the KPI cards and the ticks like any filter', async () => {
+    const ctx = await boot(); const { q, preview } = ctx;
     await preview();
     assert.ok(q('[data-customer-results]'));
-    change(q('#campaignMode'), 'Manual');
+    assert.ok(q('[data-kpi-box] [data-campaign-kpis]'), 'the KPI cards are lifted above the results section');
+    assert.equal(q('[data-results] [data-campaign-kpis]'), null);
+    pick(ctx, 'Manual');
     assert.equal(q('[data-customer-results]'), null); assert.ok(q('[data-results-stale]'));
+    assert.equal(q('[data-kpi-box]').children.length, 0, 'stale customers leave no KPI cards behind');
     await preview();
     assert.ok(q('[data-customer-results]'), 'Preview Customers loads the list for the new mode');
+    assert.ok(q('[data-kpi-box] [data-campaign-kpis]'));
 });
