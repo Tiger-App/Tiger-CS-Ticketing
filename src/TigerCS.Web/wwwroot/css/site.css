@@ -629,6 +629,40 @@ textarea.form-control { min-height: 96px; resize: vertical; padding: var(--space
 .login-footer { text-align: center; margin-top: var(--space-4); font-size: 18px; font-weight: 600; color: #FFFFFF; }
 .login-card .login-footer { color: var(--color-text-secondary); }
 
+/* Login, responsive. Desktop (>= 1200px) keeps the two-column design above.
+   Below it the page is one centred column: branding first, the card right
+   under it, so the form is never pushed down by decoration. */
+@media (max-width: 1199px) {
+  .login-shell {
+    grid-template-columns: minmax(0, 1fr); align-content: start; grid-auto-rows: min-content;
+    gap: clamp(var(--space-4), 3vh, var(--space-5));
+    padding: clamp(var(--space-4), 4vh, var(--space-6)) clamp(var(--space-4), 4vw, var(--space-6));
+    background-attachment: scroll;
+  }
+  .login-aside { max-width: none; padding: 0; gap: var(--space-3); align-items: center; text-align: center; }
+  .login-aside__statement { max-width: 52ch; margin: 0 auto; }
+  .login-aside__statement h2 { font-size: clamp(24px, 4.2vw, 34px); max-width: none; margin-bottom: var(--space-2); }
+  .login-aside__statement p { font-size: var(--text-base); max-width: none; margin: 0 auto; }
+  .login-aside__points, .login-aside__foot { display: none; }
+  /* The brand row above already carries the logo; the card's own mark would repeat it. */
+  .login-card__mark { display: none; }
+  .login-stack { width: 100%; max-width: 420px; margin: 0 auto; justify-content: flex-start; }
+  .login-card { max-width: 420px; margin: 0 auto; padding: var(--space-5) var(--space-5) var(--space-4); }
+  .login-brand { margin-bottom: var(--space-4); }
+  .login-card .form-row { margin-bottom: var(--space-4); }
+}
+@media (max-width: 767px) {
+  /* Mobile: the logo, then the form. No hero, no photograph, no feature list. */
+  .login-shell { background-image: none; gap: var(--space-5); padding: var(--space-5) var(--space-4); }
+  .login-aside__statement { display: none; }
+  .login-aside__brand { justify-content: center; }
+  .login-stack { max-width: 420px; }
+  .login-card { padding: var(--space-5) var(--space-4) var(--space-4); }
+  .login-brand__product { font-size: 22px; }
+  .login-card .form-control, .login-card .btn { width: 100%; }
+  .login-footer { margin-top: var(--space-3); }
+}
+
 /* ---------- Ticket details ---------- */
 
 .ticket-header { background: var(--color-surface); border: 1px solid var(--color-border); border-radius: var(--radius-lg); padding: var(--space-5); margin-bottom: var(--space-4); box-shadow: var(--shadow-sm); }
@@ -1333,14 +1367,6 @@ a.customer-card__name:hover { text-decoration: underline; }
 
 /* ---------- Responsive ---------- */
 
-/* Below the split, the card centres on the photograph rather than sitting
-   in a column of its own — bg.png stays the page at every width. */
-@media (max-width: 1024px) {
-  .login-shell { grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
-  .login-aside { max-width: none; }
-  .login-aside__statement { max-width: 26ch; }
-  .login-card { margin: 0 auto; }
-}
 
 @media (max-width: 1180px) {
   .kpi-grid--six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -1375,14 +1401,6 @@ a.customer-card__name:hover { text-decoration: underline; }
   .tickets-workspace .filter-bar__submit { width: 100%; margin-left: 0; justify-content: flex-end; }
   .ticket-header__top { grid-template-columns: minmax(0, 1fr); }
   .ticket-header__actions { justify-content: flex-start; }
-  /* iOS ignores a fixed attachment and jumps; the photograph still covers. */
-  .login-shell { background-attachment: scroll; padding: var(--space-5) var(--space-4); gap: var(--space-5); }
-  .login-aside { padding: 0; gap: var(--space-4); text-align: center; align-items: center; }
-  .login-aside__brand { justify-content: center; }
-  .login-aside__statement { max-width: none; }
-  .login-aside__statement h2 { font-size: 26px; margin-bottom: var(--space-2); }
-  .login-aside__statement p, .login-aside__points, .login-aside__foot { display: none; }
-  .login-card { max-width: 100%; padding: var(--space-5) var(--space-4); }
   .dash-shortcuts { grid-template-columns: 1fr; }
   .page-header { flex-wrap: wrap; }
   .page-header__actions { flex: 1 1 100%; justify-content: flex-start; }
