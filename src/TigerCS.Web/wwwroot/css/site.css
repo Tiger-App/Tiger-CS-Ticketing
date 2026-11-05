@@ -3038,7 +3038,7 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .dashboard-workspace .kpi-card__icon { width: 28px; height: 28px; }
 .dashboard-workspace .kpi-card__icon svg { width: 15px; height: 15px; }
 .dashboard-workspace .kpi-card strong { font-size: 20px; }
-.dashboard-workspace .kpi-card span { font-size: 11px; line-height: 1.25; }
+.dashboard-workspace .kpi-card span { font-size: var(--text-xs); line-height: 1.25; }
 .dashboard-workspace a.kpi-card:hover { transform: none; box-shadow: none; }
 .dashboard-workspace a.dash-shortcut:hover { transform: none; box-shadow: none; }
 
