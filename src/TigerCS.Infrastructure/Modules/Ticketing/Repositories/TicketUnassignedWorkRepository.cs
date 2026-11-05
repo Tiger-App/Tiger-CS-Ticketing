@@ -174,7 +174,8 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
                 UnmappedGenesysAgentId: unmappedId,
                 LastActivityUtc: lastActivity,
                 LeftCallCenter: left,
-                ReleasedByPerson: released.Contains(t.TicketId.ToString(System.Globalization.CultureInfo.InvariantCulture))));
+                ReleasedByPerson: released.Contains(t.TicketId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                LiveGenesysIsPhoneOnly: live.Count > 0 && live.All(i => i.ChannelId == WellKnownChannels.Phone)));
         }
 
         return result;

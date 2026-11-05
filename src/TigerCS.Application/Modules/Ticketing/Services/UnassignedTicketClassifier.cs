@@ -91,7 +91,10 @@ public sealed record UnassignedTicketEvidence(
     // The ticket was transferred to the Call Center and later moved on, or originated in the Call Center and is no longer there.
     bool LeftCallCenter,
     // A person (not the system) released an owner to the queue.
-    bool ReleasedByPerson);
+    bool ReleasedByPerson,
+    // At least one Genesys interaction is live AND every live one is a Phone call. Only such a ticket can be released by the Phone stale rule;
+    // a live chat / messaging / any other-channel conversation keeps the ticket protected. Default false = protected (safe for older callers).
+    bool LiveGenesysIsPhoneOnly = false);
 
 public sealed record UnassignedTicketClassification(UnassignedTicketClass Class, UnassignedTicketAction Action);
 

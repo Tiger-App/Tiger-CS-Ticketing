@@ -32,6 +32,12 @@
      * Business rule: every ACTIVE (Open / InProgress / PendingCustomer / PendingThirdParty) human-handled ticket has a CS Agent, whatever its department.
      * Only tickets with NO owner are candidates; an existing owner is never replaced (owned tickets are only REPORTED, see report 9).
      * HELD BACK: pending approval, Collections, a live AI conversation nobody asked a person for, tickets younger than @MinTicketAgeMinutes.
+     * STALE PHONE (approved rule, CsAgentBackfillClassifier.IsStalePhoneAi): an OPEN or IN PROGRESS, unowned ticket whose live Genesys conversations are ALL
+       Phone calls, with no human evidence and NO recorded activity for MORE than @StalePhoneAfterHours (default 6) no longer counts as ACTIVE_AI: it is
+       treated as STALE_AI and dealt to the shared rotation like any other eligible ticket. No Genesys end event is required; TicketInteractions.EndedAtUtc is
+       never written (a check proves the live-conversation count is unchanged); the ticket is not closed or moved. Chat / other channels, recent calls and
+       Pending Customer / Pending Third Party tickets stay ACTIVE_AI. Last activity = latest of ticket creation, interaction stamps, transcript lines and
+       Genesys workflow events (the same definition as UnassignedTicketEvidence.LastActivityUtc).
      * Who: the confirmed handling agent when they are an eligible Call Center CS Agent (the cursor does not move); otherwise the next eligible CS Agent
        of the persisted shared rotation, oldest ticket first, continuing the live cursor (never resetting it).
      * The ticket is NOT moved: department, request type, priority, status, SLA and history are untouched.
@@ -78,6 +84,7 @@ DECLARE @RunAssignment                bit              = 1;
 DECLARE @IncludeCategoryOnly          bit              = 0;      -- DefaultClassificationBackfillOptions.IncludeCategoryOnly (default off)
 DECLARE @IncludeAiEndedWithoutHuman   bit              = 1;      -- CsAgentBackfillOptions.IncludeAiEndedWithoutHuman (default on)
 DECLARE @MinTicketAgeMinutes          int              = 3;      -- CsAgentBackfillOptions.MinTicketAgeMinutes
+DECLARE @StalePhoneAfterHours         int              = 6;      -- CsAgentBackfillOptions.StalePhoneAiAfterHours (approved rule). NULL or <= 0 = rule OFF: every live conversation stays ACTIVE_AI.
 DECLARE @ApprovedClassificationCount  int              = NULL;   -- commit gate: report 1 "ClassificationToApply"
 DECLARE @ApprovedAssignmentCount      int              = NULL;   -- commit gate: report 1 "AssignmentToApply"
 DECLARE @ServiceIdsConfirmed          bit              = 0;      -- commit gate: 1 only after listing ALL service-account ids below
@@ -176,7 +183,8 @@ DECLARE @Asg TABLE (
     TicketId bigint PRIMARY KEY, TicketNumber nvarchar(80) NULL, TicketStatus tinyint NOT NULL, CurrentDepartmentId int NOT NULL, CreatedAtUtc datetime2 NOT NULL,
     RowVer binary(8) NOT NULL, PendingApproval bit NOT NULL, IsCollections bit NOT NULL, HumanNeeded bit NOT NULL, HasGenesys bit NOT NULL, HasLiveGenesys bit NOT NULL,
     HandlerId uniqueidentifier NULL,
-    Class varchar(24) NOT NULL, Source varchar(20) NULL, AgentId uniqueidentifier NULL, RotationSeq int NULL);
+    Class varchar(24) NOT NULL, Source varchar(20) NULL, AgentId uniqueidentifier NULL, RotationSeq int NULL,
+    LivePhoneOnly bit NOT NULL DEFAULT 0, LastActivityUtc datetime2 NULL, StalePhone bit NOT NULL DEFAULT 0);   -- StalePhone = released by the approved stale-Phone rule (STALE_AI)
 DECLARE @Agents TABLE (Rn int PRIMARY KEY, EmployeeId uniqueidentifier NOT NULL, SortKey char(36) COLLATE Latin1_General_BIN2 NOT NULL);
 DECLARE @Log TABLE (Seq int IDENTITY(1,1) PRIMARY KEY, TicketId bigint NOT NULL, Phase varchar(16) NOT NULL, Action nvarchar(100) NOT NULL, Detail nvarchar(1000) NOT NULL);
 DECLARE @Counts TABLE (TableName sysname PRIMARY KEY, RowsBefore bigint NOT NULL, RowsAfter bigint NULL, MustBeUnchanged bit NOT NULL);
@@ -217,6 +225,8 @@ SELECT @ProtectedBefore = CHECKSUM_AGG(CHECKSUM(TicketId, TicketNumber, TicketSt
                                                 EscalationLevel, CreatedAtUtc, FirstHumanResponseAtUtc))
 FROM dbo.Tickets WITH (NOLOCK);
 -- Existing ownership: every ticket that has an owner today must have the SAME owner afterwards (the assignment phase only ever fills an empty owner).
+-- Live Genesys conversations before any write: the stale-Phone rule must NOT end one (no EndedAtUtc / InactivityClosedAtUtc is ever written).
+DECLARE @LiveGenesysBefore bigint = (SELECT COUNT_BIG(*) FROM dbo.TicketInteractions WITH (NOLOCK) WHERE Source = 2 AND EndedAtUtc IS NULL AND InactivityClosedAtUtc IS NULL);
 DECLARE @OwnerSnap TABLE (TicketId bigint PRIMARY KEY, OwnerId uniqueidentifier NOT NULL);
 INSERT @OwnerSnap (TicketId, OwnerId) SELECT TicketId, CurrentOwnerEmployeeId FROM dbo.Tickets WITH (NOLOCK) WHERE CurrentOwnerEmployeeId IS NOT NULL;
 
@@ -416,15 +426,37 @@ BEGIN TRY
         FROM dbo.Tickets t
         WHERE t.TicketStatus BETWEEN 1 AND 4 AND t.CurrentOwnerEmployeeId IS NULL;
 
+        -- Phone-only live conversation and last recorded activity (UnassignedTicketEvidence.LiveGenesysIsPhoneOnly / LastActivityUtc).
+        UPDATE a SET
+            LivePhoneOnly = CASE WHEN EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = a.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL AND i.InactivityClosedAtUtc IS NULL)
+                                  AND NOT EXISTS (SELECT 1 FROM dbo.TicketInteractions i WHERE i.TicketId = a.TicketId AND i.Source = 2 AND i.EndedAtUtc IS NULL AND i.InactivityClosedAtUtc IS NULL AND i.ChannelId <> 1)
+                                 THEN 1 ELSE 0 END,
+            LastActivityUtc = (SELECT MAX(v) FROM (VALUES
+                (a.CreatedAtUtc),
+                ((SELECT MAX(q.v) FROM dbo.TicketInteractions i
+                    CROSS APPLY (VALUES (i.CreatedAtUtc), (i.InteractionStartedAtUtc), (i.LastCustomerInteractionAtUtc), (i.AwaitingCustomerReplySinceUtc)) q(v)
+                  WHERE i.TicketId = a.TicketId)),
+                ((SELECT MAX(mm.SentAtUtc) FROM dbo.TicketInteractions i JOIN dbo.TicketInteractionMessages mm ON mm.TicketInteractionId = i.TicketInteractionId
+                  WHERE i.TicketId = a.TicketId)),
+                ((SELECT MAX(e.OccurredAtUtc) FROM dbo.TicketWorkflowEvents e WHERE e.TicketId = a.TicketId AND e.EventType BETWEEN 10 AND 19))   -- HandoffRequested .. GenesysCallTransferred
+            ) x(v))
+        FROM @Asg a;
+
         -- CsAgentBackfillClassifier.Classify, in the same order as the application.
         UPDATE @Asg SET Class =
             CASE WHEN IsCollections = 1 THEN 'COLLECTIONS'
                  WHEN PendingApproval = 1 THEN 'PENDING_APPROVAL'
                  WHEN CreatedAtUtc > DATEADD(minute, -@MinTicketAgeMinutes, @Now) THEN 'TOO_NEW'
                  WHEN HumanNeeded = 1 THEN 'ELIGIBLE'
+                 -- approved stale-Phone rule: Open / In Progress, live conversations all Phone, silent for MORE than the threshold -> STALE_AI, assigned (flag below)
+                 WHEN HasGenesys = 1 AND HasLiveGenesys = 1 AND ISNULL(@StalePhoneAfterHours, 0) > 0 AND TicketStatus IN (1, 2) AND LivePhoneOnly = 1
+                      AND LastActivityUtc < DATEADD(hour, -@StalePhoneAfterHours, @Now) THEN 'ELIGIBLE'
                  WHEN HasGenesys = 1 AND HasLiveGenesys = 1 THEN 'ACTIVE_AI'
                  WHEN HasGenesys = 1 AND @IncludeAiEndedWithoutHuman = 0 THEN 'AI_ENDED_NO_HUMAN'
                  ELSE 'ELIGIBLE' END;
+
+        -- An ELIGIBLE ticket with a live conversation and no human need can only be here through the stale-Phone rule: flag it (reports, audit reason).
+        UPDATE @Asg SET StalePhone = 1 WHERE Class = 'ELIGIBLE' AND HumanNeeded = 0 AND HasGenesys = 1 AND HasLiveGenesys = 1;
 
         -- Call Center workflow settings may disable assignment: then the engine assigns nobody, and neither do we.
         IF EXISTS (SELECT 1 FROM dbo.DepartmentWorkflowSettings WHERE DepartmentId = @CcId AND AllowAssignment = 0)
@@ -488,20 +520,22 @@ BEGIN TRY
                    N'AssignedEmployeeId=' + LOWER(CONVERT(nvarchar(36), a.AgentId)) + N';DepartmentId=' + CONVERT(nvarchar(20), a.CurrentDepartmentId)
                    + CASE WHEN a.Source = 'ConfirmedHandler' THEN N';Mode=ConfirmedHandler'
                           ELSE N';Mode=RoundRobin;Pool=SharedCsAgents;PoolDepartmentId=' + CONVERT(nvarchar(20), @CcId) END
-                   + N';Trigger=Backfill;BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId)),
+                   + N';Trigger=Backfill;BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId))
+                   + CASE WHEN a.StalePhone = 1 THEN N';Reason=StalePhoneAi' ELSE N'' END,
                    @BatchId, @Now
             FROM @Asg a WHERE a.AgentId IS NOT NULL;
 
             INSERT dbo.AuditEntries (ActorEmployeeId, Action, EntityType, EntityId, BeforeValue, AfterValue, CorrelationId, OccurredAtUtc)
             SELECT NULL, N'BackfillAssign', N'Ticket', CONVERT(nvarchar(100), a.TicketId), N'Unassigned',
                    N'AssignedEmployeeId=' + LOWER(CONVERT(nvarchar(36), a.AgentId)) + N';DepartmentId=' + CONVERT(nvarchar(20), a.CurrentDepartmentId)
-                   + N';Status=' + CONVERT(nvarchar(10), a.TicketStatus) + N';Source=' + a.Source + N';BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId)),
+                   + N';Status=' + CONVERT(nvarchar(10), a.TicketStatus) + N';Source=' + a.Source + N';BatchId=' + LOWER(CONVERT(nvarchar(36), @BatchId))
+                   + CASE WHEN a.StalePhone = 1 THEN N';Reason=StalePhoneAi;LastActivityUtc=' + CONVERT(nvarchar(33), a.LastActivityUtc, 126) ELSE N'' END,
                    @BatchId, @Now
             FROM @Asg a WHERE a.AgentId IS NOT NULL;
 
             INSERT @Log (TicketId, Phase, Action, Detail)
             SELECT a.TicketId, 'ASSIGNMENT', N'AutoAssign / BackfillAssign',
-                   N'Owner none -> ' + LOWER(CONVERT(nvarchar(36), a.AgentId)) + N' (' + a.Source + N'); department ' + CONVERT(nvarchar(20), a.CurrentDepartmentId) + N' and status '
+                   N'Owner none -> ' + LOWER(CONVERT(nvarchar(36), a.AgentId)) + N' (' + a.Source + CASE WHEN a.StalePhone = 1 THEN N', STALE_AI Phone' ELSE N'' END + N'); department ' + CONVERT(nvarchar(20), a.CurrentDepartmentId) + N' and status '
                    + CONVERT(nvarchar(10), a.TicketStatus) + N' unchanged'
             FROM @Asg a WHERE a.AgentId IS NOT NULL;
 
@@ -512,8 +546,11 @@ BEGIN TRY
         -- re-checks after the writes: nothing planned may have become a held-back ticket, and every new owner must STILL be an eligible agent.
         IF EXISTS (SELECT 1 FROM @Asg a WHERE a.AgentId IS NOT NULL AND EXISTS (SELECT 1 FROM dbo.TicketApprovals ap WHERE ap.TicketId = a.TicketId AND ap.Status = 1))
             THROW 50817, 'ABORTED: a planned ticket gained a PENDING APPROVAL while the run was in progress. Whole run rolled back - re-run the dry run.', 1;
-        IF EXISTS (SELECT 1 FROM @Asg a WHERE a.AgentId IS NOT NULL AND a.HumanNeeded = 0 AND a.HasGenesys = 1 AND a.HasLiveGenesys = 1)
+        IF EXISTS (SELECT 1 FROM @Asg a WHERE a.AgentId IS NOT NULL AND a.HumanNeeded = 0 AND a.HasGenesys = 1 AND a.HasLiveGenesys = 1 AND a.StalePhone = 0)
             THROW 50818, 'ABORTED: internal check failed - a live AI conversation was planned for assignment.', 1;
+        IF EXISTS (SELECT 1 FROM @Asg a WHERE a.StalePhone = 1 AND (a.LivePhoneOnly = 0 OR a.TicketStatus NOT IN (1, 2) OR ISNULL(@StalePhoneAfterHours, 0) <= 0
+                                                                   OR a.LastActivityUtc >= DATEADD(hour, -@StalePhoneAfterHours, @Now)))
+            THROW 50821, 'ABORTED: internal check failed - a stale-Phone ticket does not satisfy the approved rule (Phone only, Open / In Progress, silent longer than the threshold).', 1;
         IF EXISTS (SELECT 1 FROM @Asg a WHERE a.AgentId IS NOT NULL AND NOT EXISTS (SELECT 1 FROM @Agents g WHERE g.EmployeeId = a.AgentId))
             THROW 50819, 'ABORTED: internal check failed - a planned owner is not an eligible CS Agent.', 1;
     END;
@@ -558,6 +595,9 @@ BEGIN TRY
     INSERT @Check SELECT N'Every classified ticket now carries its General pair (Category / RequestType / Workflow)', CASE WHEN NOT EXISTS (
                       SELECT 1 FROM @Cls k JOIN dbo.Tickets t ON t.TicketId = k.TicketId WHERE k.Decision = 'APPLY'
                         AND (t.CategoryId <> k.NewCategoryId OR t.RequestTypeId <> k.NewRequestTypeId OR t.WorkflowTemplateId <> k.NewWorkflowTemplateId)) THEN 'PASS' ELSE 'FAIL' END, NULL;
+    INSERT @Check SELECT N'Stale-Phone rule wrote no end: live Genesys conversations unchanged (no EndedAtUtc / InactivityClosedAtUtc fabricated, nothing auto-closed)',
+                  CASE WHEN (SELECT COUNT_BIG(*) FROM dbo.TicketInteractions WHERE Source = 2 AND EndedAtUtc IS NULL AND InactivityClosedAtUtc IS NULL) = @LiveGenesysBefore THEN 'PASS' ELSE 'FAIL' END,
+                  CONVERT(nvarchar(40), @LiveGenesysBefore) + N' live before';
     INSERT @Check SELECT N'No Closed / Resolved ticket received an owner', CASE WHEN NOT EXISTS (
                       SELECT 1 FROM @Asg a JOIN dbo.Tickets t ON t.TicketId = a.TicketId WHERE a.AgentId IS NOT NULL AND t.TicketStatus IN (5, 6)) THEN 'PASS' ELSE 'FAIL' END, NULL;
 
@@ -614,7 +654,8 @@ SELECT CASE WHEN @DryRun = 1 THEN 'DRY RUN (rolled back)' ELSE 'COMMITTED' END A
        (SELECT COUNT(*) FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 1 AND TargetSource = 'CS_FALLBACK') AS ClassificationToApply_AiEnded_CsFallback,
        (SELECT COUNT(*) FROM @Cls WHERE AiEndedNoHuman = 1 AND Decision = 'ALREADY_VALID') AS AiEnded_ValidClassificationPreserved,
        (SELECT COUNT(*) FROM @Cls WHERE AiEndedNoHuman = 1 AND IsCollections = 0) AS AiEndedWithoutHuman_TicketsTotal,
-       @AsgApply AS AssignmentToApply, @AsgHandler AS AssignmentToConfirmedHandler, @AsgRotation AS AssignmentToSharedRotation, @AsgNoAgent AS AssignmentBlockedNoAgent,
+       @AsgApply AS AssignmentToApply, (SELECT COUNT(*) FROM @Asg WHERE StalePhone = 1 AND AgentId IS NOT NULL) AS AssignmentToApply_StalePhone,
+       @StalePhoneAfterHours AS StalePhoneAfterHours, @AsgHandler AS AssignmentToConfirmedHandler, @AsgRotation AS AssignmentToSharedRotation, @AsgNoAgent AS AssignmentBlockedNoAgent,
        @N AS EligibleCsAgents, @Cursor AS RotationCursorBefore, ISNULL(@LastAgent, @Cursor) AS RotationCursorAfter,
        (SELECT COUNT(*) FROM @Check WHERE Result = 'FAIL') AS FailedChecks;
 
@@ -625,6 +666,7 @@ FROM (
     SELECT 'A. Classification correction (will change)' AS Category, TicketStatus FROM @Cls WHERE Decision = 'APPLY'
     UNION ALL SELECT 'A1. of which: AI ended without human intervention', TicketStatus FROM @Cls WHERE Decision = 'APPLY' AND AiEndedNoHuman = 1
     UNION ALL SELECT 'B. Assignment (will change)', TicketStatus FROM @Asg WHERE AgentId IS NOT NULL
+    UNION ALL SELECT 'B1. of which: STALE_AI Phone (> threshold without activity, no end event)', TicketStatus FROM @Asg WHERE AgentId IS NOT NULL AND StalePhone = 1
     UNION ALL SELECT 'C. Manual review: classification blocked (department has no usable General / CS General)', TicketStatus FROM @Cls WHERE Decision IN ('DEPT_GENERAL_MISSING', 'CONFIG_MISSING_CS')
     UNION ALL SELECT 'C. Manual review: assignment blocked (no eligible CS Agent / assignment disabled)', TicketStatus FROM @Asg WHERE Class IN ('NO_ELIGIBLE_AGENT', 'ASSIGNMENT_DISABLED')
     UNION ALL SELECT 'D. Left alone: category-only classification', TicketStatus FROM @Cls WHERE Decision = 'CATEGORY_ONLY_KEPT'
@@ -704,5 +746,52 @@ WHERE t.TicketStatus BETWEEN 1 AND 4 AND r.DepartmentId <> t.CurrentDepartmentId
   AND LTRIM(RTRIM(r.Name)) COLLATE Latin1_General_CI_AS <> N'General'
 ORDER BY t.TicketId;
 
+-- 5c. STALE_AI Phone tickets (approved rule): the tickets released from ACTIVE_AI, with their last recorded activity, and where each would go
+SELECT TOP (5000) a.TicketId, a.TicketNumber, CASE a.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' END AS Status, d.Code AS Department, a.CreatedAtUtc,
+       a.LastActivityUtc, CAST(DATEDIFF(minute, a.LastActivityUtc, @Now) / 60.0 AS decimal(10,1)) AS SilentHours, a.Class, a.Source, a.AgentId AS ProposedOwner, u.UserName AS ProposedOwnerUserName
+FROM @Asg a JOIN dbo.Departments d ON d.DepartmentId = a.CurrentDepartmentId LEFT JOIN dbo.AspNetUsers u ON u.Id = a.AgentId
+WHERE a.StalePhone = 1 ORDER BY a.RotationSeq, a.TicketId;
+
 -- 10. Modification log: every change this run makes / made (mirrors the AuditEntries rows with CorrelationId = BatchId)
 SELECT Seq, TicketId, Phase, Action, Detail FROM @Log ORDER BY Seq;
+
+-- ======================================================================================================================
+-- 11. ASSIGNMENT DRY-RUN SUMMARY (reads @Asg / @Agents only, writes nothing)
+-- ======================================================================================================================
+-- 11a. Why unowned active tickets stay unowned / what would happen: one row per outcome, Open vs other active, with the age of the oldest ticket.
+SELECT x.Outcome, SUM(CASE WHEN x.TicketStatus = 1 THEN 1 ELSE 0 END) AS Open_Tickets, SUM(CASE WHEN x.TicketStatus BETWEEN 2 AND 4 THEN 1 ELSE 0 END) AS InProgress_Pending_Tickets,
+       COUNT(*) AS Total, MIN(x.CreatedAtUtc) AS OldestCreatedUtc, MAX(x.CreatedAtUtc) AS NewestCreatedUtc, DATEDIFF(hour, MIN(x.CreatedAtUtc), @Now) AS OldestAgeHours
+FROM (SELECT a.TicketStatus, a.CreatedAtUtc,
+             CASE WHEN a.AgentId IS NOT NULL AND a.StalePhone = 1 THEN '1a. PROPOSED ASSIGNMENT: STALE_AI Phone (' + a.Source + ')'
+                  WHEN a.AgentId IS NOT NULL THEN '1b. PROPOSED ASSIGNMENT: other eligible (' + a.Source + ')'
+                  WHEN a.Class = 'ACTIVE_AI'          THEN '2. BLOCKED: ACTIVE_AI (live Genesys conversation still protected)'
+                  WHEN a.Class = 'PENDING_APPROVAL'   THEN '3. EXCLUDED: pending approval'
+                  WHEN a.Class = 'COLLECTIONS'        THEN '3. EXCLUDED: Collections'
+                  WHEN a.Class = 'TOO_NEW'            THEN '3. EXCLUDED: younger than @MinTicketAgeMinutes'
+                  WHEN a.Class = 'AI_ENDED_NO_HUMAN'  THEN '3. EXCLUDED: AI ended without human (@IncludeAiEndedWithoutHuman = 0)'
+                  WHEN a.Class IN ('NO_ELIGIBLE_AGENT', 'ASSIGNMENT_DISABLED') THEN '4. BLOCKED: ' + a.Class
+                  ELSE '5. OTHER: ' + a.Class END AS Outcome
+      FROM @Asg a) x
+GROUP BY x.Outcome ORDER BY x.Outcome;
+
+-- 11b. Still-blocked ACTIVE_AI tickets by department, channel mix and silence bucket (why they remain protected)
+SELECT d.Code AS Department,
+       CASE WHEN a.LivePhoneOnly = 1 THEN 'Phone only' ELSE 'Chat / other / mixed' END AS LiveConversations,
+       CASE WHEN a.LastActivityUtc >= DATEADD(hour, -1, @Now) THEN '< 1h' WHEN a.LastActivityUtc >= DATEADD(hour, -6, @Now) THEN '1h-6h'
+            WHEN a.LastActivityUtc >= DATEADD(hour, -24, @Now) THEN '6h-24h' WHEN a.LastActivityUtc >= DATEADD(day, -7, @Now) THEN '1d-7d' ELSE '> 7d' END AS SilentFor,
+       CASE a.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' WHEN 3 THEN 'PendingCustomer' ELSE 'PendingThirdParty' END AS Status,
+       COUNT(*) AS ActiveAiTickets
+FROM @Asg a JOIN dbo.Departments d ON d.DepartmentId = a.CurrentDepartmentId
+WHERE a.Class = 'ACTIVE_AI'
+GROUP BY d.Code, CASE WHEN a.LivePhoneOnly = 1 THEN 'Phone only' ELSE 'Chat / other / mixed' END,
+         CASE WHEN a.LastActivityUtc >= DATEADD(hour, -1, @Now) THEN '< 1h' WHEN a.LastActivityUtc >= DATEADD(hour, -6, @Now) THEN '1h-6h'
+              WHEN a.LastActivityUtc >= DATEADD(hour, -24, @Now) THEN '6h-24h' WHEN a.LastActivityUtc >= DATEADD(day, -7, @Now) THEN '1d-7d' ELSE '> 7d' END,
+         CASE a.TicketStatus WHEN 1 THEN 'Open' WHEN 2 THEN 'InProgress' WHEN 3 THEN 'PendingCustomer' ELSE 'PendingThirdParty' END
+ORDER BY d.Code, LiveConversations, SilentFor, Status;
+
+-- 11c. Proposed distribution per CS Agent (stale-Phone vs other, Open vs other active)
+SELECT u.UserName AS CsAgent, g.EmployeeId, COUNT(a.TicketId) AS Total,
+       SUM(CASE WHEN a.StalePhone = 1 THEN 1 ELSE 0 END) AS StaleAiPhone, SUM(CASE WHEN a.StalePhone = 0 THEN 1 ELSE 0 END) AS OtherEligible,
+       SUM(CASE WHEN a.TicketStatus = 1 THEN 1 ELSE 0 END) AS Open_Tickets, SUM(CASE WHEN a.TicketStatus BETWEEN 2 AND 4 THEN 1 ELSE 0 END) AS OtherActive
+FROM @Agents g JOIN dbo.AspNetUsers u ON u.Id = g.EmployeeId LEFT JOIN @Asg a ON a.AgentId = g.EmployeeId
+GROUP BY u.UserName, g.EmployeeId, g.Rn ORDER BY g.Rn;

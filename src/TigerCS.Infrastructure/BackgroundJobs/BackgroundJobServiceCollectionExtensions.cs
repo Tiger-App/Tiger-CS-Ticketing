@@ -42,6 +42,10 @@ public static class BackgroundJobServiceCollectionExtensions
         services.Configure<DefaultClassificationBackfillOptions>(configuration.GetSection(DefaultClassificationBackfillOptions.SectionName));
         services.AddSingleton<CsAgentBackfillRunner>();
         services.AddHostedService<CallCenterUnassignedWorkHostedService>();
+        // Recurring stale-PHONE assignment (approved rule: > 6h without activity, no end event needed): its own section, switch and interval. Off and dry-run by default.
+        services.Configure<StalePhoneAssignmentOptions>(configuration.GetSection(StalePhoneAssignmentOptions.SectionName));
+        services.AddScoped<StalePhoneAssignmentJob>();
+        services.AddHostedService<StalePhoneAssignmentHostedService>();
 
         // Tells the Collections pages whether the scheduled snapshot refresh really exists in this process (informational; registered whether or not Hangfire runs).
         services.AddSingleton<TigerCS.Application.Modules.Collections.Abstractions.ISnapshotSchedule>(sp =>

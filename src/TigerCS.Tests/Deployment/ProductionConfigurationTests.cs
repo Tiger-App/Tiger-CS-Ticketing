@@ -68,6 +68,21 @@ public sealed class ProductionConfigurationTests
     }
 
     [Fact]
+    public void Api_ShipsTheStalePhoneAssignmentDisabled_InDryRun_WithTheApprovedSixHourThreshold()
+    {
+        var c = Layered("TigerCS.Api");
+
+        // Approved rule: a live Phone conversation silent for more than 6 hours stops blocking assignment. The recurring process writes ownership when
+        // enabled with DryRun=false, so Production ships it OFF and, even if switched on, writing nothing until live use is approved.
+        Assert.False(c.GetValue<bool>("StalePhoneAssignment:Enabled"));
+        Assert.True(c.GetValue<bool>("StalePhoneAssignment:DryRun"));
+        Assert.Equal(6, c.GetValue<int>("StalePhoneAssignment:StaleAfterHours"));
+        Assert.Equal(6, c.GetValue<int>("CsAgentBackfill:StalePhoneAiAfterHours"));
+        Assert.False(c.GetValue<bool>("CsAgentBackfill:Enabled"));                                   // a live historical backfill stays gated
+        Assert.Null(c["CsAgentBackfill:StaleAiAfterHours"]);                                         // the generic all-channel stale rule stays off
+    }
+
+    [Fact]
     public void Api_UsesTheRealProviders_NotMockOrFixtureOnes()
     {
         var c = Layered("TigerCS.Api");
