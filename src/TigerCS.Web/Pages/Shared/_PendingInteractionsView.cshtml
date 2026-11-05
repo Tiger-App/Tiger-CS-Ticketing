@@ -246,7 +246,7 @@
     }
 
     <div class="panel__footer">
-        <span>Page @Model.PageNumber of @Model.PendingTotalPages</span>
+        <span class="pager-range">@(Model.PendingTotalCount == 0 ? "No records" : $"Showing {(Model.PageNumber - 1) * Model.PageSize + 1}–{Math.Min(Model.PageNumber * Model.PageSize, Model.PendingTotalCount)} of {Model.PendingTotalCount}") <span class="pager-page">· Page @Model.PageNumber of @Model.PendingTotalPages</span></span>
         <nav class="pagination" aria-label="Pagination">
             @if (Model.PageNumber > 1)
             {
