@@ -62,36 +62,57 @@ Migration `20261021120000_AddAdminEmailToCollectionsDispatch` (script `AddAdminE
 
 ## Direct Send (third sending mode)
 
-**Sending mode** on Collections → Campaigns is now **Manual**, **Auto** or **Direct Send**. Manual and Auto are unchanged.
+**Sending mode** on Collections → Campaigns is **Manual**, **Auto** or **Direct Send**. Manual and Auto are unchanged.
 
 Direct Send is for an authorized person who wants to send chosen customers to Genesys **without a campaign stage and without the Day 1 / 14 / 28 stage dates**:
 
 * No campaign stage and no send / preview date are asked for or submitted.
-* Filters: **Tower**, **Payment status** (Due / Overdue / Both), **Date range** and **Minimum amount**, plus the customer search.
-  *Payment status* and *Date range* act on the customer's earliest unpaid due date: **Overdue** = a balance due before this month, **Due** = the whole balance falls inside this month.
-  *Minimum amount* is "at least" the entered amount of the customer's whole Due + Overdue balance, which is also the AmountDue sent to Genesys.
+* Filters: **Tower**, **Payment status** (Due / Overdue / Both), **From / To date**, **Minimum Total**, plus the customer search.
 * The list shows the eligible customers with checkboxes, **Select all** on the page and **All eligible** across every page.
-* **Send to Genesys** opens a confirmation dialog with the selected count, total amount, campaign purpose and the destination contact list. Nothing is sent before the confirmation, and nothing is ever dispatched automatically.
+* **Contact list** (shown only in Direct Send): choose **Current Month** or **Follow Up**. Nothing is pre-chosen and **Send to Genesys** stays disabled until one is chosen. Both lists come from the existing `Collections:GenesysOutbound:ContactListIds` configuration; there is no separate Direct Send list.
+* **Send to Genesys** opens a confirmation dialog with the selected count, the destination list (name and id), the total amount, and the campaign purpose. Nothing is sent before the confirmation, and nothing is ever dispatched automatically.
+
+### The amount sent (calculated, never the whole balance)
+For every customer the amount is the sum of the **unpaid instalments** that match the filters:
+
+| Filter | Effect on the amount |
+|---|---|
+| Payment status **Due** | only instalments due inside the current Dubai month |
+| Payment status **Overdue** | only instalments due before the current month |
+| Payment status **Both** | both of the above (nothing from next month on is ever included) |
+| **From / To date** | only instalments whose due date is inside the range (both ends inclusive) |
+| **Minimum Total** | the customer is kept only when this filtered amount is **greater than** the minimum |
+
+Example: Due AED 5,000 + Overdue AED 8,000 with Payment status **Due** sends **AED 5,000**, with the due date of that instalment. A customer whose filtered amount is zero (or not above the minimum) is not listed and cannot be sent. The same figure is shown in the customer table, the KPI total, the confirmation dialog, the audit totals, the contacts CSV and the Genesys `AmountDue`. A customer is one row; several instalments on one due date, or the same instalment under several units, are held for review instead of being summed twice. Source amounts are only read, never changed.
+
+The unpaid instalments are stored on the customer's Direct Send review record (`CollectionsReviewRecords.InstalmentsJson`, a nullable column added by migration `AddDirectSendInstalments`; scripts `AddDirectSendInstalments.sql` and `Deploy_TigerCS_PROD_AddDirectSendInstalments.sql`). They are derived data: a review refresh rebuilds them.
+
+### Revalidation and suppression use the same amount
+Immediately before the upload the job re-reads the current balances and recalculates each customer's amount with the filter that was approved (stored with the dispatch). A customer whose selected instalments were all paid is excluded; any other change to the amount, due date, contact or validation stops the send for review. The paid-after-upload sweep compares the quoted amount with the same calculation, so a contact is made not callable only when the part that was sent changed.
+
+### Destination checks (read-only calls to Genesys)
+At approval, and again right before the upload, the chosen list is checked:
+
+* it must exist and have the contact-template columns (`Phone`, `CustomerName`, `Email Address`, `ReminderType`, `AmountDue`, `DueDate`);
+* no campaign that is **on** (or stopping) may dial it, because contacts added to it would be dialled at once. Switch that campaign off in Genesys, or choose the other list.
+
+A check that cannot be completed refuses the send. Direct Send never creates or reuses a Genesys campaign.
 
 ### Audit
-Confirming creates the same frozen, idempotent dispatch as Manual / Auto (who, when, the exact list and filter, totals). Its batch carries the campaign purpose **"Direct send - manual contact list"** and the destination contact list; the Genesys `ReminderType` column is **"Direct Send"**.
-
-### Destination contact list (configuration)
-Direct Send uses its **own** contact list, set with `Collections:GenesysOutbound:ContactListIds:DirectSend`. There is **no default**: until it is configured, Direct Send cannot be confirmed (the page and the readiness endpoint say so; Manual and Auto are not affected). The list must differ from every stage list, so that no scheduled Genesys campaign dials Direct Send customers. This setting is not part of any committed environment file; it is a deliberate, per-environment decision.
+The dispatch records who approved, when, the exact list and filter (including the chosen **ContactList**), the totals, and per batch the **contact list id** and the purpose **"Direct send - manual contact list"**. The Genesys `ReminderType` column is **"Direct Send"**.
 
 ### Safety rules that still apply (Direct Send waives only the stage schedule)
 | Rule | How |
 |---|---|
-| Authorization | Same send permission as Manual / Auto; read-only roles cannot select or confirm |
-| Financial reconciliation, fresh data | Unreconciled or stale approval data holds every record back (`SourceReconciliationRequired`, stale) |
-| Contact and identity validation | Same checks as the stage records (valid international phone, CRM/PACT conflicts, unit and customer identity, amount precision) |
-| Paid-after-upload suppression | The same sweep covers Direct Send uploads; balances are re-read before upload and paid customers are dropped |
+| Authorization | Same send permission as Manual / Auto |
+| Financial reconciliation, fresh data | Unreconciled or stale approval data holds every record back |
+| Contact and identity validation | Same checks as the stage records |
+| Paid-after-upload suppression | The same sweep, using the filtered amount |
 | Duplicate-send and idempotency | One Direct Send record per customer per month; a customer already in a live or uploaded dispatch is "Already sent"; the idempotency key replays safely |
 | Contact frequency | One contact per customer per business day across **all** modes (`ContactedToday`) |
-| Shared phone | A number used by several customers holds all of them back (`SharedPhoneMultipleUnits`) |
-| Already in today's campaign | A customer in a campaign scheduled today is held back (`DirectSendScheduledToday`) so they are not called twice |
-| Legal restrictions | A customer whose balance is in a legal stage (legal notice or legal referral) is never sent directly (`LegalStageCustomer`) |
+| Shared phone | A number used by several customers holds all of them back |
+| Already in today's campaign | A customer in a campaign scheduled today is held back (`DirectSendScheduledToday`) |
+| Legal restrictions | A customer whose balance is in a legal stage is never sent directly |
+| Opt-out | The repository has no opt-out / do-not-call store, so none is applied here; Genesys-side do-not-call handling on the list is outside this application |
 
-A held-back customer is never selectable. The row shows the exact reason, and the "Why customers are held back" panel gives the review step for each reason (fix the contact, wait a day, use the legal workflow, refresh the approval data).
-
-Direct Send needs approval data built **today** (the legal-stage and scheduled-today checks are evaluated for that day). Use **Refresh approval data** if the page says it is out of date.
+A held-back customer is never selectable; the row shows the exact reason and the "Why customers are held back" panel gives the review step. Direct Send needs approval data built **today**; use **Refresh approval data** if the page says it is out of date.

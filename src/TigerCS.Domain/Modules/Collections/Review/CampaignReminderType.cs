@@ -41,6 +41,21 @@ public static class CampaignReminderTypes
         [CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp, CampaignReminderType.Overdue, CampaignReminderType.LegalNotice, CampaignReminderType.LegalCase];
 
     /// <summary>
+    /// The two existing Genesys contact lists a Direct Send may be uploaded to: Current Month or Follow Up (their ids come from the existing <c>ContactListIds</c> configuration). There is no list of
+    /// its own. Anything else, including a blank choice, is refused: the person must choose.
+    /// </summary>
+    public static readonly IReadOnlyList<CampaignReminderType> DirectSendDestinations = [CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp];
+
+    public static bool TryParseDirectSendDestination(string? value, out CampaignReminderType destination)
+    {
+        destination = default;
+        var text = value?.Replace(" ", "").Trim();
+        foreach (var option in DirectSendDestinations)
+            if (string.Equals(text, option.ToString(), StringComparison.OrdinalIgnoreCase)) { destination = option; return true; }
+        return false;
+    }
+
+    /// <summary>
     /// The stage's display name. It is used verbatim as the Genesys campaign name (and as the Campaigns page option text), so it must not be
     /// reworded or decorated anywhere else. The reminder type / stage enum stays the internal identifier.
     /// </summary>

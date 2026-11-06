@@ -44,8 +44,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>Direct Send: the stored review records (one per customer) that match the filters, with their exact validation reasons.</summary>
     public ReviewPageDto? DirectPage { get; private set; }
     public int DirectTotalPages => DirectPage is null ? 1 : Math.Max(1, (int)Math.Ceiling(DirectPage.TotalCount / (double)DirectPage.PageSize));
-    /// <summary>Settings only Direct Send needs (its own destination contact list).</summary>
-    public IReadOnlyList<string> DirectSendBlockers { get; private set; } = [];
+    /// <summary>Direct Send: the existing Genesys contact list the person chose (<c>CurrentMonth</c> or <c>FollowUp</c>); empty until they choose.</summary>
+    public string ContactList { get; private set; } = "";
+    public static readonly string[] ContactListChoices = ["CurrentMonth", "FollowUp"];
     public int TotalPages => Report is null ? 1 : Math.Max(1, (int)Math.Ceiling(Report.TotalCount / (double)Report.PageSize));
     /// <summary>Distinct, valid tower ids from repeated <c>towerId</c> values; blanks and junk are ignored (an empty result means All projects).</summary>
     public static IReadOnlyList<int> ParseTowerIds(Microsoft.Extensions.Primitives.StringValues values) => TowerSelection.Parse(values);
@@ -134,7 +135,6 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (DirectPage is null) return;
         var readiness = await api.GetDispatchReadinessAsync(cancellationToken);
         DispatchBlockers = readiness.IsSuccess && readiness.Value is { Ready: false, Blockers: { } blockers } ? blockers : [];
-        DirectSendBlockers = readiness.IsSuccess && readiness.Value is { DirectSendBlockers: { } direct } ? direct : [];
     }
 
     public async Task<IActionResult> OnGetExportAsync(string stage = "OverdueReminder", string mode = "review",
@@ -163,6 +163,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     private void SetFilters(string stage, DateOnly? date, string? search, int page, DateOnly? from, DateOnly? to, int? month, int? year, string? load, string? paymentStatus, string? sendingMode = null)
     {
         SendingMode = CollectionsSendingModes.TryParse(sendingMode, out var parsedMode) ? parsedMode : CollectionsSendingModes.Auto;
+        ContactList = TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.TryParseDirectSendDestination(Request.Query["contactList"], out var chosenList) ? chosenList.ToString() : "";
         PaymentStatus = CampaignPaymentFilters.TryParse(paymentStatus, out var payment) ? CampaignPaymentFilters.Name(payment) : paymentStatus!.Trim();
         RequestedBusinessDate = date; RequestedDateTo = to;   // what the person asked for; BusinessDate / DateTo are later filled with the report's own defaults
         Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
@@ -252,7 +253,6 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (page.Run is not { } run) return "There is no approval data yet. Refresh the approval data, then preview again.";
         if (!run.SourceReconciled) return "The financial source is not reconciled, so nothing can be approved or sent.";
         if (DispatchBlockers.Count > 0) return "Sending to Genesys is not configured in this environment. " + string.Join(" ", DispatchBlockers);
-        if (DirectSendBlockers.Count > 0) return string.Join(" ", DirectSendBlockers);
         if (run.IsStale || run.Status != "Completed") return "The approval data is stale or still being prepared. Refresh the approval data, then preview again.";
         if (run.AsOfDate != CollectionsDisplay.DubaiToday()) return $"The approval data was built for {run.AsOfDate:dd MMM yyyy}, not today. Refresh the approval data, then preview again.";
         if (page.Counts.Ready == 0)
@@ -410,6 +410,8 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public string UnitKeys { get; private set; } = "";
     public int ContactPage { get; private set; } = 1;
     public static IReadOnlyList<string> FilterFieldNames => ["stage", "sendingMode", "businessDate", "dateFrom", "dateTo", "towerId", "minTotal", "paymentStatus", "search"];
+    /// <summary>The Direct Send destination travels with the approval (it is part of the audited filter), but is not a customer filter.</summary>
+    public static string ContactListLabel(string name) => name switch { "CurrentMonth" => "Current Month", "FollowUp" => "Follow Up", _ => name };
 
     /// <summary>Progress / failure of the approval-data refresh and the latest sends, shown above the list. Never throws: a missing piece just hides its panel.</summary>
     private async Task LoadApprovalStateAsync(CancellationToken ct)
@@ -566,6 +568,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         PaymentStatus = CampaignPaymentFilters.TryParse(Get("paymentStatus"), out var payment) ? CampaignPaymentFilters.Name(payment) : "Both";
         Stage = Get("stage") is { Length: > 0 } st ? st : "OverdueReminder";
         SendingMode = CollectionsSendingModes.TryParse(Get("sendingMode"), out var postedMode) ? postedMode : CollectionsSendingModes.Auto;
+        ContactList = TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.TryParseDirectSendDestination(Get("contactList"), out var postedList) ? postedList.ToString() : "";
         BusinessDate = Date("businessDate"); DateFrom = Date("dateFrom"); DateTo = Date("dateTo");
         TowerIds = ParseTowerIds(form is not null && form.TryGetValue("towerId", out var towerValues) ? towerValues : default);
         Search = Get("search")?.Trim();
@@ -681,7 +684,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (IsDirectSend)
             return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo, MinRemaining: MinTotal ?? 0m,
                 ReminderType: nameof(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType.DirectSend), DueStatus: PaymentStatus is "Both" ? null : PaymentStatus,
-                TowerId: SingleTowerId, TowerIds: ManyTowerIds, SendingMode: CollectionsSendingModes.DirectSend);
+                TowerId: SingleTowerId, TowerIds: ManyTowerIds, SendingMode: CollectionsSendingModes.DirectSend, ContactList: ContactList.Length > 0 ? ContactList : null);
         string? reminderType = CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage)
             ? TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.FromStage(stage).ToString() : null;
         return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo,

@@ -155,7 +155,9 @@ public static class ReviewRecordBuilder
                     Reasons = Serialize(distinctReasons),
                     ValidationStatus = ReviewReasons.StatusFor(distinctReasons, alreadySent: false),
                     SourceReadAtUtc = context.SourceReadAtUtc,
-                    Source = context.SourceLabel
+                    Source = context.SourceLabel,
+                    // Direct Send: the amount depends on the person's filters, so the unpaid instalments travel with the record and the amount is always calculated from them.
+                    InstalmentsJson = direct ? DirectSendAmounts.Serialize(unitRows.Select(r => new DirectSendInstalment(r.Due, r.Amount))) : null
                 });
             }
         }

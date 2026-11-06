@@ -17,7 +17,7 @@ public sealed class CollectionsCampaignDirectSendRenderTests
 {
     private static readonly DateTime Read = new(2026, 10, 14, 8, 0, 0, DateTimeKind.Utc);
     private static readonly DateOnly DubaiToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(4));
-    private const string DirectList = "6d2b9a0e-5c1f-4c7e-9a43-1b8f0e2d7a55";
+    private const string CurrentMonthList = "79e5ae74-ea6e-4941-b76d-45ddf487d8d1";
     private const string Url = "/Collections/Campaigns?render=full&sendingMode=DirectSend";
     private static readonly Guid DispatchId = Guid.Parse("11111111-2222-3333-4444-555555555555");
 
@@ -38,7 +38,6 @@ public sealed class CollectionsCampaignDirectSendRenderTests
             Row(4, "Excluded", ReviewReasons.LegalStageCustomer),
             Row(5, "NeedsReview", ReviewReasons.NoValidContact)
         ];
-        public List<string> DirectSendBlockers { get; } = [];
         public List<string> Blockers { get; } = [];
         public string? LastSummaryBody { get; private set; }
         public string? LastConfirmBody { get; private set; }
@@ -56,7 +55,7 @@ public sealed class CollectionsCampaignDirectSendRenderTests
                 RecordQueries.Add(request.RequestUri.Query);
                 var ready = Records.Count(r => r.ValidationStatus == "Ready");
                 var counts = new ReviewCountsDto(Records.Count, ready, Records.Count(r => r.ValidationStatus == "NeedsReview"), Records.Count(r => r.ValidationStatus == "Excluded"), Records.Count(r => r.ValidationStatus == "AlreadySent"));
-                return Json(new ReviewPageDto(Run, counts, 1, 25, Records.Count, Records, 0m));
+                return Json(new ReviewPageDto(Run, counts, 1, 25, Records.Count, Records, 0m, false, Records.Where(r => r.ValidationStatus == "Ready").Sum(r => r.RemainingAmount ?? 0m)));
             }
             if (path.EndsWith("/selection/summary"))
             {
@@ -64,10 +63,10 @@ public sealed class CollectionsCampaignDirectSendRenderTests
                 return Json(new SelectionSummaryDto(7, 2, "FP", new Dictionary<string, decimal> { ["AED"] = 1500m }, new Dictionary<string, int> { ["DirectSend"] = 2 }, 0, 0, 1, 50,
                     [new SelectionContactDto("RK1", "DirectSend", "Direct Customer 1", "+971500000001", "d1@example.test", "TP140-1", 500m, "AED", new DateOnly(2026, 9, 20), false),
                      new SelectionContactDto("RK2", "DirectSend", "Direct Customer 2", "+971500000002", "d2@example.test", "TP140-2", 1000m, "AED", new DateOnly(2026, 9, 20), false)], [],
-                    new Dictionary<string, string> { ["DirectSend"] = DirectList }));
+                    new Dictionary<string, string> { ["DirectSend"] = CurrentMonthList }, true, "CurrentMonth"));
             }
             if (path.EndsWith("/overlaps")) return Json(new OverlapPageDto(0, 1, 25, []));
-            if (path.EndsWith("/dispatches/readiness")) return Json(new DispatchReadinessDto(Blockers.Count == 0, Blockers, DirectSendBlockers));
+            if (path.EndsWith("/dispatches/readiness")) return Json(new DispatchReadinessDto(Blockers.Count == 0, Blockers));
             if (path.EndsWith("/dispatches") && request.Method == HttpMethod.Post)
             {
                 LastConfirmBody = await request.Content!.ReadAsStringAsync(cancellationToken);
@@ -128,7 +127,7 @@ public sealed class CollectionsCampaignDirectSendRenderTests
         var advanced = Regex.Match(html, "<details[^>]*data-advanced-filters[^>]*>.*?</details>", RegexOptions.Singleline).Value;
         Assert.Matches("<details[^>]*open", advanced);                                                          // the filters are open, not hidden
         Assert.Contains("name=\"paymentStatus\"", advanced); Assert.Contains("name=\"dateFrom\"", advanced); Assert.Contains("name=\"dateTo\"", advanced); Assert.Contains("name=\"minTotal\"", advanced);
-        Assert.Contains("Minimum amount (AED)", advanced);
+        Assert.Contains("Minimum Total (AED)", advanced);
         Assert.Contains("campaignTower", html);                                                                 // the Tower picker
         Assert.Contains("Direct Send: you pick customers yourself", Decode(Regex.Match(html, "id=\"tip-sending-mode\"[^>]*>(.*?)</span>", RegexOptions.Singleline).Groups[1].Value));
     }
@@ -187,9 +186,6 @@ public sealed class CollectionsCampaignDirectSendRenderTests
         var (unreconciled, _) = await LoadAsync(a => a.Run = Run(reconciled: false));
         Assert.Contains("disabled", Button(unreconciled)); Assert.StartsWith("The financial source is not reconciled", Reason(unreconciled));
 
-        var (noList, _) = await LoadAsync(a => a.DirectSendBlockers.Add("No Genesys contact list is configured for Direct Send."));
-        Assert.Contains("disabled", Button(noList)); Assert.Contains("No Genesys contact list is configured for Direct Send.", Reason(noList));
-
         var (notConfigured, _) = await LoadAsync(a => a.Blockers.Add("Customer dispatch to Genesys is switched off."));
         Assert.Contains("disabled", Button(notConfigured)); Assert.Contains("switched off", Reason(notConfigured));
 
@@ -220,7 +216,7 @@ public sealed class CollectionsCampaignDirectSendRenderTests
     {
         var form = new Dictionary<string, string>
         {
-            ["__RequestVerificationToken"] = token, ["sendingMode"] = "DirectSend", ["dateFrom"] = "2026-08-01", ["dateTo"] = "2026-09-30", ["towerId"] = "7", ["minTotal"] = "250", ["paymentStatus"] = "Overdue"
+            ["__RequestVerificationToken"] = token, ["sendingMode"] = "DirectSend", ["contactList"] = "CurrentMonth", ["dateFrom"] = "2026-08-01", ["dateTo"] = "2026-09-30", ["towerId"] = "7", ["minTotal"] = "250", ["paymentStatus"] = "Overdue"
         };
         foreach (var (key, value) in extra) form[key] = value;
         return form;
@@ -235,15 +231,17 @@ public sealed class CollectionsCampaignDirectSendRenderTests
             ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1,4|3002|TP140-2"))))).Content.ReadAsStringAsync();
         var dialog = Regex.Match(html, "<dialog[^>]*data-direct-confirm[^>]*>.*?</dialog>", RegexOptions.Singleline).Value;
         Assert.NotEmpty(dialog);
-        Assert.Contains("Send 2 customer(s) to Genesys?", Decode(dialog));                                     // the selected count, before confirming
+        Assert.Contains("Send 2 customer(s) to the Current Month contact list?", Decode(dialog));                // the selected count and the destination, before confirming
         Assert.Contains("data-snapshot-count>2<", dialog);
         Assert.Contains("Direct Send (manual contact list; no campaign stage or stage dates)", Decode(dialog));
         Assert.Contains("Campaign purpose", dialog); Assert.Contains("data-snapshot-stage>Direct send - manual contact list<", dialog);
-        Assert.Contains(DirectList, dialog);                                                                   // the destination contact list
+        Assert.Contains("Current Month contact list", dialog); Assert.Contains(CurrentMonthList, dialog);        // the destination contact list and its id
+        Assert.Contains("data-snapshot-total>AED 1,500.00<", dialog);                                       // the filtered amount
+        Assert.Contains("name=\"contactList\" value=\"CurrentMonth\"", dialog);
         Assert.Contains("data-confirm-button", dialog); Assert.Contains("required", Regex.Match(dialog, "<input[^>]*name=\"ackCampaign\"[^>]*>").Value);
         Assert.Null(api.LastConfirmBody);                                                                      // approving never sends
         // The selection travels with the Direct Send filter: no stage, no send date.
-        Assert.Contains("\"reminderType\":\"DirectSend\"", api.LastSummaryBody); Assert.Contains("\"sendingMode\":\"DirectSend\"", api.LastSummaryBody);
+        Assert.Contains("\"reminderType\":\"DirectSend\"", api.LastSummaryBody); Assert.Contains("\"sendingMode\":\"DirectSend\"", api.LastSummaryBody); Assert.Contains("\"contactList\":\"CurrentMonth\"", api.LastSummaryBody);
         Assert.Contains("SelectedUnits", api.LastSummaryBody); Assert.Contains("4|3001|TP140-1", api.LastSummaryBody);
         Assert.Contains("\"towerId\":7", api.LastSummaryBody); Assert.Contains("\"dueStatus\":\"Overdue\"", api.LastSummaryBody); Assert.Contains("\"minRemaining\":250", api.LastSummaryBody);
         Assert.DoesNotContain("sendDate\":\"2", api.LastSummaryBody!);
@@ -260,7 +258,48 @@ public sealed class CollectionsCampaignDirectSendRenderTests
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
         Assert.Equal($"/Collections/Campaigns?dispatch={DispatchId:D}", response.Headers.Location!.OriginalString);
         Assert.Contains("\"idempotencyKey\":\"direct-key-1\"", api.LastConfirmBody); Assert.Contains("\"expectedCount\":2", api.LastConfirmBody);
-        Assert.Contains("\"reminderType\":\"DirectSend\"", api.LastConfirmBody); Assert.Contains("AllMatching", api.LastConfirmBody);
+        Assert.Contains("\"reminderType\":\"DirectSend\"", api.LastConfirmBody); Assert.Contains("AllMatching", api.LastConfirmBody); Assert.Contains("\"contactList\":\"CurrentMonth\"", api.LastConfirmBody);
+    }
+
+    // ------------------------------------------------------------------ the destination contact list and the filtered total
+
+    [Fact]
+    public async Task TheContactListDropdown_OffersExactlyCurrentMonthAndFollowUp_AndIsRequired()
+    {
+        var (html, _) = await LoadAsync();
+        var select = Regex.Match(html, "<select[^>]*data-contact-list[^>]*>.*?</select>", RegexOptions.Singleline).Value;
+        Assert.NotEmpty(select); Assert.Contains("required", Regex.Match(select, "<select[^>]*>").Value); Assert.Contains("name=\"contactList\"", select);
+        Assert.Equal(["", "CurrentMonth", "FollowUp"], Regex.Matches(select, "<option value=\"(\\w*)\"").Select(m => m.Groups[1].Value));
+        Assert.DoesNotContain("selected", Regex.Match(select, "<option value=\"CurrentMonth\"[^>]*>").Value);          // nothing is pre-chosen: the person must choose
+        Assert.Contains("Current Month", select); Assert.Contains("Follow Up", select);
+        Assert.DoesNotContain("DirectSend\"", select);                                                                  // no dedicated Direct Send list
+        Assert.Contains("choose below", html);
+
+        var (chosen, _) = await LoadAsync(url: Url + "&contactList=FollowUp");
+        Assert.Matches("<option value=\"FollowUp\"[^>]*selected", chosen);
+        Assert.Contains("Follow Up list", chosen);
+    }
+
+    [Fact]
+    public async Task TheKpiTotal_IsTheExactFilteredAmountOfTheEligibleCustomers()
+    {
+        var (html, _) = await LoadAsync();
+        Assert.Contains("data-eligible-total>AED 1,500.00<", html);                                                      // Row 1 (500) + Row 2 (1,000): the held-back customers add nothing
+        Assert.Contains("Total amount", html);
+        var (none, _) = await LoadAsync(a => a.Records = [Row(3, "Excluded", ReviewReasons.SharedPhoneMultipleUnits)]);
+        Assert.Contains("data-eligible-total>AED 0.00<", none);
+    }
+
+    [Fact]
+    public async Task OnlyDirectSend_ShowsTheContactListDropdown()
+    {
+        foreach (var mode in new[] { "Manual", "Auto" })
+        {
+            var api = NewApi();
+            using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
+            var html = await (await client.GetAsync($"/Collections/Campaigns?render=full&stage=CurrentMonthReminder&businessDate=2026-10-14&sendingMode={mode}")).Content.ReadAsStringAsync();
+            Assert.DoesNotContain("data-contact-list", html); Assert.DoesNotContain("name=\"contactList\"", html);
+        }
     }
 
     // ------------------------------------------------------------------ Manual and Auto are unchanged

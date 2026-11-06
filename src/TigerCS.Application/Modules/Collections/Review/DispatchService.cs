@@ -79,14 +79,19 @@ public sealed class DispatchService(
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
                 "The list contains records that share a phone number or have no callable phone. Repeated calls are blocked pending a business decision; review the current list.");
         var types = resolved.Records.Select(r => r.ReminderType).Distinct().ToList();
-        // Direct Send is its own dispatch: never mixed with campaign-stage records, and only into its own configured list.
+        // Direct Send is its own dispatch: never mixed with campaign-stage records. The person must have chosen one of the two existing lists (Current Month or Follow Up); that list is checked
+        // against Genesys now (required columns, no active campaign dialling it) and again right before the upload.
         if (types.Contains(CampaignReminderType.DirectSend))
         {
             if (types.Count > 1 || !CollectionsSendingModes.IsDirectSend(request.Selection.Filter?.SendingMode))
                 return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, "A Direct Send approval contains Direct Send records only.");
-            if (genesys.DirectSendListProblem() is { } listProblem) return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, listProblem);
+            string listId;
+            try { listId = genesys.DirectSendContactListIdFor(request.Selection.Filter?.ContactList); }
+            catch (InvalidOperationException ex) { return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, ex.Message); }
+            if (await CheckDestinationAsync(request.Selection.Filter!.ContactList!, listId, ct) is { } destinationProblem)
+                return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, destinationProblem);
         }
-        try { foreach (var type in types) _ = genesys.ContactListIdFor(type); }
+        try { foreach (var type in types.Where(t => t != CampaignReminderType.DirectSend)) _ = genesys.ContactListIdFor(type); }
         catch (InvalidOperationException ex) { return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, ex.Message); }
 
         var now = clock.UtcNow;
@@ -94,7 +99,7 @@ public sealed class DispatchService(
         {
             IdempotencyKey = key, Fingerprint = fingerprint, Status = DispatchStatus.Queued, InitiatedByEmployeeId = caller.EmployeeId,
             InitiatedAtUtc = now, ReviewRunId = resolved.Run!.CollectionsReviewRunId, SelectionMode = request.Selection.Mode,
-            FilterJson = JsonSerializer.Serialize(request.Selection.Filter), ApprovedCount = resolved.Records.Count,
+            FilterJson = JsonSerializer.Serialize(StoredFilter(request.Selection.Filter)), ApprovedCount = resolved.Records.Count,
             ApprovedTotalsJson = JsonSerializer.Serialize(ReviewQueryService.TotalsByCurrency(resolved.Records)
                 .ToDictionary(p => p.Key, p => p.Value.ToString("0.00", CultureInfo.InvariantCulture))),
             AcknowledgedActiveCampaignRisk = true,
@@ -125,6 +130,52 @@ public sealed class DispatchService(
         return CollectionsResult<DispatchDto>.Ok(ToDto(dispatch), CollectionsOutcome.Accepted);
     }
 
+    /// <summary>
+    /// Checks a Genesys contact list before anything is uploaded to it. Null = it can be used; otherwise the exact reason. Read-only: it only looks.
+    /// <list type="bullet">
+    /// <item>The list must exist and carry every column of the contact template (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), or the upload would fail or drop data.</item>
+    /// <item>No campaign that is on (or stopping) may dial the list: contacts added to it would be dialled at once, which would interfere with that campaign. Anything that cannot be checked is refused.</item>
+    /// </list>
+    /// </summary>
+    private async Task<string?> CheckDestinationAsync(string destinationName, string listId, CancellationToken ct)
+    {
+        var label = CampaignReminderTypes.DefaultLabel(Enum.Parse<CampaignReminderType>(destinationName.Replace(" ", ""), true));
+        GenesysContactListInfo list;
+        try { list = await client.GetContactListAsync(listId, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Genesys contact list check threw {ExceptionType}.", ex.GetType().Name);
+            return $"The {label} contact list could not be checked in Genesys. Nothing was uploaded.";
+        }
+        if (list.Outcome != GenesysUploadOutcome.Accepted)
+            return $"The {label} contact list could not be checked in Genesys ({list.Error}). Nothing was uploaded.";
+        var missing = GenesysContactTemplate.Columns.Where(c => !list.Columns.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (missing.Count > 0)
+            return $"The {label} contact list does not have the required column(s): {string.Join(", ", missing)}. Nothing was uploaded.";
+        GenesysCampaignLookupResult campaigns;
+        try { campaigns = await client.FindCampaignsByContactListAsync(listId, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Genesys campaign check by contact list threw {ExceptionType}.", ex.GetType().Name);
+            return $"The campaigns that dial the {label} contact list could not be checked. Nothing was uploaded.";
+        }
+        if (campaigns.Outcome != GenesysUploadOutcome.Accepted)
+            return $"The campaigns that dial the {label} contact list could not be checked ({campaigns.Error}). Nothing was uploaded.";
+        var active = campaigns.Matches.Where(c => string.Equals(c.Status, "on", StringComparison.OrdinalIgnoreCase) || string.Equals(c.Status, "stopping", StringComparison.OrdinalIgnoreCase)).ToList();
+        if (active.Count > 0)
+            return $"The Genesys campaign \"{string.Join("\", \"", active.Select(c => c.Name))}\" is active and dials the {label} contact list, so these customers would be dialled at once. Switch it off in Genesys, or choose the other list. Nothing was uploaded.";
+        return null;
+    }
+
+    /// <summary>
+    /// The filter kept with the approval. A Direct Send approval stores its EFFECTIVE minimum (the review default when none was given) so that the revalidation before the upload and the paid-after-upload
+    /// check calculate the amount with exactly the criteria the person approved, whatever the settings are later.
+    /// </summary>
+    private ReviewFilter? StoredFilter(ReviewFilter? filter) =>
+        filter is not null && CollectionsSendingModes.IsDirectSend(filter.SendingMode) ? filter with { MinRemaining = query.DirectCriteria(filter).MinTotal } : filter;
+
     private CollectionsResult<DispatchDto> Replay(CollectionsDispatch existing, CollectionsCaller caller, string expectedFingerprint) =>
         existing.InitiatedByEmployeeId == caller.EmployeeId
         && string.Equals(existing.Fingerprint, expectedFingerprint, StringComparison.OrdinalIgnoreCase)
@@ -151,9 +202,7 @@ public sealed class DispatchService(
             try { _ = genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { blockers.Add($"No valid Genesys contact list id is configured for {type} (Collections:GenesysOutbound:ContactListIds:{type})."); }
         }
-        // Direct Send needs a list of its own; that is reported apart so it never blocks Manual or Auto.
-        var direct = genesys.DirectSendListProblem() is { } problem ? new List<string> { problem } : [];
-        return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers, direct));
+        return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers));
     }
 
     // ---------------------------------------------------------------- read
@@ -300,6 +349,8 @@ public sealed class DispatchService(
 
         var settled = new List<CollectionsDispatchItem>(cancelledItems);
         var changed = 0;
+        // Direct Send: the amount quoted is calculated from the customer's CURRENT instalments with the filter the person approved (Payment status, From / To, Minimum Total), never the whole balance.
+        var directCriteria = items.Any(i => i.ReminderType == CampaignReminderType.DirectSend) ? DirectSendFilters.FromStored(dispatch.FilterJson) : null;
         foreach (var item in items)
         {
             if (!current.TryGetValue(item.RecordKey, out var now))
@@ -307,8 +358,20 @@ public sealed class DispatchService(
                 item.Status = DispatchItemStatus.Excluded; item.StatusReason = "Paid or settled: no qualifying balance remains";
                 settled.Add(item); continue;
             }
-            var unchanged = now.ValidationStatus == ReviewValidationStatus.Ready && now.RemainingAmount == item.Amount
-                && now.DueDate == item.DueDate && now.Currency == item.Currency && now.Phone == item.Phone
+            decimal? nowAmount = now.RemainingAmount; DateOnly? nowDue = now.DueDate;
+            if (item.ReminderType == CampaignReminderType.DirectSend)
+            {
+                var calc = directCriteria is null ? new DirectSendAmount(0m, 0m, 0m, null, DirectSendAmount.Unavailable) : DirectSendFilters.CurrentAmount(now, directCriteria, asOf);
+                if (calc.Reason == DirectSendAmount.None)
+                {
+                    // Everything the filters selected has been paid or settled: nothing qualifies any more, so the customer is not sent.
+                    item.Status = DispatchItemStatus.Excluded; item.StatusReason = "Paid or settled: no qualifying balance remains within the selected filters";
+                    settled.Add(item); continue;
+                }
+                nowAmount = calc.Qualifies ? calc.Amount : null; nowDue = calc.EarliestDue;
+            }
+            var unchanged = now.ValidationStatus == ReviewValidationStatus.Ready && nowAmount == item.Amount
+                && nowDue == item.DueDate && now.Currency == item.Currency && now.Phone == item.Phone
                 && string.Equals(now.CustomerName, item.CustomerName, StringComparison.Ordinal);
             if (!unchanged) changed++;
         }
@@ -363,6 +426,17 @@ public sealed class DispatchService(
             await store.UpdateDispatchAsync(dispatch, ct);
             return false;
         }
+        // Direct Send goes to the list the person chose at approval (kept in the stored filter), not to a list of its own.
+        string? directListId = null;
+        if (items.Any(i => i.ReminderType == CampaignReminderType.DirectSend))
+        {
+            try { directListId = genesys.DirectSendContactListIdFor(DirectSendFilters.StoredContactList(dispatch.FilterJson)); }
+            catch (InvalidOperationException ex)
+            {
+                await store.UpdateItemsAsync(all, ct);
+                return await StopAsync(dispatch, DispatchStatus.Failed, $"{ex.Message} Nothing was uploaded.", ct);
+            }
+        }
         var batchSize = genesys.EffectiveBatchSize;
         var batches = new List<CollectionsGenesysBatch>();
         var plan = new List<(CollectionsGenesysBatch Batch, List<CollectionsDispatchItem> Items)>();
@@ -375,7 +449,7 @@ public sealed class DispatchService(
                 var slice = ordered.Skip(offset).Take(batchSize).ToList();
                 var batch = new CollectionsGenesysBatch
                 {
-                    CollectionsDispatchId = dispatch.CollectionsDispatchId, ReminderType = group.Key, ContactListId = genesys.ContactListIdFor(group.Key),
+                    CollectionsDispatchId = dispatch.CollectionsDispatchId, ReminderType = group.Key, ContactListId = group.Key == CampaignReminderType.DirectSend ? directListId! : genesys.ContactListIdFor(group.Key),
                     Sequence = ++sequence, ContactCount = slice.Count, Status = GenesysBatchStatus.Pending,
                     StageName = CampaignReminderTypes.StageName(group.Key)
                 };
@@ -443,6 +517,18 @@ public sealed class DispatchService(
     /// </summary>
     private async Task<bool> EnsureCampaignAsync(CollectionsDispatch dispatch, CollectionsGenesysBatch batch, CancellationToken ct)
     {
+        // Direct Send never creates or reuses a campaign: it adds contacts to the chosen EXISTING list, so the check is that nothing active dials that list (and that the list still fits the upload).
+        if (batch.ReminderType == CampaignReminderType.DirectSend)
+        {
+            var name = DirectSendFilters.StoredContactList(dispatch.FilterJson) ?? "";
+            var problem = CampaignReminderTypes.TryParseDirectSendDestination(name, out _) ? await CheckDestinationAsync(name, batch.ContactListId, ct) : "The Direct Send contact list is not recorded. Nothing was uploaded.";
+            if (problem is null) return true;
+            logger.LogWarning("Dispatch {DispatchId} batch {BatchId}: the Direct Send destination failed its check before the upload.", dispatch.CollectionsDispatchId, batch.CollectionsGenesysBatchId);
+            batch.Status = GenesysBatchStatus.Failed; batch.Error = Truncate(problem); batch.CompletedAtUtc = clock.UtcNow;
+            await store.UpdateBatchAsync(batch, ct);
+            await MarkItemsAsync(batch, DispatchItemStatus.Failed, batch.Error, null, ct);
+            return false;
+        }
         if (!genesys.Campaign.Enabled) return true;
         var gate = CampaignGates.GetOrAdd(batch.StageName ?? CampaignReminderTypes.StageName(batch.ReminderType), _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct);

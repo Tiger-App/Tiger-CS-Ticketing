@@ -14,14 +14,14 @@ namespace TigerCS.Tests.Collections.Review;
 /// </summary>
 public sealed class DirectSendReviewTests
 {
-    private const string DirectList = "6d2b9a0e-5c1f-4c7e-9a43-1b8f0e2d7a55";
+    private const string CurrentMonthList = "79e5ae74-ea6e-4941-b76d-45ddf487d8d1", FollowUpList = "3a91c06e-47ab-4a5e-a720-004bd5cf5bba";
+    public static IEnumerable<object[]> Destinations => [["CurrentMonth", CurrentMonthList], ["FollowUp", FollowUpList]];
     private static readonly DateOnly Today = new(2026, 10, 15);
 
     private static async Task<ReviewHarness> SeededAsync(Action<ReviewHarness>? configure = null, bool advanceDay = true, params PactReceivableInstalment[] rows)
     {
         var h = new ReviewHarness();
         if (advanceDay) { h.Time.Advance(TimeSpan.FromDays(1)); h.Source.ReadAt = ReviewHarness.Now.AddDays(1); }
-        h.Genesys.ContactListIds["DirectSend"] = DirectList;
         configure?.Invoke(h);
         h.Source.Items.AddRange(rows.Length > 0 ? rows : [ReviewHarness.Row(1), ReviewHarness.Row(2)]);
         await h.RefreshAsync();
@@ -30,7 +30,7 @@ public sealed class DirectSendReviewTests
 
     private static ReviewFilter DirectFilter(Func<ReviewFilter, ReviewFilter>? with = null)
     {
-        var filter = new ReviewFilter(ReminderType: "DirectSend", SendingMode: "DirectSend");
+        var filter = new ReviewFilter(ReminderType: "DirectSend", SendingMode: "DirectSend", ContactList: "CurrentMonth");
         return with is null ? filter : with(filter);
     }
 
@@ -130,7 +130,7 @@ public sealed class DirectSendReviewTests
         Assert.Equal(2, page.Counts.Ready); Assert.All(page.Items, i => { Assert.Equal("DirectSend", i.ReminderType); Assert.Equal("Ready", i.ValidationStatus); Assert.NotNull(i.TenantId); });
         var summary = (await SummaryAsync(h, DirectAll())).Value!;
         Assert.Equal(2, summary.Count); Assert.Equal(1000m, summary.TotalsByCurrency["AED"]);
-        Assert.Equal(DirectList, summary.ContactListByReminderType!["DirectSend"]);
+        Assert.Equal(CurrentMonthList, summary.ContactListByReminderType!["DirectSend"]); Assert.Equal("CurrentMonth", summary.DirectSendDestination);
         Assert.Empty(h.Scheduler.Dispatches);                                                   // refresh, listing and summary queue nothing: no automatic dispatch
         Assert.Empty(h.Client.Calls);
     }
@@ -203,7 +203,7 @@ public sealed class DirectSendReviewTests
         var auto = (await SummaryAsync(scheduled, scheduled.All(new ReviewFilter(ReminderType: "CurrentMonth")))).Value!;
         Assert.Equal(2, auto.Count); Assert.Equal(["CurrentMonth"], auto.CountByReminderType.Keys);
         // And the stage's contact list is untouched by the Direct Send list.
-        Assert.NotEqual(DirectList, auto.ContactListByReminderType!["CurrentMonth"]);
+        Assert.Equal(CurrentMonthList, auto.ContactListByReminderType!["CurrentMonth"]); Assert.Null(auto.DirectSendDestination);
     }
 
     // ------------------------------------------------------------ safety controls
@@ -249,55 +249,104 @@ public sealed class DirectSendReviewTests
     // ------------------------------------------------------------ confirmation, destination list, audit, idempotency, duplicates
 
     [Fact]
-    public async Task Confirm_NeedsADedicatedDirectSendList_AndNothingIsApprovedWithout()
-    {
-        using var h = await SeededAsync(x => x.Genesys.ContactListIds.Remove("DirectSend"));
-        var (summary, confirm) = await h.PrepareAsync(DirectAll());
-        using var scope = h.NewScope();
-        var refused = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
-        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("Direct Send", refused.Detail);
-        Assert.Empty(h.Scheduler.Dispatches);
-
-        // Sharing a campaign stage's list would let that campaign dial Direct Send customers: refused.
-        h.Genesys.ContactListIds["DirectSend"] = h.Genesys.ContactListIdFor(CampaignReminderType.Overdue);
-        var shared = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
-        Assert.Equal(CollectionsOutcome.InvalidRequest, shared.Outcome); Assert.Contains("own", shared.Detail);
-        Assert.Empty(h.Scheduler.Dispatches); Assert.Equal(2, summary.Count);
-    }
-
-    [Fact]
-    public async Task Readiness_ReportsTheDirectSendListApart_SoManualAndAutoAreNeverBlockedByIt()
-    {
-        using var without = await SeededAsync(x => x.Genesys.ContactListIds.Remove("DirectSend"));
-        using (var scope = without.NewScope())
-        {
-            var readiness = (await scope.Dispatch.ReadinessAsync(without.Manager, CancellationToken.None)).Value!;
-            Assert.DoesNotContain(readiness.Blockers, b => b.Contains("DirectSend")); Assert.Single(readiness.DirectSendBlockers!);
-            Assert.Contains("Direct Send", readiness.DirectSendBlockers![0]);
-        }
-        using var with = await SeededAsync();
-        using (var scope = with.NewScope())
-            Assert.Empty((await scope.Dispatch.ReadinessAsync(with.Manager, CancellationToken.None)).Value!.DirectSendBlockers!);
-    }
-
-    [Fact]
-    public async Task Confirm_CreatesAnAuditableDispatch_ToTheDirectSendList_AndUploadsOnlyAfterTheJobRuns()
+    public async Task NoDedicatedDirectSendList_IsNeeded_ButTheDestinationMustBeChosen()
     {
         using var h = await SeededAsync();
-        var (summary, confirm) = await h.PrepareAsync(DirectAll(), "direct-1");
+        Assert.False(h.Genesys.ContactListIds.ContainsKey("DirectSend"));                         // the existing CurrentMonth / FollowUp configuration is all there is
+        foreach (var bad in new string?[] { null, "", "Overdue", "LegalNotice", "DirectSend", "Other" })
+        {
+            var refused = await SummaryAsync(h, DirectAll(DirectFilter(f => f with { ContactList = bad })));
+            Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("Choose the Genesys contact list", refused.Detail);
+        }
+        Assert.Empty(h.Scheduler.Dispatches); Assert.Empty(h.Client.Calls);
+        using var scope = h.NewScope();
+        var readiness = (await scope.Dispatch.ReadinessAsync(h.Manager, CancellationToken.None)).Value!;
+        Assert.DoesNotContain(readiness.Blockers, b => b.Contains("DirectSend", StringComparison.OrdinalIgnoreCase));   // readiness (Manual / Auto) never asks for a Direct Send list
+        // The listing itself needs no destination: the person sees the customers first and chooses where they go when sending.
+        Assert.Equal(2, (await ListAsync(h, DirectFilter(f => f with { ContactList = null }))).Counts.Ready);
+    }
+
+    [Theory]
+    [MemberData(nameof(Destinations))]
+    public async Task Confirm_AuditsTheChosenList_AndUploadsOnlyThere(string destination, string listId)
+    {
+        using var h = await SeededAsync();
+        var request = DirectAll(DirectFilter(f => f with { ContactList = destination }));
+        var (summary, confirm) = await h.PrepareAsync(request, "direct-" + destination);
+        Assert.Equal(destination, summary.DirectSendDestination); Assert.Equal(listId, summary.ContactListByReminderType!["DirectSend"]);   // what the confirmation dialog shows
+        Assert.Equal(2, summary.Count); Assert.Equal(1000m, summary.TotalsByCurrency["AED"]);
         using var scope = h.NewScope();
         var accepted = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
         Assert.Equal(CollectionsOutcome.Accepted, accepted.Outcome);
         Assert.Equal(summary.Count, accepted.Value!.ApprovedCount); Assert.Equal(h.Manager.EmployeeId, accepted.Value.InitiatedByEmployeeId);
-        Assert.Empty(h.Client.Calls);                                                           // approved, not yet uploaded
+        Assert.Empty(h.Client.Calls);                                                           // approved, not yet uploaded: never automatic
+        Assert.Contains(listId, h.Client.ListChecks); Assert.Contains(listId, h.Client.CampaignChecks);   // the list was validated in Genesys at approval
 
         await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
         var done = (await scope.Dispatch.GetAsync(h.Manager, accepted.Value.DispatchId, CancellationToken.None)).Value!;
         Assert.Equal("Completed", done.Status); Assert.Equal(2, done.UploadedCount);
         var batch = Assert.Single(done.Batches);
-        Assert.Equal("DirectSend", batch.ReminderType); Assert.Equal(DirectList, batch.ContactListId); Assert.Equal("Direct send - manual contact list", batch.StageName);
+        Assert.Equal("DirectSend", batch.ReminderType); Assert.Equal(listId, batch.ContactListId); Assert.Equal("Direct send - manual contact list", batch.StageName);   // audit: list id + purpose
+        Assert.Null(batch.GenesysCampaignId);                                                  // no campaign is created or reused
         var call = Assert.Single(h.Client.Calls);
-        Assert.Equal(DirectList, call.ContactListId); Assert.All(call.Contacts, c => { Assert.Equal("Direct Send", c.ReminderType); Assert.True(c.Callable); });
+        Assert.Equal(listId, call.ContactListId); Assert.All(call.Contacts, c => { Assert.Equal("Direct Send", c.ReminderType); Assert.True(c.Callable); });
+        using var context = h.CreateContext();
+        var stored = context.CollectionsDispatches.Single();
+        Assert.Contains($"\"ContactList\":\"{destination}\"", stored.FilterJson);                 // the chosen destination is part of the audited approval
+        Assert.Contains("\"SendingMode\":\"DirectSend\"", stored.FilterJson);
+    }
+
+    [Theory]
+    [MemberData(nameof(Destinations))]
+    public async Task Destination_IsRefused_WhenTheListLacksARequiredColumn(string destination, string listId)
+    {
+        using var h = await SeededAsync();
+        h.Client.ListColumns[listId] = ["Phone", "CustomerName", "Email Address", "ReminderType"];
+        var (_, confirm) = await h.PrepareAsync(DirectAll(DirectFilter(f => f with { ContactList = destination })), "cols");
+        using var scope = h.NewScope();
+        var refused = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("required column", refused.Detail); Assert.Contains("AmountDue", refused.Detail); Assert.Contains("DueDate", refused.Detail);
+        Assert.Empty(h.Scheduler.Dispatches); Assert.Empty(h.Client.Calls);
+    }
+
+    [Theory]
+    [MemberData(nameof(Destinations))]
+    public async Task Destination_IsRefused_WhileAnActiveCampaignDialsIt_AndAnInactiveOneIsFine(string destination, string listId)
+    {
+        using var h = await SeededAsync();
+        var other = destination == "CurrentMonth" ? FollowUpList : CurrentMonthList;
+        h.Client.Campaigns.Add(new GenesysCampaignRef("c-other", "Some other campaign", other, "on"));            // a campaign on the OTHER list never matters
+        h.Client.Campaigns.Add(new GenesysCampaignRef("c-1", "Scheduled stage campaign", listId, "on"));
+        var (_, confirm) = await h.PrepareAsync(DirectAll(DirectFilter(f => f with { ContactList = destination })), "campaign");
+        using var scope = h.NewScope();
+        var refused = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("Scheduled stage campaign", refused.Detail); Assert.Contains("active", refused.Detail);
+        Assert.Empty(h.Scheduler.Dispatches); Assert.Empty(h.Client.Calls);
+        h.Client.Campaigns[1] = h.Client.Campaigns[1] with { Status = "off" };
+        Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
+    }
+
+    [Fact]
+    public async Task Destination_IsCheckedAgainRightBeforeTheUpload_AndAnUnverifiableListIsNeverUsed()
+    {
+        using var h = await SeededAsync();
+        var (_, confirm) = await h.PrepareAsync(DirectAll(), "late");
+        using var scope = h.NewScope();
+        Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
+        h.Client.Campaigns.Add(new GenesysCampaignRef("c-late", "Switched on after approval", CurrentMonthList, "on"));
+        await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
+        Assert.Empty(h.Client.Calls);                                                           // nothing reached the contact list
+        var dispatch = (await scope.Dispatch.ListAsync(h.Manager, CancellationToken.None)).Value!.Single();
+        Assert.Equal("CompletedWithErrors", dispatch.Status); Assert.Equal(0, dispatch.UploadedCount); Assert.Equal(2, dispatch.FailedCount);
+        Assert.Contains("Switched on after approval", Assert.Single(dispatch.Batches).Error);
+
+        using var unverifiable = await SeededAsync();
+        unverifiable.Client.ListCheckScript.Enqueue(GenesysUploadOutcome.Unknown);
+        var (_, second) = await unverifiable.PrepareAsync(DirectAll(), "unknown");
+        using var scope2 = unverifiable.NewScope();
+        var refused = await scope2.Dispatch.ConfirmAsync(unverifiable.Manager, second, CancellationToken.None);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("could not be checked", refused.Detail);
+        Assert.Empty(unverifiable.Scheduler.Dispatches);
     }
 
     [Fact]

@@ -51,6 +51,7 @@ public class CollectionsReviewRecordConfiguration : IEntityTypeConfiguration<Col
         builder.Property(r => r.ValidationStatus).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(r => r.Reasons).HasMaxLength(600).IsRequired();
         builder.Property(r => r.Source).HasMaxLength(200).IsRequired();
+        builder.Property(r => r.InstalmentsJson);
 
         builder.HasIndex(r => new { r.CollectionsReviewRunId, r.RecordKey }).IsUnique().HasDatabaseName("UX_CollectionsReviewRecords_Run_Key");
         builder.HasIndex(r => new { r.CollectionsReviewRunId, r.ReminderType, r.ValidationStatus }).HasDatabaseName("IX_CollectionsReviewRecords_Run_Type_Status");
@@ -581,11 +582,12 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
     {
         var rows = await (from i in db.CollectionsDispatchItems.AsNoTracking()
                           join b in db.CollectionsGenesysBatches.AsNoTracking() on i.CollectionsGenesysBatchId equals b.CollectionsGenesysBatchId
+                          join d in db.CollectionsDispatches.AsNoTracking() on i.CollectionsDispatchId equals d.CollectionsDispatchId
                           where i.Status == DispatchItemStatus.UploadedToGenesys && i.GenesysContactId != null
                                 && i.SuppressionStatus != ContactSuppressionStatus.Suppressed && i.UploadedAtUtc >= sinceUtc
                           orderby i.BalanceCheckedAtUtc, i.CollectionsDispatchItemId
-                          select new { Item = i, b.ContactListId }).Take(take).ToListAsync(ct);
-        return rows.Select(r => new UploadedContactView(r.Item, r.ContactListId)).ToList();
+                          select new { Item = i, b.ContactListId, d.FilterJson }).Take(take).ToListAsync(ct);
+        return rows.Select(r => new UploadedContactView(r.Item, r.ContactListId, r.FilterJson)).ToList();
     }
 
     public Task SetDispatchPhaseAsync(long dispatchId, string phase, CancellationToken ct) =>

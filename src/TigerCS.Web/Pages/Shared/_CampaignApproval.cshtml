@@ -99,14 +99,14 @@
 {
     @* The confirmation. Direct Send shows it as a dialog (upgraded to a modal by collections-campaign-approve.js; without JavaScript it is simply open on the page). *@
     Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> confirmForm = @<form method="post" class="panel review-confirm" data-confirm-form asp-page-handler="Confirm">
-        <h2 id="directConfirmTitle">@(Model.IsDirectSend ? $"Send {s.Count:N0} customer(s) to Genesys?" : "Confirm Approve & Send")<partial name="_InfoTip" model="@(new InfoTipModel("tip-confirm-checks", "What is checked before uploading", "Before uploading, the current balance of every customer is checked again against the financial snapshot. Paid customers are dropped; any other change, or a duplicate of an earlier send, stops the send for review. A copy of the approved list and the Genesys result is emailed to the Collections administrator."))" /></h2>
+        <h2 id="directConfirmTitle">@(Model.IsDirectSend ? $"Send {s.Count:N0} customer(s) to the {CampaignsModel.ContactListLabel(s.DirectSendDestination ?? "")} contact list?" : "Confirm Approve & Send")<partial name="_InfoTip" model="@(new InfoTipModel("tip-confirm-checks", "What is checked before uploading", "Before uploading, the current balance of every customer is checked again against the financial snapshot. Paid customers are dropped; any other change, or a duplicate of an earlier send, stops the send for review. A copy of the approved list and the Genesys result is emailed to the Collections administrator."))" /></h2>
         <dl class="review-snapshot" data-selection-snapshot>
             <dt>Customers</dt><dd data-snapshot-count>@s.Count</dd>
             <dt>Total amount</dt><dd data-snapshot-total>@string.Join(" · ", s.TotalsByCurrency.Select(t => $"{t.Key} {CampaignsModel.Money(t.Value)}"))</dd>
             <dt>Sending mode</dt><dd data-snapshot-mode>@(Model.IsDirectSend ? "Direct Send (manual contact list; no campaign stage or stage dates)" : Model.IsManual ? $"Manual, send date {(Model.BusinessDate ?? CollectionsDisplay.DubaiToday()):dd MMM yyyy} (today)" : "Auto (campaign schedule)")</dd>
             <dt>@(Model.IsDirectSend ? "Campaign purpose" : "Campaign stage")</dt><dd data-snapshot-stage>@string.Join(", ", s.CountByReminderType.Keys.Select(CampaignsModel.StageName))</dd>
             <dt>Destination Genesys contact list</dt>
-            <dd data-snapshot-list>@if (s.ContactListByReminderType is { Count: > 0 } lists) { @foreach (var l in lists) { <div>@CampaignsModel.StageName(l.Key): <code>@l.Value</code></div> } } else { <text>—</text> }</dd>
+            <dd data-snapshot-list>@if (s.ContactListByReminderType is { Count: > 0 } lists) { @foreach (var l in lists) { <div>@(l.Key == "DirectSend" && s.DirectSendDestination is { } destination ? $"{CampaignsModel.ContactListLabel(destination)} contact list" : CampaignsModel.StageName(l.Key)): <code>@l.Value</code></div> } } else { <text>—</text> }</dd>
             <dt>Financial source</dt><dd>@(s.SourceReconciled ? "Reconciled" : "Not reconciled")</dd>
         </dl>
         @foreach (var n in s.Notices) { <p role="status">@n</p> }
@@ -134,6 +134,7 @@
                 "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
                 "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
         }
+        <input type="hidden" name="contactList" value="@Model.ContactList" />
         <input type="hidden" name="selectionMode" value="@Model.SelectionMode" /><input type="hidden" name="unitKeys" value="@Model.UnitKeys" />
         <input type="hidden" name="expectedCount" value="@s.Count" /><input type="hidden" name="expectedFingerprint" value="@s.Fingerprint" />
         <input type="hidden" name="idempotencyKey" value="@Model.ConfirmKey" />

@@ -33,6 +33,10 @@
                     <strong class="campaign-card__value" data-blocked-count>@blocked.ToString("N0")</strong>
                 </li>
                 <li class="campaign-card">
+                    <span class="campaign-card__label">Total amount<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-total", "Total amount", "The exact amount that will be sent to Genesys for the eligible customers: only the unpaid instalments matching the Payment status and the From / To dates, for customers above the Minimum Total."))" /></span>
+                    <strong class="campaign-card__value" data-eligible-total>AED @((list.ReadyTotalAmount ?? 0m).ToString("N2", System.Globalization.CultureInfo.InvariantCulture))</strong>
+                </li>
+                <li class="campaign-card">
                     <span class="campaign-card__label">Already sent</span>
                     <strong class="campaign-card__value" data-sent-count>@counts.AlreadySent.ToString("N0")</strong>
                 </li>
@@ -40,7 +44,7 @@
             <p class="campaign-meta">
                 <span>Mode <strong data-mode-name>Direct Send</strong></span>
                 <span>Purpose <strong data-campaign-name>@Model.CampaignName</strong></span>
-                <span>Destination list <strong data-direct-list>@(Model.DirectSendBlockers.Count == 0 ? "Dedicated Direct Send list" : "Not configured")</strong></span>
+                <span>Destination <strong data-direct-list>@(Model.ContactList.Length > 0 ? CampaignsModel.ContactListLabel(Model.ContactList) + " list" : "choose below")</strong></span>
                 <span>Automatic execution <strong data-auto-sending>Off</strong><partial name="_InfoTip" model="@(new InfoTipModel("tip-auto-sending", "Automatic execution", "Direct Send never dispatches by itself. Nothing is sent until an authorized user confirms the exact count."))" /></span>
                 <span>Payment <strong>@(Model.PaymentStatus == "Both" ? "Due and Overdue" : Model.PaymentStatus)</strong></span>
             </p>
@@ -78,6 +82,14 @@
                         "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
                 }
                 <input type="hidden" name="unitKeys" value="" data-selected-units />
+                @* The destination: one of the two existing Genesys contact lists. Required (the send button stays disabled until one is chosen) and kept with the approval for the audit trail. *@
+                <label class="campaign-approve__list">Contact list
+                    <select class="field-select" name="contactList" data-contact-list required aria-describedby="tip-contact-list">
+                        <option value="" selected="@(Model.ContactList.Length == 0)">Select a contact list…</option>
+                        @foreach (var choice in CampaignsModel.ContactListChoices) { <option value="@choice" selected="@(Model.ContactList == choice)">@CampaignsModel.ContactListLabel(choice)</option> }
+                    </select>
+                    <partial name="_InfoTip" model="@(new InfoTipModel("tip-contact-list", "Contact list", "The existing Genesys list these customers are added to. It is checked in Genesys before anything is uploaded: it must have the required columns and no active campaign may dial it."))" />
+                </label>
                 @if (counts.Ready > 0)
                 {
                     <div class="campaign-approve__modes">

@@ -9,7 +9,7 @@ public sealed record ReviewFilter(
     string? PaymentStatus = null, decimal? MinRemaining = null, decimal? MaxRemaining = null,
     string? ReminderType = null, string? ValidationStatus = null, string? Reason = null,
     string? DueStatus = null, int? TowerId = null, IReadOnlyList<int>? TowerIds = null,
-    string? SendingMode = null, DateOnly? SendDate = null);
+    string? SendingMode = null, DateOnly? SendDate = null, string? ContactList = null);
 
 /// <summary>
 /// The normalized, validated filter the store understands. <see cref="PaymentStatuses"/> is null for "All".
@@ -40,7 +40,8 @@ public sealed record ReviewReasonDto(string Code, string Kind, string Explanatio
 
 public sealed record ReviewPageDto(
     ReviewRunDto? Run, ReviewCountsDto Counts, int Page, int PageSize, int TotalCount,
-    IReadOnlyList<ReviewRecordDto> Items, decimal MinRemainingApplied, bool TowerDataMissing = false);
+    IReadOnlyList<ReviewRecordDto> Items, decimal MinRemainingApplied, bool TowerDataMissing = false,
+    decimal? ReadyTotalAmount = null);
 
 public sealed record SelectionRequest(
     ReviewFilter? Filter, string Mode, IReadOnlyList<string>? RecordKeys = null,
@@ -55,7 +56,7 @@ public sealed record SelectionSummaryDto(
     long RunId, int Count, string Fingerprint, IReadOnlyDictionary<string, decimal> TotalsByCurrency,
     IReadOnlyDictionary<string, int> CountByReminderType, int SharedPhoneRecordCount, int SharedPhoneNumberCount,
     int Page, int PageSize, IReadOnlyList<SelectionContactDto> Contacts, IReadOnlyList<string> Notices,
-    IReadOnlyDictionary<string, string>? ContactListByReminderType = null, bool SourceReconciled = true);
+    IReadOnlyDictionary<string, string>? ContactListByReminderType = null, bool SourceReconciled = true, string? DirectSendDestination = null);
 
 public sealed record ConfirmDispatchRequest(
     SelectionRequest Selection, int ExpectedCount, string ExpectedFingerprint, string IdempotencyKey,
@@ -90,7 +91,6 @@ public sealed record ReconcileBatchRequest(string Resolution, string Note);
 
 /// <summary>
 /// Whether this environment is configured to send an approved list to Genesys, and if not exactly which settings are missing. Names settings only; never a secret, id or customer data.
-/// <c>DirectSendBlockers</c> are the extra settings only Direct Send needs (its own destination contact list); they never block Manual or Auto.
 /// A configuration problem here is a hard stop: it is shown before the person approves anything, and confirmation refuses again.
 /// </summary>
-public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Blockers, IReadOnlyList<string>? DirectSendBlockers = null);
+public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Blockers);

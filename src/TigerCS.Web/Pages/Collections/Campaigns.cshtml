@@ -27,7 +27,7 @@
         <label class="field-label" for="campaignDate" data-date-label>@(Model.IsManual ? "Send date" : "Preview date")</label>
         <input class="field-input" id="campaignDate" name="businessDate" type="date" data-campaign-date disabled="@Model.IsDirectSend" min="2000-01-01" max="2100-12-31" value="@((Model.BusinessDate ?? (Model.IsManual ? CollectionsDisplay.DubaiToday() : null))?.ToString("yyyy-MM-dd"))" />
     </div>;
-    const string modeTip = "Manual: you choose the send date; only the campaign schedule is waived. A future date stays pending and nothing is sent automatically. Auto: follows the stage's policy schedule; automatic execution is a separate setting, off by default. Direct Send: you pick customers yourself and send them to a dedicated Genesys contact list; no campaign stage and no stage dates apply. In every mode reconciliation, permissions, contact checks, suppression, duplicate-send and contact-frequency protection apply, and nothing is sent without your confirmation.";
+    const string modeTip = "Manual: you choose the send date; only the campaign schedule is waived. A future date stays pending and nothing is sent automatically. Auto: follows the stage's policy schedule; automatic execution is a separate setting, off by default. Direct Send: you pick customers yourself and send them to the Current Month or Follow Up Genesys contact list you choose; no campaign stage and no stage dates apply, and the amount sent follows your Payment status and dates. In every mode reconciliation, permissions, contact checks, suppression, duplicate-send and contact-frequency protection apply, and nothing is sent without your confirmation.";
 }
     @* Filter first: choosing filters never queries the campaign list. Customers load only when Preview Customers is clicked; changing a filter afterwards clears them again.
        One compact control bar: stage, Manual / Auto, the send date (Manual) or the policy schedule label (Auto), Project / Tower and Preview Customers. Everything else is under More filters. *@
@@ -94,7 +94,7 @@
                         <input class="field-input" id="campaignTo" name="dateTo" type="date" min="2000-01-01" max="2100-12-31" value="@Model.FormDateTo?.ToString("yyyy-MM-dd")" data-date-to data-campaign-to />
                     </div>
                     <div class="field-group">
-                        <label class="field-label" for="campaignMin"><span data-mode-not="DirectSend" hidden="@Model.IsDirectSend">Minimum Total (AED)</span><span data-mode-only="DirectSend" hidden="@(!Model.IsDirectSend)">Minimum amount (AED)</span></label>
+                        <label class="field-label" for="campaignMin">Minimum Total (AED)</label>
                         <input class="field-input" type="number" id="campaignMin" name="minTotal" min="0" step="any" inputmode="decimal" value="@Model.MinTotalText" data-min-total />
                     </div>
                 </div>

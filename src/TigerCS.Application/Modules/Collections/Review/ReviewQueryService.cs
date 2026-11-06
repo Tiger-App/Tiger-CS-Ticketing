@@ -24,6 +24,9 @@ public sealed class ReviewQueryService(
     /// <summary>The identity of a Campaigns row: company, tenant and unit code.</summary>
     public static string UnitKey(int companyId, string tenantId, string unitCode) => $"{companyId}|{tenantId}|{unitCode}";
 
+    /// <summary>The Direct Send criteria of a filter (the review default minimum applies when none was given).</summary>
+    public DirectSendCriteria DirectCriteria(ReviewFilter filter) => DirectSendFilters.Criteria(filter, reviewOptions.DefaultMinimumRemaining);
+
     public static readonly IReadOnlyList<string> PaymentStatusChoices = [UnpaidOrPartial, "All", "Unpaid", "PartiallyPaid", "Paid", "Unknown"];
 
     public async Task<CollectionsResult<ReviewRunDto?>> GetCurrentRunAsync(CollectionsCaller caller, CancellationToken ct)
@@ -74,6 +77,7 @@ public sealed class ReviewQueryService(
             return CollectionsResult<ReviewPageDto>.Ok(new(null, new(0, 0, 0, 0, 0), page, pageSize, 0, [], applied));
         var stale = IsStale(run);
         var spec = parsed.Spec!;
+        if (spec.ReminderType == CampaignReminderType.DirectSend) return await QueryDirectAsync(run, spec, filter ?? new ReviewFilter(), stale, page, pageSize, applied, ct);
         var items = await store.QueryAsync(run.CollectionsReviewRunId, spec, stale, (page - 1) * pageSize, pageSize, ct);
         // Counts follow every filter except the validation-status choice itself, so the four tiles always add up.
         var counts = await store.CountAsync(run.CollectionsReviewRunId, spec with { ValidationStatus = null }, stale, ct);
@@ -193,6 +197,47 @@ public sealed class ReviewQueryService(
         return null;
     }
 
+    private const int DirectScanLimit = 100_000;
+
+    /// <summary>
+    /// The Direct Send customers of a filter, each with the amount CALCULATED from its unpaid instalments and the person's Payment status, From / To and Minimum Total
+    /// (<see cref="DirectSendAmounts"/>), never the whole balance. A customer with nothing qualifying under those filters (zero, or not above the minimum) is not a candidate at all. The record's status
+    /// (reconciliation, contact, identity, shared phone, legal, duplicates, frequency) is untouched. The returned records are detached copies of the stored ones carrying the calculated amount and
+    /// earliest qualifying due date, which is what the list shows, the approval freezes, the upload quotes and the confirmation totals.
+    /// </summary>
+    private async Task<List<ReviewRecordView>> DirectCalculatedAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, CancellationToken ct)
+    {
+        // The date range, Payment status and minimum are about instalments, not about the record's whole-balance fields: they are removed from the stored-record query and applied by the calculation.
+        var coarse = spec with { DueFrom = null, DueTo = null, MinRemaining = null, MaxRemaining = null, ValidationStatus = null };
+        var views = await store.ResolveAsync(run.CollectionsReviewRunId, coarse, null, stale, DirectScanLimit, ct, units);
+        var criteria = DirectCriteria(filter ?? new ReviewFilter());
+        var today = clock.BusinessDate;
+        var result = new List<ReviewRecordView>(views.Count);
+        foreach (var view in views)
+        {
+            var calc = DirectSendFilters.CurrentAmount(view.Record, criteria, today);
+            if (calc.Qualifies) { view.Record.RemainingAmount = calc.Amount; view.Record.DueDate = calc.EarliestDue; result.Add(view); continue; }
+            // Unreadable or ambiguous instalments never produce an amount; a record that is already held back stays visible with its reason, anything else is not offered.
+            if (calc.Reason is DirectSendAmount.Ambiguous or DirectSendAmount.Unavailable && view.Record.ValidationStatus != ReviewValidationStatus.Ready)
+            { view.Record.RemainingAmount = null; result.Add(view); }
+        }
+        return result;
+    }
+
+    private async Task<CollectionsResult<ReviewPageDto>> QueryDirectAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter filter, bool stale, int page, int pageSize, decimal applied, CancellationToken ct)
+    {
+        var calculated = await DirectCalculatedAsync(run, spec, filter, null, stale, ct);
+        int Count(ReviewValidationStatus s) => calculated.Count(v => v.EffectiveStatus(stale) == s);
+        var counts = new ReviewCountsDto(calculated.Count, Count(ReviewValidationStatus.Ready), Count(ReviewValidationStatus.NeedsReview), Count(ReviewValidationStatus.Excluded), Count(ReviewValidationStatus.AlreadySent));
+        var shown = (spec.ValidationStatus is { } wanted ? calculated.Where(v => v.EffectiveStatus(stale) == wanted) : calculated)
+            .OrderBy(v => v.Record.CompanyId).ThenBy(v => v.Record.TenantId, StringComparer.OrdinalIgnoreCase).ThenBy(v => v.Record.UnitCode, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(v => v.Record.RecordKey, StringComparer.Ordinal).ToList();
+        var readyTotal = calculated.Where(v => v.EffectiveStatus(stale) == ReviewValidationStatus.Ready).Sum(v => v.Record.RemainingAmount ?? 0m);
+        var towerMissing = (spec.TowerId is not null || spec.TowerIds is not null) && shown.Count == 0 && !await store.RunHasTowerDataAsync(run.CollectionsReviewRunId, ct);
+        return CollectionsResult<ReviewPageDto>.Ok(new(ToDto(run), counts, page, pageSize, shown.Count,
+            shown.Skip((page - 1) * pageSize).Take(pageSize).Select(v => ToDto(v, stale)).ToList(), applied, towerMissing, readyTotal));
+    }
+
     /// <summary>
     /// Direct Send records are resolved only by an explicit Direct Send request, and a Direct Send request resolves nothing else: the mode and the reminder type must agree. There is no stage
     /// and no send date to check; every Ready condition (reconciliation, contact, suppression, duplicates, shared phone, legal) is already part of the stored record.
@@ -202,6 +247,7 @@ public sealed class ReviewQueryService(
         var mode = CollectionsSendingModes.IsDirectSend(filter?.SendingMode);
         var type = spec.ReminderType == CampaignReminderType.DirectSend;
         if (mode != type) return "Direct Send is selected with the Direct Send mode only.";
+        if (mode && !CampaignReminderTypes.TryParseDirectSendDestination(filter?.ContactList, out _)) return "Choose the Genesys contact list for this Direct Send: Current Month or Follow Up.";
         // The legal-stage and scheduled-today checks are evaluated for the day the review data was built, so Direct Send needs data built today (like a Manual send).
         if (mode && run.AsOfDate != clock.BusinessDate)
             return $"The review data was built for {run.AsOfDate:dd MMM yyyy}, not today ({clock.BusinessDate:dd MMM yyyy}). Refresh it, then approve.";
@@ -211,6 +257,8 @@ public sealed class ReviewQueryService(
     /// <summary>Ready records of the selection and, in Manual mode, the Excluded ones that are only outside the schedule (checked again by <see cref="IsManualReady"/>).</summary>
     private async Task<IReadOnlyList<ReviewRecordView>> ResolveReadyAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, int max, CancellationToken ct)
     {
+        if (spec.ReminderType == CampaignReminderType.DirectSend)
+            return (await DirectCalculatedAsync(run, spec, filter, units, stale, ct)).Where(v => v.EffectiveStatus(stale) == ReviewValidationStatus.Ready).Take(max + 1).ToList();
         var ready = await store.ResolveAsync(run.CollectionsReviewRunId, spec with { ValidationStatus = ReviewValidationStatus.Ready }, null, stale, max, ct, units);
         if (!CollectionsSendingModes.IsManual(filter?.SendingMode)) return ready;
         var outside = await store.ResolveAsync(run.CollectionsReviewRunId, spec with { ValidationStatus = ReviewValidationStatus.Excluded }, null, stale, max, ct, units);
@@ -274,16 +322,17 @@ public sealed class ReviewQueryService(
         if (records.Count > 0 && IsStale(resolved.Run!)) notices.Add("The review data is stale; refresh it before approving.");
         return new(resolved.Run!.CollectionsReviewRunId, records.Count, Fingerprint(records), TotalsByCurrency(records),
             records.GroupBy(r => r.ReminderType.ToString()).OrderBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count()),
-            shared.Records, shared.Numbers, page, size, contacts, notices, ContactLists(records), resolved.Run.SourceReconciled);
+            shared.Records, shared.Numbers, page, size, contacts, notices, ContactLists(records, request.Filter), resolved.Run.SourceReconciled,
+            records.Any(r => r.ReminderType == CampaignReminderType.DirectSend) && CampaignReminderTypes.TryParseDirectSendDestination(request.Filter?.ContactList, out var chosen) ? chosen.ToString() : null);
     }
 
     /// <summary>The Genesys contact list each reminder type of the selection will be uploaded to (an unconfigured list is shown as such; confirming is then refused).</summary>
-    private IReadOnlyDictionary<string, string> ContactLists(IReadOnlyList<CollectionsReviewRecord> records)
+    private IReadOnlyDictionary<string, string> ContactLists(IReadOnlyList<CollectionsReviewRecord> records, ReviewFilter? filter)
     {
         var lists = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var type in records.Select(r => r.ReminderType).Distinct().OrderBy(t => t.ToString(), StringComparer.Ordinal))
         {
-            try { lists[type.ToString()] = genesys is null ? "(not configured)" : genesys.ContactListIdFor(type); }
+            try { lists[type.ToString()] = genesys is null ? "(not configured)" : type == CampaignReminderType.DirectSend ? genesys.DirectSendContactListIdFor(filter?.ContactList) : genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { lists[type.ToString()] = "(not configured)"; }
         }
         return lists;

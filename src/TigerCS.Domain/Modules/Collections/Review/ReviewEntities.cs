@@ -66,6 +66,11 @@ public class CollectionsReviewRecord
     public string Reasons { get; set; } = "";
     public DateTime SourceReadAtUtc { get; set; }
     public string Source { get; set; } = "";
+    /// <summary>
+    /// Direct Send records only: the customer's unpaid instalments (due date and remaining amount, <see cref="DirectSendAmounts"/>). The amount a Direct Send customer is listed, approved and sent with
+    /// is always calculated from these and the person's filters; <see cref="RemainingAmount"/> is only the whole balance. Null on every other record.
+    /// </summary>
+    public string? InstalmentsJson { get; set; }
 }
 
 public enum DispatchStatus

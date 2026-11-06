@@ -153,3 +153,5 @@
 .direct-confirm { max-width: min(46rem, 94vw); width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px); background: var(--color-surface); color: inherit; padding: 0; }
 .direct-confirm::backdrop { background: rgba(0, 0, 0, .45); }
 .direct-confirm .review-confirm { margin: 0; border: 0; }
+.campaign-approve__list { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); font-weight: 600; color: var(--color-text-secondary); }
+.campaign-approve__list .field-select { min-width: 12rem; }
