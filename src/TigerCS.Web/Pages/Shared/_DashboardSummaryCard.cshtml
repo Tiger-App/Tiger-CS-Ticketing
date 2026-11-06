@@ -11,10 +11,26 @@
         "Status" => "progress",
         _ => "info",
     };
+    // A small glyph per card header, keyed on the card's title — decoration only,
+    // like the tone above; the title, total and link come from the model.
+    var headerIcon = Model.Title switch
+    {
+        "Status" => "<path d=\"M4 12h4l2-5 4 10 2-5h4\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+        "Volume by Channel" => "<path d=\"M21 12a8 8 0 0 1-11.6 7.1L4 20l1-5.1A8 8 0 1 1 21 12Z\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\"/>",
+        "Volume by Request Type" => "<path d=\"M3 12V4h8l9 9-8 8-9-9Z\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linejoin=\"round\"/><circle cx=\"7.5\" cy=\"8.5\" r=\"1\" fill=\"currentColor\"/>",
+        "Open Backlog Ageing" => "<circle cx=\"12\" cy=\"12\" r=\"8.5\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M12 7.5V12l3 2\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+        "Priority" => "<path d=\"M5 21V4M5 5h11l-2 4 2 4H5\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+        "Volume by Department" => "<path d=\"M4 21V5a1 1 0 0 1 1-1h9a1 1 0 0 1 1 1v16M15 10h4a1 1 0 0 1 1 1v10M3 21h18M8 8h3M8 12h3M8 16h3\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+        _ => "<rect x=\"5\" y=\"4\" width=\"14\" height=\"16\" rx=\"2\" stroke=\"currentColor\" stroke-width=\"1.8\"/>",
+    };
+    var slot = Model.Title == "Status" ? "status" : "channel";
 }
-<div class="panel dash-card tone-@tone dash-card--summary">
+<div class="panel dash-card tone-@tone dash-card--summary dash-card--@slot">
     <div class="panel__header">
-        <span class="panel__title">@Model.Title</span>
+        <div class="panel__lead">
+            <span class="panel__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none">@Html.Raw(headerIcon)</svg></span>
+            <span class="panel__title">@Model.Title</span>
+        </div>
         <a class="link-muted" href="@Model.TotalHref" title="Open the matching tickets">@Model.Total total</a>
     </div>
     @if (Model.Rows.Count == 0 || (Model.Total == 0 && Model.Rows.All(r => r.Count == 0)))
