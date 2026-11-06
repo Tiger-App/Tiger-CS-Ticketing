@@ -66,6 +66,12 @@ public class CollectionsReviewRecord
     public string Reasons { get; set; } = "";
     public DateTime SourceReadAtUtc { get; set; }
     public string Source { get; set; } = "";
+    /// <summary>
+    /// The customer's unpaid instalments (due date and remaining amount, <see cref="FilteredAmounts"/>) as read from the financial source, on every stage record of the unit. A Manual send
+    /// calculates the amount it lists, approves and sends from these and the person's filters (Payment status, From / To, Minimum Total); <see cref="RemainingAmount"/> stays the stage amount
+    /// that Auto uses. Null on records written before this column existed (a refresh fills it); a Manual send cannot calculate an amount for such a record.
+    /// </summary>
+    public string? InstalmentsJson { get; set; }
 }
 
 public enum DispatchStatus

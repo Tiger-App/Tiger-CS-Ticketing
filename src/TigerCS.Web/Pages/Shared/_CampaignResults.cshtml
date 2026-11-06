@@ -2,7 +2,11 @@
 @using TigerCS.Web.Services.Api
 @model CampaignsModel
 @if (Model.LoadNotice is { } notice) { <div class="receivables-notice" role="status" data-load-notice>@notice</div> }
-@if (Model.NothingDueYet)
+@if (Model.IsManual)
+{
+    <partial name="_ManualResults" model="Model" />
+}
+else if (Model.NothingDueYet)
 {
     <div class="panel"><div class="empty-state"><p class="empty-state__title">Nothing is due in this period yet.</p></div></div>
 }
@@ -50,16 +54,9 @@ else if (Model.Report is { } report)
             </ul>
             <p class="campaign-meta">
                 <span>Mode <strong data-mode-name>@report.SendingMode</strong></span>
-                @if (report.SendingMode == "Manual")
-                {
-                    <span>Send date <strong data-send-date>@report.BusinessDate.ToString("dd MMM yyyy")</strong> <em data-send-date-state>@(CampaignsModel.TimingRestriction(report) is null ? "today: can be sent after approval" : report.BusinessDate > report.LiveBusinessDate ? "pending: future date" : "passed")</em></span>
-                }
-                else
-                {
                     <span>Schedule <strong data-policy-schedule-result>@string.Join(" and ", report.ScheduledDates.Select(d => d.ToString("dd MMM yyyy")))</strong> <em>@(report.IsScheduledDate ? "today is a scheduled day" : "today is not a scheduled day")</em></span>
-                }
-                <span>Preview only <strong data-preview-only-count>@report.PreviewOnlyCount.ToString("N0")</strong><partial name="_InfoTip" model="@(new InfoTipModel("tip-preview-only", "Preview only", report.SendingMode == "Manual" ? "Eligible and otherwise valid, but the chosen send date is not today. It stays pending: nothing is queued or sent." : "Eligible and otherwise valid, but today is not a scheduled send day for this stage."))" /></span>
-                <span>Automatic execution <strong data-auto-sending>@(report.AutoSendingEnabled ? "On" : "Off")</strong><partial name="_InfoTip" model="@(new InfoTipModel("tip-auto-sending", "Automatic execution", "A separate setting (Collections:Campaigns:AutoSendingEnabled), off by default. Nothing is dispatched without an authorized user pressing Approve & Send to Genesys."))" /></span>
+                <span>Preview only <strong data-preview-only-count>@report.PreviewOnlyCount.ToString("N0")</strong><partial name="_InfoTip" model="@(new InfoTipModel("tip-preview-only", "Preview only", "Eligible and otherwise valid, but today is not a scheduled send day for this stage. Auto does not dispatch it today; use Manual to send it now."))" /></span>
+                <span>Automatic execution <strong data-auto-sending>@(report.AutoSendingEnabled ? "On" : "Off")</strong><partial name="_InfoTip" model="@(new InfoTipModel("tip-auto-sending", "Automatic execution", "A separate setting (Collections:Campaigns:AutoSendingEnabled), off by default. While it is off nothing is dispatched automatically; use Manual to send. When it is on, the automatic dispatcher sends each campaign on its scheduled date."))" /></span>
                 @if (Model.CampaignName is { } campaignName) { <span>Campaign <strong data-campaign-name>@campaignName</strong></span> }
                 <span>Payment <strong>@(report.PaymentStatus == "Both" ? "Due and Overdue" : report.PaymentStatus)</strong></span>
             </p>
@@ -80,39 +77,9 @@ else if (Model.Report is { } report)
             @if (report.PaymentStatusNote is { } statusNote) { <p class="receivables-notice" role="status" data-payment-status-note>@statusNote</p> }
         </div>
         @{ var exportProblem = Model.ExportReviewProblem; }
-        @{
-            var blocked = Model.ApproveBlockedReason;
-            // The always-available explanation of the button and, when it is disabled, the exact reason (collections-campaign-approve.js swaps in "tick at least one customer" while nothing is ticked).
-            var approveReason = blocked is null
-                ? "Only Ready customers can be sent. Nothing is sent until you confirm the exact count, amount and Genesys contact list."
-                : blocked;
-        }
         <div class="campaign-toolbar">
-            <form method="post" class="campaign-approve" data-approve-form asp-page-handler="Approve">
-                @foreach (var name in CampaignsModel.FilterFieldNames)
-                {
-                    if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
-                <input type="hidden" name="@name" value="@(name switch {
-                        "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
-                        "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
-                }
-                <input type="hidden" name="unitKeys" value="" data-selected-units />
-                @if (report.ReadyCount > 0)
-                {
-                    <div class="campaign-approve__modes">
-                        <label title="Only the customers you ticked, kept across pages"><input type="radio" name="selectionMode" value="SelectedUnits" checked /> Ticked (<span data-selected-count>0</span>)</label>
-                        <label title="All eligible customers matching the filters, on every page"><input type="radio" name="selectionMode" value="AllMatching" data-all-matching /> All eligible (<span data-all-count>@report.ReadyCount.ToString("N0")</span>)</label>
-                    </div>
-                }
-                <div class="campaign-approve__actions">
-                    <span class="campaign-action">
-                        <button class="btn btn-primary" type="submit" aria-describedby="tip-approve-reason" data-approve-button disabled="@(blocked is not null)" data-blocked="@(blocked is not null ? "true" : "false")">Approve &amp; Send to Genesys</button>
-                        <partial name="_InfoTip" model="@(new InfoTipModel("tip-approve-reason", "Approve & Send to Genesys", approveReason, "data-approve-reason"))" />
-                    </span>
-                    <span class="campaign-tally" data-selected-summary aria-live="polite">@(report.ReadyCount > 0 ? "0 selected" : "No Ready customers")</span>
-                    @if (report.ReadyCount > 0) { <button class="btn" type="button" data-clear-selection>Clear ticks</button> }
-                </div>
-            </form>
+            @* Auto never sends from this page: the automatic dispatcher prepares and sends a campaign on its scheduled date, and only while automatic execution is On. A person sends with Manual. *@
+            <p class="receivables-meta campaign-auto-note" data-auto-note>Auto does not send from this page. On a scheduled date the automatic dispatcher prepares and sends this campaign by itself (automatic execution is <strong>@(report.AutoSendingEnabled ? "On" : "Off")</strong>). To send a campaign now, choose <strong>Manual</strong>.</p>
             <div class="campaign-actions">
             @if (exportProblem is null) { <a class="btn" href="@Model.PageUrl(export: "review")" data-export-review>Export review CSV</a> }
             else
@@ -122,25 +89,17 @@ else if (Model.Report is { } report)
                     <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-review-reason", "Why Export review CSV is unavailable", exportProblem, "data-export-review-reason"))" />
                 </span>
             }
-            @if (exportProblem is null && !Model.IsManual && report.ReadyCount > 0 && report.ReadyCount + report.NotEligibleCount == report.TotalCount)
+            @if (exportProblem is null && report.ReadyCount > 0 && report.ReadyCount + report.NotEligibleCount == report.TotalCount)
             { <a class="btn btn-primary" href="@Model.PageUrl(export: "genesys")">Export Genesys CSV</a> }
             </div>
         </div>
-        @{
-            // Select all ticks only the Ready customers on this page. With none to tick it is disabled and says why (the server re-checks every selected customer at approval anyway).
-            var readyOnPage = report.Items.Count(i => i.Status == "Ready");
-            var selectAllLabel = readyOnPage > 0 ? "Select all Ready customers on this page"
-                : report.ReadyCount == 0 ? "Nothing to select: no customer is Ready to send (see \"Why sending is blocked\")."
-                : "No Ready customers on this page. Go to another page to select Ready customers.";
-        }
         <div class="table-scroll">
             <table class="table receivables-table campaigns-table">
-                <thead><tr><th><input type="checkbox" data-select-page disabled="@(readyOnPage == 0)" aria-label="@selectAllLabel" title="@selectAllLabel" /></th><th>Customer</th><th>Mobile</th><th>Email</th><th>Project / Tower</th><th>Unit</th><th class="num">Due</th><th class="num">Overdue</th><th class="num">Total</th></tr></thead>
+                <thead><tr><th>Customer</th><th>Mobile</th><th>Email</th><th>Project / Tower</th><th>Unit</th><th class="num">Due</th><th class="num">Overdue</th><th class="num">Total</th></tr></thead>
                 <tbody>
                 @foreach (var row in report.Items)
                 {
                     <tr data-campaign-status="@row.Status">
-                        <td>@if (row.Status == "Ready") { <input type="checkbox" class="campaign-select" data-unit-key="@TigerCS.Application.Modules.Collections.Review.ReviewQueryService.UnitKey(row.CompanyId, row.TenantId, row.UnitCode)" aria-label="Select @row.CustomerName" /> } else if (row.Status is "NeedsReview" or "PreviewOnly" or "InternalReview") { <input type="checkbox" class="row-select-disabled" disabled aria-label="Cannot select @row.CustomerName" title="@CampaignsModel.RowState(row): cannot be selected" /> }</td>
                         <td><strong>@row.CustomerName</strong><span class="campaign-row-state campaign-row-state--@row.Status.ToLowerInvariant()" data-row-state>@CampaignsModel.RowState(row)</span>@foreach (var note in CampaignsModel.ReviewNotes(row, report.Crm?.State)) { <span class="receivables-meta receivables-meta--review" data-unit-note>@note</span> }@if (row.Status == "NotEligible") { <span class="receivables-meta" data-campaign-readiness>@CampaignsModel.Readiness(row)</span> }</td>
                         <td>@(row.Phone.Length > 0 ? row.Phone : "—")@if (row.Phone.Length == 0) { <span class="receivables-meta receivables-meta--missing" data-unit-note>@CampaignsModel.NoMobileNote(row)</span> }</td>
                         <td>@(row.Email.Length > 0 ? row.Email : "—")@if (row.Email.Length == 0) { <span class="receivables-meta receivables-meta--missing" data-unit-note>No email: email not possible</span> }</td>
@@ -152,7 +111,7 @@ else if (Model.Report is { } report)
                     </tr>
                 }
                 @if (report.TotalCount == 0)
-                { <tr><td colspan="9">@(CollectionsDisplay.FailedCompanies(report.Snapshot) is null ? "No units qualify for these filters." : "No units to show yet.")</td></tr> }
+                { <tr><td colspan="8">@(CollectionsDisplay.FailedCompanies(report.Snapshot) is null ? "No units qualify for these filters." : "No units to show yet.")</td></tr> }
                 </tbody>
             </table>
         </div>

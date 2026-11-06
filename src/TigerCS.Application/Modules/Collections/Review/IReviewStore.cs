@@ -13,7 +13,10 @@ public sealed record ReviewRecordView(
         : Record.ValidationStatus;
 }
 
-public sealed record UploadedContactView(CollectionsDispatchItem Item, string ContactListId);
+/// <param name="Item">The uploaded dispatch item.</param>
+/// <param name="ContactListId">The Genesys contact list it was uploaded to.</param>
+/// <param name="FilterJson">The filter the dispatch was approved with (a Direct Send item is checked against its own filter).</param>
+public sealed record UploadedContactView(CollectionsDispatchItem Item, string ContactListId, string? FilterJson = null);
 
 public sealed record OverlapRow(string Phone, int CompanyId, string TenantId, string CustomerName, string UnitCode, string ReminderType,
     decimal? RemainingAmount, string Currency, string Reasons);
@@ -127,8 +130,19 @@ public sealed record GenesysCampaignLookupResult(GenesysUploadOutcome Outcome, i
 
 public sealed record GenesysCampaignCreateResult(GenesysUploadOutcome Outcome, int? HttpStatus, GenesysCampaignRef? Campaign, string? Error);
 
+/// <summary>A Genesys contact list as far as this integration cares: the names of its columns (data columns and phone columns).</summary>
+public sealed record GenesysContactListInfo(GenesysUploadOutcome Outcome, int? HttpStatus, IReadOnlyList<string> Columns, string? Error);
+
 public interface IGenesysOutboundClient
 {
+    /// <summary>GET /api/v2/outbound/contactlists/{contactListId} (read only): the list's column names, to check that an upload will fit it.</summary>
+    Task<GenesysContactListInfo> GetContactListAsync(string contactListId, CancellationToken ct) =>
+        Task.FromResult(new GenesysContactListInfo(GenesysUploadOutcome.Unknown, null, [], "This client cannot read contact lists."));
+
+    /// <summary>GET /api/v2/outbound/campaigns filtered to those that dial <paramref name="contactListId"/> (read only), with their status.</summary>
+    Task<GenesysCampaignLookupResult> FindCampaignsByContactListAsync(string contactListId, CancellationToken ct) =>
+        Task.FromResult(new GenesysCampaignLookupResult(GenesysUploadOutcome.Unknown, null, [], "This client cannot look up campaigns by contact list."));
+
     /// <summary>GET /api/v2/outbound/campaigns?name=... (read only: an Unknown outcome changed nothing).</summary>
     Task<GenesysCampaignLookupResult> FindCampaignsByNameAsync(string name, CancellationToken ct);
 

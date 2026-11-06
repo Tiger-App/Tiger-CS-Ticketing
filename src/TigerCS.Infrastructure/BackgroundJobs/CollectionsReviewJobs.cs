@@ -42,6 +42,22 @@ public sealed class CollectionsSuppressionJob(SuppressionService suppression, IL
     }
 }
 
+/// <summary>
+/// Auto sending mode: on a scheduled date prepares and dispatches the eligible campaigns. Does nothing unless <c>AutoSendingEnabled</c> is true (the recurring job is not even registered then).
+/// No automatic retry: a dispatch is idempotent per campaign and day, and the job runs again within the hour.
+/// </summary>
+public sealed class CollectionsAutoDispatchJob(AutoDispatchService autoDispatch, ILogger<CollectionsAutoDispatchJob> logger)
+{
+    public const string RecurringJobId = "collections-auto-dispatch";
+
+    [AutomaticRetry(Attempts = 0)]
+    public async Task RunAsync(CancellationToken cancellationToken)
+    {
+        var result = await autoDispatch.RunAsync(cancellationToken);
+        if (!result.Ran) logger.LogInformation("Automatic dispatch skipped: {Detail}", result.Detail);
+    }
+}
+
 public sealed class HangfireReviewJobScheduler(IBackgroundJobClient client) : IReviewJobScheduler
 {
     public void EnqueueRefresh(long runId) => client.Enqueue<CollectionsReviewRefreshJob>(j => j.RunAsync(runId, CancellationToken.None));

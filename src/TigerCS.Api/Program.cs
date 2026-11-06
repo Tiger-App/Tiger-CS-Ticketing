@@ -349,6 +349,13 @@ using (var backgroundJobScope = app.Services.CreateScope())
         backgroundJobOptions,
         backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions>(),
         backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.CollectionsOptions>().TimeZoneId);
+
+    // Auto sending mode: scheduled dispatch of the approved campaign policies - registered only while AutoSendingEnabled (false by default) and the Genesys upload are both enabled.
+    app.Services.UseTigerCsRecurringAutoDispatch(
+        backgroundJobOptions,
+        backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.CollectionsCampaignOptions>(),
+        backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions>(),
+        backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.CollectionsOptions>().TimeZoneId);
 }
 
 app.UseExceptionHandler();

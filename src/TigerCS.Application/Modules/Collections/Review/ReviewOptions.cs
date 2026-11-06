@@ -94,6 +94,17 @@ public sealed class GenesysOutboundOptions
             ? parsed.ToString("D")
             : throw new InvalidOperationException($"No valid Genesys contact list id is configured for {type}.");
 
+    /// <summary>
+    /// The Genesys contact list id a Manual send of <paramref name="type"/> uploads to, from the existing <see cref="ContactListIds"/>: the campaign type's own list, or the one the person chose
+    /// among the lists that suit the type (<see cref="CampaignReminderTypes.ManualDestinations"/>). Throws <see cref="InvalidOperationException"/> with the reason otherwise.
+    /// </summary>
+    public string ManualContactListIdFor(CampaignReminderType type, string? requested)
+    {
+        if (!CampaignReminderTypes.TryResolveManualDestination(type, requested, out var destination))
+            throw new InvalidOperationException($"A {CampaignReminderTypes.DefaultLabel(type)} campaign cannot be sent to that contact list. Choose {string.Join(", ", CampaignReminderTypes.ManualDestinations(type).Select(CampaignReminderTypes.DefaultLabel))}.");
+        return ContactListIdFor(destination);
+    }
+
     public string LabelFor(CampaignReminderType type) =>
         ReminderTypeLabels.TryGetValue(type.ToString(), out var label) && !string.IsNullOrWhiteSpace(label)
             ? label.Trim() : CampaignReminderTypes.DefaultLabel(type);

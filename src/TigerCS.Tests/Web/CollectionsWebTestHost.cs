@@ -130,7 +130,21 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
             case "/api/collections/review/runs/current":
                 return Json<TigerCS.Application.Modules.Collections.Review.ReviewRunDto?>(null);
             case "/api/collections/review/dispatches/readiness":
-                return Json(new TigerCS.Application.Modules.Collections.Review.DispatchReadinessDto(DispatchBlockers.Count == 0, DispatchBlockers));
+                return Json(new TigerCS.Application.Modules.Collections.Review.DispatchReadinessDto(DispatchBlockers.Count == 0, DispatchBlockers, !ExportForbidden));
+            case "/api/collections/review/records":
+            {
+                // Manual lists come from the stored review records: two Ready customers when IncludeNotEligible is set, otherwise one customer that needs review (reconciliation or contact).
+                var read = new DateTime(2026, 10, 14, 8, 0, 0, DateTimeKind.Utc);
+                var run = new TigerCS.Application.Modules.Collections.Review.ReviewRunDto(7, "Completed", "Completed", 100, DateOnly.FromDateTime(DateTime.UtcNow.AddHours(4)), null, new(2026, 1, 1), new(2026, 10, 31),
+                    "PACT receivables (companies 4 and 32)", "", !SourceUnreconciled, read, read, read, read, 10, 4, null, true, Stale);
+                TigerCS.Application.Modules.Collections.Review.ReviewRecordDto Record(int n, string status, params string[] reasons) => new($"RK{n}", q["reminderType"] ?? "CurrentMonth", 4, $"Campaign Customer {n}", $"+9715000030{n:D2}", $"c{n}@example.test",
+                    "TP140", $"TP140-{n}", "Unpaid", 500m * n, "AED", new DateOnly(2026, 10, 20), status, reasons.Select(r => new TigerCS.Application.Modules.Collections.Review.ReviewReasonDto(r, "NeedsReview", r)).ToList(), "PACT", read, null, null, "140", "Tower 140", $"300{n}");
+                var records = IncludeNotEligible ? new List<TigerCS.Application.Modules.Collections.Review.ReviewRecordDto> { Record(1, "Ready"), Record(2, "Ready") }
+                    : [Record(1, "NeedsReview", SourceUnreconciled ? "SourceReconciliationRequired" : "NoValidContact")];
+                var ready = records.Count(r => r.ValidationStatus == "Ready");
+                return Json(new TigerCS.Application.Modules.Collections.Review.ReviewPageDto(run, new(records.Count, ready, records.Count - ready, 0, 0), 1, 25, records.Count, records, 0m, false,
+                    records.Where(r => r.ValidationStatus == "Ready").Sum(r => r.RemainingAmount ?? 0m)));
+            }
             case "/api/collections/review/dispatches":
                 return Json(new List<TigerCS.Application.Modules.Collections.Review.DispatchDto>());
             case "/api/collections/campaigns/export":

@@ -51,6 +51,7 @@ public class CollectionsReviewRecordConfiguration : IEntityTypeConfiguration<Col
         builder.Property(r => r.ValidationStatus).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(r => r.Reasons).HasMaxLength(600).IsRequired();
         builder.Property(r => r.Source).HasMaxLength(200).IsRequired();
+        builder.Property(r => r.InstalmentsJson);
 
         builder.HasIndex(r => new { r.CollectionsReviewRunId, r.RecordKey }).IsUnique().HasDatabaseName("UX_CollectionsReviewRecords_Run_Key");
         builder.HasIndex(r => new { r.CollectionsReviewRunId, r.ReminderType, r.ValidationStatus }).HasDatabaseName("IX_CollectionsReviewRecords_Run_Type_Status");
@@ -365,8 +366,23 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
         return q;
     }
 
-    private IQueryable<Row> WithSent(IQueryable<CollectionsReviewRecord> q) =>
-        q.Select(r => new Row { Record = r, Sent = db.CollectionsDispatchItems.Any(i => i.RecordKey == r.RecordKey && LiveStatuses.Contains(i.Status)) });
+    /// <summary>
+    /// "Sent" = the record is in a live or uploaded dispatch. When <paramref name="contactedSinceUtc"/> is given (Manual and Auto dispatch) the contact-frequency limit adds: the same customer is in a
+    /// live or uploaded dispatch of ANY record that was approved since then (the start of today), so a customer is never added to a Genesys list twice in a day.
+    /// </summary>
+    private IQueryable<Row> WithSent(IQueryable<CollectionsReviewRecord> q, DateTime? contactedSinceUtc = null)
+    {
+        var limit = contactedSinceUtc is not null;
+        var since = contactedSinceUtc ?? DateTime.MaxValue;
+        return q.Select(r => new Row
+        {
+            Record = r,
+            Sent = db.CollectionsDispatchItems.Any(i => i.RecordKey == r.RecordKey && LiveStatuses.Contains(i.Status))
+                || (limit
+                    && db.CollectionsDispatchItems.Any(i => i.CompanyId == r.CompanyId && i.TenantId == r.TenantId && i.UnitCode == r.UnitCode && LiveStatuses.Contains(i.Status)
+                        && db.CollectionsDispatches.Any(d => d.CollectionsDispatchId == i.CollectionsDispatchId && d.InitiatedAtUtc >= since)))
+        });
+    }
 
     private static IQueryable<Row> ByStatus(IQueryable<Row> q, ReviewValidationStatus? status, bool stale) => status switch
     {
@@ -380,7 +396,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
 
     public async Task<StoredPage> QueryAsync(long runId, ReviewQuerySpec spec, bool stale, int skip, int take, CancellationToken ct)
     {
-        var q = ByStatus(WithSent(Filtered(runId, spec)), spec.ValidationStatus, stale);
+        var q = ByStatus(WithSent(Filtered(runId, spec), spec.ContactedSinceUtc), spec.ValidationStatus, stale);
         var total = await q.CountAsync(ct);
         var rows = await q.OrderBy(x => x.Record.CompanyId).ThenBy(x => x.Record.TenantId).ThenBy(x => x.Record.UnitCode)
             .ThenBy(x => x.Record.ReminderType).ThenBy(x => x.Record.CollectionsReviewRecordId).Skip(skip).Take(take).ToListAsync(ct);
@@ -392,7 +408,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
 
     public async Task<ReviewCountsDto> CountAsync(long runId, ReviewQuerySpec specWithoutStatus, bool stale, CancellationToken ct)
     {
-        var baseQuery = WithSent(Filtered(runId, specWithoutStatus with { ValidationStatus = null }));
+        var baseQuery = WithSent(Filtered(runId, specWithoutStatus with { ValidationStatus = null }), specWithoutStatus.ContactedSinceUtc);
         var ready = await ByStatus(baseQuery, ReviewValidationStatus.Ready, stale).CountAsync(ct);
         var review = await ByStatus(baseQuery, ReviewValidationStatus.NeedsReview, stale).CountAsync(ct);
         var excluded = await ByStatus(baseQuery, ReviewValidationStatus.Excluded, stale).CountAsync(ct);
@@ -406,7 +422,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
         var q = Filtered(runId, spec);
         if (keys is not null) q = q.Where(r => keys.Contains(r.RecordKey));
         if (unitKeys is not null) q = q.Where(r => unitKeys.Contains(r.CompanyId.ToString() + "|" + r.TenantId + "|" + r.UnitCode));
-        var rows = await ByStatus(WithSent(q), spec.ValidationStatus, stale).OrderBy(x => x.Record.RecordKey).Take(max + 1).ToListAsync(ct);
+        var rows = await ByStatus(WithSent(q, spec.ContactedSinceUtc), spec.ValidationStatus, stale).OrderBy(x => x.Record.RecordKey).Take(max + 1).ToListAsync(ct);
         return await WithHistoryAsync(rows, ct);
     }
 
@@ -564,11 +580,12 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
     {
         var rows = await (from i in db.CollectionsDispatchItems.AsNoTracking()
                           join b in db.CollectionsGenesysBatches.AsNoTracking() on i.CollectionsGenesysBatchId equals b.CollectionsGenesysBatchId
+                          join d in db.CollectionsDispatches.AsNoTracking() on i.CollectionsDispatchId equals d.CollectionsDispatchId
                           where i.Status == DispatchItemStatus.UploadedToGenesys && i.GenesysContactId != null
                                 && i.SuppressionStatus != ContactSuppressionStatus.Suppressed && i.UploadedAtUtc >= sinceUtc
                           orderby i.BalanceCheckedAtUtc, i.CollectionsDispatchItemId
-                          select new { Item = i, b.ContactListId }).Take(take).ToListAsync(ct);
-        return rows.Select(r => new UploadedContactView(r.Item, r.ContactListId)).ToList();
+                          select new { Item = i, b.ContactListId, d.FilterJson }).Take(take).ToListAsync(ct);
+        return rows.Select(r => new UploadedContactView(r.Item, r.ContactListId, r.FilterJson)).ToList();
     }
 
     public Task SetDispatchPhaseAsync(long dispatchId, string phase, CancellationToken ct) =>

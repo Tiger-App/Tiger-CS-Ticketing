@@ -39,6 +39,17 @@ public sealed class ReviewRefreshService(
     {
         if (!(await authorization.ResolveAsync(caller, ct)).CanReadFinancials)
             return CollectionsResult<ReviewRunDto>.Fail(CollectionsOutcome.Forbidden);
+        return await StartCoreAsync(caller.EmployeeId, companyId, enqueue: true, ct);
+    }
+
+    /// <summary>
+    /// The refresh the Auto dispatcher starts on a scheduled date (no person is involved). It only queues a run record; the dispatcher then runs it in its own job (<paramref name="ct"/>), so nothing is
+    /// enqueued twice.
+    /// </summary>
+    public Task<CollectionsResult<ReviewRunDto>> StartScheduledAsync(CancellationToken ct) => StartCoreAsync(DispatchService.AutoActorId, null, enqueue: false, ct);
+
+    private async Task<CollectionsResult<ReviewRunDto>> StartCoreAsync(Guid requestedBy, int? companyId, bool enqueue, CancellationToken ct)
+    {
         if (!options.Enabled || !sourceOptions.Enabled) return CollectionsResult<ReviewRunDto>.Fail(CollectionsOutcome.Disabled);
         if (companyId is not (null or 4 or 32))
             return CollectionsResult<ReviewRunDto>.Fail(CollectionsOutcome.InvalidRequest, "Company must be 4 or 32.");
@@ -55,7 +66,7 @@ public sealed class ReviewRefreshService(
             DueFrom = DateOnly.FromDateTime(sourceOptions.StartDate),
             DueTo = new DateOnly(asOf.Year, asOf.Month, DateTime.DaysInMonth(asOf.Year, asOf.Month)),
             Source = SourceLabel, SourceProcedureSuffix = sourceOptions.ProcedureSuffix ?? "", SourceReconciled = SourceReconciled,
-            RequestedByEmployeeId = caller.EmployeeId, RequestedAtUtc = now, Phase = "Queued"
+            RequestedByEmployeeId = requestedBy, RequestedAtUtc = now, Phase = "Queued"
         };
         if (!await store.TryAddRunAsync(run, ct))
         {
@@ -67,7 +78,8 @@ public sealed class ReviewRefreshService(
         }
         // Nothing would ever pick the run up (background jobs off) or the queue is unreachable: say so now instead of leaving the page on "Queued".
         string? notQueued = null;
-        if (!scheduler.IsAvailable)
+        if (!enqueue) { /* the caller runs the refresh itself */ }
+        else if (!scheduler.IsAvailable)
             notQueued = "Background jobs are disabled on this server (BackgroundJobs:Enabled is false), so the refresh cannot run. Enable them and retry.";
         else
         {

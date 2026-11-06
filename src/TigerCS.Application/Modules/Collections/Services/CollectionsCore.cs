@@ -111,6 +111,10 @@ public sealed class CollectionsClock(CollectionsOptions options, TimeProvider ti
 
     public string TimeZoneId => options.TimeZoneId;
 
+    /// <summary>The start of today's Dubai business day, as a UTC instant (the beginning of the contact-frequency day).</summary>
+    public DateTime BusinessDayStartUtc =>
+        TimeZoneInfo.ConvertTimeToUtc(DateTime.SpecifyKind(BusinessDate.ToDateTime(TimeOnly.MinValue), DateTimeKind.Unspecified), _zone.Value);
+
     /// <summary>The Dubai calendar date of a UTC instant.</summary>
     public DateOnly ToBusinessDate(DateTime utc) =>
         DateOnly.FromDateTime(TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), _zone.Value));

@@ -468,6 +468,9 @@ public sealed class ReviewUatReadinessTests(ITestOutputHelper output)
 
     private sealed class FaultyClient : IGenesysOutboundClient
     {
+        // The destination check before an upload is read-only and succeeds here; this double only misbehaves where its name says.
+        public Task<GenesysContactListInfo> GetContactListAsync(string contactListId, CancellationToken ct) => Task.FromResult(new GenesysContactListInfo(GenesysUploadOutcome.Accepted, 200, TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate.Columns.ToList(), null));
+        public Task<GenesysCampaignLookupResult> FindCampaignsByContactListAsync(string contactListId, CancellationToken ct) => Task.FromResult(new GenesysCampaignLookupResult(GenesysUploadOutcome.Accepted, 200, [], null));
         public Task<GenesysUploadResult> UploadContactsAsync(string contactListId, IReadOnlyList<GenesysContactPayload> contacts, CancellationToken ct) => throw new TimeoutException();
         public Task<GenesysSuppressResult> SetNotCallableAsync(string contactListId, string contactId, GenesysContactPayload contact, CancellationToken ct) => throw new TimeoutException();
         public Task<GenesysCampaignLookupResult> FindCampaignsByNameAsync(string name, CancellationToken ct) => throw new TimeoutException();

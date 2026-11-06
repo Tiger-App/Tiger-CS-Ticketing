@@ -20,5 +20,12 @@
 .tower-tag__state { font-size: 12px; color: var(--text-muted, #667085); }
 .tower-tag button { all: unset; cursor: pointer; line-height: 1; padding: 0 .15rem; color: var(--text-muted, #667085); }
 .tower-tag button:hover, .tower-tag button:focus-visible { color: var(--danger, #b42318); }
-.tower-assign__unassigned, .tower-assign__history { margin-top: .75rem; }
-.tower-assign__unassigned summary, .tower-assign__history summary { cursor: pointer; }
+/* The sections under the table are cards, like the table's own panel. */
+.tower-assign__unassigned, .tower-assign__history {
+  margin-top: var(--space-3, 12px); padding: var(--space-3, 12px) var(--space-4, 16px);
+  background: var(--color-surface, #fff); border: 1px solid var(--color-border, #ddd);
+  border-radius: var(--radius-md, 10px); box-shadow: var(--shadow-sm);
+}
+.tower-assign__unassigned summary, .tower-assign__history summary { cursor: pointer; font-weight: 600; }
+.tower-assign__unassigned[open] > summary, .tower-assign__history[open] > summary { margin-bottom: var(--space-3, 12px); }
+.tower-assign__history .receivables-table { margin: 0; }

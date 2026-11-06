@@ -154,6 +154,48 @@ public sealed class GenesysOutboundHttpClient(HttpClient http, IGenesysTokenProv
         return new(GenesysUploadOutcome.Unknown, null, [], "The campaign lookup returned too many pages to check.");
     }
 
+    public async Task<GenesysContactListInfo> GetContactListAsync(string contactListId, CancellationToken ct)
+    {
+        if (!Guid.TryParse(contactListId, out var id)) throw new ArgumentException("A contact list id is required.", nameof(contactListId));
+        var raw = await SendAsync(HttpMethod.Get, $"api/v2/outbound/contactlists/{id:D}", null, "contact list lookup", ct);
+        if (raw.Outcome != GenesysUploadOutcome.Accepted) return new(raw.Outcome, raw.Status, [], raw.Error);
+        try
+        {
+            using var doc = JsonDocument.Parse(raw.Body ?? "");
+            var columns = new List<string>();
+            if (doc.RootElement.TryGetProperty("columnNames", out var names) && names.ValueKind == JsonValueKind.Array)
+                columns.AddRange(names.EnumerateArray().Where(n => n.ValueKind == JsonValueKind.String).Select(n => n.GetString()!));
+            if (doc.RootElement.TryGetProperty("phoneColumns", out var phones) && phones.ValueKind == JsonValueKind.Array)
+                columns.AddRange(phones.EnumerateArray().Select(p => p.TryGetProperty("columnName", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString()! : "").Where(c => c.Length > 0));
+            return new(GenesysUploadOutcome.Accepted, raw.Status, columns, null);
+        }
+        catch (JsonException) { return new(GenesysUploadOutcome.Unknown, raw.Status, [], "Genesys returned an unreadable contact list."); }
+    }
+
+    public async Task<GenesysCampaignLookupResult> FindCampaignsByContactListAsync(string contactListId, CancellationToken ct)
+    {
+        if (!Guid.TryParse(contactListId, out var id)) throw new ArgumentException("A contact list id is required.", nameof(contactListId));
+        var found = new List<GenesysCampaignRef>();
+        for (var page = 1; page <= MaxLookupPages; page++)
+        {
+            var raw = await SendAsync(HttpMethod.Get, $"api/v2/outbound/campaigns?contactListId={id:D}&pageSize=100&pageNumber={page}", null, "campaign lookup by contact list", ct);
+            if (raw.Outcome != GenesysUploadOutcome.Accepted) return new(raw.Outcome, raw.Status, [], raw.Error);
+            try
+            {
+                using var doc = JsonDocument.Parse(raw.Body ?? "");
+                var root = doc.RootElement;
+                if (root.TryGetProperty("entities", out var entities) && entities.ValueKind == JsonValueKind.Array)
+                    found.AddRange(entities.EnumerateArray().Select(ReadCampaign).OfType<GenesysCampaignRef>());
+                var pageCount = root.TryGetProperty("pageCount", out var pc) && pc.TryGetInt32(out var n) ? n : 1;
+                // The answer is narrowed again here: a campaign counts only when it really dials this list, whatever the query filter did.
+                if (page >= pageCount)
+                    return new(GenesysUploadOutcome.Accepted, raw.Status, found.Where(c => string.Equals(c.ContactListId, id.ToString("D"), StringComparison.OrdinalIgnoreCase)).ToList(), null);
+            }
+            catch (JsonException) { return new(GenesysUploadOutcome.Unknown, raw.Status, [], "Genesys returned an unreadable campaign list."); }
+        }
+        return new(GenesysUploadOutcome.Unknown, null, [], "The campaign lookup returned too many pages to check.");
+    }
+
     public async Task<GenesysCampaignCreateResult> CreateCampaignAsync(string name, string contactListId, GenesysCampaignOptions t, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(name)) throw new ArgumentException("A campaign name is required.", nameof(name));

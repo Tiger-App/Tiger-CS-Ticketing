@@ -929,6 +929,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<int>("InstalmentCount")
                         .HasColumnType("int");
 
+                    b.Property<string>("InstalmentsJson")
+                        .HasColumnType("nvarchar(max)");
+
                     b.Property<string>("PaymentStatus")
                         .IsRequired()
                         .HasMaxLength(16)

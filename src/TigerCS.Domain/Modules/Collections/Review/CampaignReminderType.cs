@@ -33,6 +33,30 @@ public static class CampaignReminderTypes
     };
 
     /// <summary>
+    /// The existing Genesys contact lists a Manual send of <paramref name="type"/> may use. A reminder (Overdue, Current Month, Follow Up) may go to any of the three reminder lists
+    /// (for example a Current Month reminder to the Follow Up list); a legal notice or legal case goes only to its own list, so legal wording never lands in a reminder list and vice versa.
+    /// The campaign type's own list is first and is the default.
+    /// </summary>
+    public static IReadOnlyList<CampaignReminderType> ManualDestinations(CampaignReminderType type) => type switch
+    {
+        CampaignReminderType.CurrentMonth => [CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp, CampaignReminderType.Overdue],
+        CampaignReminderType.FollowUp => [CampaignReminderType.FollowUp, CampaignReminderType.CurrentMonth, CampaignReminderType.Overdue],
+        CampaignReminderType.Overdue => [CampaignReminderType.Overdue, CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp],
+        _ => [type]
+    };
+
+    /// <summary>The chosen destination of a Manual send (blank = the campaign type's own list); false when the choice is not one of <see cref="ManualDestinations"/>.</summary>
+    public static bool TryResolveManualDestination(CampaignReminderType type, string? requested, out CampaignReminderType destination)
+    {
+        destination = type;
+        var text = requested?.Replace(" ", "").Trim();
+        if (string.IsNullOrEmpty(text)) return true;
+        foreach (var option in ManualDestinations(type))
+            if (string.Equals(text, option.ToString(), StringComparison.OrdinalIgnoreCase)) { destination = option; return true; }
+        return false;
+    }
+
+    /// <summary>
     /// The stage's display name. It is used verbatim as the Genesys campaign name (and as the Campaigns page option text), so it must not be
     /// reworded or decorated anywhere else. The reminder type / stage enum stays the internal identifier.
     /// </summary>

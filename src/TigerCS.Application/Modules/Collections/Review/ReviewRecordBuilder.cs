@@ -65,6 +65,8 @@ public static class ReviewRecordBuilder
             var contactConflict = unitRows.Select(r => (r.Row.FullName.Trim(), Phone: PhoneNormalizer.Normalize(r.Row.Mobile).E164,
                 Email: NormalizeEmail(r.Row.Email), r.Row.ProjectCode)).Distinct().Count() > 1;
 
+            // The customer's unpaid instalments, stored on every stage record: a Manual send calculates its amount from them and the person's filters.
+            var instalmentsJson = FilteredAmounts.Serialize(unitRows.Select(r => new FilterInstalment(r.Due, r.Amount)));
             foreach (var stage in Enum.GetValues<CollectionsCampaignStage>())
             {
                 var instalments = unitRows.Select(r => new CampaignInstalment(r.Due, r.Amount)).ToList();
@@ -143,7 +145,8 @@ public static class ReviewRecordBuilder
                     Reasons = Serialize(distinctReasons),
                     ValidationStatus = ReviewReasons.StatusFor(distinctReasons, alreadySent: false),
                     SourceReadAtUtc = context.SourceReadAtUtc,
-                    Source = context.SourceLabel
+                    Source = context.SourceLabel,
+                    InstalmentsJson = instalmentsJson
                 });
             }
         }
@@ -205,6 +208,19 @@ public static class ReviewRecordBuilder
             }
             if (markers.Count > 0) record.Reasons = Serialize(Parse(record.Reasons).Concat(markers));
         }
+    }
+
+    /// <summary>
+    /// Whether a Manual send may send this record now: Ready, or held back by the stage schedule ALONE (<c>OutsideSchedule</c> as its only reason, so no reconciliation, contact, CRM, amount,
+    /// legal-release, repeated-call or Manual marker reason). The schedule is the one rule Manual waives; every other rule keeps the record out. Used by the approval, the list and the
+    /// revalidation right before the upload, so they can never disagree.
+    /// </summary>
+    public static bool IsManuallySendable(CollectionsReviewRecord record)
+    {
+        if (record.ValidationStatus == ReviewValidationStatus.Ready) return true;
+        if (record.ValidationStatus != ReviewValidationStatus.Excluded) return false;
+        var reasons = Parse(record.Reasons);
+        return reasons.Count == 1 && reasons[0] == ReviewReasons.OutsideSchedule;
     }
 
     public static string Serialize(IEnumerable<string> reasons)

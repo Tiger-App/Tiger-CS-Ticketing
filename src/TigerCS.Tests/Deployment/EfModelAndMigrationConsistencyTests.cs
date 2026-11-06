@@ -42,10 +42,12 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
 
         // AddUserPermissionOverrides (per-employee permission overrides), AddCollectionsTowerAssignments (Collections tower assignments) and AddCustomerContactDetails (agent-entered customer name/e-mail) were added after
         // these four and are deployed by their own scripts; the Production script for the four must stay exactly these, immediately before them.
-        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^1]);
-        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^2]);
-        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^3]);
-        Assert.Equal(FourPendingMigrations, migrations.SkipLast(3).TakeLast(4));
+        // AddDirectSendInstalments (one nullable column for Direct Send) is the newest and is deployed by its own script.
+        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^1]);
+        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^2]);
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^3]);
+        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^4]);
+        Assert.Equal(FourPendingMigrations, migrations.SkipLast(4).TakeLast(4));
     }
 
     [Fact]

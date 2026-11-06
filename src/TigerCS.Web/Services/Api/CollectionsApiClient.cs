@@ -95,7 +95,7 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         Add("paymentStatus", filter.PaymentStatus); Add("dueStatus", filter.DueStatus);
         Add("minRemaining", filter.MinRemaining?.ToString(CultureInfo.InvariantCulture));
         Add("maxRemaining", filter.MaxRemaining?.ToString(CultureInfo.InvariantCulture));
-        Add("reminderType", filter.ReminderType); Add("validationStatus", filter.ValidationStatus); Add("reason", filter.Reason);
+        Add("reminderType", filter.ReminderType); Add("sendingMode", filter.SendingMode); Add("validationStatus", filter.ValidationStatus); Add("reason", filter.Reason);
         query["page"] = Id(page);
         query["pageSize"] = "25";
         return GetAsync<ReviewPageDto>($"{ReviewBase}/records?{query}", cancellationToken);
