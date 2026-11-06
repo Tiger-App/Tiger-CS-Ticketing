@@ -124,9 +124,7 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
         var requestTypeIds = requestTypeCounts.Where(c => c.Key is not null).Select(c => c.Key!.Value).ToList();
         var requestTypeNames = requestTypeIds.Count == 0
             ? new Dictionary<int, string>()
-            : await dbContext.RequestTypes.AsNoTracking()
-                .Where(r => requestTypeIds.Contains(r.RequestTypeId))
-                .ToDictionaryAsync(r => r.RequestTypeId, r => r.Name, cancellationToken);
+            : await RequestTypeDisplayNamesAsync(requestTypeIds, cancellationToken);
 
         // Operational responsibility is the CURRENT department, never the
         // originating one.
@@ -297,6 +295,41 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
             .ToListAsync(cancellationToken);
 
         return new DashboardFilterOptionsSnapshot(departments, agents, channels, requestTypes, priorities);
+    }
+
+    /// <summary>
+    /// The label each counted request type is shown under. A name is the request type's own, except where the
+    /// same name is configured for more than one request type anywhere in the catalogue (several departments each
+    /// have a "General"): those read "Name — Department", the department being the one the request type belongs to
+    /// (<c>RequestTypes.DepartmentId</c> → <c>Departments</c>), so the rows stay tellable apart. Every request type
+    /// keeps its own id and its own row — nothing is merged by name — and the drill-down still filters on that id.
+    /// A request type whose department cannot be resolved keeps its plain name; no department is ever guessed.
+    /// Judged against the whole catalogue rather than the rows on screen, so a label does not change with the
+    /// date range or the filters.
+    /// </summary>
+    private async Task<Dictionary<int, string>> RequestTypeDisplayNamesAsync(
+        IReadOnlyCollection<int> requestTypeIds, CancellationToken cancellationToken)
+    {
+        var catalogue = await dbContext.RequestTypes.AsNoTracking()
+            .Select(r => new { r.RequestTypeId, r.Name, r.DepartmentId })
+            .ToListAsync(cancellationToken);
+        var duplicatedNames = catalogue
+            .GroupBy(r => r.Name.Trim(), StringComparer.OrdinalIgnoreCase)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var departmentNames = duplicatedNames.Count == 0
+            ? new Dictionary<int, string>()
+            : await dbContext.Departments.AsNoTracking()
+                .ToDictionaryAsync(d => d.DepartmentId, d => d.Name, cancellationToken);
+
+        return catalogue
+            .Where(r => requestTypeIds.Contains(r.RequestTypeId))
+            .ToDictionary(
+                r => r.RequestTypeId,
+                r => duplicatedNames.Contains(r.Name.Trim()) && departmentNames.TryGetValue(r.DepartmentId, out var department)
+                    ? $"{r.Name} — {department}"
+                    : r.Name);
     }
 
     private sealed record ChannelInfo(byte ChannelId, string Name, string Code, bool IsActive);
