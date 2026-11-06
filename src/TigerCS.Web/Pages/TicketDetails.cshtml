@@ -565,8 +565,8 @@ else
             <div class="tw-head__people">
                 @* Customer: a small labelled grid (who · phone · unit), not one long line; the verification state sits with the name. *@
                 <div class="tw-who">
+                  <div class="tw-col tw-col--customer">
                     <div class="tw-fact tw-fact--name">
-                        @TicketIcons.Svg("user", "ic ic--fact")
                         <div class="tw-fact__body">
                             <span class="tw-fact__k">Customer</span>
                             <span class="tw-fact__v">
@@ -583,24 +583,21 @@ else
                         </div>
                     </div>
                     <div class="tw-fact">
-                        @TicketIcons.Svg("phone", "ic ic--fact")
                         <div class="tw-fact__body">
-                            <span class="tw-fact__k">Phone</span>
+                            <span class="tw-fact__k">Phone Number</span>
                             <span class="tw-fact__v tw-who__phone">@(customer.Phone ?? "No phone recorded")</span>
                         </div>
                     </div>
-                    @if (customer.ProjectUnit is not null)
-                    {
-                        <div class="tw-fact">
-                            @TicketIcons.Svg("building", "ic ic--fact")
-                            <div class="tw-fact__body">
-                                <span class="tw-fact__k">Project / Unit</span>
-                                <span class="tw-fact__v tw-fact__v--unit">@customer.ProjectUnit@if (!customer.UnitIsConfirmed) { <span class="tw-fact__sub"> (typed in)</span> }</span>
-                            </div>
+                    @* The ticket carries no customer email today, so this states that plainly rather than leaving a blank. *@
+                    <div class="tw-fact">
+                        <div class="tw-fact__body">
+                            <span class="tw-fact__k">Email Address</span>
+                            <span class="tw-fact__v is-muted">Not available</span>
                         </div>
-                    }
+                    </div>
+                  </div>
+                  <div class="tw-col tw-col--assignment">
                     <div class="tw-fact tw-owner">
-                        @TicketIcons.Svg("users", "ic ic--fact")
                         <div class="tw-fact__body">
                             <span class="tw-fact__k">Assigned To</span>
                             <div class="tw-owner__row">
@@ -673,6 +670,20 @@ else
                             }
                         </div>
                     </div>
+                    <div class="tw-fact">
+                        <div class="tw-fact__body">
+                            <span class="tw-fact__k">Project / Unit</span>
+                            @if (customer.ProjectUnit is not null)
+                            {
+                                <span class="tw-fact__v tw-fact__v--unit">@customer.ProjectUnit@if (!customer.UnitIsConfirmed) { <span class="tw-fact__sub"> (typed in)</span> }</span>
+                            }
+                            else
+                            {
+                                <span class="tw-fact__v is-muted">Not available</span>
+                            }
+                        </div>
+                    </div>
+                  </div>
                 </div>
             </div>
 
