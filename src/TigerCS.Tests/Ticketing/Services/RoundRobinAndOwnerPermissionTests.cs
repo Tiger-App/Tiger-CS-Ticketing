@@ -126,6 +126,25 @@ public class RoundRobinAndOwnerPermissionTests
     }
 
     [Fact]
+    public async Task RoundRobin_DeactivatedEmployeeNeverReceivesATicket()
+    {
+        var f = CreateRr();
+        var active = AddMember(f.Members, f.CallCenterId);
+        var inactive = AddMember(f.Members, f.CallCenterId);
+        var former = new Employee(inactive, "Former Agent", false, Now);
+        former.Deactivate(Now);
+        typeof(UserDepartmentAssignment).GetProperty(nameof(UserDepartmentAssignment.Employee))!
+            .SetValue(f.Members.Assignments.Single(a => a.EmployeeId == inactive), former);
+
+        for (var i = 1; i <= 4; i++)
+        {
+            var t = NewTicket(i);
+            Assert.Equal(AutoAssignmentOutcome.AssignedRoundRobin, (await RoundRobinAsync(f, t)).Outcome);
+            Assert.Equal(active, t.CurrentOwnerEmployeeId);
+        }
+    }
+
+    [Fact]
     public async Task RoundRobin_NoEligibleEmployee_LeavesTicketUnassignedInTheDepartmentQueue_Audited()
     {
         var f = CreateRr();

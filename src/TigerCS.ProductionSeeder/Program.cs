@@ -14,6 +14,11 @@ using TigerCS.ProductionSeeder;
 // every check below passes; the seed and its verification run in ONE transaction that is rolled back on any failure.
 // Output never includes the connection string or any credential.
 
+if (args.Length > 0 && args[0] == "provision-staff")
+{
+    return await StaffProvisioningCommand.RunAsync(args);
+}
+
 var request = SeedSafety.Parse(args);
 if (request.Error is not null)
 {

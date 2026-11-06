@@ -141,7 +141,7 @@ public sealed class FakeUserDepartmentAssignmentRepository : IUserDepartmentAssi
     public Task<IReadOnlyCollection<UserDepartmentAssignment>> GetByDepartmentIdAsync(
         int departmentId, bool activeEmployeesOnly, CancellationToken cancellationToken = default) =>
         Task.FromResult<IReadOnlyCollection<UserDepartmentAssignment>>(
-            Assignments.Where(a => a.DepartmentId == departmentId).ToList());
+            Assignments.Where(a => a.DepartmentId == departmentId && (!activeEmployeesOnly || a.Employee is null || a.Employee.IsActive)).ToList());
 
     public Task<UserDepartmentAssignment?> GetAsync(Guid employeeId, int departmentId, CancellationToken cancellationToken = default) =>
         Task.FromResult(Assignments.FirstOrDefault(a => a.EmployeeId == employeeId && a.DepartmentId == departmentId));

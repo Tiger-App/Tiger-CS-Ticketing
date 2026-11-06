@@ -21,6 +21,7 @@ public static class SeedSafety
         "  seed --target seedtest --confirm-seed-test\n" +
         "  seed --target production --confirm-production " + Server + "/" + ProductionDatabase + " --backup-confirmed\n" +
         "Optional: --allow-untrusted-certificate (accepts TrustServerCertificate=True for a production seed; logged as a warning)\n" +
+        StaffProvisioningCommand.Usage + "\n" +
         "The connection string is read only from the ConnectionStrings__TigerCsDatabase environment variable.";
 
     public static string DatabaseFor(SeedTarget target) =>

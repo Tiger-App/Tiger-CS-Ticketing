@@ -32,6 +32,7 @@
     <ProjectReference Include="..\TigerCS.Api\TigerCS.Api.csproj" />
     <!-- The seeder's pure decision logic is compiled into the tests; referencing the exe project would clash on its top-level Program. -->
     <Compile Include="..\TigerCS.ProductionSeeder\SeedSafety.cs" Link="Deployment\SeedSafety.cs" />
+    <Compile Include="..\TigerCS.ProductionSeeder\StaffProvisioningCommand.cs" Link="Deployment\StaffProvisioningCommand.cs" />
     <!-- Aliased: TigerCS.Web's own top-level-statement Program type would otherwise collide
          (both are implicitly in the global namespace) with TigerCS.Api's Program, which the
          existing WebApplicationFactory<Program>-based integration tests reference unqualified.

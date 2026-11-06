@@ -182,8 +182,9 @@ public sealed class TicketAssignmentAppService(
         // A Collections ticket can only go to an ACTIVE member of the Collections team (any of them - the tower owner is not required for a manual assignment).
         if (isCollectionsTicket
             ? !await collectionsTeam!.IsActiveMemberAsync(request.AssignedEmployeeId, ticket.CurrentDepartmentId, cancellationToken)
-            : !await userDepartmentAssignmentRepository.ExistsAsync(request.AssignedEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
+            : !await IsActiveDepartmentMemberAsync(request.AssignedEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
         {
+            // Not a member of the ticket's department, or a member whose account is deactivated: a deactivated employee never receives a ticket.
             return TicketMutationResult.Failure(TicketMutationOutcome.EmployeeNotInDepartment);
         }
 
@@ -240,6 +241,10 @@ public sealed class TicketAssignmentAppService(
         await transaction.CommitAsync(cancellationToken);
         return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
     }
+
+    private async Task<bool> IsActiveDepartmentMemberAsync(Guid employeeId, int departmentId, CancellationToken cancellationToken) =>
+        (await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(departmentId, activeEmployeesOnly: true, cancellationToken))
+            .Any(a => a.EmployeeId == employeeId);
 
     /// <summary>
     /// Transfer authority is the Call Center layer, scoped per ticket — never global: a CS Manager may transfer any ticket; a CS Agent or
@@ -344,7 +349,7 @@ public sealed class TicketAssignmentAppService(
         // checked against the target rather than the source, and checked
         // before any write so a wrong choice changes nothing.
         if (request.AssignToEmployeeId is { } assignee
-            && !await userDepartmentAssignmentRepository.ExistsAsync(assignee, request.TargetDepartmentId, cancellationToken))
+            && !await IsActiveDepartmentMemberAsync(assignee, request.TargetDepartmentId, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.EmployeeNotInDepartment);
         }

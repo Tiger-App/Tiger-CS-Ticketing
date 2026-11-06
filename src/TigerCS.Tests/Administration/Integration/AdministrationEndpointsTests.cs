@@ -174,6 +174,30 @@ public class AdministrationEndpointsTests : IClassFixture<TigerCsApiFactory>
     // ---------------------------------------------------------- departments
 
     [Fact]
+    public async Task Department_coverage_is_reported_for_active_departments_only()
+    {
+        var (admin, _) = await CreateClientAsync(Roles.SystemAdministrator);
+        var code = Guid.NewGuid().ToString("N")[..6].ToUpperInvariant();
+        var created = await ReadAsync<AdminDepartmentDetailDto>(await admin.PostAsJsonAsync("/api/admin/departments", new SaveDepartmentRequestDto(Unique("Coverage"), code)));
+
+        var empty = (await ReadAsync<List<TigerCS.Application.Modules.Administration.Services.DepartmentCoverageLine>>(await admin.GetAsync("/api/admin/departments/coverage")))
+            .Single(c => c.DepartmentId == created.DepartmentId);
+        Assert.Equal((0, TigerCS.Application.Modules.Administration.Services.DepartmentStaffingStatus.Unstaffed), (empty.ActiveEmployeeCount, empty.Status));
+
+        var (_, _, memberId) = await _factory.SeedEmployeeAsync(Roles.DepartmentEmployee);
+        await admin.PostAsJsonAsync($"/api/admin/departments/{created.DepartmentId}/members", new AddDepartmentMemberRequestDto(memberId, false));
+        var staffed = (await ReadAsync<List<TigerCS.Application.Modules.Administration.Services.DepartmentCoverageLine>>(await admin.GetAsync("/api/admin/departments/coverage")))
+            .Single(c => c.DepartmentId == created.DepartmentId);
+        Assert.Equal((1, 1, TigerCS.Application.Modules.Administration.Services.DepartmentStaffingStatus.Staffed),
+            (staffed.ActiveEmployeeCount, staffed.AssignableEmployeeCount, staffed.Status));
+
+        await admin.PatchAsJsonAsync($"/api/admin/departments/{created.DepartmentId}/activation", new SetActiveRequestDto(false, null));
+        Assert.DoesNotContain(
+            await ReadAsync<List<TigerCS.Application.Modules.Administration.Services.DepartmentCoverageLine>>(await admin.GetAsync("/api/admin/departments/coverage")),
+            c => c.DepartmentId == created.DepartmentId);
+    }
+
+    [Fact]
     public async Task Departments_CreateListGetEditMembersAndDeactivate()
     {
         var (admin, _) = await CreateClientAsync(Roles.SystemAdministrator);

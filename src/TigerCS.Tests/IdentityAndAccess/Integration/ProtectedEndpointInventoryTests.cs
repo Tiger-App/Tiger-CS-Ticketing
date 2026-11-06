@@ -223,6 +223,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["PUT /api/admin/channels/{channelId:int:range(1,255)}"] = nameof(Administration.Integration.AdministrationEndpointsTests.Channels_ListAddEditActivationAndDuplicateCode_ThroughTheRealHost),
         ["PATCH /api/admin/channels/{channelId:int:range(1,255)}/activation"] = nameof(Administration.Integration.AdministrationEndpointsTests.Channels_ListAddEditActivationAndDuplicateCode_ThroughTheRealHost),
         ["GET /api/admin/departments"] = nameof(Administration.Integration.AdministrationEndpointsTests.Departments_CreateListGetEditMembersAndDeactivate),
+        ["GET /api/admin/departments/coverage"] = nameof(Administration.Integration.AdministrationEndpointsTests.Department_coverage_is_reported_for_active_departments_only),
         ["GET /api/admin/departments/{departmentId:int}"] = nameof(Administration.Integration.AdministrationEndpointsTests.Departments_CreateListGetEditMembersAndDeactivate),
         ["POST /api/admin/departments"] = nameof(Administration.Integration.AdministrationEndpointsTests.Departments_CreateListGetEditMembersAndDeactivate),
         ["PUT /api/admin/departments/{departmentId:int}"] = nameof(Administration.Integration.AdministrationEndpointsTests.Departments_CreateListGetEditMembersAndDeactivate),

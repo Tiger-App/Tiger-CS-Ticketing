@@ -477,6 +477,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<AdminUserAppService>();
         services.AddScoped<AdminUserPermissionAppService>();
         services.AddScoped<AdminDepartmentAppService>();
+        services.AddScoped<DepartmentCoverageService>();
+        services.AddScoped<StaffProvisioningService>();
         services.AddScoped<AdminRequestTypeAppService>();
         services.AddScoped<AdminWorkflowAppService>();
         services.AddScoped<AdminChannelAppService>();
