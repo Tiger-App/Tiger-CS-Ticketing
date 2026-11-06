@@ -21,23 +21,21 @@
     const iso = (y, m, d) => `${y}-${pad(m)}-${pad(d)}`;
     const daysIn = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate();
 
-    // ---- Sending mode (a Manual / Auto segmented toggle): Manual shows the date beside the toggle as "Send date"; Auto keeps it as "Preview date" under More filters and shows the policy
-    // schedule as a small label. One input exists either way (it is moved, never copied), so exactly one businessDate is ever submitted. Changing the mode is a filter change like any
-    // other: the customers on screen are cleared until Preview Customers is pressed.
+    // ---- Sending mode (a Manual / Auto segmented toggle): Manual sends any campaign type at any time (no date); Auto previews the policy schedule with a Preview date and shows the schedule as a small
+    // label. Changing the mode is a filter change like any other: the customers on screen are cleared until Preview Customers is pressed.
     const modeRadios = [...form.querySelectorAll('input[name="sendingMode"]')];
     const dateGroup = form.querySelector('[data-date-group]');
-    const dateSlot = form.querySelector('[data-date-slot]');
-    const advancedGrid = form.querySelector('.campaign-advanced__grid');
     const currentMode = () => (modeRadios.find(r => r.checked) || {}).value || 'Auto';
     const applyMode = () => {
         if (modeRadios.length === 0) return;
         const mode = currentMode(), manual = mode === 'Manual';
-        if (dateGroup && dateSlot && advancedGrid) {
-            const label = dateGroup.querySelector('[data-date-label]');
-            if (label) label.textContent = manual ? 'Send date' : 'Preview date';
-            if (manual) { dateSlot.prepend(dateGroup); if (date && !date.value && period) date.value = period.dataset.today || date.value; }
-            else advancedGrid.prepend(dateGroup);
-        }
+        // Manual has no send date and no stage schedule: the preview date is hidden AND disabled, so it is never submitted. The campaign type (the stage select) is used by both modes.
+        if (date) date.disabled = manual;
+        if (dateGroup) dateGroup.hidden = manual;
+        form.querySelectorAll('[data-mode-not]').forEach(e => { e.hidden = e.dataset.modeNot === mode; });
+        form.querySelectorAll('[data-mode-only]').forEach(e => { e.hidden = e.dataset.modeOnly !== mode; });
+        if (manual && advanced) advanced.open = true;
+        form.querySelectorAll('[data-label-auto]').forEach(l => { l.textContent = manual ? l.dataset.labelManual : l.dataset.labelAuto; });
         form.querySelectorAll('[data-mode-hint]').forEach(h => { h.hidden = h.dataset.modeHint !== mode; });
     };
     modeRadios.forEach(r => r.addEventListener('change', applyMode));

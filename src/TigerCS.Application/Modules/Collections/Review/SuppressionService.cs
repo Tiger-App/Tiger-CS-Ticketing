@@ -56,7 +56,14 @@ public sealed class SuppressionService(
                 item.BalanceCheckedAtUtc = now;
                 var present = current[asOfFor[item.CollectionsDispatchItemId]].TryGetValue(item.RecordKey, out var record);
                 // Paid or settled (record gone) and any other change to what was quoted both stop the call; the customer is re-approved from fresh data.
-                var stillValid = present && record!.RemainingAmount == item.Amount && record.DueDate == item.DueDate && record.Phone == item.Phone;
+                decimal? nowAmount = record?.RemainingAmount; DateOnly? nowDue = record?.DueDate;
+                if (present && candidate.FilterJson is not null && ManualFilters.FromStored(candidate.FilterJson) is { } criteria)
+                {
+                    // A Manual contact was quoted its FILTERED amount: compare with the same calculation over the customer's current instalments (as of the day it was uploaded).
+                    var calc = ManualFilters.CurrentAmount(record!, criteria, asOfFor[item.CollectionsDispatchItemId]);
+                    nowAmount = calc.Qualifies ? calc.Amount : null; nowDue = calc.EarliestDue;
+                }
+                var stillValid = present && nowAmount == item.Amount && nowDue == item.DueDate && record!.Phone == item.Phone;
                 if (stillValid) { unchanged++; changed.Add(item); continue; }
 
                 var result = await Suppress(candidate, ct);

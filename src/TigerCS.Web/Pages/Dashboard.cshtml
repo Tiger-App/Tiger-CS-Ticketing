@@ -75,33 +75,6 @@
         ("Closed", "Recently closed work", TicketsView.Closed.Href(), "success", "<path d=\"M5 13l4 4L19 7\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>"),
     ];
 
-    // Consistent colour + glyph per department, matched on the department's
-    // name — decoration only; the name shown comes from the model.
-    (string Tone, string Icon) DeptStyle(string? code, string? name)
-    {
-        // Stable DepartmentCode first; the name is only a fallback for departments created with other codes.
-        var n = (code?.ToUpperInvariant()) switch
-        {
-            "CC" => "call",
-            "REG" => "registr",
-            "LCS" => "leasing",
-            "FIN" or "ACC" => "financ",
-            "COL" => "collect",
-            "HO" => "handover",
-            "CS" => "customer",
-            _ => (name ?? string.Empty).ToLowerInvariant(),
-        };
-        const string stroke = "stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"";
-        if (n.Contains("call")) return ("dept-pink", $"<path d=\"M4 14v-2a8 8 0 0 1 16 0v2\" {stroke}/><rect x=\"3\" y=\"13\" width=\"4\" height=\"6\" rx=\"1.5\" {stroke}/><rect x=\"17\" y=\"13\" width=\"4\" height=\"6\" rx=\"1.5\" {stroke}/><path d=\"M19 19c0 1.5-2 2-5 2\" {stroke}/>");
-        if (n.Contains("registr")) return ("dept-purple", $"<path d=\"M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Z\" {stroke}/><path d=\"M14 3v5h5M9 13h6M9 17h4\" {stroke}/>");
-        if (n.Contains("leasing")) return ("dept-green", $"<path d=\"M3 11l9-7 9 7\" {stroke}/><path d=\"M5 10v10h14V10M10 20v-5h4v5\" {stroke}/>");
-        if (n.Contains("financ") || n.Contains("account")) return ("dept-blue", $"<rect x=\"3\" y=\"6\" width=\"18\" height=\"12\" rx=\"2\" {stroke}/><circle cx=\"12\" cy=\"12\" r=\"2.5\" {stroke}/><path d=\"M6.5 9.5h.01M17.5 14.5h.01\" {stroke}/>");
-        if (n.Contains("collect")) return ("dept-orange", $"<circle cx=\"12\" cy=\"12\" r=\"9\" {stroke}/><path d=\"M14.5 9.2c-.5-.8-1.4-1.2-2.5-1.2-1.4 0-2.5.7-2.5 1.9 0 2.6 5 1.3 5 3.9 0 1.2-1.1 2.2-2.5 2.2-1.2 0-2.1-.5-2.7-1.4M12 6.5V8m0 8v1.5\" {stroke}/>");
-        if (n.Contains("handover")) return ("dept-teal", $"<circle cx=\"8\" cy=\"15\" r=\"4\" {stroke}/><path d=\"M11 12l9-9M16 7l3 3M14 9l2 2\" {stroke}/>");
-        if (n.Contains("customer")) return ("dept-indigo", $"<circle cx=\"12\" cy=\"8\" r=\"4\" {stroke}/><path d=\"M4 20c1.8-3.2 4.5-5 8-5s6.2 1.8 8 5\" {stroke}/>");
-        return ("dept-gray", $"<rect x=\"4\" y=\"7\" width=\"16\" height=\"12\" rx=\"2\" {stroke}/><path d=\"M9 7V5h6v2\" {stroke}/>");
-    }
-
     var activeFilterCount = new object?[] { Model.DepartmentId, Model.OwnerEmployeeId, Model.ChannelId, Model.RequestTypeId, Model.TicketStatus, Model.PriorityId, Model.DateFrom, Model.DateTo }
         .Count(v => v is not null && !(v is string str && string.IsNullOrWhiteSpace(str)));
 }
@@ -354,13 +327,11 @@
                                 @foreach (var ticket in Model.Overview.RecentTickets)
                                 {
                                     var deptName = TicketDisplay.AssignedDepartmentLabel(ticket.CurrentDepartmentId, ticket.DepartmentName);
-                                    var (deptTone, deptIcon) = DeptStyle(ticket.DepartmentCode, ticket.DepartmentName);
                                     var created = ticket.CreatedAtUtc.ToLocalTime();
                                     <tr class="is-link" data-href="/Tickets/@ticket.TicketId">
                                         <td><a class="ticket-id-link" href="/Tickets/@ticket.TicketId">@ticket.TicketNumber</a></td>
                                         <td>
                                             <span class="dept-cell">
-                                                <span class="dept-icon tone-@deptTone" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none">@Html.Raw(deptIcon)</svg></span>
                                                 <span class="dept-cell__name">@deptName</span>
                                             </span>
                                         </td>

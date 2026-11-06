@@ -37,11 +37,25 @@ public sealed class DispatchService(
 
     // ---------------------------------------------------------------- confirm
 
+    /// <summary>The initiator recorded on a dispatch that the Auto dispatcher created on a scheduled date (no person confirmed it).</summary>
+    public static readonly Guid AutoActorId = new("00000000-0000-0000-0000-00000000a070");
+
+    /// <summary>A person confirms an exact, previously shown list. Authorization first: no data is read for an unauthorized caller.</summary>
     public async Task<CollectionsResult<DispatchDto>> ConfirmAsync(CollectionsCaller caller, ConfirmDispatchRequest request, CancellationToken ct)
     {
-        // Authorization first: no data is read for an unauthorized caller.
         if (!(await authorization.ResolveAsync(caller, ct)).CanSendReminders)
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.Forbidden);
+        return await CreateAsync(caller.EmployeeId, request, ct);
+    }
+
+    /// <summary>
+    /// The Auto dispatcher creates the dispatch of a campaign that is scheduled today. No person confirms it, so the CALLER (<c>AutoDispatchService</c>) must have checked the separate
+    /// <c>AutoSendingEnabled</c> switch and built the selection itself; every other gate, check and revalidation below is the same as for a person's confirmation.
+    /// </summary>
+    public Task<CollectionsResult<DispatchDto>> ConfirmAutoAsync(ConfirmDispatchRequest request, CancellationToken ct) => CreateAsync(AutoActorId, request, ct);
+
+    private async Task<CollectionsResult<DispatchDto>> CreateAsync(Guid initiator, ConfirmDispatchRequest request, CancellationToken ct)
+    {
         if (!options.Enabled) return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.Disabled);
         if (!genesys.Enabled || !genesys.LiveCustomerDispatchEnabled)
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.Disabled,
@@ -57,7 +71,7 @@ public sealed class DispatchService(
                 "Confirm that you understand an active Genesys campaign may begin calling uploaded contacts immediately.");
 
         var existing = await store.FindDispatchByKeyAsync(key, ct);
-        if (existing is not null) return Replay(existing, caller, request.ExpectedFingerprint);
+        if (existing is not null) return Replay(existing, initiator, request.ExpectedFingerprint);
 
         // Nothing would ever pick the job up: do not create an approval that sits in Queued and holds its customers.
         if (!scheduler.IsAvailable)
@@ -78,15 +92,27 @@ public sealed class DispatchService(
         if (ReviewQueryService.SharedPhones(resolved.Records).Records > 0 || resolved.Records.Any(r => !IsVoiceEligible(r.Phone)))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
                 "The list contains records that share a phone number or have no callable phone. Repeated calls are blocked pending a business decision; review the current list.");
-        try { foreach (var type in resolved.Records.Select(r => r.ReminderType).Distinct()) _ = genesys.ContactListIdFor(type); }
-        catch (InvalidOperationException ex) { return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, ex.Message); }
+        var types = resolved.Records.Select(r => r.ReminderType).Distinct().ToList();
+        var manual = CollectionsSendingModes.IsManual(request.Selection.Filter?.SendingMode);
+        if (manual && types.Count != 1)
+            return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, "A Manual send contains one campaign type.");
+        // The destination list of every type: its own, or (Manual) the one the person chose among the existing lists that suit it. Each is checked against Genesys now (required columns, no
+        // other active campaign dialling it) and again right before the upload; a list that cannot be verified is never used.
+        foreach (var type in types)
+        {
+            string listId;
+            try { listId = manual ? genesys.ManualContactListIdFor(type, request.Selection.Filter?.ContactList) : genesys.ContactListIdFor(type); }
+            catch (InvalidOperationException ex) { return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, ex.Message); }
+            if (await CheckDestinationAsync(type, listId, ct) is { } destinationProblem)
+                return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, destinationProblem);
+        }
 
         var now = clock.UtcNow;
         var dispatch = new CollectionsDispatch
         {
-            IdempotencyKey = key, Fingerprint = fingerprint, Status = DispatchStatus.Queued, InitiatedByEmployeeId = caller.EmployeeId,
+            IdempotencyKey = key, Fingerprint = fingerprint, Status = DispatchStatus.Queued, InitiatedByEmployeeId = initiator,
             InitiatedAtUtc = now, ReviewRunId = resolved.Run!.CollectionsReviewRunId, SelectionMode = request.Selection.Mode,
-            FilterJson = JsonSerializer.Serialize(request.Selection.Filter), ApprovedCount = resolved.Records.Count,
+            FilterJson = JsonSerializer.Serialize(StoredFilter(request.Selection.Filter)), ApprovedCount = resolved.Records.Count,
             ApprovedTotalsJson = JsonSerializer.Serialize(ReviewQueryService.TotalsByCurrency(resolved.Records)
                 .ToDictionary(p => p.Key, p => p.Value.ToString("0.00", CultureInfo.InvariantCulture))),
             AcknowledgedActiveCampaignRisk = true,
@@ -101,7 +127,7 @@ public sealed class DispatchService(
         {
             // Either the same key raced in (replay it) or a record is already in a live dispatch (a double click with another key).
             var winner = await store.FindDispatchByKeyAsync(key, ct);
-            return winner is not null ? Replay(winner, caller, request.ExpectedFingerprint)
+            return winner is not null ? Replay(winner, initiator, request.ExpectedFingerprint)
                 : CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.DuplicateDispatch,
                     "One or more of these records are already in a pending or sent dispatch. Refresh the list; they now show as Already Sent.");
         }
@@ -117,8 +143,60 @@ public sealed class DispatchService(
         return CollectionsResult<DispatchDto>.Ok(ToDto(dispatch), CollectionsOutcome.Accepted);
     }
 
-    private CollectionsResult<DispatchDto> Replay(CollectionsDispatch existing, CollectionsCaller caller, string expectedFingerprint) =>
-        existing.InitiatedByEmployeeId == caller.EmployeeId
+    /// <summary>
+    /// Checks a Genesys contact list before anything is uploaded to it. Null = it can be used; otherwise the exact reason. Read-only: it only looks.
+    /// <list type="bullet">
+    /// <item>The list must exist and carry every column of the contact template (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), or the upload would fail or drop data.</item>
+    /// <item>No OTHER campaign that is on (or stopping) may dial the list: contacts added to it would be dialled at once, which would interfere with that campaign. The type\'s own stage campaign is
+    /// the intended consumer of its own list and is not interference. Anything that cannot be checked is refused.</item>
+    /// </list>
+    /// </summary>
+    private async Task<string?> CheckDestinationAsync(CampaignReminderType type, string listId, CancellationToken ct)
+    {
+        // The list's own label, and the one campaign that is meant to dial it: the type's stage campaign, but only when the list IS that type's own list.
+        var owner = Enum.GetValues<CampaignReminderType>().FirstOrDefault(t => string.Equals(genesys.ContactListIds.GetValueOrDefault(t.ToString()), listId, StringComparison.OrdinalIgnoreCase), type);
+        var label = CampaignReminderTypes.DefaultLabel(owner);
+        var intended = string.Equals(owner.ToString(), type.ToString(), StringComparison.Ordinal) ? CampaignReminderTypes.StageName(type) : null;
+        GenesysContactListInfo list;
+        try { list = await client.GetContactListAsync(listId, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Genesys contact list check threw {ExceptionType}.", ex.GetType().Name);
+            return $"The {label} contact list could not be checked in Genesys. Nothing was uploaded.";
+        }
+        if (list.Outcome != GenesysUploadOutcome.Accepted)
+            return $"The {label} contact list could not be checked in Genesys ({list.Error}). Nothing was uploaded.";
+        var missing = GenesysContactTemplate.Columns.Where(c => !list.Columns.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
+        if (missing.Count > 0)
+            return $"The {label} contact list does not have the required column(s): {string.Join(", ", missing)}. Nothing was uploaded.";
+        GenesysCampaignLookupResult campaigns;
+        try { campaigns = await client.FindCampaignsByContactListAsync(listId, ct); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
+        catch (Exception ex)
+        {
+            logger.LogWarning("Genesys campaign check by contact list threw {ExceptionType}.", ex.GetType().Name);
+            return $"The campaigns that dial the {label} contact list could not be checked. Nothing was uploaded.";
+        }
+        if (campaigns.Outcome != GenesysUploadOutcome.Accepted)
+            return $"The campaigns that dial the {label} contact list could not be checked ({campaigns.Error}). Nothing was uploaded.";
+        // An active campaign dialling the list is interference unless it is the stage campaign this very send is meant for (the normal Auto / Manual path to the type's own list).
+        var active = campaigns.Matches.Where(c => (string.Equals(c.Status, "on", StringComparison.OrdinalIgnoreCase) || string.Equals(c.Status, "stopping", StringComparison.OrdinalIgnoreCase))
+            && !(intended is not null && string.Equals(c.Name?.Trim(), intended, StringComparison.OrdinalIgnoreCase))).ToList();
+        if (active.Count > 0)
+            return $"The Genesys campaign \"{string.Join("\", \"", active.Select(c => c.Name))}\" is active and dials the {label} contact list, so these customers would be dialled at once. Switch it off in Genesys, or choose the other list. Nothing was uploaded.";
+        return null;
+    }
+
+    /// <summary>
+    /// The filter kept with the approval. A Manual approval stores its EFFECTIVE minimum (the review default when none was given) so that the revalidation before the upload and the paid-after-upload
+    /// check calculate the amount with exactly the criteria the person approved, whatever the settings are later.
+    /// </summary>
+    private ReviewFilter? StoredFilter(ReviewFilter? filter) =>
+        filter is not null && CollectionsSendingModes.IsManual(filter.SendingMode) ? filter with { MinRemaining = query.ManualCriteria(filter).MinTotal } : filter;
+
+    private CollectionsResult<DispatchDto> Replay(CollectionsDispatch existing, Guid initiator, string expectedFingerprint) =>
+        existing.InitiatedByEmployeeId == initiator
         && string.Equals(existing.Fingerprint, expectedFingerprint, StringComparison.OrdinalIgnoreCase)
             ? CollectionsResult<DispatchDto>.Ok(ToDto(existing), CollectionsOutcome.Replayed)
             : CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.IdempotencyConflict, "This idempotency key was already used for a different approval.");
@@ -128,7 +206,8 @@ public sealed class DispatchService(
     /// <summary>The configuration gates Confirm enforces, plus the credentials and contact lists the upload needs. Read-only; sends nothing and calls nothing.</summary>
     public async Task<CollectionsResult<DispatchReadinessDto>> ReadinessAsync(CollectionsCaller caller, CancellationToken ct)
     {
-        if (!(await authorization.ResolveAsync(caller, ct)).CanReadFinancials)
+        var permissions = await authorization.ResolveAsync(caller, ct);
+        if (!permissions.CanReadFinancials)
             return CollectionsResult<DispatchReadinessDto>.Fail(CollectionsOutcome.Forbidden);
         var blockers = new List<string>();
         if (!options.Enabled) blockers.Add("Collections is switched off in this environment (Collections:Enabled).");
@@ -143,7 +222,7 @@ public sealed class DispatchService(
             try { _ = genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { blockers.Add($"No valid Genesys contact list id is configured for {type} (Collections:GenesysOutbound:ContactListIds:{type})."); }
         }
-        return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers));
+        return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers, permissions.CanSendReminders));
     }
 
     // ---------------------------------------------------------------- read
@@ -170,6 +249,7 @@ public sealed class DispatchService(
     /// <summary>Adds the approving employee's display name (looked up once per employee); the id stays when it cannot be resolved.</summary>
     private async Task<DispatchDto> WithApproverAsync(DispatchDto dto, CancellationToken ct)
     {
+        if (dto.InitiatedByEmployeeId == AutoActorId) return dto with { ApprovedByName = "Automatic (scheduled)" };
         if (employees is null) return dto;
         if (!_names.TryGetValue(dto.InitiatedByEmployeeId, out var name))
         {
@@ -290,6 +370,10 @@ public sealed class DispatchService(
 
         var settled = new List<CollectionsDispatchItem>(cancelledItems);
         var changed = 0;
+        // Manual: the amount quoted is calculated from the customer's CURRENT instalments with the filter the person approved (Payment status, From / To, Minimum Total), never the stage amount,
+        // and the record may be held back by the stage schedule alone (the one rule Manual waives). Auto compares the stage amount and needs the record Ready, as before.
+        var manualCriteria = ManualFilters.FromStored(dispatch.FilterJson);
+        var manual = manualCriteria is not null;
         foreach (var item in items)
         {
             if (!current.TryGetValue(item.RecordKey, out var now))
@@ -297,8 +381,21 @@ public sealed class DispatchService(
                 item.Status = DispatchItemStatus.Excluded; item.StatusReason = "Paid or settled: no qualifying balance remains";
                 settled.Add(item); continue;
             }
-            var unchanged = now.ValidationStatus == ReviewValidationStatus.Ready && now.RemainingAmount == item.Amount
-                && now.DueDate == item.DueDate && now.Currency == item.Currency && now.Phone == item.Phone
+            decimal? nowAmount = now.RemainingAmount; DateOnly? nowDue = now.DueDate;
+            if (manual)
+            {
+                var calc = ManualFilters.CurrentAmount(now, manualCriteria!, asOf);
+                if (calc.Reason == FilteredAmount.None)
+                {
+                    // Everything the filters selected has been paid or settled: nothing qualifies any more, so the customer is not sent.
+                    item.Status = DispatchItemStatus.Excluded; item.StatusReason = "Paid or settled: no qualifying balance remains within the selected filters";
+                    settled.Add(item); continue;
+                }
+                nowAmount = calc.Qualifies ? calc.Amount : null; nowDue = calc.EarliestDue;
+            }
+            var sendable = manual ? ReviewRecordBuilder.IsManuallySendable(now) : now.ValidationStatus == ReviewValidationStatus.Ready;
+            var unchanged = sendable && nowAmount == item.Amount
+                && nowDue == item.DueDate && now.Currency == item.Currency && now.Phone == item.Phone
                 && string.Equals(now.CustomerName, item.CustomerName, StringComparison.Ordinal);
             if (!unchanged) changed++;
         }
@@ -353,6 +450,16 @@ public sealed class DispatchService(
             await store.UpdateDispatchAsync(dispatch, ct);
             return false;
         }
+        // The destination list of each type: its own, or (Manual) the one the person chose at approval, which is kept in the stored filter.
+        var manualSend = ManualFilters.FromStored(dispatch.FilterJson) is not null;
+        var chosenList = ManualFilters.StoredContactList(dispatch.FilterJson);
+        string ListFor(CampaignReminderType type) => manualSend ? genesys.ManualContactListIdFor(type, chosenList) : genesys.ContactListIdFor(type);
+        try { foreach (var type in items.Select(i => i.ReminderType).Distinct()) _ = ListFor(type); }
+        catch (InvalidOperationException ex)
+        {
+            await store.UpdateItemsAsync(all, ct);
+            return await StopAsync(dispatch, DispatchStatus.Failed, $"{ex.Message} Nothing was uploaded.", ct);
+        }
         var batchSize = genesys.EffectiveBatchSize;
         var batches = new List<CollectionsGenesysBatch>();
         var plan = new List<(CollectionsGenesysBatch Batch, List<CollectionsDispatchItem> Items)>();
@@ -365,7 +472,7 @@ public sealed class DispatchService(
                 var slice = ordered.Skip(offset).Take(batchSize).ToList();
                 var batch = new CollectionsGenesysBatch
                 {
-                    CollectionsDispatchId = dispatch.CollectionsDispatchId, ReminderType = group.Key, ContactListId = genesys.ContactListIdFor(group.Key),
+                    CollectionsDispatchId = dispatch.CollectionsDispatchId, ReminderType = group.Key, ContactListId = ListFor(group.Key),
                     Sequence = ++sequence, ContactCount = slice.Count, Status = GenesysBatchStatus.Pending,
                     StageName = CampaignReminderTypes.StageName(group.Key)
                 };
@@ -433,6 +540,19 @@ public sealed class DispatchService(
     /// </summary>
     private async Task<bool> EnsureCampaignAsync(CollectionsDispatch dispatch, CollectionsGenesysBatch batch, CancellationToken ct)
     {
+        // Right before the upload the destination is checked again: the list must still fit the upload and no OTHER active campaign may dial it. Anything that cannot be verified fails the batch with
+        // nothing uploaded.
+        var checkProblem = await CheckDestinationAsync(batch.ReminderType, batch.ContactListId, ct);
+        if (checkProblem is not null)
+        {
+            logger.LogWarning("Dispatch {DispatchId} batch {BatchId}: the destination contact list failed its check before the upload.", dispatch.CollectionsDispatchId, batch.CollectionsGenesysBatchId);
+            batch.Status = GenesysBatchStatus.Failed; batch.Error = Truncate(checkProblem); batch.CompletedAtUtc = clock.UtcNow;
+            await store.UpdateBatchAsync(batch, ct);
+            await MarkItemsAsync(batch, DispatchItemStatus.Failed, batch.Error, null, ct);
+            return false;
+        }
+        // A Manual send to a list other than the type's own adds contacts to that EXISTING list: no campaign is created or reused for it (the stage campaign dials the stage's own list).
+        if (!string.Equals(batch.ContactListId, genesys.ContactListIdFor(batch.ReminderType), StringComparison.OrdinalIgnoreCase)) return true;
         if (!genesys.Campaign.Enabled) return true;
         var gate = CampaignGates.GetOrAdd(batch.StageName ?? CampaignReminderTypes.StageName(batch.ReminderType), _ => new SemaphoreSlim(1, 1));
         await gate.WaitAsync(ct);

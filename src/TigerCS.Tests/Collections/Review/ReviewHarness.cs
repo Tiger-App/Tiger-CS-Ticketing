@@ -41,6 +41,33 @@ public sealed class FakeGenesysClient : IGenesysOutboundClient
         }
     }
 
+    /// <summary>Column names per contact list id; a list that is not set has the six template columns. Set a list to a shorter array to test a list that does not fit.</summary>
+    public Dictionary<string, string[]> ListColumns { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public List<string> ListChecks { get; } = [];
+    public List<string> CampaignChecks { get; } = [];
+    public Queue<GenesysUploadOutcome> ListCheckScript { get; } = new();
+
+    public Task<GenesysContactListInfo> GetContactListAsync(string contactListId, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            ListChecks.Add(contactListId);
+            var outcome = ListCheckScript.Count > 0 ? ListCheckScript.Dequeue() : GenesysUploadOutcome.Accepted;
+            if (outcome != GenesysUploadOutcome.Accepted) return Task.FromResult(new GenesysContactListInfo(outcome, null, [], "Genesys could not be reached."));
+            return Task.FromResult(new GenesysContactListInfo(outcome, 200, ListColumns.TryGetValue(contactListId, out var columns) ? columns : ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], null));
+        }
+    }
+
+    public Task<GenesysCampaignLookupResult> FindCampaignsByContactListAsync(string contactListId, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            CampaignChecks.Add(contactListId);
+            return Task.FromResult(new GenesysCampaignLookupResult(GenesysUploadOutcome.Accepted, 200,
+                Campaigns.Where(c => string.Equals(c.ContactListId, contactListId, StringComparison.OrdinalIgnoreCase)).ToList(), null));
+        }
+    }
+
     /// <summary>Campaigns that "exist" in the fake Genesys; <see cref="FindCampaignsByNameAsync"/> returns those whose name contains the searched text.</summary>
     public List<GenesysCampaignRef> Campaigns { get; } = [];
     public List<string> CampaignLookups { get; } = [];
@@ -272,6 +299,7 @@ internal sealed class ReviewHarness : IDisposable
         public ReviewQueryService Query { get; private set; } = null!;
         public ReviewRefreshService Refresh { get; private set; } = null!;
         public DispatchService Dispatch { get; private set; } = null!;
+        public AutoDispatchService Auto { get; private set; } = null!;
         public SuppressionService Suppression { get; private set; } = null!;
         public DispatchAdminReportService AdminReport { get; private set; } = null!;
         public TigerCsDbContext Context => context;
@@ -286,6 +314,7 @@ internal sealed class ReviewHarness : IDisposable
             var balances = new CurrentBalanceReader(h.Sql, h.Source, Refresh, NullLogger<CurrentBalanceReader>.Instance);
             Dispatch = new DispatchService(h.Options, h.Genesys, auth, clock, Store, h.Scheduler, client ?? h.Client, Query, balances,
                 NullLogger<DispatchService>.Instance);
+            Auto = new AutoDispatchService(h.Options, h.Campaign, clock, Store, Query, Refresh, Dispatch, NullLogger<AutoDispatchService>.Instance);
             AdminReport = new DispatchAdminReportService(h.Campaign, Store, h.Email, clock, auth, NullLogger<DispatchAdminReportService>.Instance);
             Suppression = new SuppressionService(h.Options, h.Genesys, clock, Store, client ?? h.Client, balances, NullLogger<SuppressionService>.Instance);
             return this;

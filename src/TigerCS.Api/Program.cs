@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
 using TigerCS.Application.Modules.Collections;
+using TigerCS.Application.Modules.GenesysIntegration.Services;
 using TigerCS.Application.Modules.Ticketing.Services;
 using Microsoft.IdentityModel.Logging;
 using Microsoft.IdentityModel.Tokens;
@@ -311,6 +312,11 @@ using (var backgroundJobScope = app.Services.CreateScope())
     // is false.
     app.Services.UseTigerCsRecurringChatbotInactivityClose(backgroundJobOptions);
 
+    // AI-only 18-hour closure — registered only where AiOnlyAutoClose:Enabled is true (default false everywhere, Production included).
+    app.Services.UseTigerCsRecurringAiOnlyAutoClose(
+        backgroundJobOptions,
+        backgroundJobScope.ServiceProvider.GetRequiredService<IOptions<AiOnlyAutoCloseOptions>>().Value);
+
     if (!backgroundJobOptions.Enabled)
     {
         app.Logger.LogWarning(
@@ -347,6 +353,13 @@ using (var backgroundJobScope = app.Services.CreateScope())
     // Paid-after-upload suppression of Genesys contacts — registered only while upload and suppression are both enabled.
     app.Services.UseTigerCsRecurringGenesysSuppression(
         backgroundJobOptions,
+        backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions>(),
+        backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.CollectionsOptions>().TimeZoneId);
+
+    // Auto sending mode: scheduled dispatch of the approved campaign policies - registered only while AutoSendingEnabled (false by default) and the Genesys upload are both enabled.
+    app.Services.UseTigerCsRecurringAutoDispatch(
+        backgroundJobOptions,
+        backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.CollectionsCampaignOptions>(),
         backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions>(),
         backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Collections.CollectionsOptions>().TimeZoneId);
 }

@@ -87,7 +87,7 @@ public sealed class CollectionsCampaignFilterFirstTests
     }
 
     [Fact]
-    public async Task PreviewCustomers_LoadsOnlyTheMatchingCustomers_WithCountsAmountAndCheckboxesForReadyOnes()
+    public async Task PreviewCustomers_LoadsOnlyTheMatchingCustomers_WithCountsAndAmount()
     {
         var api = new FakeCollectionsApi { IncludeNotEligible = true };
         using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
@@ -96,30 +96,30 @@ public sealed class CollectionsCampaignFilterFirstTests
         var call = Assert.Single(api.Calls("/campaigns/preview"));
         foreach (var expected in new[] { "stage=CurrentMonthReminder", "towerId=7", "paymentStatus=Overdue", "dateFrom=2026-10-01", "dateTo=2026-10-31", "minTotal=250", "search=3001", "businessDate=2026-10-14" }) Assert.Contains(expected, call);
         Assert.Contains("data-eligible-count>1<", html); Assert.Contains("data-eligible-total>AED 650.00<", html);
-        Assert.Single(Regex.Matches(html, "class=\"campaign-select\""));                                    // only the Ready customer can be ticked, not the Not eligible one
+        Assert.DoesNotContain("class=\"campaign-select\"", html);                                    // Auto is a read-only preview: customers are picked in Manual
         Assert.Contains("data-campaign-status=\"NotEligible\"", html);
         Assert.Contains("data-preview-current", html);
         Assert.DoesNotContain(api.Requests, r => r.StartsWith("POST", StringComparison.Ordinal));              // previewing never sends or approves anything
     }
 
     [Fact]
-    public async Task ApproveAndSend_IsEnabledOnlyForACurrentReconciledPreviewWithReadyCustomers()
+    public async Task SendToGenesys_IsEnabledOnlyForACurrentReconciledPreviewWithReadyCustomers()
     {
         using var ready = CollectionsWebHost.Factory(new FakeCollectionsApi { IncludeNotEligible = true }); using var client = ready.CreateClient();
-        var html = await Get(client, $"/Collections/Campaigns?{Applied}&render=full");
+        var html = await Get(client, $"/Collections/Campaigns?{Applied}&render=full&sendingMode=Manual");
         var button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
         Assert.DoesNotContain("disabled", button); Assert.Contains("data-blocked=\"false\"", button);        // the script adds "nothing ticked" on top of this
         Assert.Contains("data-selected-count", html); Assert.Contains("data-all-count", html);
         Assert.Contains("data-clear-selection", html);
 
         using var unreconciled = CollectionsWebHost.Factory(new FakeCollectionsApi { IncludeNotEligible = true, SourceUnreconciled = true }); using var c2 = unreconciled.CreateClient();
-        html = await Get(c2, $"/Collections/Campaigns?{Applied}&render=full");
+        html = await Get(c2, $"/Collections/Campaigns?{Applied}&render=full&sendingMode=Manual");
         button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
         Assert.Contains("disabled", button); Assert.Contains("data-blocked=\"true\"", button);
         Assert.Contains("not reconciled", Regex.Match(html, "data-approve-reason[^>]*>(.*?)</span>", RegexOptions.Singleline).Groups[1].Value);
 
         using var none = CollectionsWebHost.Factory(new FakeCollectionsApi()); using var c3 = none.CreateClient();   // the only customer needs review: nobody is Ready
-        html = await Get(c3, $"/Collections/Campaigns?{Applied}&render=full");
+        html = await Get(c3, $"/Collections/Campaigns?{Applied}&render=full&sendingMode=Manual");
         button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
         Assert.Contains("disabled", button); Assert.DoesNotContain("campaign-select", html);
     }
@@ -173,10 +173,10 @@ public sealed class CollectionsCampaignFilterFirstTests
     {
         var api = new FakeCollectionsApi { IncludeNotEligible = true };
         using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
-        var html = await Get(client, $"/Collections/Campaigns?handler=Results&{Applied}");
+        var html = await Get(client, $"/Collections/Campaigns?handler=Results&{Applied}&sendingMode=Manual");
         var form = Regex.Match(html, "<form[^>]*data-approve-form.*?</form>", RegexOptions.Singleline).Value;
         foreach (var expected in new[] { "name=\"stage\" value=\"CurrentMonthReminder\"", "name=\"towerId\" value=\"7\"", "name=\"paymentStatus\" value=\"Overdue\"", "name=\"minTotal\" value=\"250\"", "name=\"search\" value=\"3001\"" }) Assert.Contains(expected, form);
-        Assert.Contains("value=\"AllMatching\" data-all-matching", form); Assert.Contains("data-all-count>1<", form);
+        Assert.Contains("value=\"AllMatching\" data-all-matching", form); Assert.Contains("data-all-count>2<", form);
         Assert.Contains("data-select-page", html);
     }
 

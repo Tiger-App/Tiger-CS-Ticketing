@@ -67,7 +67,7 @@ public sealed class CollectionsCampaignApprovalRenderTests
 
     private static async Task<string> TokenAsync(HttpClient client)
     {
-        var page = await (await client.GetAsync("/Collections/Campaigns?handler=Results&stage=CurrentMonthReminder&businessDate=2026-10-14")).Content.ReadAsStringAsync();
+        var page = await (await client.GetAsync("/Collections/Campaigns?handler=Results&stage=CurrentMonthReminder&sendingMode=Manual")).Content.ReadAsStringAsync();
         return WebUtility.HtmlDecode(Regex.Match(page, "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value);
     }
 
@@ -75,7 +75,7 @@ public sealed class CollectionsCampaignApprovalRenderTests
     {
         var form = new Dictionary<string, string>
         {
-            ["__RequestVerificationToken"] = token, ["stage"] = "LegalNotice", ["businessDate"] = "2026-10-14", ["dateFrom"] = "2026-09-01", ["dateTo"] = "2026-10-31",
+            ["__RequestVerificationToken"] = token, ["sendingMode"] = "Manual", ["stage"] = "LegalNotice", ["businessDate"] = "2026-10-14", ["dateFrom"] = "2026-09-01", ["dateTo"] = "2026-10-31",
             ["towerId"] = "7", ["minTotal"] = "250", ["paymentStatus"] = "Overdue", ["search"] = "3001"
         };
         foreach (var (key, value) in extra) form[key] = value;
@@ -85,40 +85,29 @@ public sealed class CollectionsCampaignApprovalRenderTests
     // ------------------------------------------------------------------ one page, no Review step
 
     [Fact]
-    public async Task ManualApproval_SendsTheModeAndTheSendDate_ToTheApi_AndAutoSendsNoDate()
+    public async Task ManualApproval_SendsTheModeAndTheCampaign_ToTheApi_WithNoSendDate()
     {
-        var manualApi = NewApi();
-        using (var factory = Factory(manualApi)) using (var client = factory.CreateClient())
-        {
-            var html = await (await client.PostAsync("/Collections/Campaigns?handler=Approve", new FormUrlEncodedContent(Form(await TokenAsync(client),
-                ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1"), ("sendingMode", "Manual"))))).Content.ReadAsStringAsync();
-            Assert.Contains("\"sendingMode\":\"Manual\"", manualApi.LastSummaryBody); Assert.Contains("\"sendDate\":\"2026-10-14\"", manualApi.LastSummaryBody);
-            Assert.Contains("data-snapshot-mode>Manual, send date 14 Oct 2026 (today)<", html);
-            Assert.Null(manualApi.LastConfirmBody);                                          // approving never sends
-        }
-        var autoApi = NewApi();
-        using (var factory = Factory(autoApi)) using (var client = factory.CreateClient())
-        {
-            var html = await (await client.PostAsync("/Collections/Campaigns?handler=Approve", new FormUrlEncodedContent(Form(await TokenAsync(client),
-                ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1"))))).Content.ReadAsStringAsync();
-            Assert.Contains("\"sendingMode\":\"Auto\"", autoApi.LastSummaryBody); Assert.DoesNotContain("\"sendDate\":\"2", autoApi.LastSummaryBody);
-            Assert.Contains("data-snapshot-mode>Auto (campaign schedule)<", html);
-        }
+        var api = NewApi();
+        using var factory = Factory(api); using var client = factory.CreateClient();
+        var html = await (await client.PostAsync("/Collections/Campaigns?handler=Approve", new FormUrlEncodedContent(Form(await TokenAsync(client),
+            ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1"))))).Content.ReadAsStringAsync();
+        Assert.Contains("\"sendingMode\":\"Manual\"", api.LastSummaryBody); Assert.Contains("\"reminderType\":\"LegalNotice\"", api.LastSummaryBody); Assert.DoesNotContain("sendDate", api.LastSummaryBody!);
+        Assert.Contains("data-snapshot-mode>Manual (any time; no send date or schedule)<", html);
+        Assert.Null(api.LastConfirmBody);                                          // approving never sends
     }
 
     [Fact]
-    public async Task Campaigns_OffersApproveAndSend_OnlyForReadyCustomers_AndLinksToNoReviewPage()
+    public async Task Campaigns_OffersSendToGenesys_OnlyForReadyCustomers_AndLinksToNoReviewPage()
     {
         using var factory = Factory(NewApi()); using var client = factory.CreateClient();
-        var full = await (await client.GetAsync("/Collections/Campaigns?render=full&stage=CurrentMonthReminder&businessDate=2026-10-14")).Content.ReadAsStringAsync();
-        Assert.Contains("Approve &amp; Send to Genesys", full);
-        Assert.Single(Regex.Matches(full, "class=\"campaign-select\""));                    // the Ready customer only; the not-eligible one has no checkbox
+        var full = await (await client.GetAsync("/Collections/Campaigns?render=full&stage=CurrentMonthReminder&sendingMode=Manual")).Content.ReadAsStringAsync();
+        Assert.Contains(">Send to Genesys<", full);
+        Assert.Equal(2, Regex.Matches(full, "class=\"campaign-select\"").Count);          // the Ready customers only
         Assert.Contains("data-all-matching", full);                                          // "all eligible customers matching the filters"
-        Assert.Contains("data-unit-key=\"4|3001|TP140-101\"", full);
+        Assert.Contains("data-unit-key=\"4|3001|TP140-1\"", full);
         Assert.DoesNotContain("/Collections/Review", full);
         Assert.DoesNotContain("Review &amp; approve", full);
-        // Due / Overdue / Total and the unit stay on the row.
-        Assert.Contains("data-unit-due", full); Assert.Contains("data-unit-overdue", full); Assert.Contains("TP140-101", full);
+        Assert.Contains("TP140-1", full);
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using TigerCS.Application.Modules.Collections;
 using TigerCS.Application.Modules.Collections.Review;
+using TigerCS.Application.Modules.GenesysIntegration.Services;
 using TigerCS.Application.Modules.SlaAndEscalation.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Services;
 
@@ -63,8 +64,10 @@ public static class BackgroundJobServiceCollectionExtensions
         services.AddScoped<CollectionsReviewRefreshJob>();
         services.AddScoped<CollectionsDispatchJob>();
         services.AddScoped<CollectionsSuppressionJob>();
+        services.AddScoped<CollectionsAutoDispatchJob>();
         // Holds only the scope factory; it opens one scope per candidate itself.
         services.AddScoped<ChatbotInactivityCloseJob>();
+        services.AddScoped<AiOnlyAutoCloseJob>();
 
         if (!options.Enabled)
         {
@@ -164,6 +167,36 @@ public static class BackgroundJobServiceCollectionExtensions
             ChatbotInactivityCloseJob.RecurringJobId,
             job => job.RunAsync(CancellationToken.None),
             "* * * * *");
+    }
+
+    /// <summary>
+    /// Registers the recurring AI-only closure (every 15 minutes) <b>only</b> when <c>AiOnlyAutoClose:Enabled</c> is true, and removes any existing
+    /// registration otherwise — so the rule is never active in an environment until someone deliberately turns it on. A no-op when
+    /// <c>BackgroundJobs:Enabled</c> is false.
+    /// </summary>
+    public static void UseTigerCsRecurringAiOnlyAutoClose(
+        this IServiceProvider services, BackgroundJobOptions backgroundJobOptions, AiOnlyAutoCloseOptions aiOnlyOptions)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(backgroundJobOptions);
+        ArgumentNullException.ThrowIfNull(aiOnlyOptions);
+
+        if (!backgroundJobOptions.Enabled)
+        {
+            return;
+        }
+
+        var manager = services.GetRequiredService<IRecurringJobManager>();
+        if (!aiOnlyOptions.Enabled)
+        {
+            manager.RemoveIfExists(AiOnlyAutoCloseJob.RecurringJobId);
+            return;
+        }
+
+        manager.AddOrUpdate<AiOnlyAutoCloseJob>(
+            AiOnlyAutoCloseJob.RecurringJobId,
+            job => job.RunAsync(CancellationToken.None),
+            AiOnlyAutoCloseJob.Cron);
     }
 
     /// <summary>
@@ -293,5 +326,26 @@ public static class BackgroundJobServiceCollectionExtensions
         }
         manager.AddOrUpdate<CollectionsSuppressionJob>(CollectionsSuppressionJob.RecurringJobId, job => job.RunAsync(CancellationToken.None),
             genesysOptions.SuppressionSweepCron, new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId) });
+    }
+
+    /// <summary>
+    /// Registers the Auto dispatcher only while <c>Collections:Campaigns:AutoSendingEnabled</c> AND the Genesys upload are both enabled, and removes it otherwise. With the default configuration
+    /// (AutoSendingEnabled false) no automatic dispatch job exists at all.
+    /// </summary>
+    public static void UseTigerCsRecurringAutoDispatch(
+        this IServiceProvider services, BackgroundJobOptions backgroundJobOptions, TigerCS.Application.Modules.Collections.CollectionsCampaignOptions campaignOptions,
+        GenesysOutboundOptions genesysOptions, string timeZoneId)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        if (!backgroundJobOptions.Enabled) return;
+
+        var manager = services.GetRequiredService<IRecurringJobManager>();
+        if (!campaignOptions.AutoSendingEnabled || !genesysOptions.Enabled)
+        {
+            manager.RemoveIfExists(CollectionsAutoDispatchJob.RecurringJobId);
+            return;
+        }
+        manager.AddOrUpdate<CollectionsAutoDispatchJob>(CollectionsAutoDispatchJob.RecurringJobId, job => job.RunAsync(CancellationToken.None),
+            campaignOptions.AutoDispatchCron, new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId) });
     }
 }

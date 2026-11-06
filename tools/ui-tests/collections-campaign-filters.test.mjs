@@ -168,21 +168,23 @@ test('filters edited while customers are loading do not leave the old customers 
 
 const pick = (ctx, mode) => { const r = ctx.q(mode === 'Manual' ? '#modeManual' : '#modeAuto'); r.checked = true; r.dispatchEvent(new ctx.window.Event('change', { bubbles: true })); };
 
-test('Manual mode moves the one date input beside the toggle as "Send date"; Auto puts it back as "Preview date" with the schedule label', async () => {
+test('Manual has no date at all (hidden and disabled, never submitted); Auto shows the Preview date and the schedule label', async () => {
     const ctx = await boot(); const { q, document } = ctx;
-    const date = q('#campaignDate');
+    const date = q('#campaignDate'); const group = q('[data-date-group]');
     assert.ok(q('[data-advanced-filters] [data-date-group]'), 'Auto: the date lives under More filters');
+    assert.equal(q('[data-date-label]').textContent, 'Preview date');
+    assert.equal(group.hidden, false); assert.equal(date.disabled, false);
     assert.equal(q('[data-policy-schedule]').hidden, false, 'Auto: the policy schedule label is shown');
-    pick(ctx, 'Manual');
-    assert.ok(q('[data-date-slot] [data-date-group]'), 'Manual: the date picker moves next to the toggle');
-    assert.equal(q('[data-date-label]').textContent, 'Send date');
-    assert.equal(date.value, '2026-10-21', 'defaults to today when empty');
-    assert.equal(q('[data-policy-schedule]').hidden, true, 'Manual: no schedule label');
     date.value = '2026-10-25';
+    pick(ctx, 'Manual');
+    assert.equal(group.hidden, true, 'Manual: there is no send date'); assert.equal(date.disabled, true, 'Manual: the date is not submitted');
+    assert.equal(q('[data-policy-schedule]').hidden, true, 'Manual: no schedule label');
+    assert.equal(new ctx.window.FormData(q('[data-campaign-filters]')).has('businessDate'), false, 'Manual submits no date');
+    assert.equal(document.body.textContent.includes('Send date'), false, 'Manual never asks for a send date');
     pick(ctx, 'Auto');
-    assert.ok(q('[data-advanced-filters] [data-date-group]')); assert.equal(q('[data-date-label]').textContent, 'Preview date');
+    assert.equal(group.hidden, false); assert.equal(date.disabled, false);
     assert.equal(date.value, '2026-10-25', 'the chosen date is kept, never duplicated');
-    assert.equal(document.querySelectorAll('input[name="businessDate"]').length, 1, 'exactly one businessDate is ever submitted');
+    assert.equal(document.querySelectorAll('input[name="businessDate"]').length, 1, 'exactly one businessDate input exists');
     assert.equal(q('[data-policy-schedule]').hidden, false);
 });
 

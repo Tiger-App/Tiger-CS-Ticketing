@@ -1,8 +1,12 @@
 namespace TigerCS.Domain.Modules.Collections;
 
 /// <summary>
-/// How a campaign is sent. <b>Auto</b> (default) follows the predefined schedule of the stage. <b>Manual</b> lets an authorized person choose the send date and bypasses ONLY that schedule:
-/// reconciliation, permissions, contact validation, suppression and duplicate-send protection apply unchanged. Neither mode dispatches by itself.
+/// How a campaign is sent: exactly two modes.
+/// <b>Auto</b> (default) follows the approved policy and the stage schedule: on a scheduled date the Auto dispatcher prepares and dispatches the eligible campaign by itself, but only while
+/// the separate <c>AutoSendingEnabled</c> switch is on (off by default).
+/// <b>Manual</b> lets an authorized person choose any existing campaign type and send it to Genesys at any time, with no send date and no stage schedule: they filter the customers (Tower,
+/// Payment status, Date range, Minimum Total), pick the customers, choose a suitable existing contact list and confirm. The amount sent follows the filters.
+/// Reconciliation, permissions, contact validation, suppression, duplicate-send protection, the legal restrictions and idempotency apply unchanged in both modes.
 /// </summary>
 public static class CollectionsSendingModes
 {
@@ -13,20 +17,12 @@ public static class CollectionsSendingModes
     {
         mode = Auto;
         if (string.IsNullOrWhiteSpace(value)) return true;
-        if (string.Equals(value.Trim(), Manual, StringComparison.OrdinalIgnoreCase)) { mode = Manual; return true; }
-        return string.Equals(value.Trim(), Auto, StringComparison.OrdinalIgnoreCase);
+        var text = value.Trim();
+        if (string.Equals(text, Manual, StringComparison.OrdinalIgnoreCase)) { mode = Manual; return true; }
+        return string.Equals(text, Auto, StringComparison.OrdinalIgnoreCase);
     }
 
     public static bool IsManual(string? value) => string.Equals(value?.Trim(), Manual, StringComparison.OrdinalIgnoreCase);
-
-    /// <summary>
-    /// The one timing rule of Manual mode: the list can be sent only ON the chosen send date, which must be today (Dubai). A later date stays pending (nothing is queued or
-    /// dispatched for it); an earlier one is over. Returns null when sending is allowed today, otherwise the review reason code.
-    /// </summary>
-    public static string? ManualTimingReason(DateOnly sendDate, DateOnly today) =>
-        sendDate == today ? null : sendDate > today ? PendingSendDate : SendDateInPast;
-
-    public const string PendingSendDate = "PendingSendDate", SendDateInPast = "SendDateInPast";
 }
 
 public enum CollectionsCampaignStage
