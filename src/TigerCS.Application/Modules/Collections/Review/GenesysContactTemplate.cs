@@ -9,6 +9,13 @@ namespace TigerCS.Application.Modules.Collections.Review;
 
 public sealed record TemplateIssue(int Row, string Column, string Message);
 
+/// <summary>How a list's actual column names compare with the six template columns.</summary>
+public sealed record TemplateHeaderCheck(IReadOnlyList<string> Missing, IReadOnlyList<string> Misnamed, IReadOnlyList<string> Unexpected)
+{
+    /// <summary>Every template column is present with its exact name (extra columns are allowed here; they are reported separately).</summary>
+    public bool Fits => Missing.Count == 0 && Misnamed.Count == 0;
+}
+
 public sealed record TemplateVerification(
     IReadOnlyList<string> Columns, IReadOnlyList<string> MissingColumns, IReadOnlyList<string> UnexpectedColumns,
     IReadOnlyList<string> MisnamedColumns, IReadOnlyList<string> ReminderTypeValues, IReadOnlyList<string> UnknownReminderTypes,
@@ -37,13 +44,13 @@ public static class GenesysContactTemplate
         var text = new StringBuilder();
         text.Append(string.Join(',', Columns.Select(Quote))).Append("\r\n");
         foreach (var c in contacts)
-            text.Append(string.Join(',', new[] { c.Phone, c.CustomerName, c.EmailAddress, c.ReminderType, c.AmountDue, c.DueDate }.Select(v => Quote(Neutralize(v))))).Append("\r\n");
+            text.Append(string.Join(',', Columns.Zip(new[] { c.Phone, c.CustomerName, c.EmailAddress, c.ReminderType, c.AmountDue, c.DueDate }, (name, v) => Quote(Neutralize(v, name == "Phone"))))).Append("\r\n");
         return text.ToString();
     }
 
-    // A name or phone beginning with = + - @ would be executed by a spreadsheet. The phone's own leading + is the one legitimate case.
-    private static string Neutralize(string value) =>
-        value.Length > 0 && value[0] is '=' or '-' or '@' ? "'" + value : value;
+    // A value beginning with = + - @ would be executed by a spreadsheet. The phone's own leading + is the one legitimate case: in any other column a leading + is neutralized too.
+    private static string Neutralize(string value, bool isPhone) =>
+        value.Length > 0 && (value[0] is '=' or '-' or '@' || (value[0] == '+' && !isPhone)) ? "'" + value : value;
 
     private static string Quote(string value) => "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
@@ -53,11 +60,8 @@ public static class GenesysContactTemplate
         if (records.Count == 0)
             return new([], Columns, [], [], [], [], 0, [new(0, "", "The file is empty.")]);
         var header = records[0].Select(h => h.Trim().TrimStart('﻿')).ToList();
-        var missing = Columns.Where(c => !header.Contains(c, StringComparer.Ordinal)).ToList();
-        // A column that matches only ignoring case/spacing is a misnamed column (e.g. "EmailAddress", "Amount Due"), reported separately.
-        static string Key(string v) => new string(v.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
-        var misnamed = missing.Where(m => header.Any(h => Key(h) == Key(m))).Select(m => $"{m} (found \"{header.First(h => Key(h) == Key(m))}\")").ToList();
-        var unexpected = header.Where(h => !Columns.Contains(h, StringComparer.Ordinal) && !missing.Any(m => Key(m) == Key(h))).ToList();
+        var check = CheckHeader(header);
+        var missing = check.Missing; var misnamed = check.Misnamed; var unexpected = check.Unexpected;
 
         var index = Columns.ToDictionary(c => c, c => header.FindIndex(h => h == c));
         var issues = new List<TemplateIssue>();
@@ -76,6 +80,37 @@ public static class GenesysContactTemplate
         }
         var unknown = values.Where(v => !expectedReminderTypes.Contains(v, StringComparer.Ordinal)).ToList();
         return new(header, missing, unexpected, misnamed, values.ToList(), unknown, records.Count - 1, issues);
+    }
+
+    /// <summary>
+    /// Compares a list's column names with the template. A column that matches only ignoring case or spacing (for example <c>EmailAddress</c>, <c>Amount Due</c>) is reported as misnamed with the name
+    /// that was found, never silently accepted: an import maps columns by their exact names.
+    /// </summary>
+    public static TemplateHeaderCheck CheckHeader(IReadOnlyList<string> header)
+    {
+        var missing = Columns.Where(c => !header.Contains(c, StringComparer.Ordinal)).ToList();
+        static string Key(string v) => new string(v.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        var misnamed = missing.Where(m => header.Any(h => Key(h) == Key(m))).Select(m => $"{m} (found \"{header.First(h => Key(h) == Key(m))}\")").ToList();
+        var unexpected = header.Where(h => !Columns.Contains(h, StringComparer.Ordinal) && !missing.Any(m => Key(m) == Key(h))).ToList();
+        return new(missing, misnamed, unexpected);
+    }
+
+    /// <summary>
+    /// The import file for a list whose actual columns are <paramref name="columns"/>: the six template columns in template order, then any further column the list has (left empty, in the list's own
+    /// order), because a list rejects or mis-maps a file that lacks one of its columns. Each value is the exact string the upload sends.
+    /// </summary>
+    public static string WriteCsv(IEnumerable<GenesysContactPayload> contacts, IReadOnlyList<string> columns)
+    {
+        var header = Columns.Concat(columns.Where(c => !Columns.Contains(c, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal)).ToList();
+        var text = new StringBuilder();
+        text.Append(string.Join(',', header.Select(Quote))).Append("\r\n");
+        foreach (var c in contacts)
+        {
+            var values = new Dictionary<string, string>(StringComparer.Ordinal)
+            { ["Phone"] = c.Phone, ["CustomerName"] = c.CustomerName, ["Email Address"] = c.EmailAddress, ["ReminderType"] = c.ReminderType, ["AmountDue"] = c.AmountDue, ["DueDate"] = c.DueDate };
+            text.Append(string.Join(',', header.Select(h => Quote(Neutralize(values.TryGetValue(h, out var v) ? v : "", h == "Phone"))))).Append("\r\n");
+        }
+        return text.ToString();
     }
 
     /// <summary>RFC 4180 CSV: quoted fields, doubled quotes, embedded commas and newlines.</summary>

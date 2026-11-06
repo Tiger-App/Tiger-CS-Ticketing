@@ -34,6 +34,18 @@ public sealed class CollectionsReviewOptions
     /// <summary>Floating-point noise tolerance in AED when normalizing a floating source value to fils.</summary>
     public decimal FloatNoiseTolerance { get; set; } = MoneyNormalizer.DefaultFloatTolerance;
 
+    /// <summary>
+    /// With background jobs off, a refresh a person starts runs inside the API process. To keep a double click, or several users, from reading the financial source over and over, a refresh is
+    /// not started again within this many seconds of the last published one for today (the page says when it can be repeated). 0 turns the cooldown off. Applies only to in-process refreshes.
+    /// </summary>
+    public int InProcessRefreshCooldownSeconds { get; set; } = 60;
+
+    /// <summary>
+    /// A file export (Export for Genesys) does not mark anyone as sent. To keep the same customers from being exported over and over unnoticed, an export that contains customers exported within this many
+    /// days is held until the person confirms it (the page says who was exported when). 0 turns the check off. 1-365.
+    /// </summary>
+    public int ExportRepeatLookbackDays { get; set; } = 30;
+
     /// <summary>Review records of runs older than the newest N completed runs are deleted.</summary>
     public int RunsToKeep { get; set; } = 2;
 }

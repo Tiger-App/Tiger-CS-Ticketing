@@ -95,9 +95,32 @@ public interface IReviewJobScheduler
 {
     /// <summary>False when nothing will ever execute an enqueued job (background jobs switched off): a run must then fail visibly instead of waiting in Queued.</summary>
     bool IsAvailable => true;
+    /// <summary>
+    /// Whether a refresh of the review data can run. It can whenever background jobs run, and also when they are switched off but the refresh runs inside this process
+    /// (<see cref="RefreshRunsInProcess"/>): a refresh is an explicit, authorized request, unlike a dispatch or the suppression sweep, which still need real background jobs.
+    /// </summary>
+    bool CanRunRefresh => IsAvailable;
+    /// <summary>True when a refresh is started by a person while background jobs are off: it runs on a single bounded worker in this process (one at a time, with a cooldown) and never recurs.</summary>
+    bool RefreshRunsInProcess => false;
     void EnqueueRefresh(long runId);
     void EnqueueDispatch(long dispatchId);
     void EnqueueSuppressionSweep();
+}
+
+/// <summary>Runs the body of one review refresh. Implemented by <see cref="ReviewRefreshService"/>; the in-process scheduler resolves it in a fresh scope.</summary>
+public interface IReviewRefreshRunner
+{
+    Task RunAsync(long runId, CancellationToken ct);
+}
+
+/// <summary>One earlier file export as the audit trail holds it: when, and the audit text (counts, filter, hash and customer fingerprints; never a customer's data).</summary>
+public sealed record GenesysExportAuditRecord(DateTime OccurredAtUtc, Guid? ActorEmployeeId, string? Details);
+
+/// <summary>Read access to the audit entries of earlier file exports, so a repeat export of the same customers can be noticed before another file is made. Read only.</summary>
+public interface IGenesysExportHistory
+{
+    /// <summary>The audit entries written by <paramref name="action"/> since <paramref name="sinceUtc"/>, newest first, at most <paramref name="take"/>.</summary>
+    Task<IReadOnlyList<GenesysExportAuditRecord>> ListExportsAsync(string action, DateTime sinceUtc, int take, CancellationToken ct);
 }
 
 public enum GenesysUploadOutcome

@@ -2,6 +2,26 @@
 @model CampaignsModel
 @* Select Customers -> Approve & Send -> Genesys + Admin Email: the approval and send status of the Campaigns page. *@
 @if (Model.ApprovalError is not null) { <div class="panel"><div class="error-state" role="alert" data-approval-error><p>@Model.ApprovalError</p></div></div> }
+@if (Model.RepeatExportWarning is not null)
+{
+    <div class="panel">
+        <form method="post" asp-page-handler="ExportGenesys" role="alert" data-repeat-export>
+            <p data-repeat-export-warning><strong>Already exported.</strong> @Model.RepeatExportWarning</p>
+            @foreach (var name in CampaignsModel.FilterFieldNames)
+            {
+                if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
+                <input type="hidden" name="@name" value="@(name switch {
+                    "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => "", "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
+                    "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
+            }
+            <input type="hidden" name="contactList" value="@Model.SelectedContactList" />
+            <input type="hidden" name="selectionMode" value="@Model.SelectionMode" />
+            <input type="hidden" name="unitKeys" value="@Model.UnitKeys" />
+            <input type="hidden" name="confirmRepeat" value="true" />
+            <button class="btn" type="submit" data-confirm-repeat-export>Export again</button>
+        </form>
+    </div>
+}
 @if (Model.ApprovalNotice is not null) { <div class="panel"><p role="status" data-approval-notice>@Model.ApprovalNotice</p></div> }
 
 @if (Model.Run is { } run && (Model.RunActive || run.Status == "Failed"))

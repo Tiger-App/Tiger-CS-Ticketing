@@ -68,6 +68,8 @@
             }
         </div>
         @{
+            var exportReason = Model.ExportGenesysBlockedReason;
+            var exportTip = exportReason ?? "Downloads the ticked (or all eligible) customers as a CSV in the format of the chosen Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), with the amounts shown here, for a manual import. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
             var approveReason = reason is null
                 ? "Only Ready customers can be sent. Nothing is sent until you confirm the exact count, amount and Genesys contact list."
                 : reason;
@@ -100,6 +102,17 @@
                     <span class="campaign-action">
                         <button class="btn btn-primary" type="submit" aria-describedby="tip-approve-reason" data-approve-button data-send-to-genesys disabled="@(reason is not null)" data-blocked="@(reason is not null ? "true" : "false")">Send to Genesys</button>
                         <partial name="_InfoTip" model="@(new InfoTipModel("tip-approve-reason", "Send to Genesys", approveReason, "data-approve-reason"))" />
+                    </span>
+                    @* Export for Genesys: a separate action from sending. It downloads the file the selection would be uploaded as; it uploads nothing and needs none of the sending-only settings. *@
+                    <span class="campaign-action">
+                        <button class="btn" type="submit" asp-page-handler="ExportGenesys" aria-describedby="tip-export-genesys" data-export-genesys-button disabled="@(exportReason is not null)" data-blocked="@(exportReason is not null ? "true" : "false")">Export for Genesys</button>
+                        <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-genesys", "Export for Genesys", exportTip, "data-export-genesys-reason"))" />
+                    </span>
+                    @* Export review CSV: the whole filtered list with status and reasons, for people (not a Genesys file). Same button in Auto, where it is a link. *@
+                    <span class="campaign-action">
+                        @{ var reviewReason = Model.ExportManualReviewBlockedReason; }
+                        <button class="btn" type="submit" asp-page-handler="ExportReview" aria-describedby="tip-export-review-manual" data-export-review-manual disabled="@(reviewReason is not null)">Export review CSV</button>
+                        <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-review-manual", "Export review CSV", reviewReason ?? "Downloads every customer matching the filters, including the ones held back, with their status and the reason, for review. It is not a Genesys file and uploads nothing.", "data-export-review-reason"))" />
                     </span>
                     <span class="campaign-tally" data-selected-summary aria-live="polite">@(counts.Ready > 0 ? "0 selected" : "No eligible customers")</span>
                     @if (counts.Ready > 0) { <button class="btn" type="button" data-clear-selection>Clear ticks</button> }

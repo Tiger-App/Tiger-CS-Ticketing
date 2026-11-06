@@ -83,6 +83,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (RenderFull) await LoadReportAsync(cancellationToken);
         await LoadApprovalStateAsync(cancellationToken);
         if (TempData["ApprovalError"] is string error) ApprovalError = error;
+        if (TempData["ApprovalNotice"] is string notice) ApprovalNotice = notice;
     }
 
     /// <summary>The results area only (HTML fragment): summary, snapshot status, table, pagination and export links.</summary>
@@ -262,19 +263,31 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// Why Send to Genesys is unavailable in Manual (null = available). Checked in the order a person can act on: data, reconciliation, configuration,
     /// freshness, then whether any customer is eligible. The API enforces every gate again at confirmation; this only names which one applies.
     /// </summary>
-    public string? ManualBlockedReason()
+    /// <param name="forExport">The file export uploads nothing, so the settings that only a send needs (background jobs, Genesys credentials, the live-dispatch switch) do not block it.</param>
+    public string? ManualBlockedReason(bool forExport = false)
     {
         if (ManualPage is not { } page) return "Preview customers first.";
         if (!CanSend) return "Your account does not have permission to approve and send campaigns (Collections send permission required).";
         if (page.Run is not { } run) return "There is no approval data yet. Refresh the approval data, then preview again.";
         if (!run.SourceReconciled) return "The financial source is not reconciled, so nothing can be approved or sent.";
-        if (DispatchBlockers.Count > 0) return "Sending to Genesys is not configured in this environment. " + string.Join(" ", DispatchBlockers);
+        if (!forExport && DispatchBlockers.Count > 0) return "Sending to Genesys is not configured in this environment. " + string.Join(" ", DispatchBlockers);
         if (run.IsStale || run.Status != "Completed") return "The approval data is stale or still being prepared. Refresh the approval data, then preview again.";
         if (run.AsOfDate != CollectionsDisplay.DubaiToday()) return $"The approval data was built for {run.AsOfDate:dd MMM yyyy}, not today. Refresh the approval data, then preview again.";
         if (page.Counts.Ready == 0)
             return page.Counts.Total == 0 ? "No customers match these filters." : "No customers are eligible to send. See the reasons below; blocked customers are never sent.";
         return null;
     }
+
+    /// <summary>Why the Manual Export review CSV is unavailable (null = available): the file only needs the permission and stored approval data.</summary>
+    public string? ExportManualReviewBlockedReason =>
+        ManualPage is not { } page ? "Preview customers first."
+        : !CanSend ? "Your account does not have permission to export campaign lists (Collections send permission required)."
+        : page.Run is null ? "There is no approval data yet. Refresh the approval data, then preview again."
+        : page.Counts.Total == 0 ? "No customers match these filters."
+        : null;
+
+    /// <summary>Why Export for Genesys is unavailable (null = available): the same data and permission rules as sending, without the sending-only settings.</summary>
+    public string? ExportGenesysBlockedReason => IsManual ? ManualBlockedReason(forExport: true) : "Export for Genesys is a Manual action.";
 
     /// <summary>What a person can do about a Manual hold: the review workflow behind each exact reason.</summary>
     public static string ManualAdvice(string code) => code switch
@@ -471,7 +484,14 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     {
         var started = await api.StartReviewRefreshAsync(null, ct);
         var target = !string.IsNullOrEmpty(returnUrl) && Url.IsLocalUrl(returnUrl) ? returnUrl : "/Collections/Campaigns";
-        if (started.IsSuccess) return LocalRedirect(target);
+        if (started.IsSuccess)
+        {
+            // A refresh that is already running shows its progress; one that finished moments ago is not repeated (in-process refreshes are rate limited), and the person is told so.
+            // A newly started refresh is always Queued, so a Completed run in the answer is the reused one.
+            if (started.Value is { Status: "Completed" } done)
+                TempData["ApprovalNotice"] = $"The approval data was refreshed at {done.CompletedAtUtc:HH:mm} UTC and is current. A refresh is not repeated within a minute; try again later if the source data has changed.";
+            return LocalRedirect(target);
+        }
         SetFiltersFromForm();
         await LoadApprovalStateAsync(ct);
         ApprovalError = Describe(started.Outcome, started.Detail);
@@ -507,6 +527,53 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         await ShowSummaryAsync(ct);
         return Page();
     }
+
+    /// <summary>
+    /// "Export for Genesys": the file the selected (or all eligible) customers would be uploaded as, in the format of the chosen contact list, for a manual import. Read only; recorded in the audit
+    /// trail by the API. The file is served as UTF-8 with a byte-order mark, like the other CSV downloads of this page, so that names in Arabic open correctly in a spreadsheet.
+    /// </summary>
+    public async Task<IActionResult> OnPostExportGenesysAsync(string? selectionMode, string? unitKeys, bool confirmRepeat = false, CancellationToken ct = default)
+    {
+        SetFiltersFromForm();
+        await EnsureTowersAsync(ct);
+        if (!IsManual) return await AutoModeRefusedAsync(ct);
+        SelectionMode = string.Equals(selectionMode, ReviewQueryService.ModeAllMatching, StringComparison.OrdinalIgnoreCase) ? ReviewQueryService.ModeAllMatching : ReviewQueryService.ModeSelectedUnits;
+        UnitKeys = unitKeys ?? "";
+        var result = await api.ExportForGenesysAsync(BuildSelection(), ct, confirmRepeat);
+        if (result.IsSuccess && result.Value is { } file)
+        {
+            // The file is a download, so what the person must know about it is also shown on the next page view: a file not checked against the Genesys list, and a confirmed repeat.
+            var notes = file.Notices.Where(n => n.Length > 0).ToList();
+            if (notes.Count > 0) TempData["ApprovalNotice"] = $"Exported {file.RowCount:N0} customer(s) to {file.FileName}. " + string.Join(" ", notes);
+            return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(file.Csv)).ToArray(), "text/csv; charset=utf-8", file.FileName);
+        }
+        await LoadApprovalStateAsync(ct);
+        // Customers who were exported before: nothing is made until the person confirms; the warning carries its own confirm button (same selection and filters).
+        if (result.Outcome == ApiOutcome.Conflict && result.ProblemType?.EndsWith("/RepeatExport", StringComparison.Ordinal) == true)
+        {
+            RepeatExportWarning = result.Detail;
+            return Page();
+        }
+        ApprovalError = Describe(result.Outcome, result.Detail);
+        return Page();
+    }
+
+    /// <summary>The Manual "Export review CSV": the filtered list with status and reasons. Not a Genesys file; it needs the same data and permission rules as the Genesys export.</summary>
+    public async Task<IActionResult> OnPostExportReviewAsync(CancellationToken ct = default)
+    {
+        SetFiltersFromForm();
+        await EnsureTowersAsync(ct);
+        if (!IsManual) return await AutoModeRefusedAsync(ct);
+        var result = await api.ExportManualReviewAsync(ApprovalFilter(), ct);
+        if (result.IsSuccess && result.Value is { } file)
+            return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(file.Csv)).ToArray(), "text/csv; charset=utf-8", file.FileName);
+        await LoadApprovalStateAsync(ct);
+        ApprovalError = Describe(result.Outcome, result.Detail);
+        return Page();
+    }
+
+    /// <summary>Set when the Genesys export found customers who were exported before: the text names how many and when, and the page offers "Export again".</summary>
+    public string? RepeatExportWarning { get; private set; }
 
     /// <summary>A person sends only in Manual. Auto campaigns are dispatched by the scheduled Auto dispatcher (while AutoSendingEnabled is on), never from this page.</summary>
     private async Task<IActionResult> AutoModeRefusedAsync(CancellationToken ct)

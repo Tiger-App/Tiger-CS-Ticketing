@@ -466,7 +466,7 @@ public static class CollectionsCampaignCsv
         return text.ToString();
     }
 
-    private static string Cell(string value, bool review, bool isPhone)
+    internal static string Cell(string value, bool review, bool isPhone)
     {
         // Review files are opened in spreadsheets. Machine imports preserve validated E.164 phone numbers.
         var trimmed = value.TrimStart();
