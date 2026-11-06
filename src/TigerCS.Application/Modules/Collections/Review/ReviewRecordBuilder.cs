@@ -65,15 +65,15 @@ public static class ReviewRecordBuilder
             var contactConflict = unitRows.Select(r => (r.Row.FullName.Trim(), Phone: PhoneNormalizer.Normalize(r.Row.Mobile).E164,
                 Email: NormalizeEmail(r.Row.Email), r.Row.ProjectCode)).Distinct().Count() > 1;
 
-            // The five campaign stages, then Direct Send (stage == null): one record per customer for the WHOLE Due + Overdue balance, with no stage window, threshold or schedule.
-            foreach (var stage in Enum.GetValues<CollectionsCampaignStage>().Select(s => (CollectionsCampaignStage?)s).Append(null))
+            // The customer's unpaid instalments, stored on every stage record: a Manual send calculates its amount from them and the person's filters.
+            var instalmentsJson = FilteredAmounts.Serialize(unitRows.Select(r => new FilterInstalment(r.Due, r.Amount)));
+            foreach (var stage in Enum.GetValues<CollectionsCampaignStage>())
             {
-                var direct = stage is null;
                 var instalments = unitRows.Select(r => new CampaignInstalment(r.Due, r.Amount)).ToList();
-                var amount = direct ? EvaluateDirectSend(instalments) : CollectionsCampaignPolicy.Evaluate(instalments, stage!.Value, context.AsOfDate);
+                var amount = CollectionsCampaignPolicy.Evaluate(instalments, stage, context.AsOfDate);
                 if (amount.Reason is "NoQualifyingBalance" or "BelowThreshold") continue;
 
-                var qualifying = direct ? instalments : CollectionsCampaignPolicy.Qualifying(instalments, stage!.Value, context.AsOfDate);
+                var qualifying = CollectionsCampaignPolicy.Qualifying(instalments, stage, context.AsOfDate);
                 var stageRows = unitRows.Where(r => qualifying.Any(q => q.DueDate == r.Due && q.RemainingAmount == r.Amount)).ToList();
                 var reasons = new List<string>();
 
@@ -110,22 +110,12 @@ public static class ReviewRecordBuilder
                 if (linked.SourceConflict) reasons.Add(ReviewReasons.ContactSourceConflict);
                 if (crm.Availability.Blocks) reasons.Add(ReviewReasons.CrmUnavailable);
 
-                if (direct)
-                {
-                    // No stage schedule applies. Legal restrictions do: a customer whose balance is in a legal stage is never sent through a generic reminder.
-                    if (CollectionsCampaignPolicy.Evaluate(instalments, CollectionsCampaignStage.LegalNotice, context.AsOfDate).Reason is "Qualifies" or "AmbiguousInstalments"
-                        || CollectionsCampaignPolicy.Evaluate(instalments, CollectionsCampaignStage.LegalReferral, context.AsOfDate).Reason is "Qualifies" or "AmbiguousInstalments")
-                        reasons.Add(ReviewReasons.LegalStageCustomer);
-                }
-                else
-                {
-                    if (!CollectionsCampaignPolicy.ScheduledDates(stage!.Value, context.AsOfDate).Contains(context.AsOfDate))
-                        reasons.Add(ReviewReasons.OutsideSchedule);
-                    if (stage == CollectionsCampaignStage.LegalNotice && !context.LegalNoticeReleased) reasons.Add(ReviewReasons.LegalNoticeReleaseRequired);
-                    if (stage == CollectionsCampaignStage.LegalReferral && !context.LegalCaseApproved) reasons.Add(ReviewReasons.LegalCaseNotApproved);
-                }
+                if (!CollectionsCampaignPolicy.ScheduledDates(stage, context.AsOfDate).Contains(context.AsOfDate))
+                    reasons.Add(ReviewReasons.OutsideSchedule);
+                if (stage == CollectionsCampaignStage.LegalNotice && !context.LegalNoticeReleased) reasons.Add(ReviewReasons.LegalNoticeReleaseRequired);
+                if (stage == CollectionsCampaignStage.LegalReferral && !context.LegalCaseApproved) reasons.Add(ReviewReasons.LegalCaseNotApproved);
 
-                var cycle = $"{context.AsOfDate.ToString("yyyy-MM", CultureInfo.InvariantCulture)}:{(direct ? "DirectSend" : stage.ToString())}";
+                var cycle = $"{context.AsOfDate.ToString("yyyy-MM", CultureInfo.InvariantCulture)}:{stage}";
                 var recordKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
                     $"{unit.Key.CompanyId}:{unit.Key.Tenant}:{unit.Key.UnitId}:{unit.Key.Code}:{cycle}")));
                 var distinctReasons = reasons.Distinct().ToList();
@@ -133,7 +123,7 @@ public static class ReviewRecordBuilder
                 {
                     RecordKey = recordKey,
                     CycleKey = cycle,
-                    ReminderType = direct ? CampaignReminderType.DirectSend : CampaignReminderTypes.FromStage(stage!.Value),
+                    ReminderType = CampaignReminderTypes.FromStage(stage),
                     CompanyId = unit.Key.CompanyId,
                     TenantId = unit.Key.Tenant,
                     CustomerName = linked.Name.Length > 0 ? linked.Name : first.FullName.Trim(),
@@ -156,27 +146,13 @@ public static class ReviewRecordBuilder
                     ValidationStatus = ReviewReasons.StatusFor(distinctReasons, alreadySent: false),
                     SourceReadAtUtc = context.SourceReadAtUtc,
                     Source = context.SourceLabel,
-                    // Direct Send: the amount depends on the person's filters, so the unpaid instalments travel with the record and the amount is always calculated from them.
-                    InstalmentsJson = direct ? DirectSendAmounts.Serialize(unitRows.Select(r => new DirectSendInstalment(r.Due, r.Amount))) : null
+                    InstalmentsJson = instalmentsJson
                 });
             }
         }
 
         MarkRepeatedCalls(records);
         return new ReviewBuildResult(records, floatNormalized, settled, cancelled);
-    }
-
-    /// <summary>
-    /// The Direct Send amount: every remaining instalment of the customer (the source window ends with the as-of month, so this is Due + Overdue). It uses the same ambiguity rule as the stages
-    /// (several instalments on one due date cannot be told apart from a duplicated allocation) and has no threshold.
-    /// </summary>
-    internal static CampaignAmount EvaluateDirectSend(IReadOnlyList<CampaignInstalment> instalments)
-    {
-        var rows = instalments.Where(i => i.RemainingAmount > 0).ToList();
-        if (rows.Count == 0) return new(0m, null, "NoQualifyingBalance");
-        var earliest = rows.Min(i => i.DueDate);
-        if (rows.GroupBy(i => i.DueDate).Any(g => g.Count() > 1)) return new(null, earliest, "AmbiguousInstalments");
-        return new(rows.Sum(i => i.RemainingAmount), earliest, "Qualifies");
     }
 
     /// <summary>
@@ -187,8 +163,7 @@ public static class ReviewRecordBuilder
     private static void MarkRepeatedCalls(List<CollectionsReviewRecord> records)
     {
         static (int, string, int?, string) Unit(CollectionsReviewRecord r) => (r.CompanyId, r.TenantId, r.UnitId, r.UnitCode);
-        // Direct Send records are not scheduled candidates: they have their own rules (MarkDirectSendRepeatedCalls) and never change how the stage records are marked.
-        var candidates = records.Where(r => r.ReminderType != CampaignReminderType.DirectSend && !Parse(r.Reasons).Contains(ReviewReasons.OutsideSchedule)).ToList();
+        var candidates = records.Where(r => !Parse(r.Reasons).Contains(ReviewReasons.OutsideSchedule)).ToList();
         var flagged = new Dictionary<CollectionsReviewRecord, List<string>>();
         void Flag(CollectionsReviewRecord r, string reason) { if (!flagged.TryGetValue(r, out var l)) flagged[r] = l = []; if (!l.Contains(reason)) l.Add(reason); }
 
@@ -203,36 +178,7 @@ public static class ReviewRecordBuilder
             record.Reasons = Serialize(all);
             record.ValidationStatus = ReviewReasons.StatusFor(all, alreadySent: false);
         }
-        MarkManualRepeatedCalls(records.Where(r => r.ReminderType != CampaignReminderType.DirectSend).ToList(), candidates);
-        MarkDirectSendRepeatedCalls(records, candidates);
-    }
-
-    /// <summary>
-    /// Repeated-call rules of Direct Send. A phone number used by several customers (among the Direct Send records, or by a customer in a campaign scheduled today) holds all of those records back
-    /// (<c>SharedPhoneMultipleUnits</c>), and a customer who is already in a campaign scheduled today is held back (<c>DirectSendScheduledToday</c>): both would call the same person twice.
-    /// </summary>
-    private static void MarkDirectSendRepeatedCalls(List<CollectionsReviewRecord> records, List<CollectionsReviewRecord> candidates)
-    {
-        static (int, string, int?, string) Unit(CollectionsReviewRecord r) => (r.CompanyId, r.TenantId, r.UnitId, r.UnitCode);
-        var direct = records.Where(r => r.ReminderType == CampaignReminderType.DirectSend).ToList();
-        if (direct.Count == 0) return;
-        var scheduledUnits = candidates.Select(Unit).ToHashSet();
-        var phoneUnits = new Dictionary<string, HashSet<(int, string, int?, string)>>(StringComparer.Ordinal);
-        foreach (var r in direct.Concat(candidates).Where(r => r.Phone.Length > 0))
-        {
-            if (!phoneUnits.TryGetValue(r.Phone, out var set)) phoneUnits[r.Phone] = set = [];
-            set.Add(Unit(r));
-        }
-        foreach (var record in direct)
-        {
-            var added = new List<string>();
-            if (scheduledUnits.Contains(Unit(record))) added.Add(ReviewReasons.DirectSendScheduledToday);
-            if (record.Phone.Length > 0 && phoneUnits[record.Phone].Count > 1) added.Add(ReviewReasons.SharedPhoneMultipleUnits);
-            if (added.Count == 0) continue;
-            var all = Parse(record.Reasons).Concat(added).Distinct().ToList();
-            record.Reasons = Serialize(all);
-            record.ValidationStatus = ReviewReasons.StatusFor(all, alreadySent: false);
-        }
+        MarkManualRepeatedCalls(records, candidates);
     }
 
     /// <summary>
@@ -262,6 +208,19 @@ public static class ReviewRecordBuilder
             }
             if (markers.Count > 0) record.Reasons = Serialize(Parse(record.Reasons).Concat(markers));
         }
+    }
+
+    /// <summary>
+    /// Whether a Manual send may send this record now: Ready, or held back by the stage schedule ALONE (<c>OutsideSchedule</c> as its only reason, so no reconciliation, contact, CRM, amount,
+    /// legal-release, repeated-call or Manual marker reason). The schedule is the one rule Manual waives; every other rule keeps the record out. Used by the approval, the list and the
+    /// revalidation right before the upload, so they can never disagree.
+    /// </summary>
+    public static bool IsManuallySendable(CollectionsReviewRecord record)
+    {
+        if (record.ValidationStatus == ReviewValidationStatus.Ready) return true;
+        if (record.ValidationStatus != ReviewValidationStatus.Excluded) return false;
+        var reasons = Parse(record.Reasons);
+        return reasons.Count == 1 && reasons[0] == ReviewReasons.OutsideSchedule;
     }
 
     public static string Serialize(IEnumerable<string> reasons)

@@ -1,14 +1,14 @@
 @using TigerCS.Web.Pages.Collections
 @using TigerCS.Web.Services.Api
 @model CampaignsModel
-@* Direct Send: the customers the user may pick for a manual contact-list dispatch. The list is the stored review records (one per customer, no campaign stage, no stage dates). Every
-   mandatory check is already part of a record, so "Ready" here means exactly what it means for Manual and Auto; a held-back customer shows its exact reason and what to do about it. *@
+@* Manual: the customers of the chosen campaign type the user may send now. The list is the stored review records of that campaign (no send date, no stage schedule); the amount is calculated from the
+   filters. Every mandatory check is already part of a record, so "Ready" means what it means everywhere; a held-back customer shows its exact reason and what to do about it. *@
 @if (Model.LoadNotice is { } directNotice) { <div class="receivables-notice" role="status" data-load-notice>@directNotice</div> }
-@if (Model.DirectPage is { } list)
+@if (Model.ManualPage is { } list)
 {
     var counts = list.Counts;
     var blocked = counts.NeedsReview + counts.Excluded;
-    var reason = Model.DirectSendBlockedReason();
+    var reason = Model.ManualBlockedReason();
     var readyOnPage = list.Items.Count(i => i.ValidationStatus == "Ready");
     var selectAllLabel = readyOnPage > 0 ? "Select all eligible customers on this page"
         : counts.Ready == 0 ? "Nothing to select: no customer is eligible to send (see \"Why customers are held back\")."
@@ -17,11 +17,11 @@
     var blockedRows = list.Items.Where(i => i.ValidationStatus != "Ready").ToList();
     var reasonGroups = blockedRows.SelectMany(i => i.Reasons.Select(r => r.Code)).GroupBy(c => c).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
     <div hidden data-effective-filters data-from="@Model.DateFrom?.ToString("yyyy-MM-dd")" data-to="@Model.DateTo?.ToString("yyyy-MM-dd")"></div>
-    <div class="campaign-fragment" data-customer-results data-preview-current data-direct-send>
+    <div class="campaign-fragment" data-customer-results data-preview-current data-manual-send>
         <div class="campaign-kpis" data-campaign-kpis>
             <ul class="campaign-totals" data-campaign-totals>
                 <li class="campaign-card">
-                    <span class="campaign-card__label">Customers<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-customers", "Customers", "Customers with a Due or Overdue balance that match the filters. No campaign stage or stage date is applied."))" /></span>
+                    <span class="campaign-card__label">Customers<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-customers", "Customers", "Customers of this campaign type with a Due or Overdue balance that match the filters. The stage schedule is not applied."))" /></span>
                     <strong class="campaign-card__value" data-eligible-count>@counts.Total.ToString("N0")</strong>
                 </li>
                 <li class="campaign-card campaign-card--ready">
@@ -42,10 +42,10 @@
                 </li>
             </ul>
             <p class="campaign-meta">
-                <span>Mode <strong data-mode-name>Direct Send</strong></span>
-                <span>Purpose <strong data-campaign-name>@Model.CampaignName</strong></span>
-                <span>Destination <strong data-direct-list>@(Model.ContactList.Length > 0 ? CampaignsModel.ContactListLabel(Model.ContactList) + " list" : "choose below")</strong></span>
-                <span>Automatic execution <strong data-auto-sending>Off</strong><partial name="_InfoTip" model="@(new InfoTipModel("tip-auto-sending", "Automatic execution", "Direct Send never dispatches by itself. Nothing is sent until an authorized user confirms the exact count."))" /></span>
+                <span>Mode <strong data-mode-name>Manual</strong></span>
+                <span>Campaign <strong data-campaign-name>@Model.CampaignName</strong></span>
+                <span>Destination <strong data-manual-list>@CampaignsModel.ContactListLabel(Model.SelectedContactList) list</strong></span>
+                <span>Sending <strong data-auto-sending>On confirmation only</strong><partial name="_InfoTip" model="@(new InfoTipModel("tip-auto-sending", "Automatic execution", "Manual never dispatches by itself. Nothing is sent until an authorized user confirms the exact count. Automatic execution is a separate Auto setting."))" /></span>
                 <span>Payment <strong>@(Model.PaymentStatus == "Both" ? "Due and Overdue" : Model.PaymentStatus)</strong></span>
             </p>
             @if (blockedRows.Count > 0 || counts.Ready == 0 || reason is not null)
@@ -57,10 +57,10 @@
                         @foreach (var g in reasonGroups)
                         {
                             <li data-not-ready-reason>@CampaignsModel.ReasonText(g.Key) (@g.Count().ToString("N0") on this list)</li>
-                            <li class="campaign-directsend__advice" data-review-workflow>@CampaignsModel.DirectSendAdvice(g.Key)</li>
+                            <li class="campaign-manual__advice" data-review-workflow>@CampaignsModel.ManualAdvice(g.Key)</li>
                         }
                     </ul>
-                    <form method="post" asp-page-handler="RefreshApproval" class="campaign-directsend__advice">
+                    <form method="post" asp-page-handler="RefreshApproval" class="campaign-manual__advice">
                         <input type="hidden" name="returnUrl" value="@Model.ReturnUrl()" />
                         <button class="btn btn-sm" type="submit" data-refresh-approval>Refresh approval data</button>
                     </form>
@@ -69,7 +69,7 @@
         </div>
         @{
             var approveReason = reason is null
-                ? "Only eligible customers can be sent. Nothing is sent until you confirm the exact count and Genesys contact list."
+                ? "Only Ready customers can be sent. Nothing is sent until you confirm the exact count, amount and Genesys contact list."
                 : reason;
         }
         <div class="campaign-toolbar">
@@ -82,13 +82,12 @@
                         "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
                 }
                 <input type="hidden" name="unitKeys" value="" data-selected-units />
-                @* The destination: one of the two existing Genesys contact lists. Required (the send button stays disabled until one is chosen) and kept with the approval for the audit trail. *@
+                @* The destination: an existing Genesys contact list that suits the campaign type (its own list first, which is the default). Kept with the approval for the audit trail. *@
                 <label class="campaign-approve__list">Contact list
-                    <select class="field-select" name="contactList" data-contact-list required aria-describedby="tip-contact-list">
-                        <option value="" selected="@(Model.ContactList.Length == 0)">Select a contact list…</option>
-                        @foreach (var choice in CampaignsModel.ContactListChoices) { <option value="@choice" selected="@(Model.ContactList == choice)">@CampaignsModel.ContactListLabel(choice)</option> }
+                    <select class="field-select" name="contactList" data-contact-list aria-describedby="tip-contact-list">
+                        @foreach (var choice in Model.ContactListChoices) { <option value="@choice" selected="@(Model.SelectedContactList == choice)">@CampaignsModel.ContactListLabel(choice)@(choice == Model.ContactListChoices[0] ? " (this campaign's list)" : "")</option> }
                     </select>
-                    <partial name="_InfoTip" model="@(new InfoTipModel("tip-contact-list", "Contact list", "The existing Genesys list these customers are added to. It is checked in Genesys before anything is uploaded: it must have the required columns and no active campaign may dial it."))" />
+                    <partial name="_InfoTip" model="@(new InfoTipModel("tip-contact-list", "Contact list", "The existing Genesys list these customers are added to: this campaign's own list, or another reminder list that suits it. It is checked in Genesys before anything is uploaded: it must have the required columns and no other active campaign may dial it."))" />
                 </label>
                 @if (counts.Ready > 0)
                 {
@@ -131,10 +130,10 @@
             </table>
         </div>
         <div class="receivables-pagination">
-            <span>Page @list.Page of @Model.DirectTotalPages · @(list.TotalCount == 1 ? "1 customer" : $"{list.TotalCount:N0} customers")</span>
+            <span>Page @list.Page of @Model.ManualTotalPages · @(list.TotalCount == 1 ? "1 customer" : $"{list.TotalCount:N0} customers")</span>
             <div>
                 @if (list.Page > 1) { <a class="btn btn-sm" data-results-link href="@Model.PageUrl(list.Page - 1)">Previous</a> }
-                @if (list.Page < Model.DirectTotalPages) { <a class="btn btn-sm" data-results-link href="@Model.PageUrl(list.Page + 1)">Next</a> }
+                @if (list.Page < Model.ManualTotalPages) { <a class="btn btn-sm" data-results-link href="@Model.PageUrl(list.Page + 1)">Next</a> }
             </div>
         </div>
     </div>

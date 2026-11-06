@@ -23,6 +23,8 @@ public sealed partial class CollectionsCampaignInfoTipTests
 
     private static Task<string> Results(FakeCollectionsApi api) => Get(api, $"/Collections/Campaigns?handler=Results&{Applied}");
     private static Task<string> FullPage(FakeCollectionsApi api) => Get(api, $"/Collections/Campaigns?{Applied}&render=full");
+    /// <summary>Sending is a Manual action: the Send button and its reason live on the Manual list.</summary>
+    private static Task<string> ManualPage(FakeCollectionsApi api) => Get(api, $"/Collections/Campaigns?{Applied}&render=full&sendingMode=Manual");
 
     [GeneratedRegex("<span class=\"info-tip\" data-info-tip>\\s*<button(?<button>[^>]*)>.*?</button>\\s*<span class=\"info-tip__content\"(?<content>[^>]*)>(?<text>.*?)</span>(?=\\s*</span>)", RegexOptions.Singleline)]
     private static partial Regex TipPattern { get; }
@@ -144,7 +146,7 @@ public sealed partial class CollectionsCampaignInfoTipTests
     [Fact]
     public async Task ABlockedApprove_ShowsTheExactReasonInAPopover_AndThePageNoLongerRepeatsItInline()
     {
-        var html = await FullPage(new FakeCollectionsApi { IncludeNotEligible = true, SourceUnreconciled = true });
+        var html = await ManualPage(new FakeCollectionsApi { IncludeNotEligible = true, SourceUnreconciled = true });
         var button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
         Assert.Contains("disabled", button); Assert.Contains("data-blocked=\"true\"", button); Assert.Contains("aria-describedby=\"tip-approve-reason\"", button);
         var tip = TipById(html, "tip-approve-reason");
@@ -157,7 +159,7 @@ public sealed partial class CollectionsCampaignInfoTipTests
     [Fact]
     public async Task ABlockedApprove_NamesMissingSendPermission_AndDoesNotBypassIt()
     {
-        var html = await FullPage(new FakeCollectionsApi { IncludeNotEligible = true, ExportForbidden = true });
+        var html = await ManualPage(new FakeCollectionsApi { IncludeNotEligible = true, ExportForbidden = true });
         var button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
         Assert.Contains("disabled", button); Assert.Contains("data-blocked=\"true\"", button);
         Assert.StartsWith("Your account does not have permission to approve and send campaigns", TipById(html, "tip-approve-reason").Text);
@@ -177,7 +179,7 @@ public sealed partial class CollectionsCampaignInfoTipTests
     {
         var api = new FakeCollectionsApi { IncludeNotEligible = true };
         api.DispatchBlockers.Add("Customer dispatch to Genesys is switched off (Collections:GenesysOutbound:LiveCustomerDispatchEnabled).");
-        var html = await FullPage(api);
+        var html = await ManualPage(api);
         var button = Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value;
         Assert.Contains("disabled", button); Assert.Contains("data-blocked=\"true\"", button);
         var text = TipById(html, "tip-approve-reason").Text;
@@ -188,7 +190,7 @@ public sealed partial class CollectionsCampaignInfoTipTests
     [Fact]
     public async Task AnEnabledApprove_StillExplainsItself_InThePopover()
     {
-        var html = await FullPage(new FakeCollectionsApi { IncludeNotEligible = true });
+        var html = await ManualPage(new FakeCollectionsApi { IncludeNotEligible = true });
         Assert.Equal("Only Ready customers can be sent. Nothing is sent until you confirm the exact count, amount and Genesys contact list.", TipById(html, "tip-approve-reason").Text);
         Assert.DoesNotContain("Only Ready customers can be sent", WithoutTips(html));
         Assert.Contains("data-selected-units", html); Assert.Contains("data-clear-selection", html);          // the selection hooks stay

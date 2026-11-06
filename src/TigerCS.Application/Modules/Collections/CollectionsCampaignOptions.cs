@@ -7,11 +7,13 @@ public sealed class CollectionsCampaignOptions
     /// A V2 procedure name alone does not prove the reconciliation succeeded.</summary>
     public bool FinancialSourceValidated { get; set; }
     /// <summary>
-    /// Separate switch for AUTOMATIC execution of scheduled campaigns (Auto sending mode). False (default). Nothing in the application dispatches on its own today: this value is
-    /// reported on the Campaigns page so it is clear that Auto mode only computes the policy schedule and readiness, and any future automatic executor must check it, in addition to
-    /// <c>GenesysOutbound:LiveCustomerDispatchEnabled</c>, the reconciliation gate and the suppression sweep. It is never a way around any of them.
+    /// Separate switch for AUTOMATIC execution of scheduled campaigns (Auto sending mode). False (default). While it is false nothing is ever dispatched without a person: Auto mode only shows the
+    /// policy schedule and readiness, and the Auto dispatcher does nothing. When true the dispatcher (<c>AutoDispatchService</c>) prepares and dispatches each campaign on its scheduled date. It is
+    /// checked IN ADDITION to, never instead of, <c>GenesysOutbound:LiveCustomerDispatchEnabled</c>, the reconciliation gate and the suppression sweep.
     /// </summary>
     public bool AutoSendingEnabled { get; set; }
+    /// <summary>When the Auto dispatcher looks for campaigns scheduled today (cron, in the business time zone). Hourly through the working day by default: each campaign is dispatched at most once a day (idempotency key), so a later attempt only completes what an earlier one could not (for example stale data).</summary>
+    public string AutoDispatchCron { get; set; } = "0 8-16 * * *";
     /// <summary>The <c>CollectionsSource:PactReceivables:ProcedureSuffix</c> that the reconciliation was performed against.
     /// The sign-off only counts while the configured procedure is the one that was reconciled; switching procedures
     /// (for example from the original to V2) requires a new reconciliation.</summary>

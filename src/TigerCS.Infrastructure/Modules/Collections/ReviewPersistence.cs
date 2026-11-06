@@ -361,16 +361,14 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
         if (s.PaymentStatuses is { } statuses) q = q.Where(r => statuses.Contains(r.PaymentStatus));
         if (s.MinRemaining is { } min) q = q.Where(r => r.RemainingAmount >= min);
         if (s.MaxRemaining is { } max) q = q.Where(r => r.RemainingAmount <= max);
-        // Direct Send records are listed and resolved only when asked for by name; every other listing (the five campaign stages) never contains them.
         if (s.ReminderType is { } type) q = q.Where(r => r.ReminderType == type);
-        else q = q.Where(r => r.ReminderType != CampaignReminderType.DirectSend);
         if (s.Reason is { } reason) { var p = $"%;{reason};%"; q = q.Where(r => EF.Functions.Like(r.Reasons, p)); }
         return q;
     }
 
     /// <summary>
-    /// "Sent" = the record is in a live or uploaded dispatch. For a Direct Send record the contact-frequency limit adds: the same customer is in a live or uploaded dispatch of ANY record that was
-    /// approved since <paramref name="contactedSinceUtc"/> (the start of today), so a customer is never added to a Genesys list twice in a day.
+    /// "Sent" = the record is in a live or uploaded dispatch. When <paramref name="contactedSinceUtc"/> is given (Manual and Auto dispatch) the contact-frequency limit adds: the same customer is in a
+    /// live or uploaded dispatch of ANY record that was approved since then (the start of today), so a customer is never added to a Genesys list twice in a day.
     /// </summary>
     private IQueryable<Row> WithSent(IQueryable<CollectionsReviewRecord> q, DateTime? contactedSinceUtc = null)
     {
@@ -380,7 +378,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
         {
             Record = r,
             Sent = db.CollectionsDispatchItems.Any(i => i.RecordKey == r.RecordKey && LiveStatuses.Contains(i.Status))
-                || (limit && r.ReminderType == CampaignReminderType.DirectSend
+                || (limit
                     && db.CollectionsDispatchItems.Any(i => i.CompanyId == r.CompanyId && i.TenantId == r.TenantId && i.UnitCode == r.UnitCode && LiveStatuses.Contains(i.Status)
                         && db.CollectionsDispatches.Any(d => d.CollectionsDispatchId == i.CollectionsDispatchId && d.InitiatedAtUtc >= since)))
         });
@@ -600,7 +598,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
 
     public async Task<OverlapPage> GetOverlapsAsync(long runId, int skip, int take, CancellationToken ct)
     {
-        var flagged = db.CollectionsReviewRecords.AsNoTracking().Where(r => r.CollectionsReviewRunId == runId && r.Phone != "" && r.ReminderType != CampaignReminderType.DirectSend
+        var flagged = db.CollectionsReviewRecords.AsNoTracking().Where(r => r.CollectionsReviewRunId == runId && r.Phone != ""
             && (EF.Functions.Like(r.Reasons, "%;SharedPhoneMultipleUnits;%") || EF.Functions.Like(r.Reasons, "%;ReminderTypeOverlap;%")));
         var phones = flagged.GroupBy(r => r.Phone);
         var total = await phones.CountAsync(ct);

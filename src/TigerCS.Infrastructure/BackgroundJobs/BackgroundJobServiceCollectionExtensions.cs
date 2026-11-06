@@ -63,6 +63,7 @@ public static class BackgroundJobServiceCollectionExtensions
         services.AddScoped<CollectionsReviewRefreshJob>();
         services.AddScoped<CollectionsDispatchJob>();
         services.AddScoped<CollectionsSuppressionJob>();
+        services.AddScoped<CollectionsAutoDispatchJob>();
         // Holds only the scope factory; it opens one scope per candidate itself.
         services.AddScoped<ChatbotInactivityCloseJob>();
 
@@ -293,5 +294,26 @@ public static class BackgroundJobServiceCollectionExtensions
         }
         manager.AddOrUpdate<CollectionsSuppressionJob>(CollectionsSuppressionJob.RecurringJobId, job => job.RunAsync(CancellationToken.None),
             genesysOptions.SuppressionSweepCron, new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId) });
+    }
+
+    /// <summary>
+    /// Registers the Auto dispatcher only while <c>Collections:Campaigns:AutoSendingEnabled</c> AND the Genesys upload are both enabled, and removes it otherwise. With the default configuration
+    /// (AutoSendingEnabled false) no automatic dispatch job exists at all.
+    /// </summary>
+    public static void UseTigerCsRecurringAutoDispatch(
+        this IServiceProvider services, BackgroundJobOptions backgroundJobOptions, TigerCS.Application.Modules.Collections.CollectionsCampaignOptions campaignOptions,
+        GenesysOutboundOptions genesysOptions, string timeZoneId)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        if (!backgroundJobOptions.Enabled) return;
+
+        var manager = services.GetRequiredService<IRecurringJobManager>();
+        if (!campaignOptions.AutoSendingEnabled || !genesysOptions.Enabled)
+        {
+            manager.RemoveIfExists(CollectionsAutoDispatchJob.RecurringJobId);
+            return;
+        }
+        manager.AddOrUpdate<CollectionsAutoDispatchJob>(CollectionsAutoDispatchJob.RecurringJobId, job => job.RunAsync(CancellationToken.None),
+            campaignOptions.AutoDispatchCron, new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById(timeZoneId) });
     }
 }

@@ -1,11 +1,11 @@
 # Collections Campaigns: Approve & Send (one page)
 
-Select Customers -> Approve & Send -> Genesys + Admin Email, on **Collections Campaigns**. The Receivables page stays the place for financial detail.
+Select Customers -> Send to Genesys -> Genesys + Admin Email, on **Collections Campaigns** (Manual mode); Auto sends by itself on the scheduled date. The Receivables page stays the place for financial detail.
 
-## Flow
-1. **Filter and preview** as before (stage, preview date, project / tower, Due / Overdue, dates, minimum total, search). Due, Overdue, Total and unit columns are unchanged.
+## Flow (Manual)
+1. **Filter and preview**: campaign type, project / tower, Payment status (Due / Overdue / Both), From / To date, Minimum Total, search. There is no send date.
 2. **Select.** Tick individual *Ready* customers (ticks survive paging), or choose *All eligible customers matching the filters* (every page).
-3. **Approve & Send to Genesys.** The page re-resolves the exact selection against the stored, validated copy of the financial snapshot (the *approval data*). If that data is
+3. **Send to Genesys.** The page re-resolves the exact selection against the stored, validated copy of the financial snapshot (the *approval data*). If that data is
    missing, failed or stale, a refresh starts and its progress (or its failure with a **Retry** button) is shown on the same page; nothing is approved from a guess.
 4. **Confirm.** Shows the exact customer count, total amount, campaign stage and destination Genesys contact list. Confirming creates the approval record (who, when, exact list and
    fingerprint) and queues the job. Idempotency key + dispatch history make a second click or a second approval of the same customers a no-op.
@@ -16,20 +16,63 @@ Select Customers -> Approve & Send -> Genesys + Admin Email, on **Collections Ca
 Nothing here bypasses financial reconciliation (`Collections:Campaigns:FinancialSourceValidated`), the dispatch restrictions, or `Collections:GenesysOutbound:LiveCustomerDispatchEnabled`
 (which stays off until someone enables it deliberately).
 
-## Sending mode: Manual or Auto
-The **Sending mode** selector on Collections Campaigns chooses how the schedule is treated. Neither mode dispatches anything by itself; a send always needs an authorized user to press **Approve & Send to Genesys** and confirm.
+## Sending modes: exactly two, Manual and Auto
+The **Sending mode** selector on Collections Campaigns has two options.
 
-| | **Auto** (default) | **Manual** |
+| | **Manual** | **Auto** (default) |
 | --- | --- | --- |
-| Date | The stage's policy schedule (Overdue: the 1st, Current Month: the 14th, Follow Up: the 28th, Legal Notice: the 12th and 14th, Legal Referral: the 30th). The page shows the calculated dates. | **Send date** picker. Only the send date being **today (Dubai)** allows a send. |
-| Outside the date | *Preview only* (`OutsideSchedule`). | A later date is *Preview only / pending* (`PendingSendDate`): nothing is queued or sent, an authorized user comes back on that day. An earlier date is over (`SendDateInPast`). |
-| Automatic execution | Separate switch `Collections:Campaigns:AutoSendingEnabled`, **off by default**. Nothing in the application dispatches on its own today; any future automatic executor must check it in addition to `GenesysOutbound:LiveCustomerDispatchEnabled`, the reconciliation gate and the suppression sweep. | Never automatic. |
+| Who sends | An authorized user, by pressing **Send to Genesys** and confirming. Nothing is ever sent without that confirmation. | The **Auto dispatcher**, by itself, on the scheduled date, with no confirmation, and only while `Collections:Campaigns:AutoSendingEnabled` is **true** (default **false**). |
+| When | **Any time.** No send date and no stage schedule. | The approved policy schedule: Overdue the 1st, Current Month the 14th, Follow Up the 28th, Legal Notice the 12th and 14th. An internal Legal referral (the 30th) is never dispatched to a customer. |
+| Which campaign | **Any existing campaign type** (Overdue, Current Month, Follow Up, Legal Notice, Legal Case), subject to the legal rules below. | Each campaign scheduled today. |
+| Customers | The user filters (Tower, Payment status, Date range, Minimum Total), then ticks customers or chooses **All eligible**. | Every customer who is Ready for the campaign today. |
+| Amount sent | **Calculated from the filters** (see below). | The approved stage amount, unchanged. |
+| Contact list | The campaign's own list, or another **existing** list that suits it (see below). | The campaign's own list. |
+| This page | List, filters, selection, confirmation dialog. | A read-only preview of the schedule and the Ready figures; it sends nothing. |
 
-**Manual bypasses only the stage schedule.** It does not touch: financial reconciliation and sign-off (`SourceGate`), the send permission (`CanSendReminders` / `Collections.Send`), CRM / PACT contact validation, the amount and identity checks, the shared-phone and repeated-reminder rules, the Genesys switches, the suppression sweep, the idempotency key, or duplicate-send protection (a customer already in a live or sent dispatch is left out; a unit that already has a dispatch **today** for another reminder type is held back from a manual send).
+### Manual
+* **Contact list.** A reminder (Overdue, Current Month, Follow Up) may go to any of the three reminder lists (`CurrentMonth`, `FollowUp`, `Overdue`; for example a Current Month reminder to the Follow Up list). A Legal Notice or Legal Case goes only to its own list, so legal wording never lands in a reminder list. The campaign's own list is the default. All lists come from the existing `Collections:GenesysOutbound:ContactListIds`; there is no list of its own for Manual.
+* **The amount** is the sum of the customer's unpaid instalments that match the filters:
 
-How it works: the review data keeps the honest `OutsideSchedule` reason on every record. In Manual mode a record is sendable only if that is its **only** reason, it is of the chosen stage, the data is current and was built today, and the send date is today. Each outside-schedule record also stores `ManualReminderTypeOverlap` / `ManualSharedPhone` markers (what the repeated-call rules would say if it were sent today), which hold it back in Manual mode and change nothing in Auto mode. The mode and send date are recorded in the dispatch's stored filter. The raw *Export Genesys CSV* is not available in Manual mode (use Approve & Send); the review export is.
+| Filter | Effect on the amount |
+|---|---|
+| Payment status **Due** | only instalments due inside the current Dubai month |
+| Payment status **Overdue** | only instalments due before the current month |
+| Payment status **Both** (default) | both (nothing from next month on is ever included) |
+| **From / To date** | only instalments whose due date is inside the range (both ends inclusive) |
+| **Minimum Total** | the customer is kept only when this filtered amount is **greater than** the minimum |
 
-The page shows **Ready**, **Needs review / blocked** and **Preview only** as three separate figures, a state on every row, and the exact reason when Approve & Send is unavailable.
+  Example: Due AED 5,000 + Overdue AED 8,000 with Payment status **Due** sends **AED 5,000**, with the due date of that instalment. A customer whose filtered amount is zero (or not above the minimum) is not listed and cannot be sent. The same figure is shown in the customer table, the KPI total, the confirmation dialog, the audit totals, the contacts CSV and the Genesys `AmountDue`. A customer is one row; several instalments on one due date, or the same instalment under several units, are held for review instead of being counted twice. The campaign type decides **who is in the campaign** (the approved stage rule); the filters decide **the amount**. Source amounts are only read, never changed.
+* **Confirmation dialog.** Shows the selected count, the destination list (name and id), the total amount and the campaign.
+* **Audit.** The dispatch stores who approved, when, the exact list and filter (including the chosen **ContactList**), the totals, and per batch the contact list id and the campaign name.
+
+### Auto
+* **The Auto dispatcher** (`AutoDispatchService`, Hangfire job `collections-auto-dispatch`, cron `Collections:Campaigns:AutoDispatchCron`, default hourly 08:00-16:00 Dubai) is **registered only while `AutoSendingEnabled` is true and the Genesys upload is enabled**. With the shipped defaults it does not exist and does nothing.
+* On a scheduled date it makes sure the review data was built **today** (it refreshes it itself otherwise), resolves the Ready customers of each scheduled campaign, and creates the dispatch through the same pipeline as a person's confirmation. One dispatch per campaign per business day (idempotency key `auto:<date>:<campaign>`), so the hourly job can never send twice.
+* The audit record names the system as the initiator ("Automatic (scheduled)"). Turning the switch on is the operator's acknowledgement that the campaign's own Genesys campaign dials what is uploaded to its list.
+* A Legal Notice is dispatched only once legal notices are released (`LegalNoticeExportEnabled`); a Legal referral never.
+
+### Rules that apply in both modes
+Manual waives **only the stage schedule**; Auto follows it. Everything else is the same:
+
+| Rule | How |
+|---|---|
+| Authorization | Manual needs the send permission; Auto runs as the system only while the switch is on |
+| Financial reconciliation, fresh data | Unreconciled or stale review data holds every record back |
+| Customer and contact validation | Valid international phone, CRM/PACT conflicts, unit and customer identity, amount precision |
+| Shared phone | A number used by several customers holds all of them back |
+| Legal restrictions | Legal notices only when released; an internal Legal referral is never sent to a customer |
+| Repeated calls | A customer who is also in another campaign scheduled today is held back from a Manual send of a different campaign |
+| Contact frequency | One contact per customer per business day across **both** modes (`ContactedToday`) |
+| Duplicate-send and idempotency | One record per customer, campaign and month; a customer already in a live or uploaded dispatch is "Already sent"; the idempotency key replays safely |
+| Revalidation | Right before the upload the job re-reads current balances, recalculates each customer's amount with the filter that was approved (Manual) or the stage amount (Auto), drops customers who paid, and stops the send for review on any other change |
+| Suppression | The paid-after-upload sweep compares with the same amount, so a contact is made not callable only when the part that was sent changed |
+| Destination checks | At approval and again right before the upload: the list must exist with the contact-template columns (`Phone`, `CustomerName`, `Email Address`, `ReminderType`, `AmountDue`, `DueDate`) and **no other active campaign** may dial it (the campaign's own stage campaign dialling its own list is the intended path). A list that cannot be verified is never used |
+| Opt-out | The repository has no opt-out / do-not-call store, so none is applied; Genesys-side do-not-call handling on the list is outside this application |
+
+A held-back customer is never selectable; the row shows the exact reason and the "Why customers are held back" panel gives the review step. Manual needs review data built **today**; use **Refresh approval data** if the page says it is out of date.
+
+### Review data and the one schema change
+Each stage record stores the customer's unpaid instalments (`CollectionsReviewRecords.InstalmentsJson`, a nullable column added by migration `AddDirectSendInstalments`; scripts `AddDirectSendInstalments.sql` and `Deploy_TigerCS_PROD_AddDirectSendInstalments.sql`). The filtered amount cannot be calculated without them (the review pages never call the financial source), so the column is required. The name is historical (the migration was created while this was developed as a separate mode); it is kept unchanged so that an environment that already applied it stays compatible. The column is derived data: a review refresh rebuilds it, and a record written before it existed makes a Manual send ask for a refresh.
 
 ## Retrying
 * **Genesys:** rejected or released customers are free again; preview the list and press Approve & Send (customers Genesys already accepted show as already sent and are left out).
@@ -59,60 +102,3 @@ phone numbers and emails are masked, formula-looking text is defused, the body c
 
 ## Database
 Migration `20261021120000_AddAdminEmailToCollectionsDispatch` (script `AddAdminEmailToCollectionsDispatch.sql` in the repository root) adds five columns to `CollectionsDispatches`.
-
-## Direct Send (third sending mode)
-
-**Sending mode** on Collections → Campaigns is **Manual**, **Auto** or **Direct Send**. Manual and Auto are unchanged.
-
-Direct Send is for an authorized person who wants to send chosen customers to Genesys **without a campaign stage and without the Day 1 / 14 / 28 stage dates**:
-
-* No campaign stage and no send / preview date are asked for or submitted.
-* Filters: **Tower**, **Payment status** (Due / Overdue / Both), **From / To date**, **Minimum Total**, plus the customer search.
-* The list shows the eligible customers with checkboxes, **Select all** on the page and **All eligible** across every page.
-* **Contact list** (shown only in Direct Send): choose **Current Month** or **Follow Up**. Nothing is pre-chosen and **Send to Genesys** stays disabled until one is chosen. Both lists come from the existing `Collections:GenesysOutbound:ContactListIds` configuration; there is no separate Direct Send list.
-* **Send to Genesys** opens a confirmation dialog with the selected count, the destination list (name and id), the total amount, and the campaign purpose. Nothing is sent before the confirmation, and nothing is ever dispatched automatically.
-
-### The amount sent (calculated, never the whole balance)
-For every customer the amount is the sum of the **unpaid instalments** that match the filters:
-
-| Filter | Effect on the amount |
-|---|---|
-| Payment status **Due** | only instalments due inside the current Dubai month |
-| Payment status **Overdue** | only instalments due before the current month |
-| Payment status **Both** | both of the above (nothing from next month on is ever included) |
-| **From / To date** | only instalments whose due date is inside the range (both ends inclusive) |
-| **Minimum Total** | the customer is kept only when this filtered amount is **greater than** the minimum |
-
-Example: Due AED 5,000 + Overdue AED 8,000 with Payment status **Due** sends **AED 5,000**, with the due date of that instalment. A customer whose filtered amount is zero (or not above the minimum) is not listed and cannot be sent. The same figure is shown in the customer table, the KPI total, the confirmation dialog, the audit totals, the contacts CSV and the Genesys `AmountDue`. A customer is one row; several instalments on one due date, or the same instalment under several units, are held for review instead of being summed twice. Source amounts are only read, never changed.
-
-The unpaid instalments are stored on the customer's Direct Send review record (`CollectionsReviewRecords.InstalmentsJson`, a nullable column added by migration `AddDirectSendInstalments`; scripts `AddDirectSendInstalments.sql` and `Deploy_TigerCS_PROD_AddDirectSendInstalments.sql`). They are derived data: a review refresh rebuilds them.
-
-### Revalidation and suppression use the same amount
-Immediately before the upload the job re-reads the current balances and recalculates each customer's amount with the filter that was approved (stored with the dispatch). A customer whose selected instalments were all paid is excluded; any other change to the amount, due date, contact or validation stops the send for review. The paid-after-upload sweep compares the quoted amount with the same calculation, so a contact is made not callable only when the part that was sent changed.
-
-### Destination checks (read-only calls to Genesys)
-At approval, and again right before the upload, the chosen list is checked:
-
-* it must exist and have the contact-template columns (`Phone`, `CustomerName`, `Email Address`, `ReminderType`, `AmountDue`, `DueDate`);
-* no campaign that is **on** (or stopping) may dial it, because contacts added to it would be dialled at once. Switch that campaign off in Genesys, or choose the other list.
-
-A check that cannot be completed refuses the send. Direct Send never creates or reuses a Genesys campaign.
-
-### Audit
-The dispatch records who approved, when, the exact list and filter (including the chosen **ContactList**), the totals, and per batch the **contact list id** and the purpose **"Direct send - manual contact list"**. The Genesys `ReminderType` column is **"Direct Send"**.
-
-### Safety rules that still apply (Direct Send waives only the stage schedule)
-| Rule | How |
-|---|---|
-| Authorization | Same send permission as Manual / Auto |
-| Financial reconciliation, fresh data | Unreconciled or stale approval data holds every record back |
-| Contact and identity validation | Same checks as the stage records |
-| Paid-after-upload suppression | The same sweep, using the filtered amount |
-| Duplicate-send and idempotency | One Direct Send record per customer per month; a customer already in a live or uploaded dispatch is "Already sent"; the idempotency key replays safely |
-| Contact frequency | One contact per customer per business day across **all** modes (`ContactedToday`) |
-| Shared phone | A number used by several customers holds all of them back |
-| Already in today's campaign | A customer in a campaign scheduled today is held back (`DirectSendScheduledToday`) |
-| Legal restrictions | A customer whose balance is in a legal stage is never sent directly |
-| Opt-out | The repository has no opt-out / do-not-call store, so none is applied here; Genesys-side do-not-call handling on the list is outside this application |
-
-A held-back customer is never selectable; the row shows the exact reason and the "Why customers are held back" panel gives the review step. Direct Send needs approval data built **today**; use **Refresh approval data** if the page says it is out of date.

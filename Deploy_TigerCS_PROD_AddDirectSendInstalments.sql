@@ -6,8 +6,8 @@
 -- Migration : 20261106044011_AddDirectSendInstalments (EF Core 10.0.11)
 -- Depends on: 20261105094644_AddCustomerContactDetails and dbo.CollectionsReviewRecords.
 -- Effect    : adds ONE nullable column dbo.CollectionsReviewRecords.InstalmentsJson nvarchar(max) NULL and records the migration in dbo.__EFMigrationsHistory.
---             No row is read-modified, altered or deleted; no table is created or dropped. Existing records keep NULL (only Direct Send records use it), so Manual
---             and Auto behave exactly as before. This script does NOT enable sending: Direct Send additionally needs Collections:GenesysOutbound:ContactListIds:DirectSend.
+--             No row is read-modified, altered or deleted; no table is created or dropped. Existing records keep NULL until the next review refresh fills it; Auto never reads
+--             it, and Manual (which calculates its filtered amount from it) asks for a refresh when it is missing. This script does NOT enable sending or Auto dispatch.
 -- Idempotent: safe to run repeatedly (guarded by __EFMigrationsHistory). Runs in one transaction.
 -- ############################################################################################
 SET NOCOUNT ON;
@@ -67,7 +67,7 @@ END CATCH;
         WHERE c.object_id = OBJECT_ID(N'dbo.CollectionsReviewRecords') AND c.name = N'InstalmentsJson';
    2. Expect exactly 1 row for the migration and none newer:
         SELECT MigrationId, ProductVersion FROM dbo.__EFMigrationsHistory WHERE MigrationId >= N'20261105094644_AddCustomerContactDetails' ORDER BY MigrationId;
-   3. Expect 0 until a Direct Send review refresh has run: SELECT COUNT_BIG(*) FROM dbo.CollectionsReviewRecords WHERE InstalmentsJson IS NOT NULL;
+   3. Expect 0 until a review refresh has run: SELECT COUNT_BIG(*) FROM dbo.CollectionsReviewRecords WHERE InstalmentsJson IS NOT NULL;
    ROLLBACK: ALTER TABLE dbo.CollectionsReviewRecords DROP COLUMN InstalmentsJson; DELETE FROM dbo.__EFMigrationsHistory WHERE MigrationId = N'20261106044011_AddDirectSendInstalments';
    Safe: the column is derived data; a review refresh rebuilds it. The previous build ignores it.
 --------------------------------------------------------------------------------------------- */

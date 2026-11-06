@@ -40,11 +40,11 @@ public sealed class CollectionsCampaignRenderTests
         var call = Assert.Single(api.Calls("/campaigns/preview"));
         foreach (var expected in new[] { "stage=CurrentMonthReminder", "towerId=7", "businessDate=2026-10-14", "dateFrom=2026-10-01", "dateTo=2026-10-31", "minTotal=250.5", "search=3001" }) Assert.Contains(expected, call);
         Assert.DoesNotContain("companyId", call);
-        // Exactly the requested columns, in order (after the leading selection checkbox column).
-        var headers = Regex.Matches(Regex.Match(html, "<thead>.*?</thead>", RegexOptions.Singleline).Value, "<th(?:\\s[^>]*)?>(.*?)</th>").Select(m => m.Groups[1].Value).Skip(1).ToList();
+        // Exactly the requested columns, in order (Auto is a read-only preview: no selection column).
+        var headers = Regex.Matches(Regex.Match(html, "<thead>.*?</thead>", RegexOptions.Singleline).Value, "<th(?:\\s[^>]*)?>(.*?)</th>").Select(m => m.Groups[1].Value).ToList();
         Assert.Equal(["Customer", "Mobile", "Email", "Project / Tower", "Unit", "Due", "Overdue", "Total"], headers);
         var cells = Regex.Matches(Regex.Match(html, "<tbody>.*?</tbody>", RegexOptions.Singleline).Value, "<td[^>]*>(.*?)</td>", RegexOptions.Singleline)
-            .Select(m => System.Net.WebUtility.HtmlDecode(Regex.Replace(m.Groups[1].Value, "<[^>]+>", "")).Trim()).Skip(1).ToList();
+            .Select(m => System.Net.WebUtility.HtmlDecode(Regex.Replace(m.Groups[1].Value, "<[^>]+>", "")).Trim()).ToList();
         Assert.Equal(["Campaign CustomerBlocked", "+971500003001", "— No email: email not possible", "Al Ghaf", "TP140-101", "—", "650.00", "650.00"], cells);   // no email -> a dash and the short reason; zero Due -> a dash; Total = Due + Overdue
         Assert.Contains("Export review CSV", html);
         Assert.DoesNotContain("Export Genesys CSV", html);

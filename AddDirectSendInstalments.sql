@@ -1,4 +1,4 @@
--- Migration 20261106044011_AddDirectSendInstalments (EF Core 10.0.11): adds ONE nullable column dbo.CollectionsReviewRecords.InstalmentsJson. Idempotent. NOT executed by Claude.
+-- Migration 20261106044011_AddDirectSendInstalments (EF Core 10.0.11): adds ONE nullable column dbo.CollectionsReviewRecords.InstalmentsJson (the customer's unpaid instalments, used by Manual sending to calculate the filtered amount). Idempotent. NOT executed by Claude.
 -- Generated from: dotnet ef migrations script 20261105094644_AddCustomerContactDetails 20261106044011_AddDirectSendInstalments --idempotent
 BEGIN TRANSACTION;
 IF NOT EXISTS (

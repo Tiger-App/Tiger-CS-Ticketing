@@ -7,7 +7,7 @@
     const load = () => { try { return new Set(JSON.parse(sessionStorage.getItem(KEY) || '[]')); } catch { return new Set(); } };
     const save = set => { try { sessionStorage.setItem(KEY, JSON.stringify([...set])); } catch { /* storage unavailable */ } };
     const selected = load();
-    // Direct Send destination: remembered for the session so paging and reloads of the results keep it.
+    // Manual destination: remembered for the session so paging the same preview keeps it.
     const LIST_KEY = 'collections-direct-contact-list';
     const readList = () => { try { return sessionStorage.getItem(LIST_KEY) || ''; } catch { return ''; } };
     const writeList = value => { try { sessionStorage.setItem(LIST_KEY, value); } catch { /* storage unavailable */ } };
@@ -26,14 +26,15 @@
             all.checked = boxes.length > 0 && ticked === boxes.length; all.indeterminate = ticked > 0 && ticked < boxes.length;
         }
         const listBox = document.querySelector('select[data-contact-list]');
-        if (listBox && !listBox.value && readList() && [...listBox.options].some(o => o.value === readList())) listBox.value = readList();
+        // A destination the person chose is kept while they page through the same preview (the server renders the campaign's own list by default); a new preview starts from the default again.
+        if (listBox && readList() && listBox.value !== readList() && [...listBox.options].some(o => o.value === readList())) listBox.value = readList();
         if (form) {
             const button = form.querySelector('[data-approve-button]');
             const mode = form.querySelector('input[name="selectionMode"]:checked');
             // Enabled only for a current preview (this form exists only inside the current results), a valid reconciliation (server: data-blocked) and eligible customers chosen.
             const blocked = !!button && button.dataset.blocked === 'true';
             const nothingTicked = !!mode && mode.value === 'SelectedUnits' && selected.size === 0;
-            // Direct Send also needs a destination contact list: one of the two existing Genesys lists must be chosen.
+            // Manual always has a destination (the campaign's own list unless another suitable one was chosen).
             const noList = !!listBox && !listBox.value;
             if (button) button.disabled = blocked || nothingTicked || !mode || noList;
             // The selection stays visible next to Approve & Send (written only when it changes: sync() also runs from a MutationObserver).
@@ -66,9 +67,9 @@
     });
     // A new preview (filters changed) starts a new selection; paging keeps it.
     const filter = document.querySelector('[data-results-form]');
-    if (filter) filter.addEventListener('submit', () => { selected.clear(); save(selected); });
+    if (filter) filter.addEventListener('submit', () => { selected.clear(); save(selected); writeList(''); });
     // Changed filters clear the customers (filters script); the ticks go with them.
-    window.addEventListener('campaign-preview-invalidated', () => { selected.clear(); save(selected); sync(); });
+    window.addEventListener('campaign-preview-invalidated', () => { selected.clear(); save(selected); writeList(''); sync(); });
     // A double click cannot submit twice (the idempotency key would replay it anyway).
     document.addEventListener('submit', event => {
         const form = event.target;
@@ -82,8 +83,8 @@
     if (results) new MutationObserver(sync).observe(results, { childList: true, subtree: true });
     sync();
 
-    // Direct Send confirmation: the server renders the dialog open; upgrade it to a modal so the count, amount and destination list are the only thing to act on.
-    const directConfirm = document.querySelector('dialog[data-direct-confirm]');
+    // Manual confirmation: the server renders the dialog open; upgrade it to a modal so the count, amount and destination list are the only thing to act on.
+    const directConfirm = document.querySelector('dialog[data-manual-confirm]');
     if (directConfirm && typeof directConfirm.showModal === 'function') { directConfirm.close(); directConfirm.showModal(); }
 
     // A chained, bounded poll: the next request is scheduled only after the previous answer, it ends when the server says the work is over, after maxMs, or after three failures in a row.

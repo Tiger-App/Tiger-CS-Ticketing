@@ -67,8 +67,9 @@ public class CollectionsReviewRecord
     public DateTime SourceReadAtUtc { get; set; }
     public string Source { get; set; } = "";
     /// <summary>
-    /// Direct Send records only: the customer's unpaid instalments (due date and remaining amount, <see cref="DirectSendAmounts"/>). The amount a Direct Send customer is listed, approved and sent with
-    /// is always calculated from these and the person's filters; <see cref="RemainingAmount"/> is only the whole balance. Null on every other record.
+    /// The customer's unpaid instalments (due date and remaining amount, <see cref="FilteredAmounts"/>) as read from the financial source, on every stage record of the unit. A Manual send
+    /// calculates the amount it lists, approves and sends from these and the person's filters (Payment status, From / To, Minimum Total); <see cref="RemainingAmount"/> stays the stage amount
+    /// that Auto uses. Null on records written before this column existed (a refresh fills it); a Manual send cannot calculate an amount for such a record.
     /// </summary>
     public string? InstalmentsJson { get; set; }
 }

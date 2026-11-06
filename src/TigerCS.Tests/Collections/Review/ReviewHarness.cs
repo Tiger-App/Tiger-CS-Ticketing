@@ -299,6 +299,7 @@ internal sealed class ReviewHarness : IDisposable
         public ReviewQueryService Query { get; private set; } = null!;
         public ReviewRefreshService Refresh { get; private set; } = null!;
         public DispatchService Dispatch { get; private set; } = null!;
+        public AutoDispatchService Auto { get; private set; } = null!;
         public SuppressionService Suppression { get; private set; } = null!;
         public DispatchAdminReportService AdminReport { get; private set; } = null!;
         public TigerCsDbContext Context => context;
@@ -313,6 +314,7 @@ internal sealed class ReviewHarness : IDisposable
             var balances = new CurrentBalanceReader(h.Sql, h.Source, Refresh, NullLogger<CurrentBalanceReader>.Instance);
             Dispatch = new DispatchService(h.Options, h.Genesys, auth, clock, Store, h.Scheduler, client ?? h.Client, Query, balances,
                 NullLogger<DispatchService>.Instance);
+            Auto = new AutoDispatchService(h.Options, h.Campaign, clock, Store, Query, Refresh, Dispatch, NullLogger<AutoDispatchService>.Instance);
             AdminReport = new DispatchAdminReportService(h.Campaign, Store, h.Email, clock, auth, NullLogger<DispatchAdminReportService>.Instance);
             Suppression = new SuppressionService(h.Options, h.Genesys, clock, Store, client ?? h.Client, balances, NullLogger<SuppressionService>.Instance);
             return this;

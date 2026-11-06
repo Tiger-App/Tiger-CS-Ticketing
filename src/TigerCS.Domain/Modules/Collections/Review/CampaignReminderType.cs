@@ -1,17 +1,13 @@
 namespace TigerCS.Domain.Modules.Collections.Review;
 
-/// <summary>
-/// The five Genesys contact-list reminder types, mapped one-to-one onto the approved campaign stages, plus <see cref="DirectSend"/>: a manual contact-list dispatch that belongs to no
-/// campaign stage and has no stage schedule. DirectSend records are only ever listed and approved when explicitly asked for (by the Direct Send mode).
-/// </summary>
+/// <summary>The five Genesys contact-list reminder types, mapped one-to-one onto the approved campaign stages.</summary>
 public enum CampaignReminderType
 {
     CurrentMonth = 1,
     FollowUp = 2,
     Overdue = 3,
     LegalNotice = 4,
-    LegalCase = 5,
-    DirectSend = 6
+    LegalCase = 5
 }
 
 public static class CampaignReminderTypes
@@ -33,24 +29,29 @@ public static class CampaignReminderTypes
         CampaignReminderType.Overdue => CollectionsCampaignStage.OverdueReminder,
         CampaignReminderType.LegalNotice => CollectionsCampaignStage.LegalNotice,
         CampaignReminderType.LegalCase => CollectionsCampaignStage.LegalReferral,
-        _ => throw new ArgumentOutOfRangeException(nameof(type))   // DirectSend has no stage
+        _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
 
-    /// <summary>The reminder types that follow the approved campaign stages (every type except <see cref="CampaignReminderType.DirectSend"/>).</summary>
-    public static readonly IReadOnlyList<CampaignReminderType> StageTypes =
-        [CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp, CampaignReminderType.Overdue, CampaignReminderType.LegalNotice, CampaignReminderType.LegalCase];
-
     /// <summary>
-    /// The two existing Genesys contact lists a Direct Send may be uploaded to: Current Month or Follow Up (their ids come from the existing <c>ContactListIds</c> configuration). There is no list of
-    /// its own. Anything else, including a blank choice, is refused: the person must choose.
+    /// The existing Genesys contact lists a Manual send of <paramref name="type"/> may use. A reminder (Overdue, Current Month, Follow Up) may go to any of the three reminder lists
+    /// (for example a Current Month reminder to the Follow Up list); a legal notice or legal case goes only to its own list, so legal wording never lands in a reminder list and vice versa.
+    /// The campaign type's own list is first and is the default.
     /// </summary>
-    public static readonly IReadOnlyList<CampaignReminderType> DirectSendDestinations = [CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp];
-
-    public static bool TryParseDirectSendDestination(string? value, out CampaignReminderType destination)
+    public static IReadOnlyList<CampaignReminderType> ManualDestinations(CampaignReminderType type) => type switch
     {
-        destination = default;
-        var text = value?.Replace(" ", "").Trim();
-        foreach (var option in DirectSendDestinations)
+        CampaignReminderType.CurrentMonth => [CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp, CampaignReminderType.Overdue],
+        CampaignReminderType.FollowUp => [CampaignReminderType.FollowUp, CampaignReminderType.CurrentMonth, CampaignReminderType.Overdue],
+        CampaignReminderType.Overdue => [CampaignReminderType.Overdue, CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp],
+        _ => [type]
+    };
+
+    /// <summary>The chosen destination of a Manual send (blank = the campaign type's own list); false when the choice is not one of <see cref="ManualDestinations"/>.</summary>
+    public static bool TryResolveManualDestination(CampaignReminderType type, string? requested, out CampaignReminderType destination)
+    {
+        destination = type;
+        var text = requested?.Replace(" ", "").Trim();
+        if (string.IsNullOrEmpty(text)) return true;
+        foreach (var option in ManualDestinations(type))
             if (string.Equals(text, option.ToString(), StringComparison.OrdinalIgnoreCase)) { destination = option; return true; }
         return false;
     }
@@ -66,7 +67,6 @@ public static class CampaignReminderTypes
         CampaignReminderType.Overdue => "Overdue reminder - day 1",
         CampaignReminderType.LegalNotice => "Legal notice - days 12 and 14",
         CampaignReminderType.LegalCase => "Internal Legal referral - day 30",
-        CampaignReminderType.DirectSend => "Direct send - manual contact list",
         _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
 
@@ -80,7 +80,6 @@ public static class CampaignReminderTypes
         CampaignReminderType.Overdue => "Overdue",
         CampaignReminderType.LegalNotice => "Legal Notice",
         CampaignReminderType.LegalCase => "Legal Case",
-        CampaignReminderType.DirectSend => "Direct Send",
         _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
 }

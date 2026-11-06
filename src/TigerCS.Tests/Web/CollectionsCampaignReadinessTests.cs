@@ -21,7 +21,7 @@ public sealed class CollectionsCampaignReadinessTests
         var html = await Results(new FakeCollectionsApi());                                  // the only customer needs review: ReadyCount = 0
         Assert.Contains("data-export-review", html); Assert.Contains("Export review CSV", html);
         Assert.Matches("<a [^>]*href=\"[^\"]*handler=Export[^\"]*mode=review", html);
-        Assert.Contains("disabled", Regex.Match(html, "<button[^>]*data-approve-button[^>]*>").Value);
+        Assert.DoesNotContain("data-approve-button", html);                                   // Auto sends nothing from this page
         Assert.DoesNotContain("Export Genesys CSV", html);                                   // the Genesys file keeps its stricter rule
     }
 
@@ -83,7 +83,7 @@ public sealed class CollectionsCampaignReadinessTests
         Assert.DoesNotContain(reasons, r => r.Contains("SourceReconciliationRequired", StringComparison.Ordinal));                // never a raw code
 
         var ready = await Results(new FakeCollectionsApi());                                // reconciled, fresh, but the customer needs review
-        var reason = Regex.Match(ready, "data-approve-reason[^>]*>(.*?)</span>", RegexOptions.Singleline).Groups[1].Value;
-        Assert.Contains("No customers are Ready to send", reason); Assert.Contains("need review or are blocked", reason);
+        Assert.Contains("data-not-ready-reasons", ready);                                   // the per-customer reasons stay visible
+        Assert.Contains("data-auto-note", ready); Assert.DoesNotContain("data-approve-reason", ready);
     }
 }

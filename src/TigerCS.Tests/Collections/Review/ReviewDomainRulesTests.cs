@@ -143,11 +143,7 @@ public sealed class ReviewDomainRulesTests
         foreach (var stage in Enum.GetValues<CollectionsCampaignStage>())
             Assert.Equal(stage, CampaignReminderTypes.ToStage(CampaignReminderTypes.FromStage(stage)));
         Assert.Equal(CampaignReminderType.LegalCase, CampaignReminderTypes.FromStage(CollectionsCampaignStage.LegalReferral));
-        // The five stage types are exactly the approved stages; Direct Send is the one type that belongs to no stage (and has no stage schedule).
-        Assert.Equal(5, CampaignReminderTypes.StageTypes.Count);
-        Assert.Equal(CollectionsCampaignStage.LegalReferral, CampaignReminderTypes.ToStage(CampaignReminderType.LegalCase));
-        Assert.Equal(CampaignReminderTypes.StageTypes.Append(CampaignReminderType.DirectSend).Order(), Enum.GetValues<CampaignReminderType>().Order());
-        Assert.Throws<ArgumentOutOfRangeException>(() => CampaignReminderTypes.ToStage(CampaignReminderType.DirectSend));
+        Assert.Equal(5, Enum.GetValues<CampaignReminderType>().Length);
     }
 
     [Fact]

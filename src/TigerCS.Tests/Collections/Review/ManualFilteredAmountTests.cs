@@ -8,13 +8,13 @@ using TigerCS.Domain.Modules.Collections.Review;
 namespace TigerCS.Tests.Collections.Review;
 
 /// <summary>
-/// The Direct Send amount is calculated from the customer's unpaid instalments with the person's Payment status, From / To dates and Minimum Total; it is never the whole balance.
+/// The Manual amount is calculated from the customer's unpaid instalments with the person's Payment status, From / To dates and Minimum Total; it is never the whole balance.
 /// The worked example: Due = AED 5,000 (20 Oct) and Overdue = AED 8,000 (10 Aug), today 15 Oct 2026. Payment status Due sends AED 5,000.
 /// </summary>
-public sealed class DirectSendAmountTests
+public sealed class FilteredAmountTests
 {
     private static readonly DateOnly Today = new(2026, 10, 15);
-    private static readonly IReadOnlyList<DirectSendInstalment> Example = [new(new DateOnly(2026, 10, 20), 5000m), new(new DateOnly(2026, 8, 10), 8000m)];
+    private static readonly IReadOnlyList<FilterInstalment> Example = [new(new DateOnly(2026, 10, 20), 5000m), new(new DateOnly(2026, 8, 10), 8000m)];
 
     private static DateOnly? D(string? text) => text is null ? null : DateOnly.Parse(text);
 
@@ -44,7 +44,7 @@ public sealed class DirectSendAmountTests
     public void TheAmount_IsStrictlyWhatThePaymentStatusAndDatesSelect(string status, string? from, string? to, int? expected)
     {
         CampaignPaymentFilters.TryParse(status, out var filter);
-        var result = DirectSendAmounts.Calculate(Example, new DirectSendCriteria(filter, D(from), D(to), null), Today);
+        var result = FilteredAmounts.Calculate(Example, new AmountCriteria(filter, D(from), D(to), null), Today);
         if (expected is null) { Assert.False(result.Qualifies); Assert.Equal(0m, result.Amount); return; }
         Assert.True(result.Qualifies); Assert.Equal((decimal)expected, result.Amount);
         Assert.Equal(result.Amount, result.DueAmount + result.OverdueAmount);
@@ -53,11 +53,11 @@ public sealed class DirectSendAmountTests
     [Fact]
     public void TheDueAndOverdueParts_FollowTheStatus_AndTheEarliestDueDateIsOfTheSelectedInstalments()
     {
-        var both = DirectSendAmounts.Calculate(Example, new(CampaignPaymentFilter.Both, null, null, null), Today);
+        var both = FilteredAmounts.Calculate(Example, new(CampaignPaymentFilter.Both, null, null, null), Today);
         Assert.Equal((5000m, 8000m, new DateOnly(2026, 8, 10)), (both.DueAmount, both.OverdueAmount, both.EarliestDue!.Value));
-        var due = DirectSendAmounts.Calculate(Example, new(CampaignPaymentFilter.Due, null, null, null), Today);
+        var due = FilteredAmounts.Calculate(Example, new(CampaignPaymentFilter.Due, null, null, null), Today);
         Assert.Equal((5000m, 0m, new DateOnly(2026, 10, 20)), (due.DueAmount, due.OverdueAmount, due.EarliestDue!.Value));   // the Genesys DueDate is the Due instalment, not the August one
-        var overdue = DirectSendAmounts.Calculate(Example, new(CampaignPaymentFilter.Overdue, null, null, null), Today);
+        var overdue = FilteredAmounts.Calculate(Example, new(CampaignPaymentFilter.Overdue, null, null, null), Today);
         Assert.Equal((0m, 8000m, new DateOnly(2026, 8, 10)), (overdue.DueAmount, overdue.OverdueAmount, overdue.EarliestDue!.Value));
     }
 
@@ -71,36 +71,36 @@ public sealed class DirectSendAmountTests
     public void TheMinimumTotal_IsAppliedToTheFilteredAmount_NotTheWholeBalance(string status, int minimum, bool qualifies)
     {
         CampaignPaymentFilters.TryParse(status, out var filter);
-        var result = DirectSendAmounts.Calculate(Example, new(filter, null, null, minimum), Today);
+        var result = FilteredAmounts.Calculate(Example, new(filter, null, null, minimum), Today);
         Assert.Equal(qualifies, result.Qualifies);
-        if (!qualifies) Assert.Equal(DirectSendAmount.BelowMinimum, result.Reason);
+        if (!qualifies) Assert.Equal(FilteredAmount.BelowMinimum, result.Reason);
     }
 
     [Fact]
     public void Nothing_IsDoubleCounted_OrGuessed()
     {
         // Several instalments on one due date cannot be told apart from a duplicated allocation: refused, never summed.
-        var twice = DirectSendAmounts.Calculate([new(new DateOnly(2026, 10, 20), 5000m), new(new DateOnly(2026, 10, 20), 5000m)], new(CampaignPaymentFilter.Both, null, null, null), Today);
-        Assert.Equal(DirectSendAmount.Ambiguous, twice.Reason); Assert.Equal(0m, twice.Amount);
+        var twice = FilteredAmounts.Calculate([new(new DateOnly(2026, 10, 20), 5000m), new(new DateOnly(2026, 10, 20), 5000m)], new(CampaignPaymentFilter.Both, null, null, null), Today);
+        Assert.Equal(FilteredAmount.Ambiguous, twice.Reason); Assert.Equal(0m, twice.Amount);
         // ... but only when the repeated date is among the SELECTED instalments.
-        var outside = DirectSendAmounts.Calculate([new(new DateOnly(2026, 10, 20), 5000m), new(new DateOnly(2026, 8, 10), 1m), new(new DateOnly(2026, 8, 10), 1m)], new(CampaignPaymentFilter.Due, null, null, null), Today);
+        var outside = FilteredAmounts.Calculate([new(new DateOnly(2026, 10, 20), 5000m), new(new DateOnly(2026, 8, 10), 1m), new(new DateOnly(2026, 8, 10), 1m)], new(CampaignPaymentFilter.Due, null, null, null), Today);
         Assert.True(outside.Qualifies); Assert.Equal(5000m, outside.Amount);
         // Settled / non-positive instalments are not receivables; nothing from next month on is in scope.
-        var scope = DirectSendAmounts.Calculate([new(new DateOnly(2026, 10, 20), 5000m), new(new DateOnly(2026, 11, 5), 700m), new(new DateOnly(2026, 9, 1), 0m)], new(CampaignPaymentFilter.Both, null, null, null), Today);
+        var scope = FilteredAmounts.Calculate([new(new DateOnly(2026, 10, 20), 5000m), new(new DateOnly(2026, 11, 5), 700m), new(new DateOnly(2026, 9, 1), 0m)], new(CampaignPaymentFilter.Both, null, null, null), Today);
         Assert.Equal(5000m, scope.Amount);
         // Unreadable stored instalments never produce an amount.
-        Assert.Equal(DirectSendAmount.Unavailable, DirectSendAmounts.Calculate(null, new(CampaignPaymentFilter.Both, null, null, null), Today).Reason);
+        Assert.Equal(FilteredAmount.Unavailable, FilteredAmounts.Calculate(null, new(CampaignPaymentFilter.Both, null, null, null), Today).Reason);
     }
 
     [Fact]
     public void TheStoredInstalments_RoundTrip_AndMalformedTextIsRefusedWhole()
     {
-        var text = DirectSendAmounts.Serialize(Example);
+        var text = FilteredAmounts.Serialize(Example);
         Assert.Equal("20260810=8000;20261020=5000", text);
-        Assert.Equal(Example.OrderBy(i => i.Due), DirectSendAmounts.TryParse(text));
-        Assert.Equal(new DirectSendInstalment(new DateOnly(2026, 10, 1), 1234.5678m), DirectSendAmounts.TryParse(DirectSendAmounts.Serialize([new(new DateOnly(2026, 10, 1), 1234.5678m)]))![0]);
+        Assert.Equal(Example.OrderBy(i => i.Due), FilteredAmounts.TryParse(text));
+        Assert.Equal(new FilterInstalment(new DateOnly(2026, 10, 1), 1234.5678m), FilteredAmounts.TryParse(FilteredAmounts.Serialize([new(new DateOnly(2026, 10, 1), 1234.5678m)]))![0]);
         foreach (var bad in new string?[] { null, "", "x", "20261020", "20261020=abc", "20261320=5", "20261020=-5", "20261020=5;oops" })
-            Assert.Null(DirectSendAmounts.TryParse(bad));
+            Assert.Null(FilteredAmounts.TryParse(bad));
     }
 
     // ------------------------------------------------------------ end to end: list, summary, payload, CSV
@@ -120,8 +120,8 @@ public sealed class DirectSendAmountTests
         return h;
     }
 
-    private static ReviewFilter Filter(string status, string? from = null, string? to = null, decimal min = 0m, string list = "CurrentMonth") =>
-        new(ReminderType: "DirectSend", SendingMode: "DirectSend", ContactList: list, DueStatus: status == "Both" ? null : status, DueFrom: D(from), DueTo: D(to), MinRemaining: min);
+    private static ReviewFilter Filter(string status, string? from = null, string? to = null, decimal min = 0m, string type = "CurrentMonth") =>
+        new(ReminderType: type, SendingMode: "Manual", DueStatus: status == "Both" ? null : status, DueFrom: D(from), DueTo: D(to), MinRemaining: min);
 
     private static SelectionRequest All(ReviewFilter filter) => new(filter, ReviewQueryService.ModeAllMatching);
 
@@ -255,9 +255,9 @@ public sealed class DirectSendAmountTests
     [Fact]
     public async Task TheDateRangeOfTheApproval_IsKeptForTheRevalidation()
     {
-        // Both, but only August: 8,000. Paying the (unselected) October instalment changes nothing; paying August removes the customer.
+        // The Overdue campaign, Both, but only August: 8,000. Paying the (unselected) October instalment changes nothing.
         using var h = await SeededAsync();
-        var (_, confirm) = await h.PrepareAsync(All(Filter("Both", "2026-08-01", "2026-08-31")), "range");
+        var (_, confirm) = await h.PrepareAsync(All(Filter("Both", "2026-08-01", "2026-08-31", type: "Overdue")), "range");
         using var scope = h.NewScope();
         await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
         h.Source.Items.RemoveAll(r => r.DueDate.Month == 10);
@@ -268,7 +268,7 @@ public sealed class DirectSendAmountTests
     // ------------------------------------------------------------ the paid-after-upload check uses the same amount
 
     [Fact]
-    public async Task Suppression_ComparesTheFilteredAmount_SoAnUnchangedDirectSendIsNotSuppressed()
+    public async Task Suppression_ComparesTheFilteredAmount_SoAnUnchangedManualSendIsNotSuppressed()
     {
         using var h = await SeededAsync();
         var (_, confirm) = await h.PrepareAsync(All(Filter("Due")), "supp");

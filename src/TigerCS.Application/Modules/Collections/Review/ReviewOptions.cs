@@ -95,14 +95,14 @@ public sealed class GenesysOutboundOptions
             : throw new InvalidOperationException($"No valid Genesys contact list id is configured for {type}.");
 
     /// <summary>
-    /// The Genesys contact list id of a Direct Send destination (<c>CurrentMonth</c> or <c>FollowUp</c>), from the existing <see cref="ContactListIds"/>. Throws
-    /// <see cref="InvalidOperationException"/> with the reason when the destination is not one of the two or its list id is not configured.
+    /// The Genesys contact list id a Manual send of <paramref name="type"/> uploads to, from the existing <see cref="ContactListIds"/>: the campaign type's own list, or the one the person chose
+    /// among the lists that suit the type (<see cref="CampaignReminderTypes.ManualDestinations"/>). Throws <see cref="InvalidOperationException"/> with the reason otherwise.
     /// </summary>
-    public string DirectSendContactListIdFor(string? destination)
+    public string ManualContactListIdFor(CampaignReminderType type, string? requested)
     {
-        if (!CampaignReminderTypes.TryParseDirectSendDestination(destination, out var type))
-            throw new InvalidOperationException("Choose the Genesys contact list for this Direct Send: Current Month or Follow Up.");
-        return ContactListIdFor(type);
+        if (!CampaignReminderTypes.TryResolveManualDestination(type, requested, out var destination))
+            throw new InvalidOperationException($"A {CampaignReminderTypes.DefaultLabel(type)} campaign cannot be sent to that contact list. Choose {string.Join(", ", CampaignReminderTypes.ManualDestinations(type).Select(CampaignReminderTypes.DefaultLabel))}.");
+        return ContactListIdFor(destination);
     }
 
     public string LabelFor(CampaignReminderType type) =>
