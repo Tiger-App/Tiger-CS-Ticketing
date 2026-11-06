@@ -36,6 +36,56 @@
         <member name="M:TigerCS.Api.Controllers.AdminControllerBase.PasswordPolicyProblem(System.Collections.Generic.IReadOnlyList{System.String})">
             <summary>422 with Identity's own password-policy descriptions in the <c>errors</c> map — the shape every Web form already reads.</summary>
         </member>
+        <member name="T:TigerCS.Api.Controllers.RunCsAgentBackfillRequestDto">
+            <summary>Body of a backfill run. <see cref="P:TigerCS.Api.Controllers.RunCsAgentBackfillRequestDto.DryRun"/> defaults to TRUE: a live run must say so explicitly.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.RunCsAgentBackfillRequestDto.#ctor(System.Boolean,System.Nullable{System.Int32},System.Int64,System.String)">
+            <summary>Body of a backfill run. <see cref="P:TigerCS.Api.Controllers.RunCsAgentBackfillRequestDto.DryRun"/> defaults to TRUE: a live run must say so explicitly.</summary>
+        </member>
+        <member name="T:TigerCS.Api.Controllers.AdminCsAgentBackfillController">
+            <summary>
+            One-time backfill of active tickets that have no CS Agent - System Administrator only, manual only (nothing schedules it).
+            Preview and dry runs are read-only. A live run additionally needs <c>CsAgentBackfill:Enabled=true</c>.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminCsAgentBackfillController.#ctor(TigerCS.Application.Modules.Ticketing.Services.CsAgentBackfillService,TigerCS.Infrastructure.BackgroundJobs.CsAgentBackfillRunner,Microsoft.Extensions.Options.IOptionsSnapshot{TigerCS.Application.Modules.Ticketing.Services.CsAgentBackfillOptions})">
+            <summary>
+            One-time backfill of active tickets that have no CS Agent - System Administrator only, manual only (nothing schedules it).
+            Preview and dry runs are read-only. A live run additionally needs <c>CsAgentBackfill:Enabled=true</c>.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminCsAgentBackfillController.Preview(System.Int64,System.Nullable{System.Int32},System.Threading.CancellationToken)">
+            <summary>Read-only preview: ticket count, current department, proposed CS Agent in the real rotation order, and every exclusion with its reason. Writes nothing and does not advance the cursor.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminCsAgentBackfillController.Run(TigerCS.Api.Controllers.RunCsAgentBackfillRequestDto,System.Threading.CancellationToken)">
+            <summary>Runs ONE throttled batch (dry run by default). Resume with the returned <c>resumeAfterTicketId</c>; repeat until <c>backlogExhausted</c>.</summary>
+        </member>
+        <member name="T:TigerCS.Api.Controllers.RunDefaultClassificationBackfillRequestDto">
+            <summary>Body of a backfill run. <see cref="P:TigerCS.Api.Controllers.RunDefaultClassificationBackfillRequestDto.DryRun"/> defaults to TRUE: a live run must say so explicitly.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.RunDefaultClassificationBackfillRequestDto.#ctor(System.Boolean,System.Nullable{System.Int32},System.Int64)">
+            <summary>Body of a backfill run. <see cref="P:TigerCS.Api.Controllers.RunDefaultClassificationBackfillRequestDto.DryRun"/> defaults to TRUE: a live run must say so explicitly.</summary>
+        </member>
+        <member name="T:TigerCS.Api.Controllers.AdminDefaultClassificationBackfillController">
+            <summary>
+            Historical backfill of Customer Services / General onto existing tickets without a valid classification - System Administrator only, manual
+            only (nothing schedules it). Preview and dry runs are read-only. A live run additionally needs <c>DefaultClassificationBackfill:Enabled=true</c>,
+            which is false in every shipped configuration until the run is separately approved.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminDefaultClassificationBackfillController.#ctor(TigerCS.Application.Modules.Ticketing.Services.DefaultClassificationBackfillService,Microsoft.Extensions.Options.IOptionsSnapshot{TigerCS.Application.Modules.Ticketing.Services.DefaultClassificationBackfillOptions})">
+            <summary>
+            Historical backfill of Customer Services / General onto existing tickets without a valid classification - System Administrator only, manual
+            only (nothing schedules it). Preview and dry runs are read-only. A live run additionally needs <c>DefaultClassificationBackfill:Enabled=true</c>,
+            which is false in every shipped configuration until the run is separately approved.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminDefaultClassificationBackfillController.Preview(System.Int64,System.Nullable{System.Int32},System.Threading.CancellationToken)">
+            <summary>Read-only preview: tickets without a valid classification by state and status, what is excluded and why. Writes nothing.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminDefaultClassificationBackfillController.Run(TigerCS.Api.Controllers.RunDefaultClassificationBackfillRequestDto,System.Threading.CancellationToken)">
+            <summary>Runs ONE batch (dry run by default). Resume with the returned <c>resumeAfterTicketId</c>; repeat until <c>backlogExhausted</c>.</summary>
+        </member>
         <member name="T:TigerCS.Api.Controllers.AdminDepartmentsController">
             <summary>Department administration — System Administrator only. Departments are deactivated, never deleted.</summary>
         </member>
@@ -379,10 +429,10 @@
             <param name="activeOnly">When true (the default), excludes deactivated channels — a new-ticket picker never offers those; false is for naming a channel a historical record references.</param>
             <response code="200">The channel directory.</response>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CollectionsCampaignsController.Preview(System.String,System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.String,System.Int32,System.Int32,System.Threading.CancellationToken,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.Nullable{System.Decimal},System.String)">
+        <member name="M:TigerCS.Api.Controllers.CollectionsCampaignsController.Preview(System.String,System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.String,System.Int32,System.Int32,System.Threading.CancellationToken,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.Nullable{System.Decimal},System.String,System.Int32[],System.String)">
             <summary>Preview one communication stage, per unit, using current remaining balances from PACT companies 4 and 32. Only instalments due before the end of the current Dubai month are listed (Overdue: before the first day of the month, Due: inside it); <c>minTotal</c> keeps units whose Due + Overdue is greater than it (omit for no minimum). <c>paymentStatus</c> is Due, Overdue or Both (default): a single status keeps only that status' instalments in the figures; preview, counts and both CSV exports share it.</summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CollectionsCampaignsController.Export(System.String,System.String,System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.String,System.Threading.CancellationToken,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.Nullable{System.Decimal},System.String)">
+        <member name="M:TigerCS.Api.Controllers.CollectionsCampaignsController.Export(System.String,System.String,System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.String,System.Threading.CancellationToken,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.Nullable{System.Decimal},System.String,System.Int32[],System.String)">
             <summary>Export the full filtered list. Review mode is for internal review; Genesys mode refuses any unresolved row,
             an unscheduled or non-current date, and internal legal referrals. CSV is returned in an internal JSON envelope.</summary>
         </member>
@@ -445,6 +495,9 @@
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.Confirm(TigerCS.Application.Modules.Collections.Review.ConfirmDispatchRequest,System.String,System.Threading.CancellationToken)">
             <summary>Approves the exact list (count and fingerprint must match) and queues the revalidation-and-upload job.</summary>
         </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.DispatchReadiness(System.Threading.CancellationToken)">
+            <summary>Whether this environment can send to Genesys and, if not, which settings are missing. Names settings only, never secrets.</summary>
+        </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.Dispatches(System.Threading.CancellationToken)">
             <summary>The latest approved sends with their batch results.</summary>
         </member>
@@ -465,6 +518,35 @@
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.Reconcile(System.Guid,System.Int64,TigerCS.Application.Modules.Collections.Review.ReconcileBatchRequest,System.Threading.CancellationToken)">
             <summary>Resolves a batch with an unknown outcome after someone checked the Genesys contact list.</summary>
+        </member>
+        <member name="T:TigerCS.Api.Controllers.CollectionsTowerAssignmentsController">
+            <summary>
+            Administration -> Collections Tower Assignments: which Collections employee is responsible for which tower in which month. Who may read and who may change it is decided in
+            <see cref="T:TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTeam"/> (only the Collections manager, CS Manager and the System Administrator read or change it) - never by the page.
+            Internal routes called server-side by the Web application as the signed-in user.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsTowerAssignmentsController.#ctor(TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTowerAssignmentAppService)">
+            <summary>
+            Administration -> Collections Tower Assignments: which Collections employee is responsible for which tower in which month. Who may read and who may change it is decided in
+            <see cref="T:TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTeam"/> (only the Collections manager, CS Manager and the System Administrator read or change it) - never by the page.
+            Internal routes called server-side by the Web application as the signed-in user.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsTowerAssignmentsController.GetMonth(System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>Everything the page shows for one month: the collectors with their towers, the tower list and the towers nobody holds yet.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsTowerAssignmentsController.SaveEmployee(System.Guid,TigerCS.Application.Modules.Collections.TowerAssignments.SaveEmployeeTowersRequest,System.Threading.CancellationToken)">
+            <summary>Replaces the set of towers one employee holds for a month (Draft, or Active when <c>activate</c> is true). 409 when a tower belongs to another collector and <c>moveFromOthers</c> is false.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsTowerAssignmentsController.Activate(TigerCS.Application.Modules.Collections.TowerAssignments.ActivateTowerAssignmentsRequest,System.Threading.CancellationToken)">
+            <summary>Puts the month's drafts (or one employee's) in force.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsTowerAssignmentsController.CopyPrevious(TigerCS.Application.Modules.Collections.TowerAssignments.CopyPreviousMonthRequest,System.Threading.CancellationToken)">
+            <summary>Copies the previous month's assignments into this month as Drafts, for towers that have none yet.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsTowerAssignmentsController.History(System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.Int32},System.Threading.CancellationToken)">
+            <summary>The tower-assignment change history (newest first), optionally for one month and/or tower.</summary>
         </member>
         <member name="T:TigerCS.Api.Controllers.CollectionsUnitsController">
             <summary>Collections by UNIT: the unit-keyed Payment Summary and the status of the bulk CRM owner data both Collections pages link with.</summary>
@@ -623,6 +705,31 @@
         </member>
         <member name="M:TigerCS.Api.Controllers.CrmDocumentCopyResponses.Coded(Microsoft.AspNetCore.Mvc.ControllerBase,TigerCS.Application.Modules.CrmDocuments.Dto.CrmDocumentCopyResult,System.Int32,System.String)">
             <summary>The standard ProblemDetails body plus the stable machine-readable <c>code</c> and the same relevant identifiers the success body carries.</summary>
+        </member>
+        <member name="T:TigerCS.Api.Controllers.CustomerContactController">
+            <summary>
+            The name and e-mail an agent enters by hand for a customer — the New Ticket "manual entry" form and the Customer Details
+            "Edit name" action. Tiger Ticketing's own data only: nothing here is sent to Tiger CRM, PACT or Tasleeh, and a ticket's
+            verification status, unit association and phone number are never touched. Scoped like the intake/lookup steps it belongs to
+            (CS Agent / CS Supervisor with <c>Tickets.Create</c>).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CustomerContactController.#ctor(TigerCS.Application.Modules.Ticketing.Services.CustomerContactAppService)">
+            <summary>
+            The name and e-mail an agent enters by hand for a customer — the New Ticket "manual entry" form and the Customer Details
+            "Edit name" action. Tiger Ticketing's own data only: nothing here is sent to Tiger CRM, PACT or Tasleeh, and a ticket's
+            verification status, unit association and phone number are never touched. Scoped like the intake/lookup steps it belongs to
+            (CS Agent / CS Supervisor with <c>Tickets.Create</c>).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CustomerContactController.Get(System.String,System.Threading.CancellationToken)">
+            <summary>The saved name/e-mail for a phone number (any written form), or 404 when none was entered.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CustomerContactController.Save(TigerCS.Application.Modules.Ticketing.Dto.SaveCustomerContactRequestDto,System.Threading.CancellationToken)">
+            <summary>Create the record for this phone, or update the existing one — never a second record for the same number.</summary>
+            <response code="200">Saved; <c>created</c> says whether a new record was made.</response>
+            <response code="400">Name missing/invalid, e-mail invalid, or phone missing.</response>
+            <response code="403">The caller's role cannot write.</response>
         </member>
         <member name="T:TigerCS.Api.Controllers.CustomerDocumentsController">
              <summary>
@@ -1150,7 +1257,7 @@
              </para>
              </summary>
              <param name="ConversationId">Required. Genesys' conversation id — the idempotency key: the same value always resolves to the same ticket.</param>
-             <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; "Twitter" and "X" are accepted as SocialMedia). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</param>
+             <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; spaces, "-" and "_" are ignored). "WebsiteChat", "WebChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel; "FacebookMessenger"/"Messenger" as Facebook; "Twitter", "X" and "Telegram" as SocialMedia.</param>
              <param name="InteractionId">Genesys' interaction id, where it differs from the conversation id.</param>
              <param name="ParticipantId">Genesys' customer-participant id, where available.</param>
              <param name="CommunicationId">Genesys' communication id, where available.</param>
@@ -1194,7 +1301,7 @@
              </para>
              </summary>
              <param name="ConversationId">Required. Genesys' conversation id — the idempotency key: the same value always resolves to the same ticket.</param>
-             <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; "Twitter" and "X" are accepted as SocialMedia). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</param>
+             <param name="Channel">Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; spaces, "-" and "_" are ignored). "WebsiteChat", "WebChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel; "FacebookMessenger"/"Messenger" as Facebook; "Twitter", "X" and "Telegram" as SocialMedia.</param>
              <param name="InteractionId">Genesys' interaction id, where it differs from the conversation id.</param>
              <param name="ParticipantId">Genesys' customer-participant id, where available.</param>
              <param name="CommunicationId">Genesys' communication id, where available.</param>
@@ -1221,7 +1328,7 @@
             <summary>Required. Genesys' conversation id — the idempotency key: the same value always resolves to the same ticket.</summary>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysInquiryRequest.Channel">
-            <summary>Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; "Twitter" and "X" are accepted as SocialMedia). "WebsiteChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel.</summary>
+            <summary>Required. One of "Phone", "LiveChat", "WhatsApp", "Instagram", "Facebook", "SocialMedia" (case-insensitive; spaces, "-" and "_" are ignored). "WebsiteChat", "WebChat" and "WebMessaging" (Genesys' own name for its web chat) are accepted as the same Live Chat channel; "FacebookMessenger"/"Messenger" as Facebook; "Twitter", "X" and "Telegram" as SocialMedia.</summary>
         </member>
         <member name="P:TigerCS.Api.Controllers.GenesysInquiryRequest.InteractionId">
             <summary>Genesys' interaction id, where it differs from the conversation id.</summary>
@@ -2210,7 +2317,7 @@
              </para>
              </summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.GenesysController.#ctor(TigerCS.Application.Modules.GenesysIntegration.Services.GenesysInquiryIngestionAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysTicketUpdateAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysCustomerLookupAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysCustomerUnitDetailsAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysAgentContextAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysScreenPopAppService)">
+        <member name="M:TigerCS.Api.Controllers.GenesysController.#ctor(TigerCS.Application.Modules.GenesysIntegration.Services.GenesysInquiryIngestionAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysTicketUpdateAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysCustomerLookupAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysCustomerUnitDetailsAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysAgentContextAppService,TigerCS.Application.Modules.GenesysIntegration.Services.GenesysScreenPopAppService,Microsoft.Extensions.Logging.ILogger{TigerCS.Api.Controllers.GenesysController})">
              <summary>
              The inbound Genesys boundary: Genesys tells TigerCS that an inquiry
              reached an agent, and later that the conversation ended.
@@ -2294,6 +2401,13 @@
              <response code="422">The inquiry could not be turned into a ticket — no department could be resolved, a request type was supplied but is invalid (nothing is written), or ticket creation itself was refused.</response>
              <response code="503">The Genesys integration is switched off (<c>Genesys:Enabled</c> is false).</response>
         </member>
+        <member name="M:TigerCS.Api.Controllers.GenesysController.LogTicketUpdate(System.Int64,TigerCS.Api.Controllers.GenesysTicketUpdateRequest,TigerCS.Application.Modules.GenesysIntegration.Dto.GenesysTicketUpdateResult)">
+            <summary>
+            One log line per <c>PATCH /api/genesys/tickets/{id}</c>, so a rejected or IGNORED update is visible: TigerCS otherwise stores nothing for either (a body whose
+            parts are all unrecognised, e.g. <c>endedAtUtc</c> at the top level instead of inside <c>ended</c>, is answered 200 and changes nothing). Logs the ticket id, the
+            conversation id, the outcome and WHICH parts were present - never the body, a transcript, a name, a phone number or a token.
+            </summary>
+        </member>
         <member name="M:TigerCS.Api.Controllers.GenesysController.UpdateTicket(System.Int64,TigerCS.Api.Controllers.GenesysTicketUpdateRequest,System.Threading.CancellationToken)">
              <summary>Update the Genesys-owned side of a ticket: agent context, conversation end and transcript, and human-handoff state.</summary>
              <remarks>
@@ -2331,7 +2445,7 @@
              <response code="200">Everything supplied was applied, or was already in that state.</response>
              <response code="400">conversationId was blank, a transcript message had an unrecognized sender or empty body, the handoff mode or trigger is not recognized, a handoff stand-down named no reason, or customerConfirmation was sent without confirmedResolved: true.</response>
              <response code="404">No such ticket, or no interaction exists for this conversation.</response>
-             <response code="409">The conversation belongs to a different ticket than the one in the route, or the ticket already has a different request type, is closed, or changed while being classified (retry).</response>
+             <response code="409">The conversation belongs to a different ticket than the one in the route, or the ticket already has a different request type, is closed (a request type cannot be classified onto it and human follow-up cannot be queued on it — open a new ticket), or changed while being classified (retry).</response>
              <response code="422">A handoff assignment was supplied but no outstanding human work exists to apply it to, or the supplied requestType does not exist, is inactive, is ambiguous by name, or cannot route.</response>
              <response code="503">The Genesys integration is switched off.</response>
         </member>
@@ -2708,12 +2822,13 @@
             <param name="minAmount">Minimum outstanding amount: an instalment counts only when its remaining unpaid amount is &gt;= this value. Default 100.</param>
             <param name="cancellationToken">Request cancellation.</param>
         </member>
-        <member name="M:TigerCS.Api.Controllers.PactReceivablesController.Instalments(System.Nullable{System.Int32},System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.String,System.Nullable{System.Decimal},System.String,System.Int32,System.Int32,System.String,System.String,System.String,System.Nullable{System.Decimal},System.Threading.CancellationToken)">
+        <member name="M:TigerCS.Api.Controllers.PactReceivablesController.Instalments(System.Nullable{System.Int32},System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.String,System.Nullable{System.Decimal},System.String,System.Int32,System.Int32,System.String,System.String,System.String,System.Nullable{System.Decimal},System.Threading.CancellationToken,System.Int32[])">
             <summary>
             Instalment-level list from the local snapshot (never PACT): tower, due-date range (any range or a whole month), payment status, minimum outstanding amount.
             Totals and paging are computed over exactly the filtered instalments.
             </summary>
-            <param name="towerId">Optional tower; omit for all towers.</param>
+            <param name="towerId">Optional tower; omit for all towers. Still accepted so old links work; combined with <c>towerIds</c>.</param>
+            <param name="towerIds">Optional several towers (repeat the parameter: <c>towerIds=1&amp;towerIds=2</c>). An instalment is kept when it belongs to ANY of them (OR); filtering happens before totals and paging. Omit for all towers; an unknown id is a 400.</param>
             <param name="dateFrom">First due date included (default 1 January of the current year).</param>
             <param name="dateTo">Last due date included, whole day (default end of the current month).</param>
             <param name="paymentStatus"><c>outstanding</c> (default: remaining balance &gt; 0), <c>unpaid</c>, <c>partial</c>, <c>paid</c> or <c>all</c>.</param>
@@ -2971,6 +3086,26 @@
             <response code="409">Not pending, or a lost concurrency race.</response>
             <response code="410">The request expired.</response>
         </member>
+        <member name="T:TigerCS.Api.Controllers.ProjectsController">
+            <summary>
+            The Project / Unit options of New Ticket Step 2: the projects and units Tiger Ticketing already holds (from its tickets — it keeps
+            no project table). Read-only; creates and changes nothing. Scoped like the wizard's other steps (CS Agent / CS Supervisor with
+            <c>Tickets.Create</c>).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.ProjectsController.#ctor(TigerCS.Application.Modules.Ticketing.Services.ProjectCatalogAppService)">
+            <summary>
+            The Project / Unit options of New Ticket Step 2: the projects and units Tiger Ticketing already holds (from its tickets — it keeps
+            no project table). Read-only; creates and changes nothing. Scoped like the wizard's other steps (CS Agent / CS Supervisor with
+            <c>Tickets.Create</c>).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.ProjectsController.List(System.Threading.CancellationToken)">
+            <summary>Every known project, one per name, alphabetical.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.ProjectsController.Units(System.String,System.Threading.CancellationToken)">
+            <summary>The unit numbers recorded for one project; an empty list when none are known.</summary>
+        </member>
         <member name="T:TigerCS.Api.Controllers.PublicTicketReviewsController">
             <summary>
             The server side of the public customer satisfaction review page. Anonymous by design — the customer arrives from an email
@@ -3065,7 +3200,7 @@
             §4.1 permission matrix grants ticket-Create to exactly these two roles.
             </summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.TicketsController.#ctor(TigerCS.Application.Modules.Ticketing.Services.TicketCreationAppService,TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService,TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentAppService,TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService,TigerCS.Application.Modules.Ticketing.Services.TicketNoteAppService,TigerCS.Application.Modules.Ticketing.Services.TicketReconciliationAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerHistoryAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerProfileAppService,TigerCS.Application.Modules.Ticketing.Services.TicketApprovalAppService,TigerCS.Application.Modules.Ticketing.Services.TicketInteractionQueryAppService,TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewQueryAppService,TigerCS.Application.Modules.Ticketing.Services.TicketClassificationAppService,TigerCS.Application.Modules.Ticketing.Services.TicketClaimAppService)">
+        <member name="M:TigerCS.Api.Controllers.TicketsController.#ctor(TigerCS.Application.Modules.Ticketing.Services.TicketCreationAppService,TigerCS.Application.Modules.Ticketing.Services.TicketQueryAppService,TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentAppService,TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService,TigerCS.Application.Modules.Ticketing.Services.TicketNoteAppService,TigerCS.Application.Modules.Ticketing.Services.TicketReconciliationAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerHistoryAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerProfileAppService,TigerCS.Application.Modules.Ticketing.Services.TicketApprovalAppService,TigerCS.Application.Modules.Ticketing.Services.TicketInteractionQueryAppService,TigerCS.Application.Modules.Ticketing.ActivityTimeline.TicketActivityTimelineAppService,TigerCS.Application.Modules.CustomerReviews.Services.TicketReviewQueryAppService,TigerCS.Application.Modules.Ticketing.Services.TicketClassificationAppService,TigerCS.Application.Modules.Ticketing.Services.TicketClaimAppService,TigerCS.Application.Modules.Ticketing.Services.TicketAssignmentHistoryAppService,TigerCS.Application.Modules.Ticketing.Services.CollectionsTransferOptionsAppService)">
             <summary>
             Items 3–8 of this increment's scope, plus a later business-rule change:
             a single ticket-creation path for every IntakeRecord. Customer
@@ -3175,6 +3310,31 @@
             <response code="200">The ticket's interactions, oldest first, each with its transcript (possibly empty).</response>
             <response code="404">No such ticket, or it is not visible to the caller.</response>
         </member>
+        <member name="M:TigerCS.Api.Controllers.TicketsController.GetCollectionsTransferOptions(System.Int64,System.Threading.CancellationToken)">
+            <summary>The Tower and Unit choices for moving this ticket into Collections: the customer's verified towers, each with that tower's units, and the ticket's own verified pair to preselect.</summary>
+            <remarks>Read-only; CRM is asked for the ticket's own customer (never a typed value). Visible to exactly the callers who can see the ticket.</remarks>
+            <param name="ticketId">The ticket.</param>
+            <response code="200">The options.</response>
+            <response code="404">No such ticket, or it is not visible to the caller.</response>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.TicketsController.GetAssignmentHistory(System.Int64,System.Threading.CancellationToken)">
+            <summary>Every assignment event of a Collections ticket: previous and new assignee, automatic or manual, tower and unit when known, who and when, and the reason.</summary>
+            <remarks>Read-only and append-only. Visible to exactly the callers who can see the ticket itself. Empty for tickets that never had a Collections assignment.</remarks>
+            <param name="ticketId">The ticket.</param>
+            <response code="200">The assignment history, oldest first.</response>
+            <response code="404">No such ticket, or it is not visible to the caller.</response>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.TicketsController.GetActivityTimeline(System.Int64,System.Threading.CancellationToken)">
+            <summary>The ticket's full chronological Activity timeline: creation, AI/Genesys/human conversation milestones, handoffs, ownership, transfers, lifecycle, SLA and every closure with its actor and reason.</summary>
+            <remarks>
+            Read-only. Built from existing stores (interactions, transcript, handoffs, handlers, workflow events, lifecycle history, ownership
+            history, audit trail); nothing is written or rewritten. All timestamps are UTC; the UI converts them to Asia/Dubai. Missing evidence is
+            reported as "Unknown" / "Not recorded", never invented. Visible to exactly the callers who can see the ticket itself.
+            </remarks>
+            <param name="ticketId">The ticket.</param>
+            <response code="200">The ticket's activity timeline, oldest first.</response>
+            <response code="404">No such ticket, or it is not visible to the caller.</response>
+        </member>
         <member name="M:TigerCS.Api.Controllers.TicketsController.GetReviews(System.Int64,System.Threading.CancellationToken)">
             <summary>The ticket's customer satisfaction reviews — one entry per review cycle (original resolution, then each reopen). Staff only.</summary>
             <remarks>
@@ -3236,6 +3396,13 @@
             <response code="404">No such ticket, or it is not visible to the caller.</response>
             <response code="409">rowVersion did not match — another request already modified this ticket. Reload it and retry.</response>
             <response code="422">The requested change is not valid for this ticket's current state.</response>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.TicketsController.RetryAssignment(System.Int64,System.Threading.CancellationToken)">
+            <summary>Retry the automatic CS Agent assignment of an active ticket that has none (CS Manager / administrator).</summary>
+            <remarks>
+            Safe to repeat: a ticket that already has a CS Agent is returned unchanged with no new assignment row or audit entry. Uses the same
+            shared round-robin rotation as every other path; with nobody eligible the failure stays recorded and 409 is returned.
+            </remarks>
         </member>
         <member name="M:TigerCS.Api.Controllers.TicketsController.TakeOwnership(System.Int64,TigerCS.Application.Modules.Ticketing.Dto.TakeOwnershipRequestDto,System.Threading.CancellationToken)">
             <summary>Take ownership of an unassigned ticket (Call Center agents).</summary>
@@ -3739,8 +3906,8 @@
         <member name="T:TigerCS.Api.Filters.RequireTicketAccessAttribute">
              <summary>
              Refuses a request that addresses a ticket (<c>{ticketId}</c> in the route) the caller may not see — the server-side half of CS Agent
-             ticket visibility for direct URLs and API calls. A CS Agent sees only tickets assigned to them or on which they handled a Genesys
-             interaction (<see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule"/>); without this, every endpoint under <c>api/tickets/{ticketId}</c> would have to
+             and Department Employee ticket visibility for direct URLs and API calls. A CS Agent sees only tickets assigned to them (or the follow-up
+             and intake exceptions of <see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule"/>), and a Department Employee only tickets assigned to them; without this, every endpoint under <c>api/tickets/{ticketId}</c> would have to
              remember that, and the CS Agent's cross-department action rights (close, classify, reopen, escalate, …) would reach tickets they cannot
              even open.
             
@@ -3757,8 +3924,8 @@
         <member name="M:TigerCS.Api.Filters.RequireTicketAccessAttribute.#ctor">
              <summary>
              Refuses a request that addresses a ticket (<c>{ticketId}</c> in the route) the caller may not see — the server-side half of CS Agent
-             ticket visibility for direct URLs and API calls. A CS Agent sees only tickets assigned to them or on which they handled a Genesys
-             interaction (<see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule"/>); without this, every endpoint under <c>api/tickets/{ticketId}</c> would have to
+             and Department Employee ticket visibility for direct URLs and API calls. A CS Agent sees only tickets assigned to them (or the follow-up
+             and intake exceptions of <see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketVisibilityRule"/>), and a Department Employee only tickets assigned to them; without this, every endpoint under <c>api/tickets/{ticketId}</c> would have to
              remember that, and the CS Agent's cross-department action rights (close, classify, reopen, escalate, …) would reach tickets they cannot
              even open.
             

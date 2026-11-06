@@ -381,9 +381,68 @@
       if (target.tagName === "DETAILS") {
         target.setAttribute("open", "");
       }
-      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      // The action may sit inside the header's Actions menu: open every enclosing menu so the form is actually visible.
+      var enclosing = target.parentElement ? target.parentElement.closest("details") : null;
+      while (enclosing) {
+        enclosing.setAttribute("open", "");
+        enclosing = enclosing.parentElement ? enclosing.parentElement.closest("details") : null;
+      }
+      target.scrollIntoView({ behavior: "smooth", block: "nearest" });
       var focusable = target.querySelector("summary, select, textarea, input:not([type=hidden]), button");
       if (focusable) focusable.focus({ preventScroll: true });
+    });
+  });
+
+  // Ticket Details "Actions" menu: each action's form opens as a modal dialog (CSS positions it; the <details> keeps it working
+  // without script). Here: one modal at a time, focus moves into it and is kept there, the close button works, and focus returns
+  // to the action's row when it closes.
+  var MODAL_FOCUSABLE = 'a[href], button:not([disabled]), select:not([disabled]), textarea:not([disabled]), input:not([disabled]):not([type=hidden]), summary';
+  document.addEventListener("toggle", function (event) {
+    var details = event.target;
+    if (!(details instanceof HTMLDetailsElement) || !details.matches(".actions-menu__panel > details[data-action]")) return;
+    var summary = details.querySelector(":scope > summary");
+    if (details.open) {
+      details.parentElement.querySelectorAll(":scope > details[data-action][open]").forEach(function (other) {
+        if (other !== details) other.removeAttribute("open");
+      });
+      var first = details.querySelector(".action-modal__body select, .action-modal__body textarea, .action-modal__body input:not([type=hidden]), .action-modal__body button, .action-modal__body a[href]");
+      if (first) first.focus({ preventScroll: true });
+    } else if (!document.activeElement || document.activeElement === document.body || details.contains(document.activeElement)) {
+      // Back to the control that opened it: the action's row, or the Actions button when the whole menu closed (Escape, outside click).
+      var menu = details.closest("details.actions-menu");
+      var back = menu && !menu.open ? menu.querySelector(":scope > summary") : summary;
+      if (back) back.focus({ preventScroll: true });
+    }
+  }, true);
+
+  document.addEventListener("click", function (event) {
+    var close = event.target instanceof Element ? event.target.closest("[data-modal-close]") : null;
+    if (!close) return;
+    var details = close.closest("details");
+    if (details) details.removeAttribute("open");
+  });
+
+  document.addEventListener("keydown", function (event) {
+    if (event.key !== "Tab") return;
+    var modal = document.querySelector(".actions-menu__panel > details[open] > .action-modal");
+    if (!modal) return;
+    var items = Array.prototype.filter.call(modal.querySelectorAll(MODAL_FOCUSABLE), function (el) { return el.offsetParent !== null; });
+    if (items.length === 0) return;
+    var firstItem = items[0], lastItem = items[items.length - 1];
+    if (!modal.contains(document.activeElement)) { event.preventDefault(); firstItem.focus(); }
+    else if (event.shiftKey && document.activeElement === firstItem) { event.preventDefault(); lastItem.focus(); }
+    else if (!event.shiftKey && document.activeElement === lastItem) { event.preventDefault(); firstItem.focus(); }
+  });
+
+  // Keyboard access for tab-jump labels (they target a tab's radio input): focusable, announced as buttons, Enter/Space activate.
+  document.querySelectorAll("label.tab-jump").forEach(function (label) {
+    if (!label.hasAttribute("tabindex")) label.setAttribute("tabindex", "0");
+    label.setAttribute("role", "button");
+    label.addEventListener("keydown", function (event) {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        label.click();
+      }
     });
   });
 
@@ -437,6 +496,102 @@
     group.addEventListener("toggle", function () {
       if (group.open) scrollChatToEnd(group);
     });
+  });
+
+  // New Ticket Step 2: when the Project changes, refill the Unit list with the units known for that project (the Web handler proxies
+  // the read-only Api call). The Unit stays free text, so a unit that is not in the system can still be typed in.
+  (function () {
+    var project = document.querySelector("[data-project-input]");
+    var unitList = document.querySelector("[data-unit-options]");
+    if (!project || !unitList) return;
+    var timer = null;
+    function load() {
+      var name = project.value.trim();
+      if (!name) { unitList.innerHTML = ""; return; }
+      fetch(project.getAttribute("data-units-url") + "&project=" + encodeURIComponent(name), { credentials: "same-origin", headers: { "Accept": "application/json" } })
+        .then(function (r) { return r.ok ? r.json() : []; })
+        .then(function (units) {
+          if (project.value.trim() !== name) return;
+          unitList.innerHTML = "";
+          units.forEach(function (u) { var o = document.createElement("option"); o.value = u; unitList.appendChild(o); });
+        })
+        .catch(function () { /* the Unit field stays free text */ });
+    }
+    project.addEventListener("input", function () { clearTimeout(timer); timer = setTimeout(load, 250); });
+    project.addEventListener("change", load);
+  })();
+
+  // Customer Details: inline edit of the customer's name/e-mail. The pencil swaps the heading for a small form; Save posts to the
+  // EditContact handler with fetch and, once the server confirms, updates every place the name is shown on the page without a
+  // reload. Without JavaScript the pencil is a link to ?editContact=1 and the form posts normally.
+  (function () {
+    var form = document.querySelector("[data-contact-edit-form]");
+    var openLink = document.querySelector("[data-contact-edit-open]");
+    if (!form || !openLink) return;
+    var title = openLink.closest(".customer-header__title");
+    var nameInput = form.querySelector("[data-contact-input-name]");
+    var emailInput = form.querySelector("[data-contact-input-email]");
+    var errorBox = form.querySelector("[data-contact-error]");
+    var saveButton = form.querySelector("[data-contact-save]");
+    var cancelLink = form.querySelector("[data-contact-edit-cancel]");
+    var initial = { name: nameInput.value, email: emailInput.value };
+
+    function show(editing) {
+      form.hidden = !editing;
+      if (title) title.hidden = editing;
+      if (editing) { nameInput.focus(); nameInput.select(); }
+    }
+    function say(text) { errorBox.textContent = text || ""; }
+    function initials(name) {
+      var parts = name.trim().split(/\s+/).filter(Boolean);
+      return ((parts[0] || "")[0] || "").concat(parts.length > 1 ? parts[parts.length - 1][0] : "").toUpperCase();
+    }
+
+    if (!form.hidden) show(true);
+    openLink.addEventListener("click", function (e) { e.preventDefault(); say(""); show(true); });
+    cancelLink.addEventListener("click", function (e) {
+      e.preventDefault();
+      nameInput.value = initial.name; emailInput.value = initial.email; say(""); show(false);
+    });
+    form.addEventListener("keydown", function (e) { if (e.key === "Escape") cancelLink.click(); });
+
+    form.addEventListener("submit", function (e) {
+      e.preventDefault();
+      if (!nameInput.value.trim()) { say("Customer name is required."); nameInput.focus(); return; }
+      saveButton.disabled = true; say("");
+      fetch(form.action, { method: "POST", body: new FormData(form), credentials: "same-origin", headers: { "X-Requested-With": "fetch", "Accept": "application/json" } })
+        .then(function (response) { return response.json().catch(function () { return { ok: false, message: "The change could not be saved." }; }); })
+        .then(function (result) {
+          if (!result.ok) { say(result.message || "The change could not be saved."); return; }
+          document.querySelectorAll("[data-contact-name]").forEach(function (el) { el.textContent = result.name; });
+          document.querySelectorAll("[data-contact-email]").forEach(function (el) { el.textContent = result.email || "\u2014"; });
+          var avatar = document.querySelector(".customer-header__avatar");
+          if (avatar) avatar.textContent = initials(result.name);
+          document.title = result.name + " \u00b7 Customer";
+          initial = { name: result.name, email: result.email || "" };
+          nameInput.value = initial.name; emailInput.value = initial.email;
+          show(false);
+        })
+        .catch(function () { say("Tiger Ticketing System could not reach the ticketing service."); })
+        .then(function () { saveButton.disabled = false; });
+    });
+  })();
+
+  // Ticket Details Assign / Transfer: state the destination in words before the agent confirms. The text follows the select
+  // beside it (the option's label up to " — ", i.e. just the person's or department's name); nothing is posted from here.
+  document.querySelectorAll("[data-destination-for]").forEach(function (note) {
+    var select = document.getElementById(note.getAttribute("data-destination-for"));
+    if (!select) { note.hidden = true; return; }
+    var template = note.getAttribute("data-destination-template") || "{0}";
+    var fallback = note.getAttribute("data-destination-fallback") || "";
+    function update() {
+      var option = select.options[select.selectedIndex];
+      var label = option && option.value ? option.text.split(" \u2014 ")[0].trim() : "";
+      note.textContent = label ? template.replace("{0}", label) : fallback;
+      note.hidden = note.textContent === "";
+    }
+    select.addEventListener("change", update);
+    update();
   });
 
   // Back/forward can restore this page from the browser's cache exactly as

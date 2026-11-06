@@ -1,7 +1,7 @@
 /* Receivables snapshot status panel and the searchable tower picker (Receivables + Campaigns). */
 .snapshot-status { font-size: var(--text-sm, .9rem); margin: .8rem 0; }
 .snapshot-status p { margin: 0 0 .5rem; }
-.snapshot-status__table { width: 100%; border-collapse: collapse; font-size: .85rem; margin: .5rem 0; display: block; overflow-x: auto; }
+.snapshot-status__table { width: 100%; border-collapse: collapse; font-size: 13px; margin: .5rem 0; display: block; overflow-x: auto; }
 .snapshot-status__table th, .snapshot-status__table td { padding: .45rem .7rem; text-align: left; border-bottom: 1px solid var(--color-border); vertical-align: top; }
 .snapshot-status__table th { white-space: nowrap; font-weight: 600; }
 .receivables-notice--warning { background: #fde8e8; border-color: #f2b8b8; color: #7a2323; }
@@ -14,9 +14,9 @@
   border-radius: var(--radius-sm); box-shadow: var(--shadow-sm, 0 4px 12px rgba(0,0,0,.12));
 }
 .tower-picker__list[hidden] { display: none; }
-.tower-picker__option { padding: .5rem .75rem; cursor: pointer; font-size: .9rem; }
+.tower-picker__option { padding: .5rem .75rem; cursor: pointer; font-size: 13px; }
 .tower-picker__option[aria-selected="true"], .tower-picker__option:hover { background: var(--color-info-tint); }
-.tower-picker__empty { padding: .5rem .75rem; color: var(--color-text-secondary); font-size: .85rem; }
+.tower-picker__empty { padding: .5rem .75rem; color: var(--color-text-secondary); font-size: 13px; }
 @media (max-width: 720px) { .tower-picker { min-width: 100%; } }
 .snapshot-status__load { display: flex; align-items: center; gap: .6rem; margin-top: .6rem; }
 .receivables-shortcuts { align-self: flex-end; }
@@ -35,22 +35,22 @@
 .unit-group { border-top: 1px solid var(--color-border, #e3e6ea); }
 .unit-detail > td { padding: 0 0 .75rem 1.5rem; background: var(--color-surface-muted, transparent); }
 .unit-detail[hidden] { display: none; }
-.receivables-table--nested { font-size: .9em; }
+.receivables-table--nested { font-size: 13px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* By unit: months in the row */
 .unit-months { list-style: none; margin: .15rem 0 0; padding: 0; display: flex; flex-direction: column; gap: .1rem; }
-.unit-month { display: flex; justify-content: space-between; gap: .75rem; font-size: .85rem; font-variant-numeric: tabular-nums; }
+.unit-month { display: flex; justify-content: space-between; gap: .75rem; font-size: 13px; font-variant-numeric: tabular-nums; }
 .unit-month__name { color: var(--color-text-secondary); }
 .receivables-table--units td { vertical-align: top; }
-.receivables-help, .snapshot-status__details { margin: .25rem 0 .5rem; font-size: .85rem; color: var(--color-text-secondary); }
+.receivables-help, .snapshot-status__details { margin: .25rem 0 .5rem; font-size: 13px; color: var(--color-text-secondary); }
 .receivables-help > summary, .snapshot-status__details > summary { cursor: pointer; }
 .snapshot-status { margin-bottom: .25rem; }
 
 /* Compact summary tiles and unit table */
 .receivables-metrics--five { gap: .5rem; margin-bottom: .5rem; }
 .receivables-metrics--five .panel { padding: .45rem .75rem; display: flex; flex-wrap: wrap; align-items: baseline; gap: .1rem .5rem; }
-.receivables-metrics--five .panel strong { font-size: 1.15rem; }
+.receivables-metrics--five .panel strong { font-size: 18px; }
 .receivables-table--units td:nth-child(2) { white-space: nowrap; }
 .receivables-amount--overdue { color: var(--color-danger, #b3261e); }
 

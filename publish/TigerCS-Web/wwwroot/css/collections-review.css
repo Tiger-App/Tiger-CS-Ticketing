@@ -1,12 +1,12 @@
 .review-tiles { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
 .review-tiles .tile { display: flex; flex-direction: column; min-width: 130px; padding: 12px 16px; border: 1px solid var(--border, #d0d7de); border-radius: 8px; text-decoration: none; color: inherit; }
-.review-tiles .tile strong { font-size: 1.6rem; }
+.review-tiles .tile strong { font-size: 22px; }
 .review-tiles .tile-ready { border-left: 6px solid #1a7f37; }
 .review-tiles .tile-review { border-left: 6px solid #bf8700; }
 .review-tiles .tile-excluded { border-left: 6px solid #6e7781; }
 .review-tiles .tile-sent { border-left: 6px solid #0969da; }
-.review-note { font-size: .9rem; opacity: .85; }
-.review-reasons { margin: 4px 0 0; padding-left: 18px; font-size: .85rem; }
+.review-note { font-size: 13px; opacity: .85; }
+.review-reasons { margin: 4px 0 0; padding-left: 18px; font-size: 13px; }
 .review-reasons .reason-warning { font-style: italic; }
 .review-run progress, .review-run [data-run-progress] { width: 100%; height: 14px; }
 .review-tally { display: flex; flex-wrap: wrap; gap: 8px 24px; list-style: none; padding: 0; }
