@@ -255,7 +255,7 @@ public sealed class DashboardAppService(
     private static IReadOnlyList<DashboardBreakdownItemDto> ToBreakdown<TKey>(
         IReadOnlyList<DashboardCountRow<TKey>> rows, int total, Func<TKey, string> keyText) where TKey : struct =>
         rows.Select(r => new DashboardBreakdownItemDto(
-            r.Key is { } key ? keyText(key) : null, r.Label, r.Count, Percentage(r.Count, total))).ToList();
+            r.Key is { } key ? keyText(key) : null, r.Label, r.Count, Percentage(r.Count, total), r.Code)).ToList();
 
     private static DashboardRecentTicketDto ToRecentDto(DashboardRecentTicketRow row) => new(
         row.TicketId,
@@ -274,7 +274,11 @@ public sealed class DashboardAppService(
         row.CurrentOwnerEmployeeId,
         row.OwnerName,
         row.CreatedAtUtc,
-        row.DepartmentCode);
+        row.DepartmentCode,
+        row.ChannelId,
+        row.ChannelName,
+        row.ChannelCode,
+        row.LastActionByName);
 
     private static DashboardAttentionTicketDto ToAttentionDto(DashboardAttentionTicket row) => new(
         row.Ticket.TicketId,

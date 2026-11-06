@@ -184,9 +184,15 @@ public sealed record DashboardKpisDto(
 /// <param name="Label">The display label — a real name from the master data, never a raw id.</param>
 /// <param name="Count">The count.</param>
 /// <param name="Percentage">Count as a percentage of the widget's total, rounded to one decimal; 0 when the total is 0.</param>
-public sealed record DashboardBreakdownItemDto(string? Key, string Label, int Count, double Percentage);
+/// <param name="Code">The stable master-data code where the dimension has one (a channel's code), else null — lets the UI choose a glyph without comparing display names.</param>
+public sealed record DashboardBreakdownItemDto(string? Key, string Label, int Count, double Percentage, string? Code = null);
 
-/// <summary>One Recent/Critical row — compact operational facts only, never the ticket description.</summary>
+/// <summary>
+/// One Recent/Critical row — compact operational facts only, never the ticket description.
+/// <c>ChannelId/ChannelName/ChannelCode</c> are the channel of the ticket's originating interaction (null when none is recorded).
+/// <c>LastActionByName</c> is who performed the most recent meaningful action on the ticket — a person's name, or "AI Assistant" for the
+/// virtual agent — and null when no meaningful action is recorded (background/system activity never counts).
+/// </summary>
 public sealed record DashboardRecentTicketDto(
     long TicketId,
     string TicketNumber,
@@ -204,7 +210,11 @@ public sealed record DashboardRecentTicketDto(
     Guid? CurrentOwnerEmployeeId,
     string? OwnerName,
     DateTime CreatedAtUtc,
-    string? DepartmentCode = null);
+    string? DepartmentCode = null,
+    byte? ChannelId = null,
+    string? ChannelName = null,
+    string? ChannelCode = null,
+    string? LastActionByName = null);
 
 /// <summary>A filter picker option. <see cref="GroupId"/> is the owning department for request types; <see cref="IsActive"/> false marks a retired channel kept for historical filtering.</summary>
 public sealed record DashboardFilterOptionDto(string Id, string Label, int? GroupId = null, bool IsActive = true);

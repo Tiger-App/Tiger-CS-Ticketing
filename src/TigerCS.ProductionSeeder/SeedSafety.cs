@@ -12,6 +12,9 @@ public sealed record SeedRequest(bool Seed, SeedTarget Target, bool AllowUntrust
 public static class SeedSafety
 {
     public const string Server = "TGAESHJDBP02";
+
+    /// <summary>The one IP address approved for <see cref="Server"/>: the same machine, reached by address. Nothing else is accepted.</summary>
+    public const string ServerAddress = "10.10.10.124";
     public const string SeedTestDatabase = "TigerCS_Ticketing_SeedTest";
     public const string ProductionDatabase = "TigerCS_Ticketing_Prod";
 
@@ -84,6 +87,53 @@ public static class SeedSafety
 
         return new SeedRequest(seed, resolved, untrusted, null);
     }
+
+    /// <summary>
+    /// The host part of a SQL Server <c>Data Source</c> (protocol prefix, port and instance name removed), or null when there is none.
+    /// Examples: <c>10.10.10.124,1433</c>, <c>tcp:10.10.10.124</c>, <c>TGAESHJDBP02\SQL</c>.
+    /// </summary>
+    public static string? DataSourceHost(string? dataSource)
+    {
+        if (string.IsNullOrWhiteSpace(dataSource)) return null;
+        var host = dataSource.Trim();
+        var colon = host.IndexOf(':');
+        if (colon >= 0 && colon < host.Length - 1 && host[..colon].ToLowerInvariant() is "tcp" or "np" or "lpc") host = host[(colon + 1)..];
+        var cut = host.IndexOfAny([',', '\\']);
+        if (cut >= 0) host = host[..cut];
+        host = host.Trim();
+        return host.Length == 0 ? null : host;
+    }
+
+    /// <summary>True only for the approved production server's name or its approved IP address (exact, case-insensitive; no wildcards, no other hosts).</summary>
+    public static bool IsApprovedServerHost(string? host) =>
+        host is not null
+        && (string.Equals(host.Trim(), Server, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(host.Trim(), ServerAddress, StringComparison.Ordinal));
+
+    /// <summary>
+    /// Verifies the connection really targets the approved server and the expected database. Two independent facts must both hold:
+    /// the connection string's Data Source is the approved name or IP, AND the server itself reports (<c>@@SERVERNAME</c>) the approved name
+    /// and (<c>DB_NAME()</c>) the expected database. Returns null when verified, otherwise the reason, with the reported values escaped so
+    /// invisible characters are visible. An IP address is never reported by the server, so it is only ever accepted from the Data Source
+    /// and never as a substitute for the server's own name.
+    /// </summary>
+    public static string? VerifyTarget(string? dataSource, string? reportedServer, string? reportedDatabase, string expectedDatabase)
+    {
+        var host = DataSourceHost(dataSource);
+        if (!IsApprovedServerHost(host))
+            return $"the connection string Data Source host {Escape(host)} is not the approved server ({Server} or {ServerAddress}).";
+
+        if (!string.Equals(reportedServer?.Trim(), Server, StringComparison.OrdinalIgnoreCase))
+            return $"the server reports itself as {Escape(reportedServer)}, not the approved {Server}.";
+
+        if (!string.Equals(reportedDatabase?.Trim(), expectedDatabase, StringComparison.OrdinalIgnoreCase))
+            return $"the connected database is {Escape(reportedDatabase)}, not {expectedDatabase}.";
+
+        return null;
+    }
+
+    private static string Escape(string? value) =>
+        value is null ? "(none)" : "\"" + string.Concat(value.Select(c => c is >= ' ' and <= '~' ? c.ToString() : $"\\u{(int)c:X4}")) + "\"";
 
     /// <summary>Exact comparison of the applied migration identities with the ones the code ships, ordered. Empty result means identical.</summary>
     public static IReadOnlyList<string> CompareMigrations(IEnumerable<string> applied, IEnumerable<string> shipped)

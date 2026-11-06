@@ -14,12 +14,13 @@ namespace TigerCS.ProductionSeeder;
 
 /// <summary>What the command line asked of <c>provision-staff</c>. <see cref="Error"/> is set when the request is not explicit and complete.</summary>
 public sealed record StaffProvisioningRequest(
-    bool Apply, SeedTarget Target, string? ActorEmail, string? CredentialsOut, bool AllowUntrustedCertificate, string? Error);
+    bool Apply, SeedTarget Target, string? ActorEmail, string? CredentialsOut, bool AllowUntrustedCertificate, string? Error,
+    string Roster = "staff");
 
 public static class StaffProvisioningCommand
 {
     public const string Usage =
-        "  provision-staff --target seedtest|production                         (DRY RUN: read-only plan + department coverage report)\n" +
+        "  provision-staff --target seedtest|production [--roster staff|department-accounts]   (DRY RUN: read-only plan + department coverage report)\n" +
         "  provision-staff --target seedtest --apply --confirm-seed-test --actor-email <active System Administrator> --credentials-out <new file>\n" +
         "  provision-staff --target production --apply --confirm-production " + SeedSafety.Server + "/" + SeedSafety.ProductionDatabase +
         " --backup-confirmed --actor-email <active System Administrator> --credentials-out <new file>\n" +
@@ -29,7 +30,7 @@ public static class StaffProvisioningCommand
     {
         static StaffProvisioningRequest Fail(string error) => new(false, SeedTarget.SeedTest, null, null, false, error);
 
-        string? target = null, actor = null, credentials = null, confirmProduction = null;
+        string? target = null, actor = null, credentials = null, confirmProduction = null, rosterName = "staff";
         bool apply = false, confirmSeedTest = false, backup = false, untrusted = false;
 
         for (var i = 1; i < args.Length; i++)
@@ -40,6 +41,7 @@ public static class StaffProvisioningCommand
                 case "--actor-email" when i + 1 < args.Length: actor = args[++i]; break;
                 case "--credentials-out" when i + 1 < args.Length: credentials = args[++i]; break;
                 case "--confirm-production" when i + 1 < args.Length: confirmProduction = args[++i]; break;
+                case "--roster" when i + 1 < args.Length: rosterName = args[++i]; break;
                 case "--apply": apply = true; break;
                 case "--confirm-seed-test": confirmSeedTest = true; break;
                 case "--backup-confirmed": backup = true; break;
@@ -47,6 +49,8 @@ public static class StaffProvisioningCommand
                 default: return Fail($"Unexpected argument '{args[i]}'.");
             }
         }
+
+        if (rosterName is not ("staff" or "department-accounts")) return Fail("--roster must be staff or department-accounts.");
 
         SeedTarget resolved;
         if (string.Equals(target, "seedtest", StringComparison.OrdinalIgnoreCase)) resolved = SeedTarget.SeedTest;
@@ -57,7 +61,7 @@ public static class StaffProvisioningCommand
         {
             return confirmSeedTest || confirmProduction is not null || backup || actor is not null || credentials is not null
                 ? Fail("Confirmation, --actor-email and --credentials-out are only valid with --apply.")
-                : new StaffProvisioningRequest(false, resolved, null, null, untrusted, null);
+                : new StaffProvisioningRequest(false, resolved, null, null, untrusted, null, rosterName);
         }
 
         if (string.IsNullOrWhiteSpace(actor)) return Fail("--apply requires --actor-email (an active System Administrator, named in the audit entries).");
@@ -72,7 +76,7 @@ public static class StaffProvisioningCommand
             if (!backup) return Fail("Applying to Production requires --backup-confirmed (a full backup was taken immediately before).");
         }
 
-        return new StaffProvisioningRequest(true, resolved, actor.Trim(), credentials, untrusted, null);
+        return new StaffProvisioningRequest(true, resolved, actor.Trim(), credentials, untrusted, null, rosterName);
     }
 
     /// <summary>A policy-compliant random password (upper, lower, digit, symbol; 20 characters) from the OS CSPRNG.</summary>
@@ -100,6 +104,7 @@ public static class StaffProvisioningCommand
             return 1;
         }
 
+        var roster = request.Roster == "department-accounts" ? StaffRoster.DepartmentAccounts : StaffRoster.RequestedStaff;
         var expectedDatabase = SeedSafety.DatabaseFor(request.Target);
         var configuration = new ConfigurationBuilder().AddEnvironmentVariables().Build();
         var connectionString = configuration.GetConnectionString("TigerCsDatabase");
@@ -143,10 +148,9 @@ public static class StaffProvisioningCommand
                 if (!await reader.ReadAsync()) throw new InvalidOperationException("Could not identify SQL Server.");
                 var server = reader.GetString(0);
                 var database = reader.GetString(1);
-                if (!string.Equals(server, SeedSafety.Server, StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(database, expectedDatabase, StringComparison.OrdinalIgnoreCase))
+                if (SeedSafety.VerifyTarget(cs.DataSource, server, database, expectedDatabase) is { } targetProblem)
                 {
-                    Console.Error.WriteLine($"BLOCKED: unexpected SQL target (server {server}, database {database}).");
+                    Console.Error.WriteLine($"BLOCKED: unexpected SQL target - {targetProblem}");
                     return 1;
                 }
 
@@ -169,7 +173,7 @@ public static class StaffProvisioningCommand
             if (!request.Apply)
             {
                 Console.WriteLine("DRY RUN - read-only. Nothing is written.");
-                lines = await provisioning.PlanAsync(StaffRoster.RequestedStaff);
+                lines = await provisioning.PlanAsync(roster);
             }
             else
             {
@@ -181,8 +185,8 @@ public static class StaffProvisioningCommand
                 }
 
                 await using var transaction = await db.Database.BeginTransactionAsync();
-                lines = await provisioning.ApplyAsync(StaffRoster.RequestedStaff, actorId.Value, entry =>
-                    passwords[entry.Email] = GeneratePassword());
+                lines = await provisioning.ApplyAsync(roster, actorId.Value, entry =>
+                    passwords[entry.Identifier] = GeneratePassword());
 
                 if (lines.Any(l => l.Status == StaffProvisioningStatus.Created && l.EmployeeId is null))
                 {
@@ -205,7 +209,7 @@ public static class StaffProvisioningCommand
                     await using var writer = new StreamWriter(stream);
                     await writer.WriteLineAsync("# One-time initial passwords. Hand over securely, then delete this file. Users should change them at first sign-in.");
                     foreach (var line in created)
-                        await writer.WriteLineAsync($"{line.Entry.Email}\t{passwords[line.Entry.Email]}");
+                        await writer.WriteLineAsync($"{line.Entry.Identifier}\t{passwords[line.Entry.Identifier]}");
                 }
 
                 await transaction.CommitAsync();
@@ -213,7 +217,7 @@ public static class StaffProvisioningCommand
 
             foreach (var line in lines)
             {
-                Console.WriteLine($"{line.Status,-13} {line.Entry.FullName} <{line.Entry.Email}> dept={line.DepartmentName ?? "-"} roles=[{string.Join(", ", line.Roles)}] - {line.Detail}");
+                Console.WriteLine($"{line.Status,-13} {line.Entry.FullName} <{line.Entry.Identifier}> dept={line.DepartmentName ?? "-"} roles=[{string.Join(", ", line.Roles)}] - {line.Detail}");
             }
 
             Console.WriteLine($"Summary: created/would-create={lines.Count(l => l.Status is StaffProvisioningStatus.Created or StaffProvisioningStatus.WouldCreate)}, " +
