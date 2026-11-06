@@ -7,8 +7,11 @@ namespace TigerCS.Application.Modules.Administration.Services;
 
 public enum DepartmentStaffingStatus
 {
-    /// <summary>At least one active employee is eligible to receive automatically assigned tickets.</summary>
+    /// <summary>At least one active individual employee is eligible to receive automatically assigned tickets.</summary>
     Staffed,
+
+    /// <summary>The only accounts that can receive automatic assignment are shared department-level accounts: tickets are handled, but by no accountable individual. Needs individual employees.</summary>
+    SharedAccountOnly,
 
     /// <summary>No active employee is a member of the department. Tickets cannot be assigned; needs an employee assignment.</summary>
     Unstaffed,
@@ -24,7 +27,9 @@ public sealed record DepartmentCoverageLine(
     int ActiveEmployeeCount,
     int AssignableEmployeeCount,
     DepartmentStaffingStatus Status,
-    IReadOnlyList<string> ActiveEmployees)
+    IReadOnlyList<string> ActiveEmployees,
+    int SharedAccountCount = 0,
+    int IndividualAssignableCount = 0)
 {
     public bool NeedsStaffing => Status != DepartmentStaffingStatus.Staffed;
 }
@@ -41,8 +46,11 @@ public sealed class DepartmentCoverageService(
     IEmployeeRepository employeeRepository,
     IUserRoleReader roleReader,
     IUserAccountManager accountManager,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    IServiceIdentityRegistry? serviceIdentities = null,
+    IReadOnlyCollection<string>? sharedAccountUserNames = null)
 {
+    private readonly IReadOnlyCollection<string> _shared = sharedAccountUserNames ?? StaffRoster.DepartmentAccountUserNames;
+
     public const string CallCenterCode = "CC";
 
     public async Task<IReadOnlyList<DepartmentCoverageLine>> GetAsync(CancellationToken cancellationToken = default)
@@ -58,6 +66,8 @@ public sealed class DepartmentCoverageService(
 
             var names = new List<string>();
             var assignable = 0;
+            var shared = 0;
+            var individualAssignable = 0;
             foreach (var employeeId in memberships.Select(m => m.EmployeeId).Distinct())
             {
                 var employee = await employeeRepository.GetByIdAsync(employeeId, cancellationToken);
@@ -67,17 +77,22 @@ public sealed class DepartmentCoverageService(
                 }
 
                 names.Add(employee.DisplayName);
+                var account = await accountManager.GetAccountAsync(employeeId, cancellationToken);
+                var isShared = account is not null && _shared.Contains(account.UserName, StringComparer.OrdinalIgnoreCase);
+                shared += isShared ? 1 : 0;
                 if (await IsAssignableAsync(employeeId, callCenter, cancellationToken))
                 {
                     assignable++;
+                    individualAssignable += isShared ? 0 : 1;
                 }
             }
 
             var status = names.Count == 0 ? DepartmentStaffingStatus.Unstaffed
                 : assignable == 0 ? DepartmentStaffingStatus.NoAssignableEmployee
+                : individualAssignable == 0 ? DepartmentStaffingStatus.SharedAccountOnly
                 : DepartmentStaffingStatus.Staffed;
             lines.Add(new DepartmentCoverageLine(
-                department.DepartmentId, department.Name, department.Code, names.Count, assignable, status, names.Order(StringComparer.Ordinal).ToList()));
+                department.DepartmentId, department.Name, department.Code, names.Count, assignable, status, names.Order(StringComparer.Ordinal).ToList(), shared, individualAssignable));
         }
 
         return lines;

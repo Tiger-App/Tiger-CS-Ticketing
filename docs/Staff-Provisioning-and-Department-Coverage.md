@@ -92,3 +92,22 @@ Most of the second brief is already implemented; the documents `Ticket-Assignmen
 Run in this session: new `StaffProvisioningTests` (16 cases: roster, dry-run is read-only, create-once/idempotent, case-insensitive match, existing user untouched, deactivated user skipped, missing department creates nothing, duplicate roster email, coverage statuses, Call Center CS-Agent-only counting, locked-out accounts, password generator, CLI safety); `AssignAsync_DeactivatedDepartmentMember_NeverReceivesTheTicket`; `RoundRobin_DeactivatedEmployeeNeverReceivesATicket`. Existing tests that cover the brief's scenarios: `AssignmentBasedVisibilityEndpointsTests` (A cannot see B's, A sees own), `RoundRobinAndOwnerPermissionTests` (fair rotation, no eligible employee, no other-department), Genesys suites (`GenesysAnsweringAgentRoutingTests`, `CallCenterFirstRoutingTests`), SLA/history/notification suites. See the PR for the full test result.
 
 Rollback: redeploy the previous API; users created by the tool are deactivated in User Management (never deleted).
+
+## 7. Department-level accounts (Accounting, Facilities Management, Leasing Customer Services)
+
+`provision-staff --roster department-accounts` (same safety rules, dry run by default) provisions three shared accounts through the same `AdminUserAppService.CreateAsync` path: user names `Accounting` (ACC), `FacilitiesManagement` (FM), `LeasingCustomerServices` (LCS); role **Department Employee** only; primary membership of their own department; no email; password generated at run time into an owner-only file, never logged; existing accounts (matched by user name, any case) are never modified; each creation is audited under the named administrator.
+
+```bash
+dotnet run --project src/TigerCS.ProductionSeeder -- provision-staff --target production --roster department-accounts   # dry run, read-only
+```
+
+**Round Robin eligibility was reviewed and not changed.** The "service identity" exclusion applies only to the *configured* integration accounts (`Authorization:ServiceIdentity:EmployeeIds`, Collections integration ids): those are also confined to the integration surface and could not work tickets. The department accounts are deliberately **not** registered there. They are ordinary Department Employees, so they are eligible exactly as any other member of their department; nothing was weakened. Visibility is the existing assignment-only rule: each account sees only tickets assigned to it.
+
+**Whether Round Robin runs for these departments is a request-type setting, not an account setting.** Department Round Robin happens only when a request type's assignment rule is *Round Robin*; with no rule a ticket without an owner goes to the shared CS Agent rotation (Call Center), and a ticket that already has a CS Agent keeps it on transfer. Check ACC/FM/LCS request-type rules in Administration and set them to Round Robin where wanted. I did not change any rule (not visible without database access).
+
+**Risk of shared accounts (recommendation: treat as a stop-gap).**
+1. *Accountability:* assignment, audit and history name the shared account, not the person who acted. 2. *Shared credential:* several people sign in as one user, which defeats per-person lockout, audit and password hygiene. 3. *Masking:* a department with only a shared account would look "Staffed". To avoid that, the coverage report now counts shared accounts separately and shows `SharedAccountOnly` (needs individual employees) until at least one individual assignable employee exists; `Staffed` requires an individual. 4. Once real employees are added, the shared account keeps taking its share of Round Robin tickets unless it is deactivated.
+
+**Preferred alternative (not built; needs approval):** a department queue with individual access. Tickets stay unassigned in the department queue (already visible to Supervisors/Managers/Admin) and named employees of that department claim them (a department-scoped copy of the Call Center "Take Ownership": active member, one transaction, audited), or are assigned by a Department Head. This keeps individual accountability and needs no shared password, but it is a new mechanism and changes the employee visibility rule for the unassigned department pool.
+
+Deactivate a department account in User Management (never deleted) once individuals are in place.

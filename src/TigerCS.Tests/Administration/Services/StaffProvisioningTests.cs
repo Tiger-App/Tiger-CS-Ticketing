@@ -230,4 +230,117 @@ public class StaffProvisioningTests
         Assert.Null(request.Error);
         Assert.False(request.Apply);
     }
+
+    // ---- Department-level (shared) accounts ----
+
+    private static (Fixture F, Department Acc, Department Fm, Department Lcs) CreateWithDepartmentAccountDepartments()
+    {
+        var f = Create();
+        return (f, f.Departments.AddDepartment("Accounting", "ACC"), f.Departments.AddDepartment("Facilities Management", "FM"),
+            f.Departments.AddDepartment("Leasing Customer Services", "LCS"));
+    }
+
+    [Fact]
+    public void Department_accounts_roster_is_three_non_admin_department_employee_accounts()
+    {
+        Assert.Equal(["Accounting", "FacilitiesManagement", "LeasingCustomerServices"], StaffRoster.DepartmentAccounts.Select(a => a.Identifier));
+        Assert.Equal(["ACC", "FM", "LCS"], StaffRoster.DepartmentAccounts.Select(a => a.DepartmentCode));
+        Assert.All(StaffRoster.DepartmentAccounts, a =>
+        {
+            Assert.Equal(Roles.DepartmentEmployee, a.Role);
+            Assert.Null(a.AccountEmail);
+        });
+    }
+
+    [Fact]
+    public async Task Department_accounts_are_created_once_with_primary_department_and_only_the_employee_role()
+    {
+        var (f, acc, fm, lcs) = CreateWithDepartmentAccountDepartments();
+
+        var first = await f.Provisioning.ApplyAsync(StaffRoster.DepartmentAccounts, Admin, Password);
+
+        Assert.All(first, l => Assert.Equal(StaffProvisioningStatus.Created, l.Status));
+        var departments = new Dictionary<string, Department> { ["ACC"] = acc, ["FM"] = fm, ["LCS"] = lcs };
+        foreach (var line in first)
+        {
+            var id = line.EmployeeId!.Value;
+            Assert.Equal([Roles.DepartmentEmployee], (await f.Accounts.GetRolesAsync(id)).ToList());
+            Assert.Equal(departments[line.Entry.DepartmentCode].DepartmentId, (await f.Assignments.GetPrimaryAsync(id))!.DepartmentId);
+            Assert.Equal(line.Entry.Identifier, (await f.Accounts.GetAccountAsync(id))!.UserName);
+            Assert.Null((await f.Accounts.GetAccountAsync(id))!.Email);
+        }
+
+        Assert.Equal(3, f.Audit.Entries.Count(e => e.Action == "AdminCreateUser" && e.ActorEmployeeId == Admin));
+
+        var second = await f.Provisioning.ApplyAsync(StaffRoster.DepartmentAccounts, Admin, _ => throw new InvalidOperationException("no password for existing"));
+        Assert.All(second, l => Assert.Equal(StaffProvisioningStatus.AlreadyExists, l.Status));
+        Assert.Equal(3, (await f.Employees.ListAsync(true, null)).Count);
+    }
+
+    [Fact]
+    public async Task Existing_department_account_name_in_another_case_is_not_duplicated()
+    {
+        var (f, _, _, _) = CreateWithDepartmentAccountDepartments();
+        var id = Guid.NewGuid();
+        f.Employees.Add(new Employee(id, "Accounting", false, DateTime.UtcNow), Roles.DepartmentEmployee);
+        f.Accounts.Add(id, "ACCOUNTING", Roles.DepartmentEmployee);
+
+        var line = Assert.Single(await f.Provisioning.PlanAsync([StaffRoster.DepartmentAccounts[0]]));
+
+        Assert.NotEqual(StaffProvisioningStatus.WouldCreate, line.Status);   // exists (here in no department, so reported for review, not modified)
+        Assert.Single(await f.Employees.ListAsync(true, null));
+    }
+
+    [Fact]
+    public async Task A_department_covered_only_by_a_shared_account_is_reported_as_needing_individuals_until_one_is_added()
+    {
+        var (f, acc, _, _) = CreateWithDepartmentAccountDepartments();
+        await f.Provisioning.ApplyAsync(StaffRoster.DepartmentAccounts, Admin, Password);
+
+        var line = (await f.Coverage.GetAsync()).Single(c => c.Code == "ACC");
+        Assert.Equal((1, 1, 1, 0, DepartmentStaffingStatus.SharedAccountOnly),
+            (line.ActiveEmployeeCount, line.AssignableEmployeeCount, line.SharedAccountCount, line.IndividualAssignableCount, line.Status));
+        Assert.True(line.NeedsStaffing);
+
+        var person = Guid.NewGuid();
+        f.Employees.Add(new Employee(person, "Real Person", false, DateTime.UtcNow), Roles.DepartmentEmployee);
+        f.Accounts.Add(person, "real.person", Roles.DepartmentEmployee);
+        f.Assignments.Assignments.Add(new UserDepartmentAssignment(person, acc.DepartmentId, true, DateTime.UtcNow, null));
+
+        line = (await f.Coverage.GetAsync()).Single(c => c.Code == "ACC");
+        Assert.Equal((2, 1, DepartmentStaffingStatus.Staffed), (line.AssignableEmployeeCount, line.IndividualAssignableCount, line.Status));
+        Assert.False(line.NeedsStaffing);
+    }
+
+    [Fact]
+    public async Task The_service_identity_exclusion_is_unchanged_a_configured_service_account_is_still_never_assignable()
+    {
+        var (f, acc, _, _) = CreateWithDepartmentAccountDepartments();
+        var service = Guid.NewGuid();
+        f.Employees.Add(new Employee(service, "Integration", false, DateTime.UtcNow), Roles.DepartmentEmployee);
+        f.Accounts.Add(service, "integration", Roles.DepartmentEmployee);
+        f.Assignments.Assignments.Add(new UserDepartmentAssignment(service, acc.DepartmentId, true, DateTime.UtcNow, null));
+        var coverage = new DepartmentCoverageService(f.Departments, f.Assignments, f.Employees, f.Accounts, f.Accounts,
+            new StubServiceIdentities(service));
+
+        var line = (await coverage.GetAsync()).Single(c => c.Code == "ACC");
+
+        Assert.Equal((1, 0, DepartmentStaffingStatus.NoAssignableEmployee), (line.ActiveEmployeeCount, line.AssignableEmployeeCount, line.Status));
+    }
+
+    [Fact]
+    public void Command_line_accepts_only_known_rosters()
+    {
+        Assert.Null(StaffProvisioningCommand.Parse(["provision-staff", "--target", "production", "--roster", "department-accounts"]).Error);
+        Assert.Equal("department-accounts", StaffProvisioningCommand.Parse(["provision-staff", "--target", "production", "--roster", "department-accounts"]).Roster);
+        Assert.Equal("staff", StaffProvisioningCommand.Parse(["provision-staff", "--target", "production"]).Roster);
+        Assert.NotNull(StaffProvisioningCommand.Parse(["provision-staff", "--target", "production", "--roster", "everyone"]).Error);
+    }
+
+    private sealed class StubServiceIdentities(params Guid[] ids) : TigerCS.Application.Authorization.IServiceIdentityRegistry
+    {
+        public bool IsServiceIdentity(Guid employeeId) => ids.Contains(employeeId);
+
+        public IReadOnlyCollection<Guid> ServiceIdentityIds => ids;
+    }
 }
