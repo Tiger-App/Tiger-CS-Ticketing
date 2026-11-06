@@ -50,8 +50,10 @@ public sealed class GenesysTokenProvider(HttpClient http, GenesysOutboundOptions
             {
                 if (!response.IsSuccessStatusCode)
                 {
-                    logger.LogWarning("Genesys token request was refused with HTTP {Status}.", (int)response.StatusCode);
-                    throw new GenesysAuthenticationException($"The Genesys login service refused the credentials (HTTP {(int)response.StatusCode}).");
+                    // The OAuth error code (invalid_client, unsupported_grant_type, ...) names the cause without exposing anything: the body's other fields and the credentials are never kept.
+                    var code = await ReadOAuthErrorCodeAsync(response, cancellationToken);
+                    logger.LogWarning("Genesys token request was refused with HTTP {Status} ({Code}).", (int)response.StatusCode, code ?? "no error code");
+                    throw new GenesysAuthenticationException($"The Genesys login service refused the credentials (HTTP {(int)response.StatusCode}{(code is null ? "" : ", " + code)}).");
                 }
                 using var json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken);
                 var root = json.RootElement;
@@ -71,6 +73,21 @@ public sealed class GenesysTokenProvider(HttpClient http, GenesysOutboundOptions
     public void Invalidate(string rejectedToken)
     {
         if (string.Equals(_token, rejectedToken, StringComparison.Ordinal)) { _token = null; _expiresAt = default; }
+    }
+
+    /// <summary>The RFC 6749 <c>error</c> code of a refused token response (letters, digits, <c>_</c> and <c>-</c> only, at most 40 characters), or null when there is none readable.</summary>
+    internal static async Task<string?> ReadOAuthErrorCodeAsync(HttpResponseMessage response, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync(cancellationToken);
+            if (string.IsNullOrWhiteSpace(body) || body.Length > 64 * 1024) return null;
+            using var json = JsonDocument.Parse(body);
+            if (json.RootElement.ValueKind != JsonValueKind.Object || !json.RootElement.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.String) return null;
+            var code = error.GetString() ?? "";
+            return code.Length > 0 && code.Length <= 40 && code.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '_' or '-') ? code : null;
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or HttpRequestException or InvalidOperationException) { return null; }
     }
 
     private bool TryCached(out string token)

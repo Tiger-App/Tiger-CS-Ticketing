@@ -15,8 +15,9 @@ using TigerCS.Tests.IdentityAndAccess.Fakes;
 namespace TigerCS.Tests.Collections.Review;
 
 /// <summary>
-/// Repeated Export for Genesys, the "not verified" label, and the Manual review export. A file export proves nothing about delivery, so it never marks anyone as sent: repeats are noticed through the
-/// audit trail and confirmed by a person, and the protections that belong to a real send (already sent, contacted today, idempotency) are exactly what they were.
+/// Repeated Export for Genesys, the "not verified" labels, and the Manual review export. A file export proves nothing about delivery, so it never marks anyone as sent: a repeat is noticed
+/// through the audit trail, said on the file and recorded, but it never blocks a download and needs no confirmation. The protections that belong to a real send (already sent, contacted
+/// today, idempotency) are exactly what they were.
 /// </summary>
 public sealed class GenesysExportRepeatTests
 {
@@ -35,10 +36,10 @@ public sealed class GenesysExportRepeatTests
     private static SelectionRequest Ticked(params string[] units) =>
         new(Manual(), ReviewQueryService.ModeSelectedUnits, null, null, 1, 50, units.Select(u => ReviewQueryService.UnitKey(4, "T000" + u[^1], u)).ToList());
 
-    private static async Task<CollectionsResult<GenesysExportDto>> ExportAsync(ReviewHarness h, SelectionRequest request, bool confirm = false, CollectionsCaller? caller = null)
+    private static async Task<CollectionsResult<GenesysExportDto>> ExportAsync(ReviewHarness h, SelectionRequest request, CollectionsCaller? caller = null)
     {
         using var scope = h.NewScope();
-        return await scope.Export.ExportAsync(caller ?? h.Manager, request, CancellationToken.None, confirm);
+        return await scope.Export.ExportAsync(caller ?? h.Manager, request, CancellationToken.None);
     }
 
     private static async Task<List<AuditEntry>> AuditAsync(ReviewHarness h, string action)
@@ -47,53 +48,44 @@ public sealed class GenesysExportRepeatTests
         return await context.AuditEntries.AsNoTracking().Where(a => a.Action == action).OrderBy(a => a.AuditEntryId).ToListAsync();
     }
 
-    // ------------------------------------------------------------ every export is audited; repeats are noticed
+    // ------------------------------------------------------------ every export is audited; repeats are noticed, never blocked
 
     [Fact]
     public async Task EveryExport_IsAudited_WithOneWayFingerprintsAndNoCustomerData()
     {
         using var h = await SeededAsync();
         Assert.True((await ExportAsync(h, Ticked("TP140-1"))).IsSuccess);
-        Assert.True((await ExportAsync(h, Ticked("TP140-2", "TP140-3"))).IsSuccess);        // different customers: no warning
+        Assert.True((await ExportAsync(h, Ticked("TP140-2", "TP140-3"))).IsSuccess);        // different customers: no repeat
         var audit = await AuditAsync(h, GenesysExportService.AuditAction);
         Assert.Equal(2, audit.Count);
-        Assert.All(audit, a => { Assert.Equal(h.Manager.EmployeeId, a.ActorEmployeeId); Assert.Contains("Repeated=0", a.AfterValue); Assert.Contains(";Customers=", a.AfterValue); });
+        Assert.All(audit, a => { Assert.Equal(h.Manager.EmployeeId, a.ActorEmployeeId); Assert.Contains("Repeated=0;RepeatCheck=Checked", a.AfterValue); Assert.Contains(";Customers=", a.AfterValue); });
         foreach (var personal in new[] { "Customer 1", "Customer 2", "+97150", "example.test", "T0001", "TP140-1" }) Assert.All(audit, a => Assert.DoesNotContain(personal, a.AfterValue));
         Assert.Equal(2, audit[0].AfterValue!.Split(";Customers=")[1].Split(',').Length);        // two fingerprints per customer: the unit and the number
         Assert.Equal(4, audit[1].AfterValue!.Split(";Customers=")[1].Split(',').Length);
     }
 
     [Fact]
-    public async Task ExportingTheSameCustomersAgain_IsHeldUntilConfirmed_AndNothingIsReleasedOrRecordedMeanwhile()
+    public async Task ExportingTheSameCustomersAgain_IsDownloadedAtOnce_SaidOnTheFile_AndAuditedAsARepeat()
     {
         using var h = await SeededAsync();
         Assert.True((await ExportAsync(h, All())).IsSuccess);
-        var again = await ExportAsync(h, All());
-        Assert.Equal(CollectionsOutcome.RepeatExport, again.Outcome); Assert.Null(again.Value);
-        Assert.Contains("3 of the 3 customers", again.Detail); Assert.Contains("already exported", again.Detail); Assert.Contains("does not mark anyone as sent", again.Detail);
-        Assert.Single(await AuditAsync(h, GenesysExportService.AuditAction));                // the held attempt wrote no export record
+        var again = (await ExportAsync(h, All())).Value!;                                      // no confirmation, no hold
+        Assert.Equal(3, again.RowCount); Assert.Equal(3, again.RepeatedCustomers); Assert.NotNull(again.LastExportedAtUtc);
+        Assert.Contains(again.Notices, n => n.Contains("3 of the 3 customer unit(s) in this file were exported before") && n.Contains("does not mark anyone as sent"));
+        var audit = await AuditAsync(h, GenesysExportService.AuditAction);
+        Assert.Equal(2, audit.Count); Assert.Contains("Repeated=3;RepeatCheck=Checked", audit[1].AfterValue);
+        var third = (await ExportAsync(h, All())).Value!;                                      // and again: every download is a file and an audit entry
+        Assert.Equal(3, third.RepeatedCustomers); Assert.Equal(3, (await AuditAsync(h, GenesysExportService.AuditAction)).Count);
     }
 
     [Fact]
-    public async Task AConfirmedRepeat_ReleasesTheFile_AndIsAuditedAsARepeat()
-    {
-        using var h = await SeededAsync();
-        await ExportAsync(h, All());
-        var dto = (await ExportAsync(h, All(), confirm: true)).Value!;
-        Assert.Equal(3, dto.RepeatedCustomers); Assert.NotNull(dto.LastExportedAtUtc); Assert.Contains(dto.Notices, n => n.Contains("exported before"));
-        Assert.Equal(3, dto.RowCount);
-        var last = (await AuditAsync(h, GenesysExportService.AuditAction)).Last();
-        Assert.Contains("Repeated=3;RepeatConfirmed=true", last.AfterValue);
-    }
-
-    [Fact]
-    public async Task OnlyTheCustomersExportedBefore_AreCounted_AndOtherCustomersAreNotWarnedAbout()
+    public async Task OnlyTheCustomersExportedBefore_AreCounted_AndOtherCustomersAreNot()
     {
         using var h = await SeededAsync();
         await ExportAsync(h, Ticked("TP140-1"));
-        var mixed = await ExportAsync(h, All());
-        Assert.Equal(CollectionsOutcome.RepeatExport, mixed.Outcome); Assert.Contains("1 of the 3 customers", mixed.Detail);
-        Assert.True((await ExportAsync(h, Ticked("TP140-2", "TP140-3"))).IsSuccess);           // none of them was exported
+        var mixed = (await ExportAsync(h, All())).Value!;
+        Assert.Equal(1, mixed.RepeatedCustomers); Assert.Contains(mixed.Notices, n => n.Contains("1 of the 3 customer unit(s)"));
+        Assert.Equal(2, (await ExportAsync(h, Ticked("TP140-2", "TP140-3"))).Value!.RepeatedCustomers);   // both were in the mixed file; customer 1 is not in this one, so it is not counted
     }
 
     [Fact]
@@ -103,36 +95,38 @@ public sealed class GenesysExportRepeatTests
         await ExportAsync(h, All());
         using var scope = h.NewScope();
         var otherList = await scope.Export.ExportAsync(h.Manager, new SelectionRequest(Manual() with { ContactList = "FollowUp" }, ReviewQueryService.ModeAllMatching), CancellationToken.None);
-        Assert.Equal(CollectionsOutcome.RepeatExport, otherList.Outcome);
+        Assert.Equal(3, otherList.Value!.RepeatedCustomers);
         var otherUser = new CollectionsCaller(Guid.NewGuid(), [Roles.CsManager], []);
-        Assert.Equal(CollectionsOutcome.RepeatExport, (await ExportAsync(h, All(), caller: otherUser)).Outcome);
+        Assert.Equal(3, (await ExportAsync(h, All(), caller: otherUser)).Value!.RepeatedCustomers);
     }
 
     [Fact]
     public async Task ARepeat_IsNoticedAcrossCampaignTypes_BecauseItIsTheSameCustomer()
     {
-        // The same customers under another campaign type are a different record, but the same people: the second file would reach them twice.
+        // The same customers under another campaign type are a different record, but the same people: the second file would reach them twice, so the file says so.
         using var h = await SeededAsync();
         Assert.True((await ExportAsync(h, All())).IsSuccess);
-        var other = await ExportAsync(h, new SelectionRequest(Manual("FollowUp"), ReviewQueryService.ModeAllMatching));
-        Assert.Equal(CollectionsOutcome.RepeatExport, other.Outcome); Assert.Contains("3 of the 3 customers", other.Detail);
+        var other = (await ExportAsync(h, new SelectionRequest(Manual("FollowUp"), ReviewQueryService.ModeAllMatching))).Value!;
+        Assert.Equal(3, other.RepeatedCustomers); Assert.Contains(other.Notices, n => n.Contains("3 of the 3 customer unit(s) in this file were exported before"));
     }
 
     [Fact]
-    public async Task IfTheHistoryIsTooLongToCheckInFull_NoFileIsMade()
+    public async Task IfTheHistoryIsTooLongToCountInFull_TheFileIsStillMade_AndSaysTheCountIsIncomplete()
     {
-        // An earlier export beyond what is read could repeat a customer, so the export stops rather than guessing.
         using var h = await SeededAsync();
         var result = await ExportWithHistoryAsync(h, new FullHistory());
-        Assert.Equal(CollectionsOutcome.FinanceUnavailable, result.Outcome); Assert.Null(result.Value); Assert.Contains("cannot cover them all", result.Detail);
+        Assert.True(result.IsSuccess);
+        Assert.Contains(result.Value!.Notices, n => n.Contains("5,000 exports or more") && n.Contains("were not checked"));
+        Assert.Contains("RepeatCheck=Incomplete", (await AuditAsync(h, GenesysExportService.AuditAction)).Single().AfterValue);
     }
 
     [Fact]
-    public async Task TheRepeatCheck_CanBeSwitchedOff_AndAnUnreadableHistoryStopsTheExport()
+    public async Task TheRepeatCount_CanBeSwitchedOff_AndAnUnreadableHistoryIsNoted_NotABlock()
     {
         using var off = await SeededAsync(x => x.Review.ExportRepeatLookbackDays = 0);
         await ExportAsync(off, All());
-        Assert.True((await ExportAsync(off, All())).IsSuccess);                               // 0 = no check
+        var second = (await ExportAsync(off, All())).Value!;                                   // 0 = no count
+        Assert.Equal(0, second.RepeatedCustomers); Assert.Contains("RepeatCheck=Off", (await AuditAsync(off, GenesysExportService.AuditAction)).Last().AfterValue);
 
         using var h = await SeededAsync();
         using var context = h.CreateContext();
@@ -141,8 +135,8 @@ public sealed class GenesysExportRepeatTests
             scope.Query, h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review,
             new ThrowingHistory(), new ReviewHarness.FreeExportLock(), NullLogger<GenesysExportService>.Instance);
         var result = await broken.ExportAsync(h.Manager, All(), CancellationToken.None);
-        Assert.Equal(CollectionsOutcome.FinanceUnavailable, result.Outcome); Assert.Null(result.Value); Assert.Contains("no file was made", result.Detail);
-        Assert.Empty(await AuditAsync(h, GenesysExportService.AuditAction));
+        Assert.True(result.IsSuccess); Assert.Contains(result.Value!.Notices, n => n.Contains("Earlier exports could not be read"));
+        Assert.Contains("Repeated=0;RepeatCheck=Unavailable", (await AuditAsync(h, GenesysExportService.AuditAction)).Single().AfterValue);   // the export itself is always recorded
     }
 
     private sealed class ThrowingHistory : IGenesysExportHistory
@@ -174,7 +168,7 @@ public sealed class GenesysExportRepeatTests
     {
         using var h = await SeededAsync();
         await ExportAsync(h, All());
-        await ExportAsync(h, All(), confirm: true);
+        await ExportAsync(h, All());
         using (var scope = h.NewScope())
         {
             Assert.Empty(await scope.Store.ListDispatchesAsync(10, CancellationToken.None));     // no dispatch, no batch
@@ -191,11 +185,12 @@ public sealed class GenesysExportRepeatTests
             await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
         }
         Assert.Equal(3, h.Client.Calls.Single().Contacts.Count);
-        var afterSend = await ExportAsync(h, All(), confirm: true);                            // even a confirmed repeat cannot export customers who are now sent
-        Assert.False(afterSend.IsSuccess); Assert.Contains("No Ready customers", afterSend.Detail);
+        var afterSend = (await ExportAsync(h, All())).Value!;                                  // a file still lists the sent customers, and says they were sent
+        Assert.Equal(3, afterSend.RowCount); Assert.Equal(3, afterSend.IncludedByStatus!["AlreadySent"]);
         using var again = h.NewScope();
         var second = await again.Dispatch.ConfirmAsync(h.Manager, confirm with { IdempotencyKey = "second-try" }, CancellationToken.None);
         Assert.False(second.IsSuccess);                                                         // already sent: duplicate-send protection
+        Assert.Equal(0, (await again.Query.SummarizeAsync(h.Manager, All(), CancellationToken.None)).Value!.Count);
     }
 
     [Fact]
@@ -203,7 +198,7 @@ public sealed class GenesysExportRepeatTests
     {
         using var h = await SeededAsync();
         await ExportAsync(h, All());
-        await ExportAsync(h, All(), confirm: true);
+        await ExportAsync(h, All());
         var (summary, confirm) = await h.PrepareAsync(All(), "send-after-exports");
         Assert.Equal(3, summary.Count);                                                         // contact frequency (ContactedToday) only counts real uploads
         using var scope = h.NewScope();
@@ -213,13 +208,12 @@ public sealed class GenesysExportRepeatTests
     [Fact]
     public async Task TheLookBackIsThirtyDays_AnExportWithinItIsARepeat_AndAnOlderOneIsNot()
     {
-        // The existing 30-day window: a repeat within it is held for confirmation; beyond it, the customer is not warned about.
         using var h = await SeededAsync();
         Assert.True((await ExportAsync(h, All())).IsSuccess);
         await AgeExportsAsync(h, days: 20);
-        Assert.Equal(CollectionsOutcome.RepeatExport, (await ExportAsync(h, All())).Outcome);
+        Assert.Equal(3, (await ExportAsync(h, All())).Value!.RepeatedCustomers);
         await AgeExportsAsync(h, days: 40);
-        Assert.True((await ExportAsync(h, All())).IsSuccess);
+        Assert.Equal(0, (await ExportAsync(h, All())).Value!.RepeatedCustomers);
     }
 
     /// <summary>Moves the recorded export audit entries back in time, as if they had been made that many days ago.</summary>
@@ -240,7 +234,7 @@ public sealed class GenesysExportRepeatTests
         var audit = new HeldWhenAudited(new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), gate);
         var service = Service(h, scope.Query, context, gate, audit);
         Assert.True((await service.ExportAsync(h.Manager, All(), CancellationToken.None)).IsSuccess);
-        Assert.Equal(new[] { true }, audit.HeldAtEachWrite);                  // the repeat check and the audit happen inside the lock
+        Assert.Equal(new[] { true }, audit.HeldAtEachWrite);                  // the repeat count and the audit happen inside the lock
         Assert.False(gate.Held);                                              // and the lock is released once the audit is written
     }
 
@@ -298,7 +292,7 @@ public sealed class GenesysExportRepeatTests
         public Task<IAsyncDisposable?> TryAcquireAsync(TimeSpan wait, CancellationToken ct) => Task.FromResult<IAsyncDisposable?>(null);
     }
 
-    // ------------------------------------------------------------ the label when the schema was not verified
+    // ------------------------------------------------------------ the labels when the schema or the data was not verified
 
     [Fact]
     public async Task WithoutSchemaVerification_TheFileIsLabelled_TemplateNotVerifiedAgainstGenesys_ButStaysTheSixColumnTemplate()
@@ -315,12 +309,14 @@ public sealed class GenesysExportRepeatTests
     }
 
     [Fact]
-    public async Task WhenTheSchemaWasVerified_ThereIsNoSuchLabel()
+    public async Task WhenTheSchemaAndTheDataWereVerified_ThereIsNoSuchLabel()
     {
         using var h = await SeededAsync(x => { x.Genesys.ClientId = "client"; x.Genesys.ClientSecret = "secret"; });
         var dto = (await ExportAsync(h, All())).Value!;
-        Assert.True(dto.SchemaVerified); Assert.Empty(dto.Notices); Assert.DoesNotContain("not verified", dto.FileName, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("Template not verified", (await AuditAsync(h, GenesysExportService.AuditAction)).Single().AfterValue);
+        Assert.True(dto.SchemaVerified); Assert.True(dto.DataVerified); Assert.Empty(dto.Notices); Assert.Empty(dto.UnverifiedReasons!);
+        Assert.DoesNotContain("not verified", dto.FileName, StringComparison.OrdinalIgnoreCase);
+        var audit = (await AuditAsync(h, GenesysExportService.AuditAction)).Single().AfterValue!;
+        Assert.DoesNotContain("Template not verified", audit); Assert.DoesNotContain(GenesysExportService.UnverifiedDataLabel, audit); Assert.Contains("DataVerified=True", audit);
     }
 
     // ------------------------------------------------------------ Manual "Export review CSV"

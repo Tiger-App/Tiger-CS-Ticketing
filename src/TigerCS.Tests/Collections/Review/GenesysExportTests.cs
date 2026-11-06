@@ -13,8 +13,8 @@ using TigerCS.Tests.IdentityAndAccess.Fakes;
 namespace TigerCS.Tests.Collections.Review;
 
 /// <summary>
-/// Export for Genesys: the customers of a Manual selection as a CSV in the format of the Genesys contact list they would go into. The six columns, their order and their formats are the ones the upload
-/// itself uses; the customers and filtered amounts are exactly the ones Preview shows; the export is read only and audited. The harness clock is 15 Oct 2026 (no stage is scheduled).
+/// Export for Genesys: every customer matching the filters as a CSV in the format of the Genesys contact list the file is for. The six columns, their order and their formats are the ones the
+/// upload itself uses; the customers and filtered amounts are exactly the ones Preview shows; the export is download only and audited. The harness clock is 15 Oct 2026 (no stage is scheduled).
 /// </summary>
 public sealed class GenesysExportTests
 {
@@ -45,11 +45,10 @@ public sealed class GenesysExportTests
 
     private static SelectionRequest All(ReviewFilter filter) => new(filter, ReviewQueryService.ModeAllMatching);
 
-    /// <summary>Most tests export the same customers again and again; they confirm the repeat. The repeat check itself is tested in <see cref="GenesysExportRepeatTests"/>.</summary>
-    private static async Task<CollectionsResult<GenesysExportDto>> ExportAsync(ReviewHarness h, SelectionRequest request, CollectionsCaller? caller = null, bool confirmRepeat = true)
+    private static async Task<CollectionsResult<GenesysExportDto>> ExportAsync(ReviewHarness h, SelectionRequest request, CollectionsCaller? caller = null)
     {
         using var scope = h.NewScope();
-        return await scope.Export.ExportAsync(caller ?? h.Manager, request, CancellationToken.None, confirmRepeat);
+        return await scope.Export.ExportAsync(caller ?? h.Manager, request, CancellationToken.None);
     }
 
     private static List<List<string>> Parse(GenesysExportDto dto) => GenesysContactTemplate.ParseCsv(dto.Csv);
@@ -129,7 +128,7 @@ public sealed class GenesysExportTests
         var result = await scope.Export.ExportAsync(h.Manager, All(filter), CancellationToken.None);
         if (expectedCustomer1 is null)
         {
-            Assert.Empty(preview.Items); Assert.False(result.IsSuccess); Assert.Contains("No Ready customers", result.Detail);
+            Assert.Empty(preview.Items); Assert.False(result.IsSuccess); Assert.Contains("nothing to export", result.Detail);
             return;
         }
         var row = Assert.Single(Parse(result.Value!).Skip(1));
@@ -149,23 +148,30 @@ public sealed class GenesysExportTests
         Assert.Equal(1, (await ExportAsync(h, All(Manual(with: f => f with { TowerId = 7 })))).Value!.RowCount);
     }
 
-    // ------------------------------------------------------------ selection and the safety rules
+    // ------------------------------------------------------------ selection: ticks narrow, nothing ticked means everyone matching
 
     [Fact]
-    public async Task OnlyTheTickedCustomers_OrAllEligible_AreExported_AndHeldBackOnesNever()
+    public async Task TicksNarrowTheFile_NothingTickedMeansEveryMatchingCustomer_AndANumberSharedByDifferentCustomersIsCountedOut()
     {
-        // Customers 3 and 4 share a number: both are held back and can never be exported, ticked or not.
+        // Customers 3 and 4 are different people on one number: never merged, never both dialled; they are left out and counted, in the answer and in the audit trail.
         var rows = new[] { ReviewHarness.Row(1), ReviewHarness.Row(2), ReviewHarness.Row(3, mobile: "971500000009"), ReviewHarness.Row(4, mobile: "971500000009") };
         using var h = await SeededAsync(null, rows);
-        Assert.Equal(2, (await ExportAsync(h, All(Manual()))).Value!.RowCount);                         // all eligible
+        var all = (await ExportAsync(h, All(Manual()))).Value!;
+        Assert.Equal(2, all.RowCount); Assert.Equal(2, all.UnitCount); Assert.Equal(2, all.ExcludedUnits);
+        var exclusion = Assert.Single(all.Exclusions!);
+        Assert.Equal((GenesysExportRows.SharedPhoneDifferentCustomers, 2), (exclusion.Code, exclusion.Units));
+        Assert.DoesNotContain("Customer 3", all.Csv); Assert.DoesNotContain("Customer 4", all.Csv);
+        Assert.Contains(all.Notices, n => n.Contains("2 of the 4 matching customer unit(s) are not in the file") && n.Contains("SharedPhoneDifferentCustomers"));
+
         var one = new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedUnits, null, null, 1, 50, [ReviewQueryService.UnitKey(4, "T0001", "TP140-1")]);
         var ticked = (await ExportAsync(h, one)).Value!;                                               // only the ticked one
-        Assert.Equal(1, ticked.RowCount); Assert.Equal("Customer 1", Parse(ticked)[1][1]);
-        var heldBack = new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedUnits, null, null, 1, 50, [ReviewQueryService.UnitKey(4, "T0003", "TP140-3"), ReviewQueryService.UnitKey(4, "T0004", "TP140-4")]);
-        Assert.False((await ExportAsync(h, heldBack)).IsSuccess);                                      // nothing eligible among them
-        Assert.DoesNotContain("Customer 3", (await ExportAsync(h, All(Manual()))).Value!.Csv);
+        Assert.Equal(1, ticked.RowCount); Assert.Equal("Customer 1", Parse(ticked)[1][1]); Assert.Equal(0, ticked.ExcludedUnits);
+        var shared = new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedUnits, null, null, 1, 50, [ReviewQueryService.UnitKey(4, "T0003", "TP140-3"), ReviewQueryService.UnitKey(4, "T0004", "TP140-4")]);
+        var none = await ExportAsync(h, shared);                                                       // nothing exportable among them: the exact reason, no file
+        Assert.False(none.IsSuccess); Assert.Contains("None of the 2 matching customer(s) could be exported", none.Detail); Assert.Contains("SharedPhoneDifferentCustomers", none.Detail);
         var excluding = (await ExportAsync(h, All(Manual()) with { ExcludedKeys = [await KeyOf(h, "TP140-2")] })).Value!;
         Assert.Equal(1, excluding.RowCount);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, (await ExportAsync(h, new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedKeys, ["x"]))).Outcome);   // record keys carry no filter
     }
 
     private static async Task<string> KeyOf(ReviewHarness h, string unit)
@@ -174,35 +180,55 @@ public sealed class GenesysExportTests
         return (await scope.Query.QueryAsync(h.Manager, Manual(), 1, 50, CancellationToken.None)).Value!.Items.Single(i => i.UnitCode == unit).RecordKey;
     }
 
+    // ------------------------------------------------------------ a file is not a send: held-back customers are in it, and said to be
+
     [Fact]
-    public async Task AlreadySentAndContactedToday_AreNotExported_AndNeitherIsAnUnreconciledSource()
+    public async Task AlreadySentAndContactedTodayCustomers_AreInTheFile_AndTheFileSaysSo()
     {
         using var h = await SeededAsync();
         var (_, confirm) = await h.PrepareAsync(All(Manual("CurrentMonth")), "first");
         using (var scope = h.NewScope()) await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
-        Assert.False((await ExportAsync(h, All(Manual("CurrentMonth")))).IsSuccess);                  // already in a live dispatch
-        Assert.False((await ExportAsync(h, All(Manual("FollowUp")))).IsSuccess);                       // one contact per customer per day
-
-        using var unreconciled = await SeededAsync(x => x.Campaign.FinancialSourceValidated = false);
-        var refused = await ExportAsync(unreconciled, All(Manual()));
-        Assert.False(refused.IsSuccess); Assert.Contains("No Ready customers", refused.Detail);
+        var sent = (await ExportAsync(h, All(Manual("CurrentMonth")))).Value!;                          // already in a live dispatch: still in the file, counted as such
+        Assert.Equal(2, sent.RowCount); Assert.Equal(2, sent.IncludedByStatus!["AlreadySent"]);
+        Assert.Contains(sent.Notices, n => n.Contains("2 of the 2 customer unit(s) in this file are held back from sending (Already sent 2)"));
+        var today = (await ExportAsync(h, All(Manual("FollowUp")))).Value!;                             // the contact-frequency hold of a send does not empty a file
+        Assert.True(today.IncludedByStatus!.ContainsKey("AlreadySent"));
     }
 
     [Fact]
-    public async Task ItNeedsTheSendRight_ManualMode_AndCurrentData()
+    public async Task AnUnreconciledSource_IsLabelledFinancialDataNotVerified_NotRefused()
+    {
+        using var h = await SeededAsync(x => x.Campaign.FinancialSourceValidated = false);
+        var dto = (await ExportAsync(h, All(Manual()))).Value!;
+        Assert.Equal(2, dto.RowCount); Assert.False(dto.DataVerified);
+        Assert.Contains(ReviewReasons.SourceReconciliationRequired, dto.UnverifiedReasons!);
+        Assert.Contains(dto.Notices, n => n.Contains("has not been reconciled against PACT"));
+        Assert.EndsWith($" ({GenesysExportService.UnverifiedDataLabel}).csv", dto.FileName);
+        Assert.Equal(2, dto.IncludedByStatus!["NeedsReview"]);                                        // what the Manual page shows for them
+        using var context = h.CreateContext();
+        var audit = (await context.AuditEntries.ToListAsync()).Single().AfterValue!;
+        Assert.Contains("DataVerified=False;Unverified=SourceReconciliationRequired", audit); Assert.Contains(GenesysExportService.UnverifiedDataLabel, audit);
+    }
+
+    [Fact]
+    public async Task ItNeedsTheSendRight_AValidMode_AndACampaignType_ButNeverCurrentData()
     {
         using var h = await SeededAsync();
         Assert.Equal(CollectionsOutcome.Forbidden, (await ExportAsync(h, All(Manual()), h.Agent)).Outcome);
         Assert.Equal(CollectionsOutcome.Forbidden, (await ExportAsync(h, All(Manual()), h.Reporting)).Outcome);
-        // Started from the Auto page, the export holds the same financially eligible customers as from Manual: the schedule is never a condition of a file, and nothing is sent.
+        // Started from the Auto page, the export holds the same customers as from Manual: the schedule is never a condition of a file, and nothing is sent.
         var auto = (await ExportAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto", MinRemaining: 0m)))).Value!;
         var manual = (await ExportAsync(h, All(Manual()))).Value!;
         Assert.Equal(manual.Csv, auto.Csv); Assert.Equal(manual.TotalAmount, auto.TotalAmount);
         Assert.Equal(CollectionsOutcome.InvalidRequest, (await ExportAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Nonsense")))).Outcome);
         Assert.Equal(CollectionsOutcome.InvalidRequest, (await ExportAsync(h, All(new ReviewFilter(SendingMode: "Manual")))).Outcome);          // no campaign type
-        h.Time.Advance(TimeSpan.FromDays(1));                                                         // the data was built yesterday
-        var stale = await ExportAsync(h, All(Manual()));
-        Assert.Equal(CollectionsOutcome.InvalidRequest, stale.Outcome); Assert.Contains("built for", stale.Detail);
+        h.Time.Advance(TimeSpan.FromDays(1));                                                         // the data was built yesterday and is stale
+        var stale = (await ExportAsync(h, All(Manual()))).Value!;
+        Assert.False(stale.DataVerified);
+        Assert.Contains(ReviewReasons.StaleSource, stale.UnverifiedReasons!); Assert.Contains(GenesysExportService.BuiltForAnotherDay, stale.UnverifiedReasons!);
+        Assert.Contains(stale.Notices, n => n.Contains("was read 1 day(s) 0 hour(s) ago") && n.Contains("15 Oct 2026"));   // the actual age, not just "stale"
+        Assert.Contains(stale.Notices, n => n.Contains("built for 15 Oct 2026, not today (16 Oct 2026)"));
+        Assert.Contains(GenesysExportService.UnverifiedDataLabel, stale.FileName);
     }
 
     // ------------------------------------------------------------ the contact list
@@ -261,6 +287,7 @@ public sealed class GenesysExportTests
     [Fact]
     public async Task AListThatLacksOrMisnamesAColumn_RefusesTheExport_NamingTheColumn()
     {
+        // A list that WAS read and really conflicts with the template is an incompatibility: reported, never guessed around.
         using var missing = await WithGenesysAsync(x => x.Client.ListColumns[CurrentMonthList] = ["Phone", "CustomerName", "Email Address", "ReminderType", "DueDate"]);
         var refused = await ExportAsync(missing, All(Manual()));
         Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("missing column AmountDue", refused.Detail); Assert.Contains("Nothing was exported", refused.Detail);
@@ -272,16 +299,19 @@ public sealed class GenesysExportTests
     }
 
     [Fact]
-    public async Task AListThatCannotBeRead_RefusesTheExport_ItIsNeverGuessed()
+    public async Task AListThatCannotBeRead_FallsBackToTheDocumentedTemplate_AndSaysItWasNotVerified_WithTheReason()
     {
         using var h = await WithGenesysAsync();
         h.Client.ListCheckScript.Enqueue(GenesysUploadOutcome.Unknown);
-        var refused = await ExportAsync(h, All(Manual()));
-        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("could not be read in Genesys", refused.Detail);
+        var dto = (await ExportAsync(h, All(Manual()))).Value!;
+        Assert.False(dto.SchemaVerified); Assert.Equal(Template, Parse(dto)[0]); Assert.Equal(2, dto.RowCount);
+        Assert.StartsWith(GenesysExportService.NotVerifiedLabel, dto.Notices[0]);
+        Assert.Contains("could not be read in Genesys (Genesys could not be reached)", dto.Notices[0]); Assert.Contains("check it against the list before importing", dto.Notices[0]);
+        Assert.Contains($"({GenesysExportService.NotVerifiedLabel})", dto.FileName);
         using var throwing = await SeededAsync(x => { x.Genesys.ClientId = "c"; x.Genesys.ClientSecret = "s"; });
         using var scope = throwing.NewScope(new ThrowingListClient());
-        var thrown = await scope.Export.ExportAsync(throwing.Manager, All(Manual()), CancellationToken.None);
-        Assert.Equal(CollectionsOutcome.InvalidRequest, thrown.Outcome);
+        var thrown = (await scope.Export.ExportAsync(throwing.Manager, All(Manual()), CancellationToken.None)).Value!;
+        Assert.False(thrown.SchemaVerified); Assert.Contains("the request failed", thrown.Notices[0]);
     }
 
     private sealed class ThrowingListClient : IGenesysOutboundClient
@@ -320,7 +350,7 @@ public sealed class GenesysExportTests
     }
 
     [Fact]
-    public async Task EveryExportIsAudited_WithoutAnyCustomerData()
+    public async Task EveryExportIsAudited_WithTheCountsOfTheFile_AndWithoutAnyCustomerData()
     {
         using var h = await WithGenesysAsync();
         var dto = (await ExportAsync(h, All(Manual("CurrentMonth", "FollowUp", f => f with { DueStatus = "Due" })))).Value!;
@@ -329,8 +359,10 @@ public sealed class GenesysExportTests
         Assert.Equal((GenesysExportService.AuditAction, GenesysExportService.AuditEntityType, (Guid?)h.Manager.EmployeeId), (entry.Action, entry.EntityType, entry.ActorEmployeeId));
         Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(dto.Csv)))[..16], entry.EntityId);
         var after = entry.AfterValue!;
-        Assert.Contains("Campaign=CurrentMonth", after); Assert.Contains($"ContactList=FollowUp ({FollowUpList})", after); Assert.Contains("Rows=2", after);
-        Assert.Contains("Total=AED 5500.00", after); Assert.Contains("SchemaVerified=True", after); Assert.Contains("Mode=Manual", after); Assert.Contains("\"DueStatus\":\"Due\"", after); Assert.Contains(dto.Sha256, after);
+        Assert.Contains("Campaign=CurrentMonth", after); Assert.Contains($"ContactList=FollowUp ({FollowUpList})", after); Assert.Contains("Rows=2;Units=2;CombinedRows=0;CombinedUnits=0;Excluded=0;Exclusions=", after);
+        Assert.Contains("Total=AED 5500.00", after); Assert.Contains("IncludedByStatus=Ready:2", after); Assert.Contains("DataVerified=True;Unverified=;", after);
+        Assert.Contains("SchemaVerified=True", after); Assert.Contains("Mode=Manual", after); Assert.Contains("\"DueStatus\":\"Due\"", after); Assert.Contains("Repeated=0;RepeatCheck=Checked", after); Assert.Contains(dto.Sha256, after);
+        Assert.Equal(dto.TotalAmount, Parse(dto).Skip(1).Sum(r => decimal.Parse(r[4], System.Globalization.CultureInfo.InvariantCulture)));   // the audit total is the total of the rows
         foreach (var personal in new[] { "Customer 1", "Customer 2", "+97150", "example.test" }) Assert.DoesNotContain(personal, after);
     }
 

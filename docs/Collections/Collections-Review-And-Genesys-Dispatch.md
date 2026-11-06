@@ -79,7 +79,18 @@ are both scheduled on day 14). Until decided, such records are blocked; no ackno
 ## Genesys
 
 * Token: `POST {LoginBaseUrl}/oauth/token`, `Authorization: Basic base64(ClientId:ClientSecret)`, `grant_type=client_credentials`, server-side only,
-  cached until `expires_in − 60 s`, one shared request for concurrent callers, invalidated on `401` (one retry). Secrets/tokens are never logged or put in errors.
+  cached until `expires_in − 60 s`, one shared request for concurrent callers, invalidated on `401` (one retry). Secrets/tokens are never logged or put in errors; a refused token
+  request names only the OAuth `error` code (`HTTP 400, invalid_client`), nothing else from the body.
+* **"The Genesys login service refused the credentials (HTTP 400)."** The login service answered the token request with 400, so no API call was made (the contact list could not be
+  read; a send is refused, an Export for Genesys falls back to the documented template and is labelled). Genesys Cloud answers 400 to a *well-formed* request it cannot honour, so the
+  cause is configuration, in this order of likelihood: (1) `invalid_client`: the client id / secret pair is not an OAuth client of the org that `LoginBaseUrl` belongs to. Check the **region**:
+  the default is Frankfurt (`login.mypurecloud.de` / `api.mypurecloud.de`); a client created in another region's org (for example `login.mypurecloud.ie` or the Middle East region
+  `login.mec1.pure.cloud` / `api.mec1.pure.cloud`) is unknown there. The two settings must name the same region as the org that owns the contact lists. (2) `invalid_client` with the
+  right region: the secret was not supplied as configured (user-secrets / environment variable `Collections__GenesysOutbound__ClientSecret`, trailing newline or quotes from a copy,
+  or a secret that was regenerated in Genesys), or the client is not of grant type **Client Credentials** (a Code Authorization or Implicit client cannot use this flow).
+  (3) `unsupported_grant_type` / `invalid_request`: a proxy rewrote the form body. Verify from the API host with `curl -u "<client-id>:<client-secret>" -d grant_type=client_credentials
+  {LoginBaseUrl}/oauth/token` and read the `error` field; the application log line "Genesys token request was refused with HTTP 400 (<code>)" now carries the same code. The
+  client also needs the `outbound` permissions of the Collections lists; a missing permission shows as 403 on the API call, not as 400 on the token.
 * Upload: `POST {ApiBaseUrl}/api/v2/outbound/contactlists/{id}/contacts`; body `[ { "contactListId": "<same id>", "data": { "Phone", "CustomerName",
   "Email Address", "ReminderType", "AmountDue", "DueDate" }, "callable": true } ]`, all data values strings, `DueDate` `yyyy-MM-dd`. One request = one list, ≤ 1,000 contacts.
 

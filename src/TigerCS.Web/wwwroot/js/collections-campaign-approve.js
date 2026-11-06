@@ -44,13 +44,14 @@
                 const text = mode.value === 'AllMatching' ? `All ${allCount} eligible` : `${selected.size} selected`;
                 if (summary.textContent !== text) summary.textContent = text;
             }
-            // Export for Genesys follows the same selection rule as Send: it needs ticked customers, or the "all eligible" choice, and its own server-side block.
+            // Export for Genesys needs no selection: with nothing ticked it exports every customer matching the filters; ticks only narrow it. Only the server-side block (permission, no data) disables it.
             const exportButton = form.querySelector('[data-export-genesys-button]');
-            if (exportButton) exportButton.disabled = exportButton.dataset.blocked === 'true' || nothingTicked || !mode;
+            if (exportButton) exportButton.disabled = exportButton.dataset.blocked === 'true';
             const exportReason = form.querySelector('[data-export-genesys-reason]');
             if (exportReason && exportButton) {
                 if (!exportReason.dataset.default) exportReason.dataset.default = exportReason.textContent;
-                const exportText = exportButton.dataset.blocked !== 'true' && nothingTicked ? 'Tick at least one Ready customer, or choose all eligible customers.' : exportReason.dataset.default;
+                const narrowed = !!mode && mode.value === 'SelectedUnits' && selected.size > 0;
+                const exportText = exportButton.dataset.blocked !== 'true' && narrowed ? `Only the ${selected.size} ticked customer(s) are exported. ` + exportReason.dataset.default : exportReason.dataset.default;
                 if (exportReason.textContent !== exportText) exportReason.textContent = exportText;
             }
             const reason = form.querySelector('[data-approve-reason]');
@@ -92,7 +93,7 @@
     // sync() then restores its real state.) The server would refuse a second simultaneous export anyway.
     document.addEventListener('submit', event => {
         const button = event.submitter;
-        if (!button || !button.matches || !button.matches('[data-export-genesys-button],[data-export-review-manual],[data-confirm-repeat-export]')) return;
+        if (!button || !button.matches || !button.matches('[data-export-genesys-button],[data-export-review-manual]')) return;
         button.disabled = true;
         setTimeout(() => { button.disabled = false; sync(); }, 4000);
     });

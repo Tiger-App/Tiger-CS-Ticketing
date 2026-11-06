@@ -70,7 +70,7 @@
         </div>
         @{
             var exportReason = Model.ExportGenesysBlockedReason;
-            var exportTip = exportReason ?? "Downloads the ticked (or all eligible) customers as a CSV in the format of the chosen Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), with the amounts shown here, for a manual import. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
+            var exportTip = exportReason ?? $"Downloads every customer matching the filters, held-back ones included (or only the ticked customers), as a CSV in the format of the {Model.ExportDestinationLabel} Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), with the amounts shown here, for a manual import. It does not depend on sending eligibility: unverified data is labelled on the file. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
             var approveReason = reason is null
                 ? "Only Ready customers can be sent. Nothing is sent until you confirm the exact count, amount and Genesys contact list."
                 : reason;
@@ -115,7 +115,7 @@
                         <button class="btn" type="submit" asp-page-handler="ExportReview" aria-describedby="tip-export-review-manual" data-export-review-manual disabled="@(reviewReason is not null)">Export review CSV</button>
                         <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-review-manual", "Export review CSV", reviewReason ?? "Downloads every customer matching the filters, including the ones held back, with their status and the reason, for review. It is not a Genesys file and uploads nothing.", "data-export-review-reason"))" />
                     </span>
-                    <span class="campaign-tally" data-selected-summary aria-live="polite">@(counts.Ready > 0 ? "0 selected" : "No eligible customers")</span>
+                    <span class="campaign-tally" data-selected-summary aria-live="polite">@(counts.Ready > 0 ? "0 selected" : "Nothing to send; export available")</span>
                     @if (counts.Ready > 0) { <button class="btn" type="button" data-clear-selection>Clear ticks</button> }
                 </div>
             </form>

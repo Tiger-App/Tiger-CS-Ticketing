@@ -43,8 +43,8 @@ public sealed class ManualListCoverageTests
         {
             var filter = Manual(from);
             Assert.True((await scope.Query.QueryAsync(h.Manager, filter, 1, 50, CancellationToken.None)).IsSuccess);
-            // The same customers are exported three times here, so the repeats are confirmed (the repeat check itself is tested in GenesysExportRepeatTests).
-            Assert.True((await scope.Export.ExportAsync(h.Manager, new SelectionRequest(filter, ReviewQueryService.ModeAllMatching), CancellationToken.None, confirmRepeat: true)).IsSuccess);
+            // The same customers are exported three times here; a repeat is noted on the file, never a block (GenesysExportRepeatTests).
+            Assert.True((await scope.Export.ExportAsync(h.Manager, new SelectionRequest(filter, ReviewQueryService.ModeAllMatching), CancellationToken.None)).IsSuccess);
         }
     }
 

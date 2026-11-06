@@ -320,6 +320,64 @@ public sealed class ReviewQueryService(
         return CollectionsResult<ManualListDto>.Ok(new(ToDto(run), ManualShown(manual.Views, null, stale).Select(v => ToDto(v, stale, manual: true)).ToList()));
     }
 
+    // ---------------------------------------------------------------- export resolution (a file, never a send)
+
+    /// <summary>
+    /// One unit of an export: the stored record as a detached copy carrying the amount and earliest due date calculated from the filters (null when the instalments are ambiguous or
+    /// unreadable: no value is ever invented), the status the Manual page shows for it, and its exact reasons.
+    /// </summary>
+    public sealed record ExportCandidate(CollectionsReviewRecord Record, ReviewValidationStatus Status, IReadOnlyList<string> Reasons);
+
+    /// <param name="Run">The approval data the candidates come from (null only with <paramref name="Error"/>).</param>
+    /// <param name="Candidates">Every customer unit that matches the filters, whatever its status.</param>
+    /// <param name="Skipped">Ticked customers that match no record of the filters any more (paid, changed); never silently kept.</param>
+    /// <param name="Stale">The approval data is older than the freshness window.</param>
+    /// <param name="Error">Why the selection cannot be resolved at all (the filter is invalid, or the data cannot answer it).</param>
+    public sealed record ExportResolution(CollectionsReviewRun? Run, IReadOnlyList<ExportCandidate> Candidates, int Skipped, bool Stale, string? Error);
+
+    /// <summary>
+    /// The customers of "Export for Genesys": EVERY customer unit of the chosen campaign type that matches Tower, Payment status, From / To and Minimum Total, with the amount Preview shows
+    /// (<see cref="ManualCalculatedAsync"/>, the one Manual calculation), whatever its validation status. A file is not a send, so nothing that only a send needs is a condition here: no Ready
+    /// status, no reconciliation, no freshness, no build date, no schedule. Only what makes the amounts WRONG rather than unverified is refused: a From date the stored instalments do not cover,
+    /// a month filter, an unknown campaign type, a list that cannot be read in one pass, more customers than one file may hold. The send path (<see cref="ResolveAsync"/>) is untouched: it
+    /// still resolves Ready records only.
+    /// </summary>
+    public async Task<ExportResolution> ResolveForExportAsync(SelectionRequest request, CancellationToken ct)
+    {
+        var run = await store.GetCurrentRunAsync(ct);
+        if (run is null) return new(null, [], 0, false, "There is no approval data yet. Refresh the approval data, then export.");
+        // The population is the Manual one in both modes (financially matching customers, schedule or not); the mode the export was started from is kept by the caller for the audit only.
+        var filter = (request.Filter ?? new ReviewFilter()) with { SendingMode = CollectionsSendingModes.Manual };
+        var parsed = TryParse(filter);
+        if (parsed.Error is not null) return new(run, [], 0, false, parsed.Error);
+        var spec = parsed.Spec!;
+        if (spec.ReminderType is null) return new(run, [], 0, false, "Choose the campaign type to export.");
+        if (ManualCoverageProblem(filter, run) is { } coverage) return new(run, [], 0, false, coverage);
+        var stale = IsStale(run);
+
+        IReadOnlyCollection<string>? units = null;
+        if (string.Equals(request.Mode, ModeSelectedUnits, StringComparison.OrdinalIgnoreCase))
+        {
+            units = (request.UnitKeys ?? []).Where(k => !string.IsNullOrWhiteSpace(k)).Select(k => k.Trim()).ToHashSet(StringComparer.Ordinal);
+            if (units.Count == 0) return new(run, [], 0, stale, "Select at least one customer, or export all customers matching the filters.");
+        }
+        else if (!string.Equals(request.Mode, ModeAllMatching, StringComparison.OrdinalIgnoreCase))
+            return new(run, [], 0, stale, "A record-key list carries no Manual filter: an export is of all customers matching the filters (AllMatching) or of the ticked customers (SelectedUnits).");
+
+        var manual = await ManualCalculatedAsync(run, spec, filter, units, stale, ct);
+        if (manual.Problem is not null) return new(run, [], 0, stale, manual.Problem);
+        var views = manual.Views;
+        var max = Math.Max(1, reviewOptions.MaxSelection);
+        if (views.Count > max) return new(run, [], 0, stale, $"More than {max:N0} customers match. Narrow the filters (for example by tower or dates) and export in parts.");
+        var excluded = (request.ExcludedKeys ?? []).ToHashSet(StringComparer.Ordinal);
+        if (excluded.Count > 0) views = views.Where(v => !excluded.Contains(v.Record.RecordKey)).ToList();
+        var skipped = units is null ? 0 : units.Count(u => !views.Any(v => UnitKey(v.Record.CompanyId, v.Record.TenantId, v.Record.UnitCode) == u));
+        var candidates = views.OrderBy(v => v.Record.CompanyId).ThenBy(v => v.Record.TenantId, StringComparer.OrdinalIgnoreCase).ThenBy(v => v.Record.UnitCode, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(v => v.Record.RecordKey, StringComparer.Ordinal)
+            .Select(v => new ExportCandidate(v.Record, ManualStatus(v, stale), ManualReasons(v, stale))).ToList();
+        return new(run, candidates, skipped, stale, null);
+    }
+
     /// <summary>Ready records of the selection. In Manual mode these are the customers the person may send now (see <see cref="ManualCalculatedAsync"/>): schedule waived, amount from the filters.</summary>
     private async Task<(IReadOnlyList<ReviewRecordView> Views, string? Problem)> ResolveReadyAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, int max, CancellationToken ct)
     {
@@ -411,6 +469,17 @@ public sealed class ReviewQueryService(
     private static ReviewRecordDto ToDto(ReviewRecordView v, bool stale, bool manual = false)
     {
         var r = v.Record;
+        var reasons = ReasonsOf(v, stale, manual);
+        return new(r.RecordKey, r.ReminderType.ToString(), r.CompanyId, r.CustomerName, r.Phone, r.Email, r.ProjectCode, r.UnitCode,
+            r.PaymentStatus.ToString(), r.RemainingAmount, r.Currency, r.DueDate, (manual ? ManualStatus(v, stale) : v.EffectiveStatus(stale)).ToString(),
+            reasons.Select(c => new ReviewReasonDto(c, (ReviewReasons.KindOf(c) ?? ReasonKind.NeedsReview).ToString(), ReviewReasons.Explain(c))).ToList(),
+            r.Source, r.SourceReadAtUtc, v.PreviousDispatchStatus, v.PreviousDispatchAtUtc, r.TowerNumber, r.TowerName, r.TenantId);
+    }
+
+    /// <summary>The reasons a record is shown with: the stored ones, minus the schedule in Manual, plus staleness and the contact-frequency hold, which are facts of the moment, not of the record.</summary>
+    private static List<string> ReasonsOf(ReviewRecordView v, bool stale, bool manual)
+    {
+        var r = v.Record;
         var reasons = ReviewRecordBuilder.Parse(r.Reasons).ToList();
         if (manual) reasons.Remove(ReviewReasons.OutsideSchedule);
         if (stale && (r.ValidationStatus == ReviewValidationStatus.Ready || (manual && IsManuallySendable(r))) && !reasons.Contains(ReviewReasons.StaleSource))
@@ -418,11 +487,11 @@ public sealed class ReviewQueryService(
         // Held back because the customer was already added to a Genesys list today by ANOTHER record (the contact-frequency limit); say so rather than "already sent".
         if (v.AlreadySent && v.PreviousDispatchStatus is null && !reasons.Contains(ReviewReasons.ContactedToday))
             reasons.Add(ReviewReasons.ContactedToday);
-        return new(r.RecordKey, r.ReminderType.ToString(), r.CompanyId, r.CustomerName, r.Phone, r.Email, r.ProjectCode, r.UnitCode,
-            r.PaymentStatus.ToString(), r.RemainingAmount, r.Currency, r.DueDate, (manual ? ManualStatus(v, stale) : v.EffectiveStatus(stale)).ToString(),
-            reasons.Select(c => new ReviewReasonDto(c, (ReviewReasons.KindOf(c) ?? ReasonKind.NeedsReview).ToString(), ReviewReasons.Explain(c))).ToList(),
-            r.Source, r.SourceReadAtUtc, v.PreviousDispatchStatus, v.PreviousDispatchAtUtc, r.TowerNumber, r.TowerName, r.TenantId);
+        return reasons;
     }
+
+    /// <summary>The reasons of a Manual row, exactly as the Manual page lists them.</summary>
+    private static IReadOnlyList<string> ManualReasons(ReviewRecordView v, bool stale) => ReasonsOf(v, stale, manual: true);
 
     public (ReviewQuerySpec? Spec, string? Error) TryParse(ReviewFilter f)
     {
