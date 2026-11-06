@@ -3002,7 +3002,7 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .page--workspace .tw-fact__v.is-muted { font-weight: 400; color: var(--tw-muted); }
 .page--workspace .tw-fact__sub { display: inline; font-size: 12px; line-height: 18px; color: var(--tw-muted); }
 .page--workspace .tw-who__name { font-size: 14px; }
-.page--workspace .tw-verif { line-height: 18px; padding: 0 6px; font-size: 11px; border-radius: 4px; }
+.page--workspace .tw-verif { line-height: 18px; padding: 0 6px; font-size: 12px; border-radius: 4px; }
 .page--workspace .tw-route { font-size: 12px; line-height: 18px; }
 .page--workspace .tw-route--awaiting { color: var(--color-warning-text); }
 .page--workspace .btn-reassign { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 6px; }
