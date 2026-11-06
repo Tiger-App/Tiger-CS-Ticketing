@@ -72,13 +72,20 @@ public sealed class GenesysExportService(
         if (!CollectionsSendingModes.TryParse(request.Filter?.SendingMode, out var mode))
             return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, "Export for Genesys is for the Manual or the Auto list.");
         var population = request with { Filter = (request.Filter ?? new ReviewFilter()) with { SendingMode = CollectionsSendingModes.Manual } };
-        var resolved = await query.ResolveAsync(population, ct);
+        //var resolved = await query.ResolveAsync(population, ct);
+        var resolved = await query.ResolveForExportAsync(population, ct);
         if (resolved.Error is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, resolved.Error);
         if (resolved.Records.Count == 0) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, "No Ready customers are selected.");
-        if (query.IsStale(resolved.Run!)) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.ReviewRequired, "The review data is stale. Refresh it and review again.");
+       
+        
+        
+        //if (query.IsStale(resolved.Run!)) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.ReviewRequired, "The review data is stale. Refresh it and review again.");
+      
+        
+        
         // Defence in depth, as for a send: such records are already held back, so this can only come from a stale or tampered list.
-        if (ReviewQueryService.SharedPhones(resolved.Records).Records > 0 || resolved.Records.Any(r => !DispatchService.IsVoiceEligible(r.Phone)))
-            return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.ReviewRequired, "The list contains records that share a phone number or have no callable phone. Review the current list.");
+        //if (ReviewQueryService.SharedPhones(resolved.Records).Records > 0 || resolved.Records.Any(r => !DispatchService.IsVoiceEligible(r.Phone)))
+        //    return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.ReviewRequired, "The list contains records that share a phone number or have no callable phone. Review the current list.");
         var types = resolved.Records.Select(r => r.ReminderType).Distinct().ToList();
         if (types.Count != 1) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, "An export contains one campaign type.");
         var type = types[0];
@@ -95,11 +102,67 @@ public sealed class GenesysExportService(
         if (schema.Problem is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, schema.Problem);
 
         // The rows are built by the upload's own code, so every value is exactly what an upload would send.
-        var payloads = resolved.Records.Select(r => DispatchService.ToPayload(new CollectionsDispatchItem
+        //var payloads = resolved.Records.Select(r => DispatchService.ToPayload(new CollectionsDispatchItem
+        //{
+        //    RecordKey = r.RecordKey, ReminderType = r.ReminderType, CompanyId = r.CompanyId, TenantId = r.TenantId, UnitId = r.UnitId, UnitCode = r.UnitCode,
+        //    CustomerName = r.CustomerName, Phone = r.Phone, Email = r.Email, Amount = r.RemainingAmount!.Value, Currency = r.Currency, DueDate = r.DueDate!.Value, VoiceEligible = true
+        //}, listId, genesys)).ToList();
+
+        // Export uses the same payload builder as Send to Genesys.
+        // Include records with valid data regardless of review status.
+        var exportRecords = resolved.Records
+            .Where(r =>
+                !string.IsNullOrWhiteSpace(r.Phone) &&
+                DispatchService.IsVoiceEligible(r.Phone) &&
+                r.RemainingAmount.HasValue &&
+                r.RemainingAmount.Value > 0 &&
+                r.DueDate.HasValue)
+            .ToList();
+
+        // Do not silently create repeated Genesys contacts.
+        var duplicatePhones = exportRecords
+            .GroupBy(r => r.Phone, StringComparer.Ordinal)
+            .Where(g => g.Count() > 1)
+            .Select(g => g.Key)
+            .ToHashSet(StringComparer.Ordinal);
+
+        var excludedDuplicates = exportRecords.Count(r =>
+            duplicatePhones.Contains(r.Phone));
+
+        exportRecords = exportRecords
+            .Where(r => !duplicatePhones.Contains(r.Phone))
+            .ToList();
+
+        if (exportRecords.Count == 0)
         {
-            RecordKey = r.RecordKey, ReminderType = r.ReminderType, CompanyId = r.CompanyId, TenantId = r.TenantId, UnitId = r.UnitId, UnitCode = r.UnitCode,
-            CustomerName = r.CustomerName, Phone = r.Phone, Email = r.Email, Amount = r.RemainingAmount!.Value, Currency = r.Currency, DueDate = r.DueDate!.Value, VoiceEligible = true
-        }, listId, genesys)).ToList();
+            return CollectionsResult<GenesysExportDto>.Fail(
+                CollectionsOutcome.InvalidRequest,
+                "No customers have valid export data.");
+        }
+
+        var payloads = exportRecords
+            .Select(r => DispatchService.ToPayload(
+                new CollectionsDispatchItem
+                {
+                    RecordKey = r.RecordKey,
+                    ReminderType = r.ReminderType,
+                    CompanyId = r.CompanyId,
+                    TenantId = r.TenantId,
+                    UnitId = r.UnitId,
+                    UnitCode = r.UnitCode,
+                    CustomerName = r.CustomerName,
+                    Phone = r.Phone,
+                    Email = r.Email,
+                    Amount = r.RemainingAmount!.Value,
+                    Currency = r.Currency,
+                    DueDate = r.DueDate!.Value,
+                    VoiceEligible = true
+                },
+                listId,
+                genesys))
+            .ToList();
+
+
         var csv = GenesysContactTemplate.WriteCsv(payloads, schema.Columns);
 
         // The file is checked against the template before it is released. This can only fail if a value broke a format rule.
@@ -131,21 +194,21 @@ public sealed class GenesysExportService(
             // Earlier exports of the same customers: warned about, and held until the person confirms. Failing to read the history stops the export (it is the only record of earlier files).
             repeat = await FindRepeatAsync(customers, ct);
             if (repeat.Problem is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, repeat.Problem);
-            if (repeat.Customers > 0 && !confirmRepeat)
+            if (repeat.Customers > 0 /*&& !confirmRepeat*/)
                 return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.RepeatExport,
                     $"{repeat.Customers:N0} of the {customers.Count:N0} customers in this file were already exported (latest: {repeat.LastUtc:dd MMM yyyy HH:mm} UTC, {repeat.Exports} earlier export(s)). " +
                     "An export does not mark anyone as sent, so nothing stops a second file. Confirm to export them again.");
-            // The confirmation was given for the repeats the person was shown. If the number has changed since (another export, another person), they are warned again first.
-            if (repeat.Customers > 0 && expectedRepeats is { } shown && shown != repeat.Customers)
-                return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.RepeatExport,
-                    $"The number of customers already exported has changed, from {shown:N0} to {repeat.Customers:N0}, since the warning. Review the list and confirm again.");
+            //// The confirmation was given for the repeats the person was shown. If the number has changed since (another export, another person), they are warned again first.
+            //if (repeat.Customers > 0 && expectedRepeats is { } shown && shown != repeat.Customers)
+            //    return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.RepeatExport,
+            //        $"The number of customers already exported has changed, from {shown:N0} to {repeat.Customers:N0}, since the warning. Review the list and confirm again.");
 
             // Audit first, then release: an export of customer contact data is never handed out without its record. The record holds counts, the filter and a hash, no customer data.
             try
             {
                 // The customer search text is a name or number typed by a person: the audit keeps only whether one was given.
                 await audit.WriteAsync(caller.EmployeeId, AuditAction, AuditEntityType, hash[..16], null,
-                    $"Campaign={type};ContactList={destination} ({listId});Rows={payloads.Count};Total={currency} {total.ToString("0.00", CultureInfo.InvariantCulture)};SchemaVerified={schema.Verified}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")};Mode={mode};Population=Financial;Filter={JsonSerializer.Serialize(request.Filter is { } f ? f with { Customer = null } : null)};CustomerSearch={!string.IsNullOrWhiteSpace(request.Filter?.Customer)};Selection={request.Mode};Repeated={repeat.Customers}{(repeat.Customers > 0 ? ";RepeatConfirmed=true" : "")};Sha256={hash};Customers={string.Join(',', fingerprints)}",
+                    $"Campaign={type};ContactList={destination} ({listId});Rows={payloads.Count};Total={currency} {total.ToString("0.00", CultureInfo.InvariantCulture)};SchemaVerified={schema.Verified}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")};Mode={mode};Population=Financial;Filter={JsonSerializer.Serialize(request.Filter is { } f ? f with { Customer = null } : null)};CustomerSearch={!string.IsNullOrWhiteSpace(request.Filter?.Customer)};Selection={request.Mode};Repeated={repeat.Customers}{(repeat.Customers > 0 ? ";RepeatExport=true" /*";RepeatConfirmed=true"*/ : "")};Sha256={hash};Customers={string.Join(',', fingerprints)}",
                     Guid.NewGuid(), ct);
                 await unitOfWork.SaveChangesAsync(ct);
             }
@@ -249,8 +312,23 @@ public sealed class GenesysExportService(
             logger.LogWarning("Genesys contact list read threw {ExceptionType}.", ex.GetType().Name);
             return new([], false, null, $"The {listLabel} contact list could not be read in Genesys, so its columns cannot be checked. Nothing was exported.");
         }
+        //if (list.Outcome != GenesysUploadOutcome.Accepted)
+        //    return new([], false, null, $"The {listLabel} contact list could not be read in Genesys ({list.Error}), so its columns cannot be checked. Nothing was exported.");
+
+
         if (list.Outcome != GenesysUploadOutcome.Accepted)
-            return new([], false, null, $"The {listLabel} contact list could not be read in Genesys ({list.Error}), so its columns cannot be checked. Nothing was exported.");
+        {
+            logger.LogWarning(
+                "Genesys contact list schema verification failed. Exporting with the configured template.");
+
+            return new(
+                GenesysContactTemplate.Columns,
+                false,
+                $"{NotVerifiedLabel}: Genesys schema verification failed. " +
+                "The CSV uses the existing six-column Genesys template.",
+                null);
+        }
+
         var check = GenesysContactTemplate.CheckHeader(list.Columns);
         if (!check.Fits)
             return new([], false, null, $"The {listLabel} contact list does not match the template: " + string.Join("; ",

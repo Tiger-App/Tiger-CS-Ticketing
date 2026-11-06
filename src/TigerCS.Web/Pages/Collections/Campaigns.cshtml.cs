@@ -287,8 +287,69 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         : null;
 
     /// <summary>Why Export for Genesys is unavailable (null = available): the same data and permission rules as sending, without the sending-only settings.</summary>
-    public string? ExportGenesysBlockedReason => IsManual ? ManualBlockedReason(forExport: true) : AutoExportBlockedReason();
+    //public string? ExportGenesysBlockedReason => IsManual ? ManualBlockedReason(forExport: true) : AutoExportBlockedReason();
 
+    //public string? ExportGenesysBlockedReason
+    //{
+    //    get
+    //    {
+    //        if (IsManual)
+    //        {
+    //            if (ManualPage == null)
+    //                return "Preview customers first.";
+
+    //            if (!CanSend)
+    //                return "You do not have permission to export.";
+
+    //            if (ManualPage.Counts.Total == 0)
+    //                return "No customers to export.";
+
+    //            return null;
+    //        }
+
+    //        if (Report == null)
+    //            return "Preview customers first.";
+
+    //        if (!Report.CanExportReview)
+    //            return "You do not have permission to export.";
+
+    //        if (Report.TotalCount == 0)
+    //            return "No customers to export.";
+
+    //        return null;
+    //    }
+    //}
+
+    public string? ExportGenesysBlockedReason
+    {
+        get
+        {
+            if (IsManual)
+            {
+                if (ManualPage == null)
+                    return "Preview customers first.";
+
+                if (!CanSend)
+                    return "Export permission required.";
+
+                if (ManualPage.Counts.Total == 0)
+                    return "No customers to export.";
+
+                return null;
+            }
+
+            if (Report == null)
+                return "Preview customers first.";
+
+            if (!Report.CanExportReview)
+                return "Export permission required.";
+
+            if (Report.TotalCount == 0)
+                return "No customers to export.";
+
+            return null;
+        }
+    }
     /// <summary>
     /// Why Export for Genesys is unavailable on the Auto page (null = available). The file holds the financially eligible customers of the filters whatever the schedule says, so it needs the
     /// same approval data a Manual list needs (built today, reconciled, not stale) and the send permission; never the scheduled date, the live-dispatch switch or background jobs.

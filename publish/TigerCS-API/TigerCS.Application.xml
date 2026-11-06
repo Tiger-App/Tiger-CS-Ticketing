@@ -678,6 +678,110 @@
         <member name="M:TigerCS.Application.Modules.Administration.Services.AdminWorkflowAppService.DeleteDraftAsync(System.Guid,System.Int32,System.Threading.CancellationToken)">
             <summary>Deletes a Draft that nothing references. Published and Historical versions are never deletable — tickets pin them.</summary>
         </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.DepartmentStaffingStatus.Staffed">
+            <summary>At least one active individual employee is eligible to receive automatically assigned tickets.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.DepartmentStaffingStatus.SharedAccountOnly">
+            <summary>The only accounts that can receive automatic assignment are shared department-level accounts: tickets are handled, but by no accountable individual. Needs individual employees.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.DepartmentStaffingStatus.Unstaffed">
+            <summary>No active employee is a member of the department. Tickets cannot be assigned; needs an employee assignment.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.DepartmentStaffingStatus.NoAssignableEmployee">
+            <summary>Active members exist but none can receive automatic assignment (e.g. only supervisors, read-only users, locked-out accounts).</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Administration.Services.DepartmentCoverageService">
+            <summary>
+            Read-only department coverage: for every ACTIVE department, how many active employees belong to it and how many of them are eligible
+            for automatic (Round Robin) assignment. The eligibility test mirrors <c>TicketAutoAssignmentService</c> exactly (not a service identity,
+            not locked out, an operational role — CS Agents only in the Call Center — and not read-only), so "Staffed" here means the rotation has
+            somebody to pick. Nothing is created or changed; "Unstaffed" is derived from the existing department/user relationships, not stored.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Services.DepartmentCoverageService.#ctor(TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserRoleReader,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserAccountManager,TigerCS.Application.Authorization.IServiceIdentityRegistry,System.Collections.Generic.IReadOnlyCollection{System.String})">
+            <summary>
+            Read-only department coverage: for every ACTIVE department, how many active employees belong to it and how many of them are eligible
+            for automatic (Round Robin) assignment. The eligibility test mirrors <c>TicketAutoAssignmentService</c> exactly (not a service identity,
+            not locked out, an operational role — CS Agents only in the Call Center — and not read-only), so "Staffed" here means the rotation has
+            somebody to pick. Nothing is created or changed; "Unstaffed" is derived from the existing department/user relationships, not stored.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Administration.Services.StaffRosterEntry">
+            <summary>One person to be provisioned. The department is named by its stable <c>Code</c> (never by a new record) and the role must be an existing fixed role.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Services.StaffRosterEntry.#ctor(System.String,System.String,System.String,System.String,System.String)">
+            <summary>One person to be provisioned. The department is named by its stable <c>Code</c> (never by a new record) and the role must be an existing fixed role.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Services.StaffRosterEntry.Identifier">
+            <summary>The Identity user name the account is looked up and created by: the explicit <see cref="P:TigerCS.Application.Modules.Administration.Services.StaffRosterEntry.UserName"/> (department accounts have no email), otherwise the email.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Administration.Services.StaffRosterEntry.AccountEmail">
+            <summary>The email stored on the account: none for a department-level account.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Administration.Services.StaffRoster">
+            <summary>
+            The staff requested for provisioning. Customer Services users are CS Agents (the existing front-line role). Registration users are
+            Department Employees: the existing non-administrative role that "works and resolves tickets assigned to their department"
+            (<see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Roles.Descriptions"/>), it carries no management, assignment, close or administration authority, and it is already part of the
+            Round Robin eligible set for every department except the Call Center. No new role is invented and no administrative privilege is given.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.StaffRoster.DepartmentAccounts">
+            <summary>
+            Department-level (shared) accounts: not people. Same existing non-administrative role, primary membership of their own department,
+            no email. They are ordinary Identity users, deliberately NOT configured service identities (that list confines an account to the
+            integration surface, which would stop it working tickets), so the Round Robin exclusion of service identities is untouched.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.StaffRoster.DepartmentAccountUserNames">
+            <summary>Identity user names of the department-level accounts, so reports can tell them apart from individual employees.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.StaffProvisioningStatus.WouldCreate">
+            <summary>Dry run: the account does not exist and every prerequisite is in place, so apply would create it.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.StaffProvisioningStatus.Created">
+            <summary>Created by this run through the existing administration create-user path.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.StaffProvisioningStatus.AlreadyExists">
+            <summary>An account with this email/user name exists and already has the requested department and role. Nothing was written.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Administration.Services.StaffProvisioningStatus.Skipped">
+            <summary>Nothing was written and a person must look: the account exists with a different role/department, is deactivated or incomplete, or a prerequisite (department, role) is missing.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Administration.Services.StaffProvisioningService">
+            <summary>
+            Idempotent provisioning of a fixed roster through the EXISTING administration create-user path
+            (<see cref="M:TigerCS.Application.Modules.Administration.Services.AdminUserAppService.CreateAsync(System.Guid,TigerCS.Application.Modules.Administration.Dto.CreateUserRequestDto,System.Threading.CancellationToken)"/>: Identity account + Employee + role + primary department + audit entry).
+            It adds nothing new to authentication: no password handling of its own (the caller supplies the initial password exactly as an
+            administrator does in User Management; Identity's policy validates it), no new department, no new role.
+            <para>
+            Safety rules: an existing account is never modified, only reported; a person is matched by email or user name, case-insensitively, so
+            re-running creates nothing twice; departments are resolved by existing <c>Code</c> and an inactive or missing one skips the user.
+            </para>
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Services.StaffProvisioningService.#ctor(TigerCS.Application.Modules.Administration.Services.AdminUserAppService,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserAccountManager,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserRoleReader,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IDepartmentRepository,TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IUserDepartmentAssignmentRepository)">
+            <summary>
+            Idempotent provisioning of a fixed roster through the EXISTING administration create-user path
+            (<see cref="M:TigerCS.Application.Modules.Administration.Services.AdminUserAppService.CreateAsync(System.Guid,TigerCS.Application.Modules.Administration.Dto.CreateUserRequestDto,System.Threading.CancellationToken)"/>: Identity account + Employee + role + primary department + audit entry).
+            It adds nothing new to authentication: no password handling of its own (the caller supplies the initial password exactly as an
+            administrator does in User Management; Identity's policy validates it), no new department, no new role.
+            <para>
+            Safety rules: an existing account is never modified, only reported; a person is matched by email or user name, case-insensitively, so
+            re-running creates nothing twice; departments are resolved by existing <c>Code</c> and an inactive or missing one skips the user.
+            </para>
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Services.StaffProvisioningService.PlanAsync(System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Administration.Services.StaffRosterEntry},System.Threading.CancellationToken)">
+            <summary>Read-only: what apply would do. Writes nothing.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Administration.Services.StaffProvisioningService.ApplyAsync(System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Administration.Services.StaffRosterEntry},System.Guid,System.Func{TigerCS.Application.Modules.Administration.Services.StaffRosterEntry,System.String},System.Threading.CancellationToken)">
+            <summary>
+            Creates the missing users. <paramref name="actorEmployeeId"/> must be an existing active System Administrator: the audit entry names the
+            administrator who authorised the provisioning, as for any user created in User Management.
+            <paramref name="passwordFor"/> supplies the initial password per user; it is passed to Identity and never stored or logged here.
+            </summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.ClassificationAndRouting.Dto.CategoryDto">
             <summary>An active Ticket Category the caller may route a ticket to. <c>GET /api/categories</c>.</summary>
             <param name="CategoryId">The real database id — the only value <c>POST /api/tickets</c> accepts for <c>CategoryId</c>.</param>
@@ -1260,10 +1364,13 @@
         </member>
         <member name="P:TigerCS.Application.Modules.Collections.CollectionsCampaignOptions.AutoSendingEnabled">
             <summary>
-            Separate switch for AUTOMATIC execution of scheduled campaigns (Auto sending mode). False (default). Nothing in the application dispatches on its own today: this value is
-            reported on the Campaigns page so it is clear that Auto mode only computes the policy schedule and readiness, and any future automatic executor must check it, in addition to
-            <c>GenesysOutbound:LiveCustomerDispatchEnabled</c>, the reconciliation gate and the suppression sweep. It is never a way around any of them.
+            Separate switch for AUTOMATIC execution of scheduled campaigns (Auto sending mode). False (default). While it is false nothing is ever dispatched without a person: Auto mode only shows the
+            policy schedule and readiness, and the Auto dispatcher does nothing. When true the dispatcher (<c>AutoDispatchService</c>) prepares and dispatches each campaign on its scheduled date. It is
+            checked IN ADDITION to, never instead of, <c>GenesysOutbound:LiveCustomerDispatchEnabled</c>, the reconciliation gate and the suppression sweep.
             </summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.CollectionsCampaignOptions.AutoDispatchCron">
+            <summary>When the Auto dispatcher looks for campaigns scheduled today (cron, in the business time zone). Hourly through the working day by default: each campaign is dispatched at most once a day (idempotency key), so a later attempt only completes what an earlier one could not (for example stale data).</summary>
         </member>
         <member name="P:TigerCS.Application.Modules.Collections.CollectionsCampaignOptions.ValidatedProcedureSuffix">
             <summary>The <c>CollectionsSource:PactReceivables:ProcedureSuffix</c> that the reconciliation was performed against.
@@ -2470,6 +2577,61 @@
             one looked at the sign-off flag only, the other also at the procedure). Fail-closed: every branch that is not a full pass explains itself.
             </summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.AutoDispatchStageResult">
+            <param name="Stage">The campaign type.</param>
+            <param name="Outcome"><c>Dispatched</c>, <c>AlreadyDispatched</c>, <c>NothingReady</c>, <c>NotReleased</c>, <c>Refused</c>.</param>
+            <param name="Detail">Why, when the campaign was not dispatched.</param>
+            <param name="Count">How many customers the dispatch carries.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.AutoDispatchStageResult.#ctor(System.String,System.String,System.String,System.Int32)">
+            <param name="Stage">The campaign type.</param>
+            <param name="Outcome"><c>Dispatched</c>, <c>AlreadyDispatched</c>, <c>NothingReady</c>, <c>NotReleased</c>, <c>Refused</c>.</param>
+            <param name="Detail">Why, when the campaign was not dispatched.</param>
+            <param name="Count">How many customers the dispatch carries.</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.AutoDispatchStageResult.Stage">
+            <summary>The campaign type.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.AutoDispatchStageResult.Outcome">
+            <summary><c>Dispatched</c>, <c>AlreadyDispatched</c>, <c>NothingReady</c>, <c>NotReleased</c>, <c>Refused</c>.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.AutoDispatchStageResult.Detail">
+            <summary>Why, when the campaign was not dispatched.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.AutoDispatchStageResult.Count">
+            <summary>How many customers the dispatch carries.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.AutoDispatchService">
+            <summary>
+            Auto sending mode: on the scheduled date of each approved campaign policy it prepares and dispatches the eligible customers by itself, with no person confirming. It exists only to
+            follow the approved schedule and is inert unless <c>Collections:Campaigns:AutoSendingEnabled</c> is true (false by default).
+            <list type="bullet">
+            <item>It never builds its own list: it asks the review data for the Ready records of a campaign scheduled TODAY (the stage amount, exactly as the approved policy defines it) and creates the dispatch
+            through the same pipeline as a person's confirmation: reconciliation, contact validation, shared-phone, legal-release, duplicate-send and contact-frequency rules, the active-campaign and contact-list
+            checks, a frozen audit record, revalidation of the current balances right before the upload, and the paid-after-upload suppression.</item>
+            <item>One dispatch per campaign per business day: the idempotency key is the campaign and the date, so repeating the job (it runs hourly) can never send twice.</item>
+            <item>It never sends an internal Legal referral, and a legal notice only when legal notices have been released.</item>
+            <item>The initiator on the audit record is the system actor <see cref="F:TigerCS.Application.Modules.Collections.Review.DispatchService.AutoActorId"/>, shown as "Automatic (scheduled)".</item>
+            </list>
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.AutoDispatchService.#ctor(TigerCS.Application.Modules.Collections.CollectionsOptions,TigerCS.Application.Modules.Collections.CollectionsCampaignOptions,TigerCS.Application.Modules.Collections.Services.CollectionsClock,TigerCS.Application.Modules.Collections.Review.IReviewStore,TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.ReviewRefreshService,TigerCS.Application.Modules.Collections.Review.DispatchService,Microsoft.Extensions.Logging.ILogger{TigerCS.Application.Modules.Collections.Review.AutoDispatchService})">
+            <summary>
+            Auto sending mode: on the scheduled date of each approved campaign policy it prepares and dispatches the eligible customers by itself, with no person confirming. It exists only to
+            follow the approved schedule and is inert unless <c>Collections:Campaigns:AutoSendingEnabled</c> is true (false by default).
+            <list type="bullet">
+            <item>It never builds its own list: it asks the review data for the Ready records of a campaign scheduled TODAY (the stage amount, exactly as the approved policy defines it) and creates the dispatch
+            through the same pipeline as a person's confirmation: reconciliation, contact validation, shared-phone, legal-release, duplicate-send and contact-frequency rules, the active-campaign and contact-list
+            checks, a frozen audit record, revalidation of the current balances right before the upload, and the paid-after-upload suppression.</item>
+            <item>One dispatch per campaign per business day: the idempotency key is the campaign and the date, so repeating the job (it runs hourly) can never send twice.</item>
+            <item>It never sends an internal Legal referral, and a legal notice only when legal notices have been released.</item>
+            <item>The initiator on the audit record is the system actor <see cref="F:TigerCS.Application.Modules.Collections.Review.DispatchService.AutoActorId"/>, shown as "Automatic (scheduled)".</item>
+            </list>
+            </summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.AutoDispatchService.Stages">
+            <summary>The campaigns Auto may dispatch. An internal Legal referral is never dispatched to a customer.</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.CurrentBalanceReader">
              <summary>
              Re-reads current balances for the companies involved in a dispatch or a suppression sweep and rebuilds the review records, keyed by
@@ -2563,6 +2725,37 @@
             "Uploaded to Genesys" means the contact is in the list. It never means the customer was called or contacted.
             </summary>
         </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.DispatchService.AutoActorId">
+            <summary>The initiator recorded on a dispatch that the Auto dispatcher created on a scheduled date (no person confirmed it).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.DispatchService.CanSendAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,System.Threading.CancellationToken)">
+            <summary>Whether the caller holds the send right. The API checks it before it validates a request, so an unauthorized caller learns nothing about the request.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ConfirmAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,TigerCS.Application.Modules.Collections.Review.ConfirmDispatchRequest,System.Threading.CancellationToken)">
+            <summary>A person confirms an exact, previously shown list. Authorization first: no data is read for an unauthorized caller.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ConfirmAutoAsync(TigerCS.Application.Modules.Collections.Review.ConfirmDispatchRequest,System.Threading.CancellationToken)">
+            <summary>
+            The Auto dispatcher creates the dispatch of a campaign that is scheduled today. No person confirms it, so the CALLER (<c>AutoDispatchService</c>) must have checked the separate
+            <c>AutoSendingEnabled</c> switch and built the selection itself; every other gate, check and revalidation below is the same as for a person's confirmation.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.DispatchService.CheckDestinationAsync(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Checks a Genesys contact list before anything is uploaded to it. Null = it can be used; otherwise the exact reason. Read-only: it only looks.
+            <list type="bullet">
+            <item>The list must exist and carry every column of the contact template (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), or the upload would fail or drop data.</item>
+            <item>No OTHER campaign that is on (or stopping) may dial the list: contacts added to it would be dialled at once, which would interfere with that campaign. The type\'s own stage campaign is
+            the intended consumer of its own list and is not interference. Anything that cannot be checked is refused.</item>
+            </list>
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.DispatchService.StoredFilter(TigerCS.Application.Modules.Collections.Review.ReviewFilter)">
+            <summary>
+            The filter kept with the approval. A Manual approval stores its EFFECTIVE minimum (the review default when none was given) so that the revalidation before the upload and the paid-after-upload
+            check calculate the amount with exactly the criteria the person approved, whatever the settings are later.
+            </summary>
+        </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ReadinessAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,System.Threading.CancellationToken)">
             <summary>The configuration gates Confirm enforces, plus the credentials and contact lists the upload needs. Read-only; sends nothing and calls nothing.</summary>
         </member>
@@ -2617,6 +2810,15 @@
             <c>ConfirmedNotUploaded</c>: nothing was created; the records are released and may be approved again (with fresh validation).
             </summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.TemplateHeaderCheck">
+            <summary>How a list's actual column names compare with the six template columns.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.TemplateHeaderCheck.#ctor(System.Collections.Generic.IReadOnlyList{System.String},System.Collections.Generic.IReadOnlyList{System.String},System.Collections.Generic.IReadOnlyList{System.String})">
+            <summary>How a list's actual column names compare with the six template columns.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.TemplateHeaderCheck.Fits">
+            <summary>Every template column is present with its exact name (extra columns are allowed here; they are reported separately).</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate">
             <summary>
             The Genesys outbound contact-list shape: exactly six data columns, every value a string. This type writes that shape and checks any
@@ -2625,6 +2827,18 @@
         </member>
         <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate.Columns">
             <summary>The six data columns, in Genesys order. <c>Email Address</c> has a space; the others do not.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate.CheckHeader(System.Collections.Generic.IReadOnlyList{System.String})">
+            <summary>
+            Compares a list's column names with the template. A column that matches only ignoring case or spacing (for example <c>EmailAddress</c>, <c>Amount Due</c>) is reported as misnamed with the name
+            that was found, never silently accepted: an import maps columns by their exact names.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate.WriteCsv(System.Collections.Generic.IEnumerable{TigerCS.Application.Modules.Collections.Review.GenesysContactPayload},System.Collections.Generic.IReadOnlyList{System.String})">
+            <summary>
+            The import file for a list whose actual columns are <paramref name="columns"/>: the six template columns in template order, then any further column the list has (left empty, in the list's own
+            order), because a list rejects or mis-maps a file that lacks one of its columns. Each value is the exact string the upload sends.
+            </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate.ParseCsv(System.String)">
             <summary>RFC 4180 CSV: quoted fields, doubled quotes, embedded commas and newlines.</summary>
@@ -2635,6 +2849,87 @@
             It is an internal staff file, not the contact-list template: names differ and Stage values are not ReminderType labels.
             </summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportService">
+            <summary>
+            "Export for Genesys": a file a person can import into a Genesys outbound contact list by hand, for the customers of a Manual selection. It is the same list the page showed:
+            <list type="bullet">
+            <item>The customers and their amounts come from <see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)"/>, the code behind Preview and the approval: campaign, Tower, Payment status, Date range, Minimum Total and
+            the ticked customers (or all eligible) give exactly the customers and the filtered amounts that were shown. Held-back customers (reconciliation, contact, shared phone, legal, already sent, contacted
+            today) are never exported.</item>
+            <item>Each row is built by <see cref="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ToPayload(TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem,System.String,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions)"/>, the code that builds the upload, and written with <see cref="T:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate"/>: the six columns Phone, CustomerName,
+            Email Address, ReminderType, AmountDue, DueDate, with an E.164 phone, an amount with two decimals and a yyyy-MM-dd date. Nothing else about a customer is in the file.</item>
+            <item>The columns come from the chosen list as it really is: when the Genesys integration is configured its columns are read (read only) and the export is refused if one of the six is missing or
+            misnamed; extra columns of the list are kept, empty. Without the integration the documented template is used and the result says it was not verified.</item>
+            <item>It is read only. It uploads nothing, queues nothing and does not mark anyone as sent: a file is no proof that Genesys received anything, so the send protections (already sent, contacted today,
+            idempotency) are neither used nor weakened here. Each export is written to the audit trail (who, when, campaign, list, count, total, the filter, a hash of the file and a one-way fingerprint of
+            each customer's unit, never a customer's data) before the file is released.</item>
+            <item>Because an export is not recorded as a send, the audit fingerprints are how a repeat is noticed: when any customer was exported within <c>ExportRepeatLookbackDays</c> the file is held
+            (<see cref="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.RepeatExport"/>) until the person confirms the repeat, and the confirmed repeat is audited as such.</item>
+            <item>When the list's columns could not be checked in Genesys the file is labelled "Template not verified against Genesys" (name and notices), never presented as verified.</item>
+            </list>
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.#ctor(TigerCS.Application.Modules.Collections.CollectionsOptions,TigerCS.Application.Modules.Collections.PactReceivablesOptions,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions,TigerCS.Application.Modules.Collections.Services.CollectionsAuthorizationService,TigerCS.Application.Modules.Collections.Services.CollectionsClock,TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.IGenesysOutboundClient,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Modules.Collections.Abstractions.ICollectionsUnitOfWork,TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions,TigerCS.Application.Modules.Collections.Review.IGenesysExportHistory,TigerCS.Application.Modules.Collections.Review.IGenesysExportLock,Microsoft.Extensions.Logging.ILogger{TigerCS.Application.Modules.Collections.Review.GenesysExportService})">
+            <summary>
+            "Export for Genesys": a file a person can import into a Genesys outbound contact list by hand, for the customers of a Manual selection. It is the same list the page showed:
+            <list type="bullet">
+            <item>The customers and their amounts come from <see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)"/>, the code behind Preview and the approval: campaign, Tower, Payment status, Date range, Minimum Total and
+            the ticked customers (or all eligible) give exactly the customers and the filtered amounts that were shown. Held-back customers (reconciliation, contact, shared phone, legal, already sent, contacted
+            today) are never exported.</item>
+            <item>Each row is built by <see cref="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ToPayload(TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem,System.String,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions)"/>, the code that builds the upload, and written with <see cref="T:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate"/>: the six columns Phone, CustomerName,
+            Email Address, ReminderType, AmountDue, DueDate, with an E.164 phone, an amount with two decimals and a yyyy-MM-dd date. Nothing else about a customer is in the file.</item>
+            <item>The columns come from the chosen list as it really is: when the Genesys integration is configured its columns are read (read only) and the export is refused if one of the six is missing or
+            misnamed; extra columns of the list are kept, empty. Without the integration the documented template is used and the result says it was not verified.</item>
+            <item>It is read only. It uploads nothing, queues nothing and does not mark anyone as sent: a file is no proof that Genesys received anything, so the send protections (already sent, contacted today,
+            idempotency) are neither used nor weakened here. Each export is written to the audit trail (who, when, campaign, list, count, total, the filter, a hash of the file and a one-way fingerprint of
+            each customer's unit, never a customer's data) before the file is released.</item>
+            <item>Because an export is not recorded as a send, the audit fingerprints are how a repeat is noticed: when any customer was exported within <c>ExportRepeatLookbackDays</c> the file is held
+            (<see cref="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.RepeatExport"/>) until the person confirms the repeat, and the confirmed repeat is audited as such.</item>
+            <item>When the list's columns could not be checked in Genesys the file is labelled "Template not verified against Genesys" (name and notices), never presented as verified.</item>
+            </list>
+            </summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportLockWait">
+            <summary>How long an export waits for the export lock while another export is recording its audit entry, before it stops.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysExportService.NotVerifiedLabel">
+            <summary>The label of a file whose contact-list columns were not read from Genesys.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysExportService.MaxHistoryEntries">
+            <summary>
+            The most earlier exports read for the repeat check. A window that holds this many cannot be checked in full, so the export stops rather than guessing that a customer is new.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Fingerprint(System.String)">
+            <summary>
+            A one-way fingerprint of a customer's unit (company, tenant, unit): the same customer is recognised in every campaign type and month, and no customer data is kept.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.PhoneFingerprint(System.String)">
+            <summary>The same one-way fingerprint for a phone number: the number that is dialled, whichever unit it was written against.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken,System.Boolean,System.Nullable{System.Int32})">
+            <param name="caller">Who exports; needs the send right.</param>
+            <param name="request">The Manual selection: campaign, filters, contact list and the ticked customers (or all eligible).</param>
+            <param name="ct">Cancellation.</param>
+            <param name="confirmRepeat">The person has seen that some customers were already exported and wants the file anyway.</param>
+            <param name="expectedRepeats">How many repeated customers the person was shown with that confirmation. If the count is different now (a repeat appeared after the warning), the file is not made.</param>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportedCustomer">
+            <summary>One record of the selection as the repeat check sees it: the fingerprint of its unit and of its number (when it has one).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportedCustomer.#ctor(System.String,System.String)">
+            <summary>One record of the selection as the repeat check sees it: the fingerprint of its unit and of its number (when it has one).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.FindRepeatAsync(System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportedCustomer},System.Threading.CancellationToken)">
+            <summary>How many of these customers appear in an earlier export within the look-back, how many earlier exports that is, and the latest of them.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ReadSchemaAsync(System.String,System.String,System.Threading.CancellationToken)">
+            <summary>
+            The columns of the chosen list. With the Genesys integration configured they are read from Genesys (read only) and must fit the template; a list that cannot be read or does not fit refuses the
+            export. Without the integration the documented template is used and the result says it was not verified.
+            </summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewRecordView">
             <summary>A stored record together with its live "already dispatched" fact (looked up, never copied).</summary>
         </member>
@@ -2643,6 +2938,25 @@
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewRecordView.EffectiveStatus(System.Boolean)">
             <summary>Stored status, adjusted for a stale run and for a previous dispatch.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.UploadedContactView">
+            <param name="Item">The uploaded dispatch item.</param>
+            <param name="ContactListId">The Genesys contact list it was uploaded to.</param>
+            <param name="FilterJson">The filter the dispatch was approved with (a Direct Send item is checked against its own filter).</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.UploadedContactView.#ctor(TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem,System.String,System.String)">
+            <param name="Item">The uploaded dispatch item.</param>
+            <param name="ContactListId">The Genesys contact list it was uploaded to.</param>
+            <param name="FilterJson">The filter the dispatch was approved with (a Direct Send item is checked against its own filter).</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.UploadedContactView.Item">
+            <summary>The uploaded dispatch item.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.UploadedContactView.ContactListId">
+            <summary>The Genesys contact list it was uploaded to.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.UploadedContactView.FilterJson">
+            <summary>The filter the dispatch was approved with (a Direct Send item is checked against its own filter).</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.IReviewStore">
             <summary>Persistence port of the review and dispatch workflow. Implemented over EF Core; every filter, count and page runs in the database.</summary>
@@ -2698,6 +3012,39 @@
         <member name="P:TigerCS.Application.Modules.Collections.Review.IReviewJobScheduler.IsAvailable">
             <summary>False when nothing will ever execute an enqueued job (background jobs switched off): a run must then fail visibly instead of waiting in Queued.</summary>
         </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.IReviewJobScheduler.CanRunRefresh">
+            <summary>
+            Whether a refresh of the review data can run. It can whenever background jobs run, and also when they are switched off but the refresh runs inside this process
+            (<see cref="P:TigerCS.Application.Modules.Collections.Review.IReviewJobScheduler.RefreshRunsInProcess"/>): a refresh is an explicit, authorized request, unlike a dispatch or the suppression sweep, which still need real background jobs.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.IReviewJobScheduler.RefreshRunsInProcess">
+            <summary>True when a refresh is started by a person while background jobs are off: it runs on a single bounded worker in this process (one at a time, with a cooldown) and never recurs.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.IReviewRefreshRunner">
+            <summary>Runs the body of one review refresh. Implemented by <see cref="T:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService"/>; the in-process scheduler resolves it in a fresh scope.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportAuditRecord">
+            <summary>One earlier file export as the audit trail holds it: when, and the audit text (counts, filter, hash and customer fingerprints; never a customer's data).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportAuditRecord.#ctor(System.DateTime,System.Nullable{System.Guid},System.String)">
+            <summary>One earlier file export as the audit trail holds it: when, and the audit text (counts, filter, hash and customer fingerprints; never a customer's data).</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.IGenesysExportHistory">
+            <summary>Read access to the audit entries of earlier file exports, so a repeat export of the same customers can be noticed before another file is made. Read only.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.IGenesysExportHistory.ListExportsAsync(System.String,System.DateTime,System.Int32,System.Threading.CancellationToken)">
+            <summary>The audit entries written by <paramref name="action"/> since <paramref name="sinceUtc"/>, newest first, at most <paramref name="take"/>.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.IGenesysExportLock">
+            <summary>
+            One file export at a time across the application: the repeat check and its audit entry run inside the lock, so two simultaneous exports cannot both miss each other's entry. The lock is
+            held only for that step, not while the file is built.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.IGenesysExportLock.TryAcquireAsync(System.TimeSpan,System.Threading.CancellationToken)">
+            <summary>Waits up to <paramref name="wait"/> for the lock; disposing the handle releases it. Null when another export is still recording its audit entry.</summary>
+        </member>
         <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysUploadOutcome.Accepted">
             <summary>Genesys accepted the batch; contact ids were returned.</summary>
         </member>
@@ -2748,6 +3095,18 @@
         <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysCampaignLookupResult.#ctor(TigerCS.Application.Modules.Collections.Review.GenesysUploadOutcome,System.Nullable{System.Int32},System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.GenesysCampaignRef},System.String)">
             <summary>Every campaign Genesys returned for the name filter in <c>Matches</c>; callers still compare names exactly.</summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysContactListInfo">
+            <summary>A Genesys contact list as far as this integration cares: the names of its columns (data columns and phone columns).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysContactListInfo.#ctor(TigerCS.Application.Modules.Collections.Review.GenesysUploadOutcome,System.Nullable{System.Int32},System.Collections.Generic.IReadOnlyList{System.String},System.String)">
+            <summary>A Genesys contact list as far as this integration cares: the names of its columns (data columns and phone columns).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.IGenesysOutboundClient.GetContactListAsync(System.String,System.Threading.CancellationToken)">
+            <summary>GET /api/v2/outbound/contactlists/{contactListId} (read only): the list's column names, to check that an upload will fit it.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.IGenesysOutboundClient.FindCampaignsByContactListAsync(System.String,System.Threading.CancellationToken)">
+            <summary>GET /api/v2/outbound/campaigns filtered to those that dial <paramref name="contactListId"/> (read only), with their status.</summary>
+        </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.IGenesysOutboundClient.FindCampaignsByNameAsync(System.String,System.Threading.CancellationToken)">
             <summary>GET /api/v2/outbound/campaigns?name=... (read only: an Unknown outcome changed nothing).</summary>
         </member>
@@ -2763,10 +3122,49 @@
         <member name="M:TigerCS.Application.Modules.Collections.Review.IGenesysOutboundClient.UploadContactsAsync(System.String,System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.GenesysContactPayload},System.Threading.CancellationToken)">
             <summary>POST /api/v2/outbound/contactlists/{contactListId}/contacts for exactly one list and at most 1,000 contacts.</summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.ManualFilters">
+            <summary>
+            Turns the Manual filter (Payment status, From / To, Minimum Total) into the criteria of <see cref="T:TigerCS.Domain.Modules.Collections.Review.FilteredAmounts"/>. The same criteria are used to list, approve, revalidate before
+            the upload and run the paid-after-upload check, so the amount of a customer can never differ between them.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ManualFilters.Criteria(TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Nullable{System.Decimal})">
+            <param name="filter">The Direct Send filter.</param>
+            <param name="defaultMinimum">The minimum applied when the filter carries none (the review default); null = no minimum.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ManualFilters.FromStored(System.String)">
+            <summary>
+            The criteria a MANUAL dispatch was approved with (its stored filter). Null for any other dispatch (Auto sends the stage amount). A Manual filter that cannot be read is also null, and the
+            stage amount then differs from the filtered amount that was quoted, so nothing unverifiable is sent and an uploaded contact is suppressed.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ManualFilters.StoredContactList(System.String)">
+            <summary>The contact list a Manual approval chose (a campaign type name), read from its stored filter; null when none was chosen (the campaign type's own list) or the filter is unreadable.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ManualFilters.CurrentAmount(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord,TigerCS.Domain.Modules.Collections.Review.AmountCriteria,System.DateOnly)">
+            <summary>The amount and earliest due date a Direct Send item is worth NOW: calculated from the customer's current instalments with the approval's own filter.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.ManualReviewExportService">
+            <summary>
+            The Manual "Export review CSV": a file for people to review the Manual list, not a file for Genesys. It holds every customer of the filtered list, held-back ones included, with the amount
+            calculated from the same filters as the page (<see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.QueryAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Int32,System.Int32,System.Threading.CancellationToken)"/>, the code behind the table), the status and the exact reasons. It reads the stored review data, uploads
+            nothing and changes nothing; like the Auto review export it needs the send right, and each export is written to the audit trail (counts, filter and file hash, never a customer's data).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ManualReviewExportService.#ctor(TigerCS.Application.Modules.Collections.CollectionsOptions,TigerCS.Application.Modules.Collections.PactReceivablesOptions,TigerCS.Application.Modules.Collections.Services.CollectionsAuthorizationService,TigerCS.Application.Modules.Collections.Services.CollectionsClock,TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Modules.Collections.Abstractions.ICollectionsUnitOfWork,Microsoft.Extensions.Logging.ILogger{TigerCS.Application.Modules.Collections.Review.ManualReviewExportService})">
+            <summary>
+            The Manual "Export review CSV": a file for people to review the Manual list, not a file for Genesys. It holds every customer of the filtered list, held-back ones included, with the amount
+            calculated from the same filters as the page (<see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.QueryAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Int32,System.Int32,System.Threading.CancellationToken)"/>, the code behind the table), the status and the exact reasons. It reads the stored review data, uploads
+            nothing and changes nothing; like the Auto review export it needs the send right, and each export is written to the audit trail (counts, filter and file hash, never a customer's data).
+            </summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.ManualReviewExportService.MaxRows">
+            <summary>The most rows one review file holds; a longer list must be narrowed with the filters.</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewFilter">
             <summary>The review filters as sent by the API. Everything optional; blank means "no restriction".</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewFilter.#ctor(System.Nullable{System.Int32},System.String,System.String,System.String,System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.String,System.Nullable{System.Decimal},System.Nullable{System.Decimal},System.String,System.String,System.String,System.String,System.Nullable{System.Int32},System.Collections.Generic.IReadOnlyList{System.Int32},System.String,System.Nullable{System.DateOnly})">
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewFilter.#ctor(System.Nullable{System.Int32},System.String,System.String,System.String,System.Nullable{System.Int32},System.Nullable{System.Int32},System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.String,System.Nullable{System.Decimal},System.Nullable{System.Decimal},System.String,System.String,System.String,System.String,System.Nullable{System.Int32},System.Collections.Generic.IReadOnlyList{System.Int32},System.String,System.String)">
             <summary>The review filters as sent by the API. Everything optional; blank means "no restriction".</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec">
@@ -2774,10 +3172,16 @@
             The normalized, validated filter the store understands. <see cref="P:TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec.PaymentStatuses"/> is null for "All".
             </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec.#ctor(System.Nullable{System.Int32},System.String,System.String,System.String,System.String,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Collections.Generic.IReadOnlyList{TigerCS.Domain.Modules.Collections.Review.ReviewPaymentStatus},System.Nullable{System.Decimal},System.Nullable{System.Decimal},System.Nullable{TigerCS.Domain.Modules.Collections.Review.CampaignReminderType},System.Nullable{TigerCS.Domain.Modules.Collections.Review.ReviewValidationStatus},System.String,System.Nullable{System.Int32},System.Collections.Generic.IReadOnlyList{System.Int32})">
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec.#ctor(System.Nullable{System.Int32},System.String,System.String,System.String,System.String,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Collections.Generic.IReadOnlyList{TigerCS.Domain.Modules.Collections.Review.ReviewPaymentStatus},System.Nullable{System.Decimal},System.Nullable{System.Decimal},System.Nullable{TigerCS.Domain.Modules.Collections.Review.CampaignReminderType},System.Nullable{TigerCS.Domain.Modules.Collections.Review.ReviewValidationStatus},System.String,System.Nullable{System.Int32},System.Collections.Generic.IReadOnlyList{System.Int32},System.Nullable{System.DateTime})">
             <summary>
             The normalized, validated filter the store understands. <see cref="P:TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec.PaymentStatuses"/> is null for "All".
             </summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.ManualListDto">
+            <summary>Every row of one Manual list in the page's order, from one calculation (see <c>ReviewQueryService.ManualListAsync</c>): for a file that holds the whole list.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ManualListDto.#ctor(TigerCS.Application.Modules.Collections.Review.ReviewRunDto,System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.ReviewRecordDto})">
+            <summary>Every row of one Manual list in the page's order, from one calculation (see <c>ReviewQueryService.ManualListAsync</c>): for a file that holds the whole list.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.OverlapGroupDto">
             <summary>One phone number that would receive several calls: the customers and units behind it, and why it is held back.</summary>
@@ -2788,13 +3192,41 @@
         <member name="T:TigerCS.Application.Modules.Collections.Review.DispatchReadinessDto">
             <summary>
             Whether this environment is configured to send an approved list to Genesys, and if not exactly which settings are missing. Names settings only; never a secret, id or customer data.
+            <c>CanSend</c> is whether the caller holds the send permission, so a reader is told why Send is unavailable before trying it.
             A configuration problem here is a hard stop: it is shown before the person approves anything, and confirmation refuses again.
             </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Review.DispatchReadinessDto.#ctor(System.Boolean,System.Collections.Generic.IReadOnlyList{System.String})">
+        <member name="M:TigerCS.Application.Modules.Collections.Review.DispatchReadinessDto.#ctor(System.Boolean,System.Collections.Generic.IReadOnlyList{System.String},System.Boolean)">
             <summary>
             Whether this environment is configured to send an approved list to Genesys, and if not exactly which settings are missing. Names settings only; never a secret, id or customer data.
+            <c>CanSend</c> is whether the caller holds the send permission, so a reader is told why Send is unavailable before trying it.
             A configuration problem here is a hard stop: it is shown before the person approves anything, and confirmation refuses again.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportDto">
+            <summary>
+            The "Export for Genesys" file: customers of a Manual selection in the format of the Genesys contact list they would be imported into. <c>Columns</c> is the file's header exactly. <c>SchemaVerified</c> is
+            true when that list's real columns were read from Genesys and fit; false when the Genesys integration is not configured, so the documented six-column template was used: the file is then labelled
+            "Template not verified against Genesys" (in <c>Notices</c> and in the file name). <c>RepeatedCustomers</c> is how many of the customers had already been exported (0 = none), confirmed by the person;
+            <c>LastExportedAtUtc</c> is the latest earlier export of any of them.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportDto.#ctor(System.String,System.String,System.Int32,System.String,System.String,System.String,System.Decimal,System.String,System.Collections.Generic.IReadOnlyList{System.String},System.Boolean,System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Int32,System.Nullable{System.DateTime})">
+            <summary>
+            The "Export for Genesys" file: customers of a Manual selection in the format of the Genesys contact list they would be imported into. <c>Columns</c> is the file's header exactly. <c>SchemaVerified</c> is
+            true when that list's real columns were read from Genesys and fit; false when the Genesys integration is not configured, so the documented six-column template was used: the file is then labelled
+            "Template not verified against Genesys" (in <c>Notices</c> and in the file name). <c>RepeatedCustomers</c> is how many of the customers had already been exported (0 = none), confirmed by the person;
+            <c>LastExportedAtUtc</c> is the latest earlier export of any of them.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewExportDto">
+            <summary>
+            The Manual "Export review CSV": every customer of the filtered Manual list with the status and the exact reason a held-back customer cannot be sent, for people to review (not for Genesys).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewExportDto.#ctor(System.String,System.String,System.Int32,System.Int32,System.String)">
+            <summary>
+            The Manual "Export review CSV": every customer of the filtered Manual list with the status and the exact reason a held-back customer cannot be sent, for people to review (not for Genesys).
             </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions">
@@ -2827,8 +3259,25 @@
         <member name="P:TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions.FloatNoiseTolerance">
             <summary>Floating-point noise tolerance in AED when normalizing a floating source value to fils.</summary>
         </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions.InProcessRefreshCooldownSeconds">
+            <summary>
+            With background jobs off, a refresh a person starts runs inside the API process. To keep a double click, or several users, from reading the financial source over and over, a refresh is
+            not started again within this many seconds of the last published one for today (the page says when it can be repeated). 0 turns the cooldown off. Applies only to in-process refreshes.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions.ExportRepeatLookbackDays">
+            <summary>
+            A file export (Export for Genesys) does not mark anyone as sent. To keep the same customers from being exported over and over unnoticed, an export that contains customers exported within this many
+            days is held until the person confirms it (the page says who was exported when). The default is 30 days. A customer last exported further back than this is not warned about. 0 turns the check off. 1-365.
+            </summary>
+        </member>
         <member name="P:TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions.RunsToKeep">
             <summary>Review records of runs older than the newest N completed runs are deleted.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions.ManualListCapacity">
+            <summary>
+            The most customers one Manual list can hold. A list that needs more than one pass to read is refused, never cut short: a silently partial list would under-report and under-count.
+            </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions">
             <summary>
@@ -2866,6 +3315,12 @@
         </member>
         <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions.ReminderTypeLabels">
             <summary>Optional override of the ReminderType text written to Genesys; unset types use <see cref="M:TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.DefaultLabel(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType)"/>.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions.ManualContactListIdFor(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType,System.String)">
+            <summary>
+            The Genesys contact list id a Manual send of <paramref name="type"/> uploads to, from the existing <see cref="P:TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions.ContactListIds"/>: the campaign type's own list, or the one the person chose
+            among the lists that suit the type (<see cref="M:TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualDestinations(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType)"/>). Throws <see cref="T:System.InvalidOperationException"/> with the reason otherwise.
+            </summary>
         </member>
         <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions.Campaign">
             <summary>Campaign lookup/creation (<c>Collections:GenesysOutbound:Campaign</c>). Off by default: contacts are then uploaded to the lists exactly as before.</summary>
@@ -2913,6 +3368,9 @@
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.UnitKey(System.Int32,System.String,System.String)">
             <summary>The identity of a Campaigns row: company, tenant and unit code.</summary>
         </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualCriteria(TigerCS.Application.Modules.Collections.Review.ReviewFilter)">
+            <summary>The Manual amount criteria of a filter (the review default minimum applies when none was given).</summary>
+        </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.OverlapsAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,System.Int32,System.Int32,System.Threading.CancellationToken)">
             <summary>Phone numbers that would be called repeatedly (several units, or several reminder types for one unit): who, how many units, and why they are held back.</summary>
         </member>
@@ -2927,27 +3385,73 @@
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualProblem(TigerCS.Application.Modules.Collections.Review.ReviewFilter,TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec,TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun)">
             <summary>
-            Manual mode only: why the selection cannot be sent now (null = it can, or it is Auto). Manual sending needs one campaign stage and today as the send date, and is only possible from
-            review data built today. Nothing about a future or past date is stored or queued: that list simply cannot be approved until its day.
+            Manual mode only: why the selection cannot be sent (null = it can, or it is Auto). Manual sending needs one campaign type (any existing one, at any time: there is no send date and no stage
+            schedule), a contact list that suits that type, and review data built today (the repeated-call checks are evaluated for the day the data was built). Whether each CUSTOMER may be sent is
+            decided by the stored record: reconciliation, contact, identity, shared phone, legal release, duplicates and the contact-frequency limit all stay in force.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualCoverageProblem(TigerCS.Application.Modules.Collections.Review.ReviewFilter,TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun)">
+            <summary>
+            A Manual amount is calculated from the instalments the approval data stores, which start at the configured PACT start date (the run's <c>DueFrom</c>). A From date before that cannot be
+            calculated from the stored data, so it is refused: an amount that quietly left out earlier instalments would be understated (null = the filter is covered).
+            </summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualCalc">
+            <summary>The customers of a Manual calculation, or why the list cannot be calculated in one pass (<see cref="P:TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions.ManualListCapacity"/>).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualCalc.#ctor(System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.ReviewRecordView},System.String)">
+            <summary>The customers of a Manual calculation, or why the list cannot be calculated in one pass (<see cref="P:TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions.ManualListCapacity"/>).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualCalculatedAsync(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun,TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Collections.Generic.IReadOnlyCollection{System.String},System.Boolean,System.Threading.CancellationToken)">
+            <summary>
+            The customers of a Manual filter, each with the amount CALCULATED from its unpaid instalments and the person's Payment status, From / To and Minimum Total
+            (<see cref="T:TigerCS.Domain.Modules.Collections.Review.FilteredAmounts"/>), never the stage amount. A customer with nothing qualifying under those filters (zero, or not above the minimum) is not a candidate at all. The record's
+            own status (reconciliation, contact, identity, shared phone, legal release, duplicates, frequency) is untouched. The returned records are detached copies of the stored ones carrying the
+            calculated amount and the earliest qualifying due date: what the list shows, the approval freezes, the upload quotes and the confirmation totals.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualStatus(TigerCS.Application.Modules.Collections.Review.ReviewRecordView,System.Boolean)">
+            <summary>The status a Manual list shows: a record held back by the stage schedule alone is Ready (the schedule is the one rule Manual waives); everything else is what it is.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualShown(System.Collections.Generic.IEnumerable{TigerCS.Application.Modules.Collections.Review.ReviewRecordView},System.Nullable{TigerCS.Domain.Modules.Collections.Review.ReviewValidationStatus},System.Boolean)">
+            <summary>The rows of a Manual list in the order the page shows them (company, tenant, unit, record key), optionally only those with one status.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualListAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Threading.CancellationToken)">
+            <summary>
+            Every row of a Manual list in the page's order, from ONE calculation. A file that holds the whole list uses this: paging through <see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.QueryAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Int32,System.Int32,System.Threading.CancellationToken)"/> would recalculate the whole
+            run once per page.
             </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveReadyAsync(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun,TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Collections.Generic.IReadOnlyCollection{System.String},System.Boolean,System.Int32,System.Threading.CancellationToken)">
-            <summary>Ready records of the selection and, in Manual mode, the Excluded ones that are only outside the schedule (checked again by <see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.IsManualReady(TigerCS.Application.Modules.Collections.Review.ReviewRecordView,System.Boolean,TigerCS.Application.Modules.Collections.Review.ReviewFilter)"/>).</summary>
+            <summary>Ready records of the selection. In Manual mode these are the customers the person may send now (see <see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualCalculatedAsync(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun,TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Collections.Generic.IReadOnlyCollection{System.String},System.Boolean,System.Threading.CancellationToken)"/>): schedule waived, amount from the filters.</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.IsManualReady(TigerCS.Application.Modules.Collections.Review.ReviewRecordView,System.Boolean,TigerCS.Application.Modules.Collections.Review.ReviewFilter)">
-            <summary>
-            A record that the schedule alone keeps out and that Manual mode may send today. Every other check stays in force: it must be Excluded for exactly one reason (OutsideSchedule, so no
-            reconciliation, contact, CRM, amount, legal-release or repeated-call reason, including the Manual markers), of the chosen stage, in current data, and not already sent.
-            </summary>
-        </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ContactLists(System.Collections.Generic.IReadOnlyList{TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord})">
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ContactLists(System.Collections.Generic.IReadOnlyList{TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord},TigerCS.Application.Modules.Collections.Review.ReviewFilter)">
             <summary>The Genesys contact list each reminder type of the selection will be uploaded to (an unconfigured list is shown as such; confirming is then refused).</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.IsStale(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun)">
             <summary>A review run is built from the local receivables snapshot, so it is stale when that snapshot is: the snapshot's own limit (<see cref="P:TigerCS.Application.Modules.Collections.ReceivablesSnapshotOptions.MaxAgeMinutes"/>) applies.</summary>
         </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ToDto(TigerCS.Application.Modules.Collections.Review.ReviewRecordView,System.Boolean,System.Boolean)">
+            <param name="v">The stored record with its sent / history facts.</param>
+            <param name="stale">Whether the review run is older than the freshness window.</param>
+            <param name="manual">A Manual list: the stage schedule is waived, so a record held back by it alone is shown as Ready and the schedule is not given as a reason.</param>
+        </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.TowerSet(TigerCS.Application.Modules.Collections.Review.ReviewFilter)">
             <summary>The distinct tower ids of a filter (the single id and the list together); empty = All projects.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewBuildContext">
+            <summary>
+            What one build of review records knows about its run. <c>PolicyStart</c> is the first due date the stage policy looks at (the configured PACT start date), the same as the Campaigns
+            preview's eligibility scope: instalments due before it never make a unit a candidate or change a stage amount, but they ARE kept in the unit's stored instalments, so a Manual amount, a
+            Due / Overdue figure and the Minimum Total see the customer's whole history exactly as the preview does. A null <c>PolicyStart</c> puts every instalment read in the policy scope.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewBuildContext.#ctor(System.DateOnly,System.DateTime,System.String,System.String,System.Boolean,System.Boolean,System.Boolean,System.Decimal,System.Collections.Generic.IReadOnlyDictionary{System.String,System.String},TigerCS.Application.Modules.Collections.Services.CrmLinkSet,System.Nullable{System.DateOnly})">
+            <summary>
+            What one build of review records knows about its run. <c>PolicyStart</c> is the first due date the stage policy looks at (the configured PACT start date), the same as the Campaigns
+            preview's eligibility scope: instalments due before it never make a unit a candidate or change a stage amount, but they ARE kept in the unit's stored instalments, so a Manual amount, a
+            Due / Overdue figure and the Minimum Total see the customer's whole history exactly as the preview does. A null <c>PolicyStart</c> puts every instalment read in the policy scope.
+            </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewRecordBuilder">
             <summary>
@@ -2973,6 +3477,13 @@
             outside-schedule records of the SAME reminder type, so manual sending never skips the duplicate-call protection that scheduled records get.
             </summary>
         </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewRecordBuilder.IsManuallySendable(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord)">
+            <summary>
+            Whether a Manual send may send this record now: Ready, or held back by the stage schedule ALONE (<c>OutsideSchedule</c> as its only reason, so no reconciliation, contact, CRM, amount,
+            legal-release, repeated-call or Manual marker reason). The schedule is the one rule Manual waives; every other rule keeps the record out. Used by the approval, the list and the
+            revalidation right before the upload, so they can never disagree.
+            </summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService">
             <summary>
             The explicit "refresh review data" job: one read of the financial source, validation of every record, and storage.
@@ -2993,8 +3504,29 @@
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService.SourceGate">
             <summary>The one gate definition (sign-off, procedure, recent automated reconciliation) shared with the Campaigns preview.</summary>
         </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService.ReadMinimumAmount">
+            <summary>
+            The per-instalment minimum of every source read of the review pipeline (the refresh and the revalidation before an upload): none. The Campaigns preview reads the same way, so the three
+            read the same instalments and calculate the same amounts; a minimum is applied to a customer's total, never to single instalments.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService.PolicyStart">
+            <summary>The first due date the stage policy looks at: the configured PACT start date, the Campaigns preview's eligibility scope.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService.ReadStart">
+            <summary>
+            The first due date the review pipeline READS: the whole history, like the Campaigns preview's default period, so a customer's Due / Overdue figures, Minimum Total and Manual amount
+            see the same instalments in both modes. Which instalments make a unit a candidate is still decided from <see cref="P:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService.PolicyStart"/> on.
+            </summary>
+        </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService.ReadCrmAsync(System.Collections.Generic.IEnumerable{TigerCS.Application.Modules.Collections.Abstractions.PactReceivableInstalment},System.Threading.CancellationToken)">
             <summary>The CRM links of every unit of a source read (ONE bulk read), with the state of the CRM data; empty when no link service is configured.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService.StartScheduledAsync(System.Threading.CancellationToken)">
+            <summary>
+            The refresh the Auto dispatcher starts on a scheduled date (no person is involved). It only queues a run record; the dispatcher then runs it in its own job (<paramref name="ct"/>), so nothing is
+            enqueued twice.
+            </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewRefreshService.IsDatabaseFailure(System.Exception)">
             <summary>
@@ -3097,7 +3629,7 @@
             (not the preview date), and the dates only choose which instalments are read ([From, To], To never past the end of the current month). A combination that cannot match anything says so.
             </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Services.CollectionsCampaignAppService.Compose(System.Int32,System.Boolean,System.Boolean,System.Boolean,TigerCS.Domain.Modules.Collections.CollectionsCampaignStage,System.DateOnly,System.Collections.Generic.IReadOnlyList{System.DateOnly},System.Boolean)">
+        <member name="M:TigerCS.Application.Modules.Collections.Services.CollectionsCampaignAppService.Compose(System.Int32,System.Boolean,System.Boolean,System.Boolean,TigerCS.Domain.Modules.Collections.CollectionsCampaignStage,System.DateOnly,System.Collections.Generic.IReadOnlyList{System.DateOnly})">
             <summary>Review reasons and status of a candidate from its unit-level flags and the global (source / schedule / release) gates. Order is part of the contract.</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Services.CollectionsCampaignAppService.BuildFactsInMemory(System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Abstractions.PactReceivableInstalment},System.DateOnly,System.DateOnly,System.Decimal,TigerCS.Domain.Modules.Collections.CollectionsCampaignStage,System.DateOnly,System.String,System.String,System.Nullable{System.Int32},System.Nullable{System.DateOnly},System.Nullable{System.Decimal},System.Collections.Generic.IReadOnlyDictionary{System.ValueTuple{System.Int32,System.String},TigerCS.Application.Modules.Collections.Abstractions.CrmUnitLink},System.Nullable{System.DateOnly},System.Boolean,TigerCS.Domain.Modules.Collections.CampaignPaymentFilter)">
@@ -3151,6 +3683,9 @@
         <member name="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.DuplicateDispatch">
             <summary>A record is already part of a pending or sent dispatch, or the same key was used for a different list (409).</summary>
         </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.RepeatExport">
+            <summary>The file contains customers who were already exported; it is made only when the person confirms the repeat (409).</summary>
+        </member>
         <member name="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.Conflict">
             <summary>The request conflicts with the current state (for example a reconciliation is already running) - 409.</summary>
         </member>
@@ -3177,6 +3712,9 @@
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Services.CollectionsClock.#ctor(TigerCS.Application.Modules.Collections.CollectionsOptions,System.TimeProvider)">
             <summary>The Dubai business date, freshness and rule settings every Collections decision shares.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Services.CollectionsClock.BusinessDayStartUtc">
+            <summary>The start of today's Dubai business day, as a UTC instant (the beginning of the contact-frequency day).</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Services.CollectionsClock.ToBusinessDate(System.DateTime)">
             <summary>The Dubai calendar date of a UTC instant.</summary>
@@ -9822,6 +10360,97 @@
         <member name="P:TigerCS.Application.Modules.GenesysIntegration.GenesysOptions.CustomerInactivityTimeout">
             <summary>The configured timeout, or null when automatic closure is switched off.</summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions">
+            <summary>
+            Settings of the AI-only time-limit closure (<c>AiOnlyAutoClose</c> section). <b>Off by default in every environment</b>: the recurring job is
+            registered only where <see cref="P:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions.Enabled"/> is set to true, so shipping this code enables nothing in Production.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions.Enabled">
+            <summary>Whether the recurring job is registered at all. Default false.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions.ThresholdHours">
+            <summary>How long after creation (UTC) an AI-only ticket may stay open. Default 18; zero or negative falls back to the default.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions.BatchSize">
+            <summary>Candidates examined per batch (small, to keep CPU and database load low). Clamped to 1–200.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions.MaxBatchesPerRun">
+            <summary>Batches per run; the next run (15 minutes later) continues. Clamped to 1–20.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOutcome">
+            <summary>What one attempt to close a ticket for the AI-only time limit did.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOutcome.Closed">
+            <summary>Closed by this call.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOutcome.NotEligible">
+            <summary>Left alone: not old enough, already closed/not open, or a person is (or may be) involved. Nothing was written.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOutcome.LostRace">
+            <summary>Another writer changed the ticket at the same moment; this call changed nothing and the next run re-evaluates it.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyTicketAutoCloseAppService">
+             <summary>
+             Closes tickets that only the AI virtual agent ever handled and that have stayed open for more than
+             <see cref="P:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions.Threshold"/> (18 hours) since creation (<see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.CreatedAtUtc"/>, UTC).
+            
+             <para>
+             <b>"AI only" is judged from stored facts, never from display text.</b> It mirrors what the ticket page shows as
+             <c>Handled by = AI (virtual agent) — no human involved</c> (<see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketInteractionQueryAppService"/>: handling state <c>Ai</c>) and is
+             deliberately stricter wherever a person might be involved. ALL must hold, for every interaction of the ticket: it is a Genesys interaction
+             (a locally created one is a person's work); no <c>HandledByUserId</c>; no <c>RequiresHumanFollowUp</c>; no <c>HumanAgent</c> transcript line;
+             on the phone no Genesys agent. For the ticket: no owner, no recorded interaction handler, no handoff other than a cancelled / not-required
+             one (waiting, assigned, in progress and completed all mean a human was asked for or took it) and no internal note (written by people only).
+             </para>
+            
+             <para>
+             <b>Closure</b> goes through <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.CloseForAiOnlyTimeoutAsync(System.Guid,System.Int64,System.String,System.String,System.Threading.CancellationToken)"/>: the existing system Resolved → Closed path,
+             outcome Resolved (final status Closed, never Cancelled), reason <see cref="F:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyTicketAutoCloseAppService.ClosureReason"/>, status history and an <c>AutoCloseAiOnlyTimeout</c> audit entry, in one transaction.
+             No customer notification is enqueued. Conversation history, interactions and every other ticket field are untouched.
+             </para>
+            
+             <para>
+             <b>Safe to repeat.</b> Every fact is re-read at close time; a Closed ticket is never touched again (the lifecycle refuses it and writes
+             nothing), and the ticket's concurrency token makes an overlapping run or a late human action win over the job.
+             </para>
+             </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyTicketAutoCloseAppService.#ctor(TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionRepository,TigerCS.Application.Modules.GenesysIntegration.Abstractions.IGenesysConversationRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketInteractionHandlerRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketAgentHandoffRepository,TigerCS.Application.Modules.Ticketing.Abstractions.ITicketNoteRepository,TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService,System.TimeProvider)">
+             <summary>
+             Closes tickets that only the AI virtual agent ever handled and that have stayed open for more than
+             <see cref="P:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyAutoCloseOptions.Threshold"/> (18 hours) since creation (<see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.CreatedAtUtc"/>, UTC).
+            
+             <para>
+             <b>"AI only" is judged from stored facts, never from display text.</b> It mirrors what the ticket page shows as
+             <c>Handled by = AI (virtual agent) — no human involved</c> (<see cref="T:TigerCS.Application.Modules.Ticketing.Services.TicketInteractionQueryAppService"/>: handling state <c>Ai</c>) and is
+             deliberately stricter wherever a person might be involved. ALL must hold, for every interaction of the ticket: it is a Genesys interaction
+             (a locally created one is a person's work); no <c>HandledByUserId</c>; no <c>RequiresHumanFollowUp</c>; no <c>HumanAgent</c> transcript line;
+             on the phone no Genesys agent. For the ticket: no owner, no recorded interaction handler, no handoff other than a cancelled / not-required
+             one (waiting, assigned, in progress and completed all mean a human was asked for or took it) and no internal note (written by people only).
+             </para>
+            
+             <para>
+             <b>Closure</b> goes through <see cref="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.CloseForAiOnlyTimeoutAsync(System.Guid,System.Int64,System.String,System.String,System.Threading.CancellationToken)"/>: the existing system Resolved → Closed path,
+             outcome Resolved (final status Closed, never Cancelled), reason <see cref="F:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyTicketAutoCloseAppService.ClosureReason"/>, status history and an <c>AutoCloseAiOnlyTimeout</c> audit entry, in one transaction.
+             No customer notification is enqueued. Conversation history, interactions and every other ticket field are untouched.
+             </para>
+            
+             <para>
+             <b>Safe to repeat.</b> Every fact is re-read at close time; a Closed ticket is never touched again (the lifecycle refuses it and writes
+             nothing), and the ticket's concurrency token makes an overlapping run or a late human action win over the job.
+             </para>
+             </summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyTicketAutoCloseAppService.ClosureReason">
+            <summary>The exact closure reason recorded on the resolution, status history and audit entry.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyTicketAutoCloseAppService.ListCandidatesAsync(System.Int64,System.Threading.CancellationToken)">
+            <summary>Next batch of candidate ticket ids after <paramref name="afterTicketId"/> (0 to start). Candidates only — see <see cref="M:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyTicketAutoCloseAppService.TryCloseAsync(System.Int64,System.Threading.CancellationToken)"/>.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.GenesysIntegration.Services.AiOnlyTicketAutoCloseAppService.IsAiOnlyAsync(TigerCS.Domain.Modules.Ticketing.Ticket,System.Collections.Generic.IReadOnlyList{TigerCS.Domain.Modules.Ticketing.TicketInteraction},System.Threading.CancellationToken)">
+            <summary>The stored-fact definition of "handled by the AI alone" — see the class remarks.</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.GenesysIntegration.Services.ChatbotInactivityCloseOutcome">
             <summary>What one attempt to close an interaction's ticket for customer inactivity did.</summary>
         </member>
@@ -16294,15 +16923,15 @@
             <summary>An eligible Call Center CS Agent: also include the unassigned Genesys-originated tickets of the CS intake / classification queue (<c>TicketQueryFilters.GenesysIntake</c>).</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardCountRow`1">
-            <summary>One aggregated row: a dimension value (null key = the value is not recorded on the ticket, e.g. no originating channel, no request type, Unclassified priority) with its display label and count.</summary>
+            <summary>One aggregated row: a dimension value (null key = the value is not recorded on the ticket, e.g. no originating channel, no request type, Unclassified priority) with its display label and count. <paramref name="Code"/> is the stable master-data code where the dimension has one (channels), so the UI can pick a glyph without comparing names.</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardCountRow`1.#ctor(System.Nullable{`0},System.String,System.Int32)">
-            <summary>One aggregated row: a dimension value (null key = the value is not recorded on the ticket, e.g. no originating channel, no request type, Unclassified priority) with its display label and count.</summary>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardCountRow`1.#ctor(System.Nullable{`0},System.String,System.Int32,System.String)">
+            <summary>One aggregated row: a dimension value (null key = the value is not recorded on the ticket, e.g. no originating channel, no request type, Unclassified priority) with its display label and count. <paramref name="Code"/> is the stable master-data code where the dimension has one (channels), so the UI can pick a glyph without comparing names.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardRecentTicketRow">
             <summary>One Recent/Critical row — display facts resolved by joins in the same query, never per row afterwards.</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardRecentTicketRow.#ctor(System.Int64,System.String,System.String,System.String,System.String,System.Int32,System.String,System.Nullable{System.Int32},System.String,System.Nullable{System.Byte},TigerCS.Domain.Modules.Ticketing.TicketStatus,TigerCS.Domain.Modules.Ticketing.SlaState,System.Nullable{System.DateTime},System.Nullable{System.Guid},System.String,System.DateTime,System.String)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardRecentTicketRow.#ctor(System.Int64,System.String,System.String,System.String,System.String,System.Int32,System.String,System.Nullable{System.Int32},System.String,System.Nullable{System.Byte},TigerCS.Domain.Modules.Ticketing.TicketStatus,TigerCS.Domain.Modules.Ticketing.SlaState,System.Nullable{System.DateTime},System.Nullable{System.Guid},System.String,System.DateTime,System.String,System.Nullable{System.Byte},System.String,System.String,System.String)">
             <summary>One Recent/Critical row — display facts resolved by joins in the same query, never per row afterwards.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Abstractions.DashboardOverviewSnapshot">
@@ -16942,6 +17571,15 @@
             ever fabricated.
             </summary>
         </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository.ListAiOnlyAutoCloseCandidateIdsAsync(System.DateTime,System.Int64,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            Candidate ids for the AI-only time-limit closure, ascending, strictly after <paramref name="afterTicketId"/> (a keyset cursor, so a candidate
+            the service rejects is never re-listed within one run), at most <paramref name="batchSize"/>: tickets created before
+            <paramref name="createdBeforeUtc"/> (exclusive) that are still open for work (Open / In Progress / Pending Customer), owned by nobody and
+            recorded on Genesys. The implementation also drops what is plainly human work (a handler, a handoff, a human-follow-up flag); candidates
+            only — the closing service re-checks every fact before it writes.
+            </summary>
+        </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository.CountByTicketNumberPrefixAsync(System.String,System.Threading.CancellationToken)">
             <summary>
             Count of existing tickets whose TicketNumber already starts with
@@ -17114,6 +17752,9 @@
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Abstractions.TicketClosureAuditActions.ClosedForDocumentDelivery">
             <summary>Document-delivery workflow closure — a system closure, never attributed to the AI.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Ticketing.Abstractions.TicketClosureAuditActions.ClosedForAiOnlyTimeout">
+            <summary>AI-only time-limit closure (no human ever involved, open longer than the configured hours) — a system closure, never attributed to the AI's own completion.</summary>
         </member>
         <member name="F:TigerCS.Application.Modules.Ticketing.Abstractions.TicketClosureAuditActions.AllClosures">
             <summary>Every action that closes a ticket, so "the latest closure" considers all of them.</summary>
@@ -18897,13 +19538,15 @@
             <param name="Label">The display label — a real name from the master data, never a raw id.</param>
             <param name="Count">The count.</param>
             <param name="Percentage">Count as a percentage of the widget's total, rounded to one decimal; 0 when the total is 0.</param>
+            <param name="Code">The stable master-data code where the dimension has one (a channel's code), else null — lets the UI choose a glyph without comparing display names.</param>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Dto.DashboardBreakdownItemDto.#ctor(System.String,System.String,System.Int32,System.Double)">
+        <member name="M:TigerCS.Application.Modules.Ticketing.Dto.DashboardBreakdownItemDto.#ctor(System.String,System.String,System.Int32,System.Double,System.String)">
             <summary>One bar row of a breakdown widget.</summary>
             <param name="Key">The dimension value the drill-down filters on (a channel/request type/department/priority id, a status name, or an age bucket name); null when the value is not recorded on the ticket, in which case the row is informational and not a drill-down.</param>
             <param name="Label">The display label — a real name from the master data, never a raw id.</param>
             <param name="Count">The count.</param>
             <param name="Percentage">Count as a percentage of the widget's total, rounded to one decimal; 0 when the total is 0.</param>
+            <param name="Code">The stable master-data code where the dimension has one (a channel's code), else null — lets the UI choose a glyph without comparing display names.</param>
         </member>
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardBreakdownItemDto.Key">
             <summary>The dimension value the drill-down filters on (a channel/request type/department/priority id, a status name, or an age bucket name); null when the value is not recorded on the ticket, in which case the row is informational and not a drill-down.</summary>
@@ -18917,11 +19560,24 @@
         <member name="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardBreakdownItemDto.Percentage">
             <summary>Count as a percentage of the widget's total, rounded to one decimal; 0 when the total is 0.</summary>
         </member>
-        <member name="T:TigerCS.Application.Modules.Ticketing.Dto.DashboardRecentTicketDto">
-            <summary>One Recent/Critical row — compact operational facts only, never the ticket description.</summary>
+        <member name="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardBreakdownItemDto.Code">
+            <summary>The stable master-data code where the dimension has one (a channel's code), else null — lets the UI choose a glyph without comparing display names.</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Ticketing.Dto.DashboardRecentTicketDto.#ctor(System.Int64,System.String,System.String,System.String,System.String,System.Int32,System.String,System.Nullable{System.Int32},System.String,System.Nullable{System.Byte},System.String,System.String,System.Nullable{System.DateTime},System.Nullable{System.Guid},System.String,System.DateTime,System.String)">
-            <summary>One Recent/Critical row — compact operational facts only, never the ticket description.</summary>
+        <member name="T:TigerCS.Application.Modules.Ticketing.Dto.DashboardRecentTicketDto">
+            <summary>
+            One Recent/Critical row — compact operational facts only, never the ticket description.
+            <c>ChannelId/ChannelName/ChannelCode</c> are the channel of the ticket's originating interaction (null when none is recorded).
+            <c>LastActionByName</c> is who performed the most recent meaningful action on the ticket — a person's name, or "AI Assistant" for the
+            virtual agent — and null when no meaningful action is recorded (background/system activity never counts).
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Dto.DashboardRecentTicketDto.#ctor(System.Int64,System.String,System.String,System.String,System.String,System.Int32,System.String,System.Nullable{System.Int32},System.String,System.Nullable{System.Byte},System.String,System.String,System.Nullable{System.DateTime},System.Nullable{System.Guid},System.String,System.DateTime,System.String,System.Nullable{System.Byte},System.String,System.String,System.String)">
+            <summary>
+            One Recent/Critical row — compact operational facts only, never the ticket description.
+            <c>ChannelId/ChannelName/ChannelCode</c> are the channel of the ticket's originating interaction (null when none is recorded).
+            <c>LastActionByName</c> is who performed the most recent meaningful action on the ticket — a person's name, or "AI Assistant" for the
+            virtual agent — and null when no meaningful action is recorded (background/system activity never counts).
+            </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Ticketing.Dto.DashboardFilterOptionDto">
             <summary>A filter picker option. <see cref="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardFilterOptionDto.GroupId"/> is the owning department for request types; <see cref="P:TigerCS.Application.Modules.Ticketing.Dto.DashboardFilterOptionDto.IsActive"/> false marks a retired channel kept for historical filtering.</summary>
@@ -24048,6 +24704,14 @@
             failure <paramref name="reason"/> (only <c>TicketClosed</c> is sent — "resolved" would be false). The reason and the
             delivery <paramref name="detail"/> (document type, code, timestamp) are written to the status history and the audit entry.
             A ticket that is already Closed (or not closable) is a no-op: nothing is written twice.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.CloseForAiOnlyTimeoutAsync(System.Guid,System.Int64,System.String,System.String,System.Threading.CancellationToken)">
+            <summary>
+            Closes a ticket that only the AI virtual agent ever handled once it has stayed open past the AI-only time limit: the same system
+            Resolved → Closed closure as document delivery, outcome <see cref="F:TigerCS.Domain.Modules.Ticketing.ResolutionOutcome.Resolved"/> (the ticket ends Closed, not Cancelled) with the supplied
+            <paramref name="reason"/>, audit action <c>AutoCloseAiOnlyTimeout</c>. <b>The customer is not notified</b>: no lifecycle event reaches the Outbox.
+            A ticket already Closed, or one a person owns, is left exactly as it is (nothing written twice).
             </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Ticketing.Services.TicketLifecycleAppService.CloseForAiCompletionAsync(System.Guid,System.Int64,System.String,System.String,System.Action{System.DateTime},System.Threading.CancellationToken,System.Boolean)">

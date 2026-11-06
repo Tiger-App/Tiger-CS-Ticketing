@@ -89,8 +89,11 @@
         <member name="T:TigerCS.Api.Controllers.AdminDepartmentsController">
             <summary>Department administration — System Administrator only. Departments are deactivated, never deleted.</summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.AdminDepartmentsController.#ctor(TigerCS.Application.Modules.Administration.Services.AdminDepartmentAppService)">
+        <member name="M:TigerCS.Api.Controllers.AdminDepartmentsController.#ctor(TigerCS.Application.Modules.Administration.Services.AdminDepartmentAppService,TigerCS.Application.Modules.Administration.Services.DepartmentCoverageService)">
             <summary>Department administration — System Administrator only. Departments are deactivated, never deleted.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminDepartmentsController.Coverage(System.Threading.CancellationToken)">
+            <summary>Staffing coverage of every active department: active employees, employees eligible for automatic assignment, and an Unstaffed / NoAssignableEmployee flag. Read-only.</summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.AdminDepartmentsController.List(System.Boolean,System.Threading.CancellationToken)">
             <summary>Every department with member, request-type and ticket-reference counts (inactive included by default).</summary>
@@ -464,7 +467,7 @@
             server-side by the Web application as the signed-in user.
             </summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.#ctor(TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.ReviewRefreshService,TigerCS.Application.Modules.Collections.Review.DispatchService,TigerCS.Application.Modules.Collections.Review.DispatchAdminReportService)">
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.#ctor(TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.ReviewRefreshService,TigerCS.Application.Modules.Collections.Review.DispatchService,TigerCS.Application.Modules.Collections.Review.DispatchAdminReportService,TigerCS.Application.Modules.Collections.Review.GenesysExportService,TigerCS.Application.Modules.Collections.Review.ManualReviewExportService)">
             <summary>
             Collections review and approval: filtered stored records, explicit refresh jobs, approval of an exact list and upload to
             Genesys outbound contact lists. Reads never call the financial source; only the refresh job does. Internal routes called
@@ -491,6 +494,17 @@
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.Summary(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)">
             <summary>The exact count, totals by currency and contact list of a selection, with the fingerprint to confirm.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.ExportForGenesys(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Boolean,System.Nullable{System.Int32},System.Threading.CancellationToken)">
+            <summary>
+            "Export for Genesys": the customers of a Manual selection as a CSV in the format of the chosen Genesys contact list (six columns, exactly the values an upload would send). Read only: it uploads
+            nothing, queues nothing and marks nobody as sent; it is written to the audit trail. Needs the send right, like the send itself.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.ExportReview(TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Threading.CancellationToken)">
+            <summary>
+            The Manual "Export review CSV": every customer of the filtered Manual list with its status and reasons, for people to review. Not a Genesys file. Read only and audited; needs the send right.
+            </summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.Confirm(TigerCS.Application.Modules.Collections.Review.ConfirmDispatchRequest,System.String,System.Threading.CancellationToken)">
             <summary>Approves the exact list (count and fingerprint must match) and queues the revalidation-and-upload job.</summary>

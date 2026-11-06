@@ -320,6 +320,80 @@ public sealed class ReviewQueryService(
         return CollectionsResult<ManualListDto>.Ok(new(ToDto(run), ManualShown(manual.Views, null, stale).Select(v => ToDto(v, stale, manual: true)).ToList()));
     }
 
+
+    public async Task<Resolved> ResolveForExportAsync(
+        SelectionRequest request,
+        CancellationToken ct)
+    {
+        var run = await store.GetCurrentRunAsync(ct);
+
+        if (run is null)
+            return new(null, [], 0,
+                "No review data available. Refresh first.");
+
+        var filter = (request.Filter ?? new ReviewFilter()) with
+        {
+            SendingMode = CollectionsSendingModes.Manual,
+            ValidationStatus = null
+        };
+
+        var parsed = TryParse(filter);
+
+        if (parsed.Error is not null)
+            return new(run, [], 0, parsed.Error);
+
+        if (parsed.Spec!.ReminderType is null)
+            return new(run, [], 0, "Choose a campaign type.");
+
+        // Never calculate partial balances from missing historical data.
+        if (ManualCoverageProblem(filter, run) is { } coverage)
+            return new(run, [], 0, coverage);
+
+        var stale = IsStale(run);
+
+        IReadOnlyCollection<string>? units = null;
+
+        if (request.Mode == ModeSelectedUnits)
+        {
+            units = (request.UnitKeys ?? [])
+                .Where(x => !string.IsNullOrWhiteSpace(x))
+                .Select(x => x.Trim())
+                .ToHashSet(StringComparer.Ordinal);
+        }
+        else if (request.Mode != ModeAllMatching)
+        {
+            return new(run, [], 0, "Invalid export selection.");
+        }
+
+        var calculated = await ManualCalculatedAsync(
+            run,
+            parsed.Spec!,
+            filter,
+            units,
+            stale,
+            ct);
+
+        if (calculated.Problem is not null)
+            return new(run, [], 0, calculated.Problem);
+
+        var excluded = (request.ExcludedKeys ?? [])
+            .ToHashSet(StringComparer.Ordinal);
+
+        var records = calculated.Views
+            .Select(v => v.Record)
+            .Where(r => !excluded.Contains(r.RecordKey))
+            .OrderBy(r => r.RecordKey, StringComparer.Ordinal)
+            .ToList();
+
+        return new(run, records, 0, null);
+    }
+
+
+
+
+
+
+
     /// <summary>Ready records of the selection. In Manual mode these are the customers the person may send now (see <see cref="ManualCalculatedAsync"/>): schedule waived, amount from the filters.</summary>
     private async Task<(IReadOnlyList<ReviewRecordView> Views, string? Problem)> ResolveReadyAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, int max, CancellationToken ct)
     {

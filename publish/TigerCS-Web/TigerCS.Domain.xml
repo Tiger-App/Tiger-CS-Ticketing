@@ -346,18 +346,16 @@
         </member>
         <member name="T:TigerCS.Domain.Modules.Collections.CollectionsSendingModes">
             <summary>
-            How a campaign is sent. <b>Auto</b> (default) follows the predefined schedule of the stage. <b>Manual</b> lets an authorized person choose the send date and bypasses ONLY that schedule:
-            reconciliation, permissions, contact validation, suppression and duplicate-send protection apply unchanged. Neither mode dispatches by itself.
+            How a campaign is sent: exactly two modes.
+            <b>Auto</b> (default) follows the approved policy and the stage schedule: on a scheduled date the Auto dispatcher prepares and dispatches the eligible campaign by itself, but only while
+            the separate <c>AutoSendingEnabled</c> switch is on (off by default).
+            <b>Manual</b> lets an authorized person choose any existing campaign type and send it to Genesys at any time, with no send date and no stage schedule: they filter the customers (Tower,
+            Payment status, Date range, Minimum Total), pick the customers, choose a suitable existing contact list and confirm. The amount sent follows the filters.
+            Reconciliation, permissions, contact validation, suppression, duplicate-send protection, the legal restrictions and idempotency apply unchanged in both modes.
             </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Collections.CollectionsSendingModes.TryParse(System.String,System.String@)">
             <summary>Blank means Auto. Anything but Auto / Manual is refused (false).</summary>
-        </member>
-        <member name="M:TigerCS.Domain.Modules.Collections.CollectionsSendingModes.ManualTimingReason(System.DateOnly,System.DateOnly)">
-            <summary>
-            The one timing rule of Manual mode: the list can be sent only ON the chosen send date, which must be today (Dubai). A later date stays pending (nothing is queued or
-            dispatched for it); an earlier one is over. Returns null when sending is allowed today, otherwise the review reason code.
-            </summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Collections.CollectionsCampaignFlags">
             <summary>Unit-level review reasons of a campaign candidate (bit mask). The remaining reasons (stale source, coverage, currency, release gates) do
@@ -1137,6 +1135,16 @@
         <member name="T:TigerCS.Domain.Modules.Collections.Review.CampaignReminderType">
             <summary>The five Genesys contact-list reminder types, mapped one-to-one onto the approved campaign stages.</summary>
         </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualDestinations(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType)">
+            <summary>
+            The existing Genesys contact lists a Manual send of <paramref name="type"/> may use. A reminder (Overdue, Current Month, Follow Up) may go to any of the three reminder lists
+            (for example a Current Month reminder to the Follow Up list); a legal notice or legal case goes only to its own list, so legal wording never lands in a reminder list and vice versa.
+            The campaign type's own list is first and is the default.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.TryResolveManualDestination(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType,System.String,TigerCS.Domain.Modules.Collections.Review.CampaignReminderType@)">
+            <summary>The chosen destination of a Manual send (blank = the campaign type's own list); false when the choice is not one of <see cref="M:TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualDestinations(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType)"/>.</summary>
+        </member>
         <member name="M:TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.StageName(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType)">
             <summary>
             The stage's display name. It is used verbatim as the Genesys campaign name (and as the Campaigns page option text), so it must not be
@@ -1145,6 +1153,76 @@
         </member>
         <member name="M:TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.DefaultLabel(TigerCS.Domain.Modules.Collections.Review.CampaignReminderType)">
             <summary>Default ReminderType label written to Genesys; overridable by configuration after checking the supplied templates.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.Review.FilterInstalment">
+            <summary>One unpaid instalment of a customer: its due date and its REMAINING amount (never the plan amount).</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.Review.FilterInstalment.#ctor(System.DateOnly,System.Decimal)">
+            <summary>One unpaid instalment of a customer: its due date and its REMAINING amount (never the plan amount).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.Review.AmountCriteria">
+            <summary>
+            What the person chose on the Manual page: Payment status, From / To date (inclusive, on the instalment due date) and Minimum Total. A null date is open-ended; a null or zero
+            minimum means no minimum.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.Review.AmountCriteria.#ctor(TigerCS.Domain.Modules.Collections.CampaignPaymentFilter,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Decimal})">
+            <summary>
+            What the person chose on the Manual page: Payment status, From / To date (inclusive, on the instalment due date) and Minimum Total. A null date is open-ended; a null or zero
+            minimum means no minimum.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.Review.FilteredAmount">
+            <param name="Amount">The qualifying amount: the sum of the selected instalments (0 when none).</param>
+            <param name="DueAmount">The part of <paramref name="Amount"/> due inside the current month.</param>
+            <param name="OverdueAmount">The part of <paramref name="Amount"/> due before the current month.</param>
+            <param name="EarliestDue">The earliest due date among the selected instalments (null when none).</param>
+            <param name="Reason"><c>Qualifies</c>, <c>NoQualifyingBalance</c> (nothing is left once the filters are applied), <c>BelowMinimum</c>, <c>AmbiguousInstalments</c> or
+            <c>InstalmentsUnavailable</c> (the stored instalments cannot be read).</param>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.Review.FilteredAmount.#ctor(System.Decimal,System.Decimal,System.Decimal,System.Nullable{System.DateOnly},System.String)">
+            <param name="Amount">The qualifying amount: the sum of the selected instalments (0 when none).</param>
+            <param name="DueAmount">The part of <paramref name="Amount"/> due inside the current month.</param>
+            <param name="OverdueAmount">The part of <paramref name="Amount"/> due before the current month.</param>
+            <param name="EarliestDue">The earliest due date among the selected instalments (null when none).</param>
+            <param name="Reason"><c>Qualifies</c>, <c>NoQualifyingBalance</c> (nothing is left once the filters are applied), <c>BelowMinimum</c>, <c>AmbiguousInstalments</c> or
+            <c>InstalmentsUnavailable</c> (the stored instalments cannot be read).</param>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.FilteredAmount.Amount">
+            <summary>The qualifying amount: the sum of the selected instalments (0 when none).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.FilteredAmount.DueAmount">
+            <summary>The part of <paramref name="Amount"/> due inside the current month.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.FilteredAmount.OverdueAmount">
+            <summary>The part of <paramref name="Amount"/> due before the current month.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.FilteredAmount.EarliestDue">
+            <summary>The earliest due date among the selected instalments (null when none).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.FilteredAmount.Reason">
+            <summary><c>Qualifies</c>, <c>NoQualifyingBalance</c> (nothing is left once the filters are applied), <c>BelowMinimum</c>, <c>AmbiguousInstalments</c> or
+            <c>InstalmentsUnavailable</c> (the stored instalments cannot be read).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.Review.FilteredAmounts">
+            <summary>
+            THE Manual amount. The amount a customer is listed with, approved with, revalidated against before the upload, quoted to Genesys and checked by the paid-after-upload sweep is always
+            this one calculation over the customer's stored unpaid instalments:
+            <list type="bullet">
+            <item><b>Payment status</b> (the Campaigns rule, <see cref="T:TigerCS.Domain.Modules.Collections.CollectionsDueMonth"/>): Due = instalments due inside the current Dubai month, Overdue = due before it, Both = either. Nothing due from
+            the next month on is ever included.</item>
+            <item><b>From / To</b>: only instalments whose due date is inside the range.</item>
+            <item><b>Minimum Total</b>: the customer is kept only when the filtered amount is GREATER than it (the rule the Campaigns page states).</item>
+            </list>
+            Nothing is ever double counted: a customer is one stored list of instalments, and several instalments on one due date cannot be told apart from a duplicated allocation, so they are refused
+            (<c>AmbiguousInstalments</c>) instead of being summed. The source amounts are only read, never changed.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.Review.FilteredAmounts.Serialize(System.Collections.Generic.IEnumerable{TigerCS.Domain.Modules.Collections.Review.FilterInstalment})">
+            <summary>Compact, culture-free storage: <c>yyyyMMdd=amount;yyyyMMdd=amount</c>.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.Review.FilteredAmounts.TryParse(System.String)">
+            <summary>The stored instalments, or null when the text is missing or malformed (never a partial list).</summary>
         </member>
         <member name="F:TigerCS.Domain.Modules.Collections.Review.AmountPrecision.Exact">
             <summary>Exactly representable in fils (two decimals).</summary>
@@ -1242,6 +1320,13 @@
         </member>
         <member name="P:TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord.Reasons">
             <summary>Semicolon separated reason codes (needs-review, exclusions and warnings).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord.InstalmentsJson">
+            <summary>
+            The customer's unpaid instalments (due date and remaining amount, <see cref="T:TigerCS.Domain.Modules.Collections.Review.FilteredAmounts"/>) as read from the financial source, on every stage record of the unit. A Manual send
+            calculates the amount it lists, approves and sends from these and the person's filters (Payment status, From / To, Minimum Total); <see cref="P:TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord.RemainingAmount"/> stays the stage amount
+            that Auto uses. Null on records written before this column existed (a refresh fills it); a Manual send cannot calculate an amount for such a record.
+            </summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Collections.Review.CollectionsDispatch">
             <summary>An approved, frozen list of records to upload to Genesys, with who approved it and what was approved.</summary>
@@ -1354,6 +1439,9 @@
             Markers stored on an outside-schedule record. They change nothing in Auto mode (the record is outside the schedule either way); in Manual mode they hold the record back
             because sending it on the manual date would call the same unit twice, or the same number for two units, on that day.
             </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.ContactedToday">
+            <summary>Manual only (derived when listing, never stored): the customer was already added to a Genesys dispatch today (the contact-frequency limit).</summary>
         </member>
         <member name="F:TigerCS.Domain.Modules.Collections.TowerAssignments.TowerAssignmentStatus.Draft">
             <summary>Saved but not in force: automatic routing ignores it.</summary>
@@ -4240,6 +4328,13 @@
             step with outcome <see cref="F:TigerCS.Domain.Modules.Ticketing.ResolutionOutcome.Resolved"/>. Refused for a ticket a person owns
             (<see cref="T:TigerCS.Domain.Modules.Ticketing.TicketNotEligibleForResolutionException"/>) — a human has taken it, so the AI cannot close it — and for one already closed.
             Returns the status held before so the caller writes the history rows.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.CloseForAiOnlyTimeout">
+            <summary>
+            AI-only time limit: a ticket the AI virtual agent alone has handled and nobody finished is closed by the system through the
+            normal Resolved → Closed transition (outcome <see cref="F:TigerCS.Domain.Modules.Ticketing.ResolutionOutcome.Resolved"/>, never Cancelled). Same preconditions as <see cref="M:TigerCS.Domain.Modules.Ticketing.Ticket.CloseForAiCompletion"/>:
+            open for work and not owned by a person. Returns the status held before so the caller writes the history rows.
             </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.Close">
