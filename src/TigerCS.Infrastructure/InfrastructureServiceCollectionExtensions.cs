@@ -374,6 +374,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<GenesysAgentHandoffAppService>();
         services.AddScoped<GenesysTicketUpdateAppService>();
         services.AddScoped<ChatbotInactivityCloseAppService>();
+        // AI-only 18-hour closure. Off unless AiOnlyAutoClose:Enabled is set; the job is registered only then (see Program.cs).
+        services.Configure<AiOnlyAutoCloseOptions>(configuration.GetSection(AiOnlyAutoCloseOptions.SectionName));
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<AiOnlyAutoCloseOptions>>().Value);
+        services.AddScoped<AiOnlyTicketAutoCloseAppService>();
         services.AddScoped<GenesysCustomerLookupAppService>();
         services.AddScoped<GenesysVerifiedBuyerResolver>();
         services.AddScoped<GenesysCustomerUnitDetailsAppService>();
