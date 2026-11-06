@@ -3263,8 +3263,6 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .dashboard-workspace .dash-attention .ticket-id-link:hover { background: color-mix(in srgb, #3B82F6 10%, #fff); text-decoration: none; }
 .dashboard-workspace .dept-cell { display: flex; }
 .dashboard-workspace .dept-cell__name { overflow: visible; text-overflow: clip; white-space: normal; }
-.dashboard-workspace .dept-icon { width: 30px; height: 30px; border-radius: 8px; }
-.dashboard-workspace .dept-icon svg { width: 16px; height: 16px; }
 
 @media (max-width: 1100px) {
   .dashboard-workspace .dash-kpi-panel .kpi-grid--six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
