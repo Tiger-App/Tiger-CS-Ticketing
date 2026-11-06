@@ -260,6 +260,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "PUT /api/admin/users/{employeeId}/permissions",
         "GET /api/admin/users/password-policy",
         "GET /api/admin/departments",
+        "GET /api/admin/departments/coverage",
         "GET /api/admin/departments/{departmentId}",
         "POST /api/admin/departments",
         "PUT /api/admin/departments/{departmentId}",

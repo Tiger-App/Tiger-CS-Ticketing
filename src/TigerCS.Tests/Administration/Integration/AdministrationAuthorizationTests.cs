@@ -46,6 +46,7 @@ public class AdministrationAuthorizationTests : IClassFixture<TigerCsApiFactory>
         ("DELETE", $"/api/admin/users/{Guid.NewGuid()}/departments/1"),
         ("GET", "/api/admin/departments"),
         ("GET", "/api/admin/departments/1"),
+        ("GET", "/api/admin/departments/coverage"),
         ("POST", "/api/admin/departments"),
         ("PUT", "/api/admin/departments/1"),
         ("PATCH", "/api/admin/departments/1/activation"),
