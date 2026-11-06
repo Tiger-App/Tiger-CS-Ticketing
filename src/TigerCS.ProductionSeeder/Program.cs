@@ -95,10 +95,9 @@ try
         database = reader.GetString(1);
     }
 
-    if (!string.Equals(server, SeedSafety.Server, StringComparison.OrdinalIgnoreCase)
-        || !string.Equals(database, expectedDatabase, StringComparison.OrdinalIgnoreCase))
+    if (SeedSafety.VerifyTarget(cs.DataSource, server, database, expectedDatabase) is { } targetProblem)
     {
-        Console.Error.WriteLine($"BLOCKED: unexpected SQL target (server {server}, database {database}).");
+        Console.Error.WriteLine($"BLOCKED: unexpected SQL target - {targetProblem}");
         return 1;
     }
 
