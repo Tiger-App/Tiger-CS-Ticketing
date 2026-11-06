@@ -401,6 +401,72 @@ public class TicketAssignmentAppServiceTests
         Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign");
     }
 
+    [Fact]
+    public async Task TransferAsync_OfAnOwnerlessTicketIntoARoundRobinDepartment_AssignsOnlyActiveEligibleMembersOfThatDepartment()
+    {
+        var f = CreateService();
+        var ticket = await SeedTicketAsync(f.Tickets, departmentId: 2);
+        ticket.ClassifyRequestType(requestTypeId: 10);
+        var registration = f.Departments.AddDepartment("Registration", "REG");
+        var other = f.Departments.AddDepartment("Accounting", "ACC");
+        f.Rules.Add(RequestTypeAssignmentRule.ForRoundRobin(10));
+
+        var roles = new FakeUserRoleReader();
+        Guid Member(int departmentId, string role, bool active = true)
+        {
+            var id = Guid.NewGuid();
+            var membership = new UserDepartmentAssignment(id, departmentId, true, DateTime.UtcNow, null);
+            var employee = new Employee(id, "E", false, DateTime.UtcNow);
+            if (!active) employee.Deactivate(DateTime.UtcNow);
+            typeof(UserDepartmentAssignment).GetProperty(nameof(UserDepartmentAssignment.Employee))!.SetValue(membership, employee);
+            f.DepartmentAssignments.Assignments.Add(membership);
+            roles.Add(id, role);
+            return id;
+        }
+
+        var eligible = Member(registration.DepartmentId, Roles.DepartmentEmployee);
+        Member(registration.DepartmentId, Roles.DepartmentEmployee, active: false);   // deactivated: never receives
+        Member(registration.DepartmentId, Roles.CsSupervisor);                        // not an operational role
+        Member(other.DepartmentId, Roles.DepartmentEmployee);                         // another department
+
+        var autoAssignment = new TicketAutoAssignmentService(
+            f.Rules, f.WorkflowSettings, f.DepartmentAssignments, f.Assignments, f.Audit,
+            new RotationStub([]), f.Departments, roles);
+        var service = new TicketAssignmentAppService(
+            f.Tickets, f.Assignments, f.DepartmentAssignments, f.Departments, f.UnitOfWork, f.Audit, TimeProvider.System,
+            f.WorkflowSettings, autoAssignment);
+
+        var result = await service.TransferAsync(
+            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new TransferTicketRequestDto(registration.DepartmentId, "Registration request", []));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(registration.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(eligible, ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Trigger=DepartmentTransfer"));
+    }
+
+    [Fact]
+    public async Task TransferAsync_WithAssignToEmployeeId_RefusesADeactivatedMemberOfTheTargetDepartment()
+    {
+        var f = CreateService();
+        var ticket = await SeedTicketAsync(f.Tickets, departmentId: 2);
+        var target = f.Departments.AddDepartment("Registration", "REG");
+        var id = Guid.NewGuid();
+        var former = new Employee(id, "Former", false, DateTime.UtcNow);
+        former.Deactivate(DateTime.UtcNow);
+        var membership = new UserDepartmentAssignment(id, target.DepartmentId, true, DateTime.UtcNow, null);
+        typeof(UserDepartmentAssignment).GetProperty(nameof(UserDepartmentAssignment.Employee))!.SetValue(membership, former);
+        f.DepartmentAssignments.Assignments.Add(membership);
+
+        var result = await f.Service.TransferAsync(
+            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
+            new TransferTicketRequestDto(target.DepartmentId, "Registration request", [], AssignToEmployeeId: id));
+
+        Assert.Equal(TicketMutationOutcome.EmployeeNotInDepartment, result.Outcome);
+        Assert.Equal(2, ticket.CurrentDepartmentId);
+        Assert.Empty(f.Audit.Entries);
+    }
+
     private sealed class RotationStub(Dictionary<int, DepartmentAssignmentRotation> rows) : IAssignmentRotationRepository
     {
         public Task<DepartmentAssignmentRotation> GetForUpdateAsync(int departmentId, DateTime nowUtc, CancellationToken cancellationToken = default)

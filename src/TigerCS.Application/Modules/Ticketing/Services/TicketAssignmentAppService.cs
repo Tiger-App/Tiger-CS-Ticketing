@@ -349,7 +349,7 @@ public sealed class TicketAssignmentAppService(
         // checked against the target rather than the source, and checked
         // before any write so a wrong choice changes nothing.
         if (request.AssignToEmployeeId is { } assignee
-            && !await userDepartmentAssignmentRepository.ExistsAsync(assignee, request.TargetDepartmentId, cancellationToken))
+            && !await IsActiveDepartmentMemberAsync(assignee, request.TargetDepartmentId, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.EmployeeNotInDepartment);
         }

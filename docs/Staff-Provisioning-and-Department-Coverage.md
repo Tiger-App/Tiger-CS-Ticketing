@@ -17,12 +17,12 @@ No database migration, no schema change, no new role, no new permission, no chan
 
 ## 2. Decisions and findings
 
-* **"CUSTOMERSERVICES" = department `CS` "Customer Service".** `LCS` "Leasing Customer Services" is a different department and was not used. *Please confirm.*
+* **Confirmed:** "CUSTOMERSERVICES" = department `CS` "Customer Service" (not `LCS`).
 * **Customer Services → `CS Agent`** (as instructed).
-* **Registration → `Department Employee`.** It is the existing non-administrative role that works and resolves tickets assigned to the employee's department. It has no assign/close/transfer/admin authority and is in the Round Robin eligible set for every department except the Call Center. No role was invented; no administrative privilege is granted. *Please confirm; if Registration needs a different role, change `StaffRoster.cs` only.*
-* **The Call Center rotation (needs a decision).** Genesys/phone and manual Call Center intake are dealt by the *shared CS Agent rotation*, whose pool is the members of the department with code `CC`, CS Agents only. The three new CS Agents are placed in `CS` (as requested), so they will **not** receive Call Center rotation work unless they are also made members of `CC`. I did not add that: it changes who receives Genesys-routed tickets. If wanted, add the membership in User Management.
+* **Registration → `Department Employee`.** It is the existing non-administrative role that works and resolves tickets assigned to the employee's department. It has no assign/close/transfer/admin authority and is in the Round Robin eligible set for every department except the Call Center. No role was invented; no administrative privilege is granted. **Confirmed.**
+* **The Call Center rotation (decision: leave unchanged).** Genesys/phone and manual Call Center intake are dealt by the *shared CS Agent rotation*, whose pool is the members of the department with code `CC`, CS Agents only. The three new CS Agents are placed in `CS` (as requested), so they will **not** receive Call Center rotation work unless they are also made members of `CC`. **Confirmed: the new CS users are not added to `CC`; Genesys/Call Center routing is unchanged.**
 * **No hardcoded passwords.** Passwords are generated at run time (CSPRNG, 20 chars, policy-compliant), passed to Identity, and written only to an owner-only file you name. They are never printed or logged. Each user can be reset from User Management as usual.
-* **Defect fixed:** manual reassignment (`TicketAssignmentAppService.AssignAsync`) only checked department membership, so a *deactivated* employee could be assigned a ticket. It now requires an *active* member (Collections already did).
+* **Defect fixed:** manual reassignment (`AssignAsync`) and transfer-with-assignee (`TransferAsync`) only checked department membership, so a *deactivated* employee could be named as assignee. Both now require an *active* member (Collections already did).
 
 ## 3. How to provision (idempotent)
 
@@ -79,7 +79,8 @@ Most of the second brief is already implemented; the documents `Ticket-Assignmen
 
 **Not done / needs your decision** (changing these would alter live Genesys behaviour, so I did not):
 1. Department Head keeps a department-wide view (open decision 1 in `Ticket-Assignment-Based-Visibility.md`).
-2. "Export": no separate export endpoint was found beyond the scoped list/search surfaces; I did not verify an Excel/CSV export path separately.
+2. **Export:** there is no ticket export endpoint in the code. The only exports are the Collections dispatch/campaign CSV/workbook (permission `Collections.View`, not granted to Department Employee) and `api/reports/team-performance*` (CS Manager / General Manager / Chairman only; Department Employee gets 403, tested). Neither returns an employee's ticket list. If a ticket export is added later it must go through `TicketQueryAppService`.
+2b. **Transfer behaviour (needs your decision):** by an existing, documented business rule a department transfer *keeps the CS Agent as owner* (`preserveOwner`); the department rule / Round Robin runs only for a ticket with *no* owner, and the fallback pool is the shared CS Agent rotation. So a transferred ticket is not automatically handed to a member of the receiving department when a CS Agent already owns it, and with assignment-only visibility the receiving department's employees do not see it until a Supervisor/Manager assigns it (`TransferTicketRequestDto.AssignToEmployeeId` does that atomically). I did not change this: it contradicts the Genesys/Call Center ownership model you asked to keep. When the ticket has no owner and the request type's rule is Round Robin, only active, eligible members of the *target* department are chosen (tested).
 3. "Check coverage before activating automatic assignment" is reported (tool + endpoint) but does not *block* activation of a rule or department; blocking would change admin behaviour. Say if you want a guard.
 4. A persisted "Unstaffed" flag on departments (needs a column) was not added; the status is derived.
 5. The Registration and other departments' *request-type assignment rules* were not inspected per department; rules and Round Robin are unchanged.
