@@ -78,9 +78,11 @@ public sealed class ReviewQueryService(
         var stale = IsStale(run);
         var spec = parsed.Spec!;
         if (CollectionsSendingModes.IsManual(filter?.SendingMode))
-            return spec.ReminderType is null
-                ? CollectionsResult<ReviewPageDto>.Fail(CollectionsOutcome.InvalidRequest, "Choose the campaign type to send.")
-                : await QueryManualAsync(run, spec, filter!, stale, page, pageSize, applied, ct);
+        {
+            if (spec.ReminderType is null) return CollectionsResult<ReviewPageDto>.Fail(CollectionsOutcome.InvalidRequest, "Choose the campaign type to send.");
+            if (ManualCoverageProblem(filter, run) is { } coverage) return CollectionsResult<ReviewPageDto>.Fail(CollectionsOutcome.InvalidRequest, coverage);
+            return await QueryManualAsync(run, spec, filter!, stale, page, pageSize, applied, ct);
+        }
         var items = await store.QueryAsync(run.CollectionsReviewRunId, spec, stale, (page - 1) * pageSize, pageSize, ct);
         // Counts follow every filter except the validation-status choice itself, so the four tiles always add up.
         var counts = await store.CountAsync(run.CollectionsReviewRunId, spec with { ValidationStatus = null }, stale, ct);
@@ -195,8 +197,17 @@ public sealed class ReviewQueryService(
             return $"A {CampaignReminderTypes.DefaultLabel(type)} campaign cannot be sent to that contact list. Choose {string.Join(", ", CampaignReminderTypes.ManualDestinations(type).Select(CampaignReminderTypes.DefaultLabel))}.";
         var today = clock.BusinessDate;
         if (run.AsOfDate != today) return $"The review data was built for {run.AsOfDate:dd MMM yyyy}, not today ({today:dd MMM yyyy}). Refresh it, then approve.";
-        return null;
+        return ManualCoverageProblem(filter, run);
     }
+
+    /// <summary>
+    /// A Manual amount is calculated from the instalments the approval data stores, which start at the configured PACT start date (the run's <c>DueFrom</c>). A From date before that cannot be
+    /// calculated from the stored data, so it is refused: an amount that quietly left out earlier instalments would be understated (null = the filter is covered).
+    /// </summary>
+    private static string? ManualCoverageProblem(ReviewFilter? filter, CollectionsReviewRun run) =>
+        CollectionsSendingModes.IsManual(filter?.SendingMode) && filter?.DueFrom is { } from && from < run.DueFrom
+            ? $"The approval data holds instalments due from {run.DueFrom:dd MMM yyyy} on. An amount from {from:dd MMM yyyy} cannot be calculated from it, so choose a From date on or after {run.DueFrom:dd MMM yyyy}."
+            : null;
 
     private const int ManualScanLimit = 100_000;
 
@@ -247,13 +258,38 @@ public sealed class ReviewQueryService(
         var calculated = await ManualCalculatedAsync(run, spec, filter, null, stale, ct);
         int Count(ReviewValidationStatus s) => calculated.Count(v => ManualStatus(v, stale) == s);
         var counts = new ReviewCountsDto(calculated.Count, Count(ReviewValidationStatus.Ready), Count(ReviewValidationStatus.NeedsReview), Count(ReviewValidationStatus.Excluded), Count(ReviewValidationStatus.AlreadySent));
-        var shown = (spec.ValidationStatus is { } wanted ? calculated.Where(v => ManualStatus(v, stale) == wanted) : calculated)
-            .OrderBy(v => v.Record.CompanyId).ThenBy(v => v.Record.TenantId, StringComparer.OrdinalIgnoreCase).ThenBy(v => v.Record.UnitCode, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(v => v.Record.RecordKey, StringComparer.Ordinal).ToList();
+        var shown = ManualShown(calculated, spec.ValidationStatus, stale);
         var readyTotal = calculated.Where(v => ManualStatus(v, stale) == ReviewValidationStatus.Ready).Sum(v => v.Record.RemainingAmount ?? 0m);
         var towerMissing = (spec.TowerId is not null || spec.TowerIds is not null) && shown.Count == 0 && !await store.RunHasTowerDataAsync(run.CollectionsReviewRunId, ct);
         return CollectionsResult<ReviewPageDto>.Ok(new(ToDto(run), counts, page, pageSize, shown.Count,
             shown.Skip((page - 1) * pageSize).Take(pageSize).Select(v => ToDto(v, stale, manual: true)).ToList(), applied, towerMissing, readyTotal));
+    }
+
+    /// <summary>The rows of a Manual list in the order the page shows them (company, tenant, unit, record key), optionally only those with one status.</summary>
+    private static List<ReviewRecordView> ManualShown(IEnumerable<ReviewRecordView> calculated, ReviewValidationStatus? wanted, bool stale) =>
+        (wanted is { } status ? calculated.Where(v => ManualStatus(v, stale) == status) : calculated)
+        .OrderBy(v => v.Record.CompanyId).ThenBy(v => v.Record.TenantId, StringComparer.OrdinalIgnoreCase).ThenBy(v => v.Record.UnitCode, StringComparer.OrdinalIgnoreCase)
+        .ThenBy(v => v.Record.RecordKey, StringComparer.Ordinal).ToList();
+
+    /// <summary>
+    /// Every row of a Manual list in the page's order, from ONE calculation. A file that holds the whole list uses this: paging through <see cref="QueryAsync"/> would recalculate the whole
+    /// run once per page.
+    /// </summary>
+    public async Task<CollectionsResult<ManualListDto>> ManualListAsync(CollectionsCaller caller, ReviewFilter? filter, CancellationToken ct)
+    {
+        if (!(await authorization.ResolveAsync(caller, ct)).CanReadFinancials)
+            return CollectionsResult<ManualListDto>.Fail(CollectionsOutcome.Forbidden);
+        if (!options.Enabled) return CollectionsResult<ManualListDto>.Fail(CollectionsOutcome.Disabled);
+        var parsed = TryParse(filter ?? new ReviewFilter());
+        if (parsed.Error is not null) return CollectionsResult<ManualListDto>.Fail(CollectionsOutcome.InvalidRequest, parsed.Error);
+        if (!CollectionsSendingModes.IsManual(filter?.SendingMode) || parsed.Spec!.ReminderType is null)
+            return CollectionsResult<ManualListDto>.Fail(CollectionsOutcome.InvalidRequest, "Choose the campaign type of the Manual list.");
+        var run = await store.GetCurrentRunAsync(ct);
+        if (run is null) return CollectionsResult<ManualListDto>.Fail(CollectionsOutcome.ReviewRequired, "There is no approval data yet. Refresh the approval data, then export.");
+        if (ManualCoverageProblem(filter, run) is { } coverage) return CollectionsResult<ManualListDto>.Fail(CollectionsOutcome.InvalidRequest, coverage);
+        var stale = IsStale(run);
+        var calculated = await ManualCalculatedAsync(run, parsed.Spec!, filter, null, stale, ct);
+        return CollectionsResult<ManualListDto>.Ok(new(ToDto(run), ManualShown(calculated, null, stale).Select(v => ToDto(v, stale, manual: true)).ToList()));
     }
 
     /// <summary>Ready records of the selection. In Manual mode these are the customers the person may send now (see <see cref="ManualCalculatedAsync"/>): schedule waived, amount from the filters.</summary>

@@ -339,7 +339,7 @@ public sealed class GenesysExportTests
         var auth = new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository());
         var clock = new CollectionsClock(h.Options, h.Time);
         using var scope = h.NewScope();
-        var broken = new GenesysExportService(h.Options, h.Genesys, auth, clock, scope.Query, h.Client, new ThrowingAudit(), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, scope.Store as IGenesysExportHistory ?? throw new InvalidOperationException(), NullLogger<GenesysExportService>.Instance);
+        var broken = new GenesysExportService(h.Options, h.Genesys, auth, clock, scope.Query, h.Client, new ThrowingAudit(), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, scope.Store as IGenesysExportHistory ?? throw new InvalidOperationException(), new ReviewHarness.FreeExportLock(), NullLogger<GenesysExportService>.Instance);
         var result = await broken.ExportAsync(h.Manager, All(Manual()), CancellationToken.None);
         Assert.Equal(CollectionsOutcome.FinanceUnavailable, result.Outcome); Assert.Null(result.Value); Assert.Contains("no file was released", result.Detail);
     }

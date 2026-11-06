@@ -31,9 +31,12 @@ namespace TigerCS.Application.Modules.Collections.Review;
 public sealed class GenesysExportService(
     CollectionsOptions options, GenesysOutboundOptions genesys, CollectionsAuthorizationService authorization, CollectionsClock clock,
     ReviewQueryService query, IGenesysOutboundClient client, IAuditEntryWriter audit, ICollectionsUnitOfWork unitOfWork, CollectionsReviewOptions reviewOptions, IGenesysExportHistory history,
-    ILogger<GenesysExportService> logger)
+    IGenesysExportLock exportLock, ILogger<GenesysExportService> logger)
 {
     public const string AuditAction = "CollectionsGenesysFileExported", AuditEntityType = "CollectionsGenesysExport";
+
+    /// <summary>How long an export waits for the export lock while another export is recording its audit entry, before it stops.</summary>
+    public static readonly TimeSpan ExportLockWait = TimeSpan.FromSeconds(20);
 
     /// <summary>The label of a file whose contact-list columns were not read from Genesys.</summary>
     public const string NotVerifiedLabel = "Template not verified against Genesys";
@@ -100,35 +103,47 @@ public sealed class GenesysExportService(
                 $"The file did not pass the Genesys template check ({check.Issues.Count} issue(s), for example {check.Issues.FirstOrDefault()?.Message ?? "unknown"}). Nothing was exported.");
         }
 
-        // Earlier exports of the same customers: warned about, and held until the person confirms. Failing to read the history stops the export (it is the only record of earlier files).
         // The customer's unit, not the record: a record is one campaign type and month, and the same customer under another campaign is still the same customer.
         var fingerprints = resolved.Records.Select(r => Fingerprint(ReviewQueryService.UnitKey(r.CompanyId, r.TenantId, r.UnitCode))).Distinct().ToList();
-        var repeat = await FindRepeatAsync(fingerprints, ct);
-        if (repeat.Problem is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, repeat.Problem);
-        if (repeat.Customers > 0 && !confirmRepeat)
-            return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.RepeatExport,
-                $"{repeat.Customers:N0} of the {fingerprints.Count:N0} customers in this file were already exported (latest: {repeat.LastUtc:dd MMM yyyy HH:mm} UTC, {repeat.Exports} earlier export(s)). " +
-                "An export does not mark anyone as sent, so nothing stops a second file. Confirm to export them again.");
-
         var total = resolved.Records.Sum(r => r.RemainingAmount ?? 0m);
         var currency = resolved.Records[0].Currency;
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(csv)));
         var now = clock.UtcNow;
         var campaign = CampaignReminderTypes.StageName(type);
 
-        // Audit first, then release: an export of customer contact data is never handed out without its record. The record holds counts, the filter and a hash, no customer data.
+        // The repeat check and the audit entry are one step under the export lock: a second export that starts at the same moment waits here and then sees this one's entry, instead of
+        // both passing the check. The lock covers only that step; the file is already built.
+        var gate = await exportLock.TryAcquireAsync(ExportLockWait, ct);
+        if (gate is null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, "Another export is being recorded. Try again in a moment.");
+        Repeat repeat;
         try
         {
-            await audit.WriteAsync(caller.EmployeeId, AuditAction, AuditEntityType, hash[..16], null,
-                $"Campaign={type};ContactList={destination} ({listId});Rows={payloads.Count};Total={currency} {total:0.00};SchemaVerified={schema.Verified}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")};Mode=Manual;Filter={JsonSerializer.Serialize(request.Filter)};Selection={request.Mode};Repeated={repeat.Customers}{(repeat.Customers > 0 ? ";RepeatConfirmed=true" : "")};Sha256={hash};Customers={string.Join(',', fingerprints)}",
-                Guid.NewGuid(), ct);
-            await unitOfWork.SaveChangesAsync(ct);
+            // Earlier exports of the same customers: warned about, and held until the person confirms. Failing to read the history stops the export (it is the only record of earlier files).
+            repeat = await FindRepeatAsync(fingerprints, ct);
+            if (repeat.Problem is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, repeat.Problem);
+            if (repeat.Customers > 0 && !confirmRepeat)
+                return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.RepeatExport,
+                    $"{repeat.Customers:N0} of the {fingerprints.Count:N0} customers in this file were already exported (latest: {repeat.LastUtc:dd MMM yyyy HH:mm} UTC, {repeat.Exports} earlier export(s)). " +
+                    "An export does not mark anyone as sent, so nothing stops a second file. Confirm to export them again.");
+
+            // Audit first, then release: an export of customer contact data is never handed out without its record. The record holds counts, the filter and a hash, no customer data.
+            try
+            {
+                await audit.WriteAsync(caller.EmployeeId, AuditAction, AuditEntityType, hash[..16], null,
+                    $"Campaign={type};ContactList={destination} ({listId});Rows={payloads.Count};Total={currency} {total:0.00};SchemaVerified={schema.Verified}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")};Mode=Manual;Filter={JsonSerializer.Serialize(request.Filter)};Selection={request.Mode};Repeated={repeat.Customers}{(repeat.Customers > 0 ? ";RepeatConfirmed=true" : "")};Sha256={hash};Customers={string.Join(',', fingerprints)}",
+                    Guid.NewGuid(), ct);
+                await unitOfWork.SaveChangesAsync(ct);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                unitOfWork.DiscardPendingChanges();
+                logger.LogError("Genesys export could not be audited ({ExceptionType}); the file was not released.", ex.GetType().Name);
+                return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, "The export could not be recorded in the audit trail, so no file was released. Try again.");
+            }
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        finally
         {
-            unitOfWork.DiscardPendingChanges();
-            logger.LogError("Genesys export could not be audited ({ExceptionType}); the file was not released.", ex.GetType().Name);
-            return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, "The export could not be recorded in the audit trail, so no file was released. Try again.");
+            await gate.DisposeAsync();
         }
 
         var notices = new List<string>();

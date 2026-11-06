@@ -42,9 +42,9 @@ public sealed class CollectionsReviewOptions
 
     /// <summary>
     /// A file export (Export for Genesys) does not mark anyone as sent. To keep the same customers from being exported over and over unnoticed, an export that contains customers exported within this many
-    /// days is held until the person confirms it (the page says who was exported when). 0 turns the check off. 1-365.
+    /// days is held until the person confirms it (the page says who was exported when). The default of 90 days spans the month-to-month repeats a monthly reminder cycle produces. 0 turns the check off. 1-365.
     /// </summary>
-    public int ExportRepeatLookbackDays { get; set; } = 30;
+    public int ExportRepeatLookbackDays { get; set; } = 90;
 
     /// <summary>Review records of runs older than the newest N completed runs are deleted.</summary>
     public int RunsToKeep { get; set; } = 2;
