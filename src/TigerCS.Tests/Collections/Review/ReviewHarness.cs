@@ -220,6 +220,10 @@ public sealed class FakeJobScheduler : IReviewJobScheduler
 {
     public bool Available { get; set; } = true;
     public bool IsAvailable => Available;
+    /// <summary>Background jobs are off, but a refresh a person starts runs in this process (the in-process scheduler).</summary>
+    public bool InProcessRefresh { get; set; }
+    public bool CanRunRefresh => Available || InProcessRefresh;
+    public bool RefreshRunsInProcess => InProcessRefresh;
     public Exception? EnqueueFailure { get; set; }
     public List<long> Refreshes { get; } = [];
     public List<long> Dispatches { get; } = [];
@@ -300,6 +304,8 @@ internal sealed class ReviewHarness : IDisposable
         public ReviewRefreshService Refresh { get; private set; } = null!;
         public DispatchService Dispatch { get; private set; } = null!;
         public AutoDispatchService Auto { get; private set; } = null!;
+        public GenesysExportService Export { get; private set; } = null!;
+        public ManualReviewExportService ReviewExport { get; private set; } = null!;
         public SuppressionService Suppression { get; private set; } = null!;
         public DispatchAdminReportService AdminReport { get; private set; } = null!;
         public TigerCsDbContext Context => context;
@@ -314,6 +320,8 @@ internal sealed class ReviewHarness : IDisposable
             var balances = new CurrentBalanceReader(h.Sql, h.Source, Refresh, NullLogger<CurrentBalanceReader>.Instance);
             Dispatch = new DispatchService(h.Options, h.Genesys, auth, clock, Store, h.Scheduler, client ?? h.Client, Query, balances,
                 NullLogger<DispatchService>.Instance);
+            Export = new GenesysExportService(h.Options, h.Genesys, auth, clock, Query, client ?? h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, new ReviewStore(context, h.RetryPolicy), NullLogger<GenesysExportService>.Instance);
+            ReviewExport = new ManualReviewExportService(h.Options, auth, clock, Query, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), NullLogger<ManualReviewExportService>.Instance);
             Auto = new AutoDispatchService(h.Options, h.Campaign, clock, Store, Query, Refresh, Dispatch, NullLogger<AutoDispatchService>.Instance);
             AdminReport = new DispatchAdminReportService(h.Campaign, Store, h.Email, clock, auth, NullLogger<DispatchAdminReportService>.Instance);
             Suppression = new SuppressionService(h.Options, h.Genesys, clock, Store, client ?? h.Client, balances, NullLogger<SuppressionService>.Instance);

@@ -16,7 +16,7 @@ public sealed class ReviewRefreshService(
     CollectionsReviewOptions reviewOptions, CollectionsAuthorizationService authorization, CollectionsClock clock,
     IPactReceivablesSource source, IReviewStore store, IReviewJobScheduler scheduler, ReviewQueryService query,
     ILogger<ReviewRefreshService> logger, CollectionsUnitLinkService? links = null,
-    TigerCS.Application.Modules.Collections.Reconciliation.IFinancialReconciliationEvidence? reconciliation = null)
+    TigerCS.Application.Modules.Collections.Reconciliation.IFinancialReconciliationEvidence? reconciliation = null) : IReviewRefreshRunner
 {
     public const string SourceLabel = "PACT receivables (companies 4 and 32)";
 
@@ -56,10 +56,15 @@ public sealed class ReviewRefreshService(
 
         var now = clock.UtcNow;
         var active = await store.GetActiveRunAsync(ct);
+        // One refresh at a time: a request while one is queued or running gets that run back (it is also the database's rule, see TryAddRunAsync).
         if (active is not null && !IsDead(active, now)) return CollectionsResult<ReviewRunDto>.Ok(query.ToDto(active), CollectionsOutcome.Replayed);
         if (active is not null) await store.FailRunAsync(active.CollectionsReviewRunId, "The previous refresh did not finish and was replaced.", now, ct);
 
         var asOf = clock.BusinessDate;
+        // With background jobs off the refresh runs inside this process, so it is also rate limited: the data that was just published for today is returned instead of reading the source again.
+        if (enqueue && scheduler.RefreshRunsInProcess && reviewOptions.InProcessRefreshCooldownSeconds > 0
+            && await store.GetCurrentRunAsync(ct) is { CompletedAtUtc: { } done } recent && recent.AsOfDate == asOf && now - done < TimeSpan.FromSeconds(reviewOptions.InProcessRefreshCooldownSeconds))
+            return CollectionsResult<ReviewRunDto>.Ok(query.ToDto(recent), CollectionsOutcome.Replayed);
         var run = new CollectionsReviewRun
         {
             Status = ReviewRunStatus.Queued, AsOfDate = asOf, CompanyId = companyId,
@@ -79,7 +84,7 @@ public sealed class ReviewRefreshService(
         // Nothing would ever pick the run up (background jobs off) or the queue is unreachable: say so now instead of leaving the page on "Queued".
         string? notQueued = null;
         if (!enqueue) { /* the caller runs the refresh itself */ }
-        else if (!scheduler.IsAvailable)
+        else if (!scheduler.CanRunRefresh)
             notQueued = "Background jobs are disabled on this server (BackgroundJobs:Enabled is false), so the refresh cannot run. Enable them and retry.";
         else
         {

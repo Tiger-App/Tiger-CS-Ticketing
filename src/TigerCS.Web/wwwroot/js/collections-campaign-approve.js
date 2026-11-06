@@ -44,6 +44,15 @@
                 const text = mode.value === 'AllMatching' ? `All ${allCount} eligible` : `${selected.size} selected`;
                 if (summary.textContent !== text) summary.textContent = text;
             }
+            // Export for Genesys follows the same selection rule as Send: it needs ticked customers, or the "all eligible" choice, and its own server-side block.
+            const exportButton = form.querySelector('[data-export-genesys-button]');
+            if (exportButton) exportButton.disabled = exportButton.dataset.blocked === 'true' || nothingTicked || !mode;
+            const exportReason = form.querySelector('[data-export-genesys-reason]');
+            if (exportReason && exportButton) {
+                if (!exportReason.dataset.default) exportReason.dataset.default = exportReason.textContent;
+                const exportText = exportButton.dataset.blocked !== 'true' && nothingTicked ? 'Tick at least one Ready customer, or choose all eligible customers.' : exportReason.dataset.default;
+                if (exportReason.textContent !== exportText) exportReason.textContent = exportText;
+            }
             const reason = form.querySelector('[data-approve-reason]');
             if (reason) {
                 if (!reason.dataset.default) reason.dataset.default = reason.textContent;

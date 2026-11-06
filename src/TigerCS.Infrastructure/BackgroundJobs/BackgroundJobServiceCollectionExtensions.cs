@@ -74,7 +74,8 @@ public static class BackgroundJobServiceCollectionExtensions
             // See NoOpSlaDeadlineScheduler's remarks: detection logic is
             // unaffected, only its timing.
             services.AddSingleton<ISlaDeadlineScheduler, NoOpSlaDeadlineScheduler>();
-            services.AddSingleton<IReviewJobScheduler, NoOpReviewJobScheduler>();
+            // A person can still refresh the approval data (one bounded in-process worker); dispatching and the suppression sweep stay off with the jobs.
+            services.AddSingleton<IReviewJobScheduler, InProcessReviewJobScheduler>();
             return services;
         }
 
