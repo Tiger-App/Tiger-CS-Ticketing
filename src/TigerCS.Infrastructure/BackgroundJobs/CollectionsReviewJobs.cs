@@ -1,4 +1,6 @@
 using Hangfire;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using TigerCS.Application.Modules.Collections.Review;
 
@@ -65,6 +67,60 @@ public sealed class HangfireReviewJobScheduler(IBackgroundJobClient client) : IR
     public void EnqueueDispatch(long dispatchId) => client.Enqueue<CollectionsDispatchJob>(j => j.RunAsync(dispatchId, CancellationToken.None));
 
     public void EnqueueSuppressionSweep() => client.Enqueue<CollectionsSuppressionJob>(j => j.RunAsync(CancellationToken.None));
+}
+
+/// <summary>
+/// Used when Hangfire is switched off (<c>BackgroundJobs:Enabled</c> false). A person can still refresh the approval data: that one explicit, authorized request runs on a single worker inside
+/// this process, one refresh at a time, bounded by the refresh's own time budget and cancelled when the host stops. Nothing recurs, and nothing else changes: a dispatch (the upload to Genesys) and
+/// the paid-after-upload sweep still need real background jobs, so with jobs off nothing can be sent. The refresh is the same <see cref="ReviewRefreshService"/> as with Hangfire, so the financial
+/// reconciliation gate, the sign-off and every validation are unchanged.
+/// </summary>
+public sealed class InProcessReviewJobScheduler(IServiceScopeFactory scopes, IHostApplicationLifetime lifetime, ILogger<InProcessReviewJobScheduler> logger) : IReviewJobScheduler
+{
+    private readonly SemaphoreSlim _oneAtATime = new(1, 1);
+    private readonly object _sync = new();
+    private Task _latest = Task.CompletedTask;
+
+    /// <summary>False: a dispatch (and the suppression sweep) need real background jobs, so an approved send cannot be queued while they are off.</summary>
+    public bool IsAvailable => false;
+    public bool CanRunRefresh => true;
+    public bool RefreshRunsInProcess => true;
+
+    public void EnqueueRefresh(long runId)
+    {
+        var stopping = lifetime.ApplicationStopping;
+        lock (_sync) _latest = Task.Run(() => RunAsync(runId, stopping), CancellationToken.None);
+    }
+
+    private async Task RunAsync(long runId, CancellationToken stopping)
+    {
+        try
+        {
+            await _oneAtATime.WaitAsync(stopping);
+            try
+            {
+                using var scope = scopes.CreateScope();
+                await scope.ServiceProvider.GetRequiredService<IReviewRefreshRunner>().RunAsync(runId, stopping);
+            }
+            finally { _oneAtATime.Release(); }
+        }
+        catch (OperationCanceledException) when (stopping.IsCancellationRequested)
+        {
+            logger.LogWarning("Review refresh {RunId} was cancelled because the server is stopping; the stuck-run timeout will close it.", runId);
+        }
+        catch (Exception ex)
+        {
+            // The refresh records its own failures on the run. This only guards the worker: a run that could not even start is closed by the stuck-run timeout.
+            logger.LogError(ex, "Review refresh {RunId} failed in the in-process worker ({ExceptionType}).", runId, ex.GetType().Name);
+        }
+    }
+
+    /// <summary>Completes when the most recently started refresh has finished (graceful shutdown and tests).</summary>
+    public Task WhenIdleAsync() { lock (_sync) return _latest; }
+
+    public void EnqueueDispatch(long dispatchId) => logger.LogWarning("Background jobs are disabled; dispatch {DispatchId} stays queued.", dispatchId);
+
+    public void EnqueueSuppressionSweep() => logger.LogWarning("Background jobs are disabled; the suppression sweep did not run.");
 }
 
 /// <summary>Used when Hangfire is switched off: work stays Queued and is reported as such. Nothing runs silently.</summary>

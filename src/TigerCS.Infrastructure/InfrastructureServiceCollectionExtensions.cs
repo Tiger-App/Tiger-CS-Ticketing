@@ -447,8 +447,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IReviewStore, ReviewStore>();
         services.AddScoped<ReviewQueryService>();
         services.AddScoped<ReviewRefreshService>();
+        services.AddScoped<IReviewRefreshRunner>(sp => sp.GetRequiredService<ReviewRefreshService>());
         services.AddScoped<CurrentBalanceReader>();
         services.AddScoped<DispatchService>();
+        services.AddScoped<GenesysExportService>();
         services.AddScoped<AutoDispatchService>();
         services.AddScoped<DispatchAdminReportService>();
         services.AddScoped<SuppressionService>();

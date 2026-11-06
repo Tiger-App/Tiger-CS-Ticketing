@@ -34,6 +34,12 @@ public sealed class CollectionsReviewOptions
     /// <summary>Floating-point noise tolerance in AED when normalizing a floating source value to fils.</summary>
     public decimal FloatNoiseTolerance { get; set; } = MoneyNormalizer.DefaultFloatTolerance;
 
+    /// <summary>
+    /// With background jobs off, a refresh a person starts runs inside the API process. To keep a double click, or several users, from reading the financial source over and over, a refresh is
+    /// not started again within this many seconds of the last published one for today (the page says when it can be repeated). 0 turns the cooldown off. Applies only to in-process refreshes.
+    /// </summary>
+    public int InProcessRefreshCooldownSeconds { get; set; } = 60;
+
     /// <summary>Review records of runs older than the newest N completed runs are deleted.</summary>
     public int RunsToKeep { get; set; } = 2;
 }

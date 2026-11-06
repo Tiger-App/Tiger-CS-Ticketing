@@ -108,6 +108,9 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         PostAsync<ConfirmDispatchRequest, DispatchDto>($"{ReviewBase}/dispatches", request,
             new Dictionary<string, string> { ["Idempotency-Key"] = request.IdempotencyKey }, cancellationToken);
 
+    public Task<ApiResult<GenesysExportDto>> ExportForGenesysAsync(SelectionRequest request, CancellationToken cancellationToken) =>
+        PostAsync<SelectionRequest, GenesysExportDto>($"{ReviewBase}/export/genesys", request, cancellationToken);
+
     public Task<ApiResult<OverlapPageDto>> GetOverlapsAsync(int page, CancellationToken cancellationToken) =>
         GetAsync<OverlapPageDto>($"{ReviewBase}/overlaps?page={Id(page)}&pageSize=25", cancellationToken);
 

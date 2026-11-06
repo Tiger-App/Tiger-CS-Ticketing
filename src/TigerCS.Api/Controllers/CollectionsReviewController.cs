@@ -21,7 +21,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/collections/review")]
 [Tags(OpenApiTags.Collections)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-public sealed class CollectionsReviewController(ReviewQueryService query, ReviewRefreshService refresh, DispatchService dispatch, DispatchAdminReportService adminReport) : ControllerBase
+public sealed class CollectionsReviewController(ReviewQueryService query, ReviewRefreshService refresh, DispatchService dispatch, DispatchAdminReportService adminReport, GenesysExportService genesysExport) : ControllerBase
 {
     public sealed record StartRefreshRequest(int? CompanyId);
 
@@ -71,6 +71,16 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
     [ProducesResponseType<SelectionSummaryDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Summary([FromBody] SelectionRequest request, CancellationToken ct) =>
         Caller() is { } caller ? Result(await query.SummarizeAsync(caller, request, ct)) : Unauthorized();
+
+    /// <summary>
+    /// "Export for Genesys": the customers of a Manual selection as a CSV in the format of the chosen Genesys contact list (six columns, exactly the values an upload would send). Read only: it uploads
+    /// nothing, queues nothing and marks nobody as sent; it is written to the audit trail. Needs the send right, like the send itself.
+    /// </summary>
+    [HttpPost("export/genesys")]
+    [RequirePermission(Permissions.CollectionsSend)]
+    [ProducesResponseType<GenesysExportDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ExportForGenesys([FromBody] SelectionRequest request, CancellationToken ct) =>
+        Caller() is { } caller ? Result(await genesysExport.ExportAsync(caller, request, ct)) : Unauthorized();
 
     /// <summary>Approves the exact list (count and fingerprint must match) and queues the revalidation-and-upload job.</summary>
     [HttpPost("dispatches")]

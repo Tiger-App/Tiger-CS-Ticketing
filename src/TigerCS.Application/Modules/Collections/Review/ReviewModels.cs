@@ -95,3 +95,11 @@ public sealed record ReconcileBatchRequest(string Resolution, string Note);
 /// A configuration problem here is a hard stop: it is shown before the person approves anything, and confirmation refuses again.
 /// </summary>
 public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Blockers, bool CanSend = true);
+
+/// <summary>
+/// The "Export for Genesys" file: customers of a Manual selection in the format of the Genesys contact list they would be imported into. <c>Columns</c> is the file's header exactly. <c>SchemaVerified</c> is
+/// true when that list's real columns were read from Genesys and fit; false when the Genesys integration is not configured, so the documented six-column template was used.
+/// </summary>
+public sealed record GenesysExportDto(
+    string FileName, string Csv, int RowCount, string Campaign, string ContactList, string ContactListId, decimal TotalAmount, string Currency,
+    IReadOnlyList<string> Columns, bool SchemaVerified, IReadOnlyList<string> Notices, string Sha256);
