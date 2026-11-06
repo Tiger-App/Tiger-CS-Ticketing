@@ -11,6 +11,7 @@ public static class TimelineAuditActions
     public const string AutoCloseCustomerInactivity = "AutoCloseCustomerInactivity";
     public const string AutoCloseByAi = "AutoCloseByAi";
     public const string AutoCloseDocumentDelivery = "AutoCloseDocumentDelivery";
+    public const string AutoCloseAiOnlyTimeout = "AutoCloseAiOnlyTimeout";
 
     /// <summary>Written (forward-compatible, from this release on) when a human reply reaches TigerCS for a ticket that is already Closed. Its audit time is the moment TigerCS received it.</summary>
     public const string HumanActivityAfterClosure = "TicketHumanActivityAfterClosure";
@@ -18,7 +19,7 @@ public static class TimelineAuditActions
     /// <summary>Every audit action the timeline reads.</summary>
     public static readonly IReadOnlyCollection<string> All =
     [
-        AutoCloseCustomerInactivity, AutoCloseByAi, AutoCloseDocumentDelivery, HumanActivityAfterClosure,
+        AutoCloseCustomerInactivity, AutoCloseByAi, AutoCloseDocumentDelivery, AutoCloseAiOnlyTimeout, HumanActivityAfterClosure,
         "GenesysRoutingChanged", "GenesysTranscriptAppended", "GenesysHumanFollowUpRequired",
         "GenesysHandoffAutoRaisedOnConversationEnd", "GenesysConversationEnded"
     ];
@@ -810,7 +811,7 @@ public static class TicketActivityTimelineBuilder
     {
         var audit = s.AuditEntries.FirstOrDefault(a =>
             a.CorrelationId == closing.CorrelationId
-            && a.Action is TimelineAuditActions.AutoCloseCustomerInactivity or TimelineAuditActions.AutoCloseByAi or TimelineAuditActions.AutoCloseDocumentDelivery);
+            && a.Action is TimelineAuditActions.AutoCloseCustomerInactivity or TimelineAuditActions.AutoCloseByAi or TimelineAuditActions.AutoCloseDocumentDelivery or TimelineAuditActions.AutoCloseAiOnlyTimeout);
 
         var note = string.IsNullOrWhiteSpace(closing.Note) ? null : closing.Note;
 
@@ -821,6 +822,7 @@ public static class TicketActivityTimelineBuilder
             {
                 TimelineAuditActions.AutoCloseCustomerInactivity => (ClosedByTypes.SystemAutomation, "Chatbot inactivity job", reason, "CustomerInactivity", "Audit entry"),
                 TimelineAuditActions.AutoCloseByAi => (ClosedByTypes.Ai, "AI virtual agent", reason, "AiResolved", "Audit entry"),
+                TimelineAuditActions.AutoCloseAiOnlyTimeout => (ClosedByTypes.SystemAutomation, "AI-only auto-close job", reason, "AiOnlyTimeout", "Audit entry"),
                 _ => (ClosedByTypes.SystemAutomation, "Document delivery workflow", reason, "DocumentDelivery", "Audit entry")
             };
         }

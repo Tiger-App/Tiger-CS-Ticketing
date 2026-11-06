@@ -1003,6 +1003,24 @@ public class Ticket
         return CloseForDocumentDelivery(ResolutionOutcomeValue.Resolved);
     }
 
+    /// <summary>
+    /// AI-only time limit: a ticket the AI virtual agent alone has handled and nobody finished is closed by the system as
+    /// <see cref="ResolutionOutcomeValue.Cancelled"/> (nothing was confirmed fixed). Same preconditions as <see cref="CloseForAiCompletion"/>:
+    /// open for work and not owned by a person. Returns the status held before so the caller writes the history rows.
+    /// </summary>
+    public TicketStatus CloseForAiOnlyTimeout()
+    {
+        EnsureNotClosed();
+
+        if (TicketStatus is not (TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer)
+            || CurrentOwnerEmployeeId is not null)
+        {
+            throw new TicketNotEligibleForResolutionException(TicketId, TicketStatus);
+        }
+
+        return CloseForDocumentDelivery(ResolutionOutcomeValue.Cancelled);
+    }
+
     /// <summary>MVP-API-Contracts.md §3.10 — the final, CS-layer-only close, distinct from Resolve. Requires a current TicketResolutions row (enforced by the caller — this method only enforces the TicketStatus precondition).</summary>
     public void Close()
     {

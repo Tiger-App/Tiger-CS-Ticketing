@@ -977,6 +977,22 @@ public sealed class TicketLifecycleAppService(
             ticket => ticket.CloseForDocumentDelivery(outcome), beforeCommit: null, cancellationToken);
 
     /// <summary>
+    /// Closes a ticket that only the AI virtual agent ever handled once it has stayed open past the AI-only time limit: the same system
+    /// Resolved → Closed closure as document delivery, outcome <see cref="ResolutionOutcome.Cancelled"/> with the supplied
+    /// <paramref name="reason"/>, audit action <c>AutoCloseAiOnlyTimeout</c>. <b>The customer is not notified</b>: no lifecycle event reaches the Outbox.
+    /// A ticket already Closed, or one a person owns, is left exactly as it is (nothing written twice).
+    /// </summary>
+    public Task<TicketMutationResult> CloseForAiOnlyTimeoutAsync(
+        Guid integrationEmployeeId,
+        long ticketId,
+        string reason,
+        string detail,
+        CancellationToken cancellationToken = default) =>
+        CloseBySystemAsync(
+            integrationEmployeeId, ticketId, ResolutionOutcome.Cancelled, reason, detail, TicketClosureAuditActions.ClosedForAiOnlyTimeout,
+            ticket => ticket.CloseForAiOnlyTimeout(), beforeCommit: null, cancellationToken, notifyCustomer: false);
+
+    /// <summary>
     /// Closes the ticket when the Genesys AI reports it finished the conversation: the same Resolved → Closed system closure as document
     /// delivery, outcome Resolved, with the exact <paramref name="reason"/> the caller supplies ("Closed by AI"). A ticket a person owns, or
     /// one already closed (by anyone, for any reason), is left exactly as it is — nothing is overwritten or written twice.
@@ -1053,7 +1069,8 @@ public sealed class TicketLifecycleAppService(
         string auditAction,
         Func<Ticket, TicketStatus> close,
         Action<DateTime>? beforeCommit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool notifyCustomer = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
 
@@ -1127,9 +1144,13 @@ public sealed class TicketLifecycleAppService(
 
         if (outcome == ResolutionOutcome.Resolved)
         {
-            await EnqueueLifecycleEventAsync(
-                OutboxEventTypes.TicketResolved, OutboxEventTypes.TicketResolvedVersion,
-                ticket, integrationEmployeeId, correlationId, now, cancellationToken);
+            if (notifyCustomer)
+            {
+                await EnqueueLifecycleEventAsync(
+                    OutboxEventTypes.TicketResolved, OutboxEventTypes.TicketResolvedVersion,
+                    ticket, integrationEmployeeId, correlationId, now, cancellationToken);
+            }
+
             // The ticket is already Closed in memory here, so the processor used to answer TicketClosed and the Resolution SLA of a
             // system-closed Resolved ticket was never settled (it stayed Running). Settle the Resolution clock - and only that one - now.
             await breachProcessor.ProcessDeadlineAsync(
@@ -1137,9 +1158,13 @@ public sealed class TicketLifecycleAppService(
                 resolutionAchievedAtUtc: now, settlingClosure: true);
         }
 
-        await EnqueueLifecycleEventAsync(
-            OutboxEventTypes.TicketClosed, OutboxEventTypes.TicketClosedVersion,
-            ticket, integrationEmployeeId, correlationId, now, cancellationToken);
+        // notifyCustomer == false (AI-only time limit): no lifecycle event is written, so nothing reaches the customer.
+        if (notifyCustomer)
+        {
+            await EnqueueLifecycleEventAsync(
+                OutboxEventTypes.TicketClosed, OutboxEventTypes.TicketClosedVersion,
+                ticket, integrationEmployeeId, correlationId, now, cancellationToken);
+        }
 
         beforeCommit?.Invoke(now);
 
