@@ -40,6 +40,9 @@ public sealed class DispatchService(
     /// <summary>The initiator recorded on a dispatch that the Auto dispatcher created on a scheduled date (no person confirmed it).</summary>
     public static readonly Guid AutoActorId = new("00000000-0000-0000-0000-00000000a070");
 
+    /// <summary>Whether the caller holds the send right. The API checks it before it validates a request, so an unauthorized caller learns nothing about the request.</summary>
+    public async Task<bool> CanSendAsync(CollectionsCaller caller, CancellationToken ct) => (await authorization.ResolveAsync(caller, ct)).CanSendReminders;
+
     /// <summary>A person confirms an exact, previously shown list. Authorization first: no data is read for an unauthorized caller.</summary>
     public async Task<CollectionsResult<DispatchDto>> ConfirmAsync(CollectionsCaller caller, ConfirmDispatchRequest request, CancellationToken ct)
     {

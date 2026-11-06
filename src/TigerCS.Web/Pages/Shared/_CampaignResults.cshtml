@@ -89,8 +89,42 @@ else if (Model.Report is { } report)
                     <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-review-reason", "Why Export review CSV is unavailable", exportProblem, "data-export-review-reason"))" />
                 </span>
             }
-            @if (exportProblem is null && report.ReadyCount > 0 && report.ReadyCount + report.NotEligibleCount == report.TotalCount)
-            { <a class="btn btn-primary" href="@Model.PageUrl(export: "genesys")">Export Genesys CSV</a> }
+            @* Export for Genesys: the same audited, template-checked file as in Manual, of every financially eligible customer of these filters, schedule or not. It uploads nothing and
+               marks nobody as sent; Auto's sending readiness and scheduler are untouched. *@
+            @{
+                var genesysReason = Model.ExportGenesysBlockedReason;
+                var genesysTip = genesysReason ?? "Downloads every financially eligible customer of these filters, on any day, as a CSV in the format of the campaign's Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate) for a manual import. Customers held back by financial, contact, identity, legal or duplicate rules are left out. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
+            }
+            @if (genesysReason is null)
+            {
+                <form method="post" class="campaign-action" asp-page-handler="ExportGenesys" data-auto-export-form>
+                    @foreach (var name in CampaignsModel.FilterFieldNames)
+                    {
+                        if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
+                        <input type="hidden" name="@name" value="@(name switch {
+                            "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => "", "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
+                            "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
+                    }
+                    <input type="hidden" name="selectionMode" value="AllMatching" />
+                    <button class="btn" type="submit" aria-describedby="tip-export-genesys" data-export-genesys-button data-blocked="false">Export for Genesys</button>
+                    <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-genesys", "Export for Genesys", genesysTip, "data-export-genesys-reason"))" />
+                </form>
+            }
+            else
+            {
+                @* Blocked: the button stays visible with its reason, and no export request can be posted (the same pattern as the review export above). *@
+                <span class="campaign-action">
+                    <button class="btn" type="button" disabled aria-disabled="true" aria-describedby="tip-export-genesys" data-export-genesys-button data-blocked="true">Export for Genesys</button>
+                    <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-genesys", "Why Export for Genesys is unavailable", genesysTip, "data-export-genesys-reason"))" />
+                </span>
+            }
+            @if (Model.AutoExportNeedsRefresh)
+            {
+                <form method="post" asp-page-handler="RefreshApproval" class="campaign-action">
+                    <input type="hidden" name="returnUrl" value="@Model.ReturnUrl()" />
+                    <button class="btn btn-sm" type="submit" data-refresh-approval>Refresh approval data</button>
+                </form>
+            }
             </div>
         </div>
         <div class="table-scroll">

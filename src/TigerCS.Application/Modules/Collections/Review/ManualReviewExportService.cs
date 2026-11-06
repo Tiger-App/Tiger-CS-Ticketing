@@ -17,15 +17,13 @@ namespace TigerCS.Application.Modules.Collections.Review;
 /// nothing and changes nothing; like the Auto review export it needs the send right, and each export is written to the audit trail (counts, filter and file hash, never a customer's data).
 /// </summary>
 public sealed class ManualReviewExportService(
-    CollectionsOptions options, CollectionsAuthorizationService authorization, CollectionsClock clock, ReviewQueryService query,
+    CollectionsOptions options, PactReceivablesOptions sourceOptions, CollectionsAuthorizationService authorization, CollectionsClock clock, ReviewQueryService query,
     IAuditEntryWriter audit, ICollectionsUnitOfWork unitOfWork, ILogger<ManualReviewExportService> logger)
 {
     public const string AuditAction = "CollectionsReviewFileExported", AuditEntityType = "CollectionsReviewExport";
 
     /// <summary>The most rows one review file holds; a longer list must be narrowed with the filters.</summary>
     public const int MaxRows = 20000;
-
-    private const int PageSize = 100;
 
     private static readonly string[] Header =
     [
@@ -36,26 +34,18 @@ public sealed class ManualReviewExportService(
     {
         if (!(await authorization.ResolveAsync(caller, ct)).CanSendReminders)
             return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.Forbidden);
-        if (!options.Enabled) return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.Disabled);
+        if (!options.Enabled || !sourceOptions.Enabled) return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.Disabled);
         if (!CollectionsSendingModes.IsManual(filter?.SendingMode))
             return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.InvalidRequest, "This review export is for Manual. Auto has its own review export.");
 
-        var rows = new List<ReviewRecordDto>();
-        ReviewRunDto? run = null;
-        for (var page = 1; ; page++)
-        {
-            var result = await query.QueryAsync(caller, filter, page, PageSize, ct);
-            if (!result.IsSuccess) return CollectionsResult<ReviewExportDto>.Fail(result.Outcome, result.Detail);
-            var data = result.Value!;
-            run = data.Run;
-            if (run is null) return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.ReviewRequired, "There is no approval data yet. Refresh the approval data, then export.");
-            if (data.TotalCount > MaxRows)
-                return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.InvalidRequest, $"{data.TotalCount:N0} customers match; a review file holds at most {MaxRows:N0}. Narrow the filters and export again.");
-            rows.AddRange(data.Items);
-            if (data.Items.Count < PageSize || rows.Count >= data.TotalCount) break;
-        }
+        // The whole list from one calculation: paging would recalculate the run once per page.
+        var list = await query.ManualListAsync(caller, filter, ct);
+        if (!list.IsSuccess) return CollectionsResult<ReviewExportDto>.Fail(list.Outcome, list.Detail);
+        var rows = list.Value!.Items;
+        if (rows.Count > MaxRows)
+            return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.InvalidRequest, $"{rows.Count:N0} customers match; a review file holds at most {MaxRows:N0}. Narrow the filters and export again.");
 
-        var csv = Write(rows, run!);
+        var csv = Write(rows, list.Value.Run);
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(csv)));
         var ready = rows.Count(r => r.ValidationStatus == "Ready");
         try

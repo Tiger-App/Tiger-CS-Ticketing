@@ -358,11 +358,12 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
         if (s.Unit is { } unit) { var p = Like(unit); q = q.Where(r => EF.Functions.Like(r.UnitCode, p, "\\")); }
         if (s.CustomerText is { } text)
         {
+            // The same fields the Campaigns preview searches: name, customer id, unit code, e-mail, tower number or name, and the phone's digits.
             var name = Like(text);
             var digits = s.PhoneDigits is null ? null : Like(s.PhoneDigits);
-            q = digits is null
-                ? q.Where(r => EF.Functions.Like(r.CustomerName, name, "\\") || EF.Functions.Like(r.TenantId, name, "\\"))
-                : q.Where(r => EF.Functions.Like(r.CustomerName, name, "\\") || EF.Functions.Like(r.Phone, digits, "\\") || EF.Functions.Like(r.TenantId, name, "\\"));
+            q = q.Where(r => EF.Functions.Like(r.CustomerName, name, "\\") || EF.Functions.Like(r.TenantId, name, "\\") || EF.Functions.Like(r.UnitCode, name, "\\")
+                || EF.Functions.Like(r.Email, name, "\\") || (r.TowerNumber != null && EF.Functions.Like(r.TowerNumber, name, "\\")) || (r.TowerName != null && EF.Functions.Like(r.TowerName, name, "\\"))
+                || (digits != null && EF.Functions.Like(r.Phone, digits, "\\")));
         }
         if (s.DueFrom is { } from) q = q.Where(r => r.DueDate >= from);
         if (s.DueTo is { } to) q = q.Where(r => r.DueDate <= to);

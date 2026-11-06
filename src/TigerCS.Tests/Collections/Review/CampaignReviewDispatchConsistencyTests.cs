@@ -40,16 +40,16 @@ public sealed class CampaignReviewDispatchConsistencyTests
     {
         using var h = Harness();
         var date = new DateOnly(2026, 10, 14);
-        // The Campaigns page filters on the unit's TOTAL (strictly greater than Minimum Total); the review / dispatch pipeline keeps its own inclusive per-instalment minimum
-        // (100). 99.99 makes both exclude the 99.99 unit and include the 100 and 250.50 ones.
+        // The Campaigns page filters on the unit's TOTAL (strictly greater than Minimum Total). The review / dispatch pipeline reads every instalment too and applies a minimum to the
+        // stored total (inclusive, 100 here). 99.99 makes both exclude the 99.99 unit and include the 100 and 250.50 ones.
         var preview = (await Preview(h).PreviewAsync(h.Manager, "CurrentMonthReminder", date, minTotal: 99.99m)).Value!;
         h.Source.Requests.Clear();   // from here on only the review / dispatch reads are checked
         var run = await h.RefreshAsync();
         Assert.Equal("Completed", run.Status);
         using var scope = h.NewScope();
-        var review = (await scope.Query.QueryAsync(h.Manager, new ReviewFilter(ReminderType: "CurrentMonth", PaymentStatus: "All"), 1, 100, CancellationToken.None)).Value!;
+        var review = (await scope.Query.QueryAsync(h.Manager, new ReviewFilter(ReminderType: "CurrentMonth", PaymentStatus: "All", MinRemaining: 100m), 1, 100, CancellationToken.None)).Value!;
 
-        // Same units, same amounts: the 99.99 instalment is below the minimum (100, inclusive) for every consumer; the settled row is nobody's candidate.
+        // Same units, same amounts: the 99.99 unit is below the minimum total for every consumer; the settled row is nobody's candidate.
         Assert.Equal(["T0002", "T0003"], preview.Items.Select(i => i.TenantId).Order());
         Assert.Equal(preview.Items.OrderBy(i => i.UnitCode).Select(i => (i.UnitCode, i.Amount)),
                      review.Items.OrderBy(i => i.UnitCode).Select(i => (i.UnitCode, i.RemainingAmount)));
@@ -57,19 +57,19 @@ public sealed class CampaignReviewDispatchConsistencyTests
         Assert.Equal(preview.TotalCount, export.RowCount);
         h.Source.Requests.Clear();   // the Campaigns reads above filter the unit total; the next assertions are about the review / dispatch reads only
 
-        // Every source read of the three flows carried the same filters.
-        Assert.All(h.Source.Requests, r => Assert.Equal(100m, r.MinAmount));
+        // Every source read of the three flows carried the same filters: the whole window, every instalment (no per-instalment minimum, like the Campaigns preview).
+        Assert.All(h.Source.Requests, r => Assert.Equal(0m, r.MinAmount));
         Assert.All(h.Source.Requests, r => Assert.Equal(DateOnly.FromDateTime(h.Sql.StartDate), r.FromDate));
 
-        // Dispatch: approval of the exact list, revalidation against the same snapshot, upload of exactly those contacts (to the scripted client).
-        var (summary, confirm) = await h.PrepareAsync();
+        // Dispatch: approval of the exact list (the same minimum total), revalidation against the same snapshot, upload of exactly those contacts (to the scripted client).
+        var (summary, confirm) = await h.PrepareAsync(h.All(new ReviewFilter(MinRemaining: 100m)));
         Assert.Equal(2, summary.Count);
         using (var s = h.NewScope()) Assert.Equal(CollectionsOutcome.Accepted, (await s.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
         using (var s = h.NewScope()) await s.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Last(), CancellationToken.None);
         var sent = h.Client.Calls.SelectMany(c => c.Contacts).ToList();
         Assert.Equal(2, sent.Count);
         Assert.Equal(preview.Items.Sum(i => i.Amount), sent.Sum(c => decimal.Parse(c.AmountDue, System.Globalization.CultureInfo.InvariantCulture)));
-        Assert.All(h.Source.Requests, r => Assert.Equal(100m, r.MinAmount));
+        Assert.All(h.Source.Requests, r => Assert.Equal(0m, r.MinAmount));
     }
 
     [Fact]

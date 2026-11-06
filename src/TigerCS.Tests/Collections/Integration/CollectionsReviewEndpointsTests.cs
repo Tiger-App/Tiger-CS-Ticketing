@@ -135,6 +135,20 @@ public sealed class CollectionsReviewEndpointsTests
     }
 
     [Fact]
+    public async Task APersonCannotConfirmAnAutoList_OverTheApi_AndNothingIsQueued()
+    {
+        // The Auto list (an unset or Auto mode) is the scheduled dispatcher's; a person's confirmation is refused before any list is read or queued.
+        var source = new Source();
+        using var factory = Factory(source);
+        using var manager = await Client(factory, Roles.CsManager);
+        var auto = new ConfirmDispatchRequest(new SelectionRequest(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto"), ReviewQueryService.ModeAllMatching), 1, "x", "k", true);
+        var response = await manager.PostAsJsonAsync("/api/collections/review/dispatches", auto);
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        Assert.Contains("Manual", await response.Content.ReadAsStringAsync());
+        Assert.Equal(0, source.Reads);
+    }
+
+    [Fact]
     public async Task ConfirmationNeedsTheIdempotencyKey_AndAnAcknowledgement()
     {
         using var factory = Factory(new Source());

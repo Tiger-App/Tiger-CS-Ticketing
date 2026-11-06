@@ -48,9 +48,10 @@ public static class GenesysContactTemplate
         return text.ToString();
     }
 
-    // A value beginning with = + - @ would be executed by a spreadsheet. The phone's own leading + is the one legitimate case: in any other column a leading + is neutralized too.
+    // A value beginning with = + - @ (or a tab or carriage return, which a spreadsheet also reads as the start of a formula) would be executed. The phone's own leading + is the one legitimate
+    // case: in any other column a leading + is neutralized too.
     private static string Neutralize(string value, bool isPhone) =>
-        value.Length > 0 && (value[0] is '=' or '-' or '@' || (value[0] == '+' && !isPhone)) ? "'" + value : value;
+        value.Length > 0 && (value[0] is '=' or '-' or '@' or '\t' or '\r' || (value[0] == '+' && !isPhone)) ? "'" + value : value;
 
     private static string Quote(string value) => "\"" + value.Replace("\"", "\"\"", StringComparison.Ordinal) + "\"";
 
@@ -103,7 +104,8 @@ public static class GenesysContactTemplate
     {
         var header = Columns.Concat(columns.Where(c => !Columns.Contains(c, StringComparer.Ordinal)).Distinct(StringComparer.Ordinal)).ToList();
         var text = new StringBuilder();
-        text.Append(string.Join(',', header.Select(Quote))).Append("\r\n");
+        // The list's own column names come from Genesys: neutralized like any cell (the six template names start with a letter, so they are unchanged).
+        text.Append(string.Join(',', header.Select(h => Quote(Neutralize(h, isPhone: false))))).Append("\r\n");
         foreach (var c in contacts)
         {
             var values = new Dictionary<string, string>(StringComparer.Ordinal)

@@ -43,6 +43,9 @@ public sealed record ReviewPageDto(
     IReadOnlyList<ReviewRecordDto> Items, decimal MinRemainingApplied, bool TowerDataMissing = false,
     decimal? ReadyTotalAmount = null);
 
+/// <summary>Every row of one Manual list in the page's order, from one calculation (see <c>ReviewQueryService.ManualListAsync</c>): for a file that holds the whole list.</summary>
+public sealed record ManualListDto(ReviewRunDto Run, IReadOnlyList<ReviewRecordDto> Items);
+
 public sealed record SelectionRequest(
     ReviewFilter? Filter, string Mode, IReadOnlyList<string>? RecordKeys = null,
     IReadOnlyList<string>? ExcludedKeys = null, int ContactPage = 1, int ContactPageSize = 50,

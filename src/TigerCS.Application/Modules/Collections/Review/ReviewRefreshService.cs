@@ -27,9 +27,24 @@ public sealed class ReviewRefreshService(
     public TigerCS.Application.Modules.Collections.Reconciliation.SourceGateDto SourceGate() =>
         TigerCS.Application.Modules.Collections.Reconciliation.SourceGate.Evaluate(campaignOptions, sourceOptions, reconciliation, clock.UtcNow);
 
+    /// <summary>
+    /// The per-instalment minimum of every source read of the review pipeline (the refresh and the revalidation before an upload): none. The Campaigns preview reads the same way, so the three
+    /// read the same instalments and calculate the same amounts; a minimum is applied to a customer's total, never to single instalments.
+    /// </summary>
+    public const decimal ReadMinimumAmount = 0m;
+
     public ReviewBuildContext Context(DateOnly asOf, DateTime readAtUtc, CrmLinkSet? crm = null) => new(asOf, readAtUtc, SourceLabel, sourceOptions.Currency,
         SourceReconciled, campaignOptions.LegalNoticeExportEnabled, campaignOptions.LegalCaseDispatchApproved,
-        reviewOptions.FloatNoiseTolerance, sourceOptions.SourceStatusMap, crm);
+        reviewOptions.FloatNoiseTolerance, sourceOptions.SourceStatusMap, crm, PolicyStart);
+
+    /// <summary>The first due date the stage policy looks at: the configured PACT start date, the Campaigns preview's eligibility scope.</summary>
+    public DateOnly PolicyStart => DateOnly.FromDateTime(sourceOptions.StartDate);
+
+    /// <summary>
+    /// The first due date the review pipeline READS: the whole history, like the Campaigns preview's default period, so a customer's Due / Overdue figures, Minimum Total and Manual amount
+    /// see the same instalments in both modes. Which instalments make a unit a candidate is still decided from <see cref="PolicyStart"/> on.
+    /// </summary>
+    public static readonly DateOnly ReadStart = CollectionsCampaignAppService.HistoryStart;
 
     /// <summary>The CRM links of every unit of a source read (ONE bulk read), with the state of the CRM data; empty when no link service is configured.</summary>
     public Task<CrmLinkSet> ReadCrmAsync(IEnumerable<PactReceivableInstalment> items, CancellationToken ct) =>
@@ -63,12 +78,13 @@ public sealed class ReviewRefreshService(
         var asOf = clock.BusinessDate;
         // With background jobs off the refresh runs inside this process, so it is also rate limited: the data that was just published for today is returned instead of reading the source again.
         if (enqueue && scheduler.RefreshRunsInProcess && reviewOptions.InProcessRefreshCooldownSeconds > 0
-            && await store.GetCurrentRunAsync(ct) is { CompletedAtUtc: { } done } recent && recent.AsOfDate == asOf && now - done < TimeSpan.FromSeconds(reviewOptions.InProcessRefreshCooldownSeconds))
+            && await store.GetCurrentRunAsync(ct) is { CompletedAtUtc: { } done } recent && recent.AsOfDate == asOf && recent.CompanyId == companyId
+            && now - done < TimeSpan.FromSeconds(reviewOptions.InProcessRefreshCooldownSeconds))
             return CollectionsResult<ReviewRunDto>.Ok(query.ToDto(recent), CollectionsOutcome.Replayed);
         var run = new CollectionsReviewRun
         {
             Status = ReviewRunStatus.Queued, AsOfDate = asOf, CompanyId = companyId,
-            DueFrom = DateOnly.FromDateTime(sourceOptions.StartDate),
+            DueFrom = ReadStart,
             DueTo = new DateOnly(asOf.Year, asOf.Month, DateTime.DaysInMonth(asOf.Year, asOf.Month)),
             Source = SourceLabel, SourceProcedureSuffix = sourceOptions.ProcedureSuffix ?? "", SourceReconciled = SourceReconciled,
             RequestedByEmployeeId = requestedBy, RequestedAtUtc = now, Phase = "Queued"
@@ -154,9 +170,12 @@ public sealed class ReviewRefreshService(
         try
         {
             phase = "Reading the financial source"; await ProgressAsync(runId, phase, 5, null, ct);
-            var snapshot = await source.ReadAsync(new PactReceivablesRequest(run.DueFrom, run.DueTo, run.CompanyId, MinAmount: decimal.Round(sourceOptions.DefaultMinOutstandingAmount, 4)), budget.Token);
-            // Same minimum outstanding amount as the Campaigns preview. A local snapshot that is not loaded or does not cover the window would silently omit
-            // receivables: refuse. (A merely stale snapshot is flagged on every record through its read time, as before.)
+            // Every instalment of the window is read (no per-instalment minimum), exactly as the Campaigns preview reads it: the minimum is a rule about a customer's TOTAL (Minimum Total, the
+            // stage threshold), applied by the calculation. A per-instalment minimum here made the two modes disagree: a customer whose instalments were each below it was missing from the
+            // stored data, or stored with a smaller amount, while the preview counted them all.
+            var snapshot = await source.ReadAsync(new PactReceivablesRequest(run.DueFrom, run.DueTo, run.CompanyId, MinAmount: ReadMinimumAmount), budget.Token);
+            // A local snapshot that is not loaded or does not cover the window would silently omit receivables: refuse. (A merely stale snapshot is flagged on every record through its
+            // read time, as before.)
             if (snapshot.Snapshot is { } snapshotStatus && (!snapshotStatus.RangeCovered || snapshotStatus.Companies.Any(c => !c.HasSnapshot)))
                 throw new PactReceivablesSourceException($"Receivables data is not ready. {snapshotStatus.ReadyProblem}");
             phase = "Validating records"; await ProgressAsync(runId, phase, 45, snapshot.Items.Count, ct);

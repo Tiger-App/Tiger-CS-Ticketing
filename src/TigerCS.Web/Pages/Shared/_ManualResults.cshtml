@@ -54,6 +54,7 @@
                     <summary>Why customers are held back <span class="campaign-blockers__count">@(reasonGroups.Count + (reason is null ? 0 : 1))</span></summary>
                     <ul class="campaign-blockers__list">
                         @if (reason is not null) { <li data-not-ready-reason>@reason</li> }
+                        @if (list.TowerDataMissing) { <li data-not-ready-reason data-tower-data-missing>The approval data carries no project / tower for these customers, so the tower filter matched nobody. Refresh the approval data; if the notice stays, the receivables source does not supply towers and the filter cannot be applied in Manual.</li> }
                         @foreach (var g in reasonGroups)
                         {
                             <li data-not-ready-reason>@CampaignsModel.ReasonText(g.Key) (@g.Count().ToString("N0") on this list)</li>

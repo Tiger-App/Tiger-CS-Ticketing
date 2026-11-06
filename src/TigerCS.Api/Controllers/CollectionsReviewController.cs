@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc;
 using TigerCS.Api.OpenApi;
 using TigerCS.Application.Modules.Collections.Review;
 using TigerCS.Application.Modules.Collections.Services;
+using TigerCS.Domain.Modules.Collections;
 using TigerCS.Domain.Modules.Collections.Review;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 using TigerCS.Infrastructure.Modules.IdentityAndAccess.Services;
@@ -79,8 +80,9 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
     [HttpPost("export/genesys")]
     [RequirePermission(Permissions.CollectionsSend)]
     [ProducesResponseType<GenesysExportDto>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> ExportForGenesys([FromBody] SelectionRequest request, [FromQuery] bool confirmRepeat = false, CancellationToken ct = default) =>
-        Caller() is { } caller ? Result(await genesysExport.ExportAsync(caller, request, ct, confirmRepeat)) : Unauthorized();
+    public async Task<IActionResult> ExportForGenesys([FromBody] SelectionRequest request, [FromQuery] bool confirmRepeat = false, [FromQuery] int? expectedRepeats = null,
+        CancellationToken ct = default) =>
+        Caller() is { } caller ? Result(await genesysExport.ExportAsync(caller, request, ct, confirmRepeat, expectedRepeats)) : Unauthorized();
 
     /// <summary>
     /// The Manual "Export review CSV": every customer of the filtered Manual list with its status and reasons, for people to review. Not a Genesys file. Read only and audited; needs the send right.
@@ -98,6 +100,11 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
     public async Task<IActionResult> Confirm([FromBody] ConfirmDispatchRequest request, [FromHeader(Name = "Idempotency-Key")] string? headerKey, CancellationToken ct)
     {
         if (Caller() is not { } caller) return Unauthorized();
+        if (!await dispatch.CanSendAsync(caller, ct)) return Result(CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.Forbidden));
+        // A person sends Manual lists only. The Auto list (an unset or Auto mode) is dispatched by the automatic dispatcher, and only while AutoSendingEnabled is on.
+        if (!CollectionsSendingModes.IsManual(request.Selection.Filter?.SendingMode))
+            return Result(CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest,
+                "Sending to Genesys by a person is Manual only. Automatic campaigns are dispatched by the automatic dispatcher while AutoSendingEnabled is on."));
         var effective = string.IsNullOrWhiteSpace(request.IdempotencyKey) ? headerKey ?? "" : request.IdempotencyKey;
         return Result(await dispatch.ConfirmAsync(caller, request with { IdempotencyKey = effective }, ct));
     }

@@ -68,7 +68,7 @@ public sealed class CollectionsCampaignRenderTests
         Assert.Matches("data-campaign-status=\"NotEligible\"", html);
         Assert.Contains("Not eligible: no balance qualifies for this stage", html);
         Assert.Matches(@"data-unit-due>\s*300\.00\s*<", html);                       // the unit's real Due is shown, not hidden or zeroed
-        Assert.Contains("Export Genesys CSV", html);                                    // every ELIGIBLE row is ready: the Genesys file (ready rows only) is offered
+        Assert.Contains("Export for Genesys", html); Assert.DoesNotContain("Export Genesys CSV", html);   // the audited Export for Genesys replaces the old unchecked Auto file
         foreach (var gone in new[] { "View Details", "data-unit-toggle", "data-unit-detail", "Original amount", "Days late", "receivables-table--instalments" })
             Assert.DoesNotContain(gone, html);                                          // Campaigns omit the expandable instalment details of Receivables
     }

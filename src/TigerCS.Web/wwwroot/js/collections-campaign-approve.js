@@ -88,6 +88,14 @@
             if (button && event.submitter === button) { button.disabled = true; button.textContent = 'Sending…'; selected.clear(); save(selected); }
         }
     });
+    // An export button is held for a few seconds once pressed: a double click sends one request, not two. (The download does not reload the page, so the button is released on a timer, and
+    // sync() then restores its real state.) The server would refuse a second simultaneous export anyway.
+    document.addEventListener('submit', event => {
+        const button = event.submitter;
+        if (!button || !button.matches || !button.matches('[data-export-genesys-button],[data-export-review-manual],[data-confirm-repeat-export]')) return;
+        button.disabled = true;
+        setTimeout(() => { button.disabled = false; sync(); }, 4000);
+    });
     const results = document.querySelector('[data-results]');
     if (results) new MutationObserver(sync).observe(results, { childList: true, subtree: true });
     sync();
