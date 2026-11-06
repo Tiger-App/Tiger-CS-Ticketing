@@ -178,6 +178,16 @@ public sealed class FakeTicketRepository : ITicketRepository
     /// <summary>Test assertion helper — every ticket added so far, in insertion order.</summary>
     public IReadOnlyCollection<Ticket> All => _tickets.Values;
 
+    /// <summary>Mirrors the coarse part of the real AI-only candidate query (created before the cutoff, open for work, unowned); the service re-checks the rest.</summary>
+    public Task<IReadOnlyList<long>> ListAiOnlyAutoCloseCandidateIdsAsync(
+        DateTime createdBeforeUtc, long afterTicketId, int batchSize, CancellationToken cancellationToken = default) =>
+        Task.FromResult<IReadOnlyList<long>>(
+            _tickets.Values
+                .Where(t => t.TicketId > afterTicketId && t.CreatedAtUtc < createdBeforeUtc
+                    && t.TicketStatus is TigerCS.Domain.Modules.Ticketing.TicketStatus.Open or TigerCS.Domain.Modules.Ticketing.TicketStatus.InProgress or TigerCS.Domain.Modules.Ticketing.TicketStatus.PendingCustomer
+                    && t.CurrentOwnerEmployeeId is null)
+                .OrderBy(t => t.TicketId).Select(t => t.TicketId).Take(batchSize).ToList());
+
     /// <summary>The handlers the CS Agent visibility rule reads. Share this instance with the <c>TicketQueryAppService</c> under test.</summary>
     public FakeTicketInteractionHandlerRepository Handlers { get; } = new();
 

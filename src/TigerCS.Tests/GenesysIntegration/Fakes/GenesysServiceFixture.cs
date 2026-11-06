@@ -140,6 +140,12 @@ public sealed class GenesysServiceFixture
     /// <summary>The chatbot customer-inactivity closer (the background job's whole body).</summary>
     public ChatbotInactivityCloseAppService InactivityClose { get; }
 
+    /// <summary>The AI-only 18-hour closer (the background job's whole body), over the same stores and the REAL lifecycle service.</summary>
+    public AiOnlyTicketAutoCloseAppService AiOnlyClose { get; }
+
+    /// <summary>The settings <see cref="AiOnlyClose"/> reads — mutate before use to change threshold or batch size.</summary>
+    public AiOnlyAutoCloseOptions AiOnlyOptions { get; } = new() { Enabled = true };
+
     /// <summary>The REAL lifecycle service the closer calls — over the same ticket, status-history, audit and Outbox fakes.</summary>
     public TicketLifecycleAppService Lifecycle { get; }
 
@@ -340,6 +346,9 @@ public sealed class GenesysServiceFixture
 
         InactivityClose = new ChatbotInactivityCloseAppService(
             Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock, Audit);
+
+        AiOnlyClose = new AiOnlyTicketAutoCloseAppService(
+            AiOnlyOptions, Tickets, Interactions, Conversations, Tickets.Handlers, Handoffs, TicketNotes, Lifecycle, Clock);
 
         AgentContext = new GenesysAgentContextAppService(
             Options, AgentResolution, Conversations, Tickets, UnitOfWork, Audit, HandlingHistory);

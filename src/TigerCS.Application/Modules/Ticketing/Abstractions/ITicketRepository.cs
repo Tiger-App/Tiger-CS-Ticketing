@@ -202,6 +202,16 @@ public interface ITicketRepository
     Task AddAsync(Ticket ticket, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Candidate ids for the AI-only time-limit closure, ascending, strictly after <paramref name="afterTicketId"/> (a keyset cursor, so a candidate
+    /// the service rejects is never re-listed within one run), at most <paramref name="batchSize"/>: tickets created before
+    /// <paramref name="createdBeforeUtc"/> (exclusive) that are still open for work (Open / In Progress / Pending Customer), owned by nobody and
+    /// recorded on Genesys. The implementation also drops what is plainly human work (a handler, a handoff, a human-follow-up flag); candidates
+    /// only — the closing service re-checks every fact before it writes.
+    /// </summary>
+    Task<IReadOnlyList<long>> ListAiOnlyAutoCloseCandidateIdsAsync(
+        DateTime createdBeforeUtc, long afterTicketId, int batchSize, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Count of existing tickets whose TicketNumber already starts with
     /// <paramref name="ticketNumberPrefix"/> (e.g. "TG-CS-20260820-") — used
     /// to compute the next per-department-per-day sequence segment

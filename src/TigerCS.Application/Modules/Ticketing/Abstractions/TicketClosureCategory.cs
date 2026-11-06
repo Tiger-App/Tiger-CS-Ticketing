@@ -54,7 +54,10 @@ public static class TicketClosureAuditActions
     /// <summary>Document-delivery workflow closure — a system closure, never attributed to the AI.</summary>
     public const string ClosedForDocumentDelivery = "AutoCloseDocumentDelivery";
 
+    /// <summary>AI-only time-limit closure (no human ever involved, open longer than the configured hours) — a system closure, never attributed to the AI's own completion.</summary>
+    public const string ClosedForAiOnlyTimeout = "AutoCloseAiOnlyTimeout";
+
     /// <summary>Every action that closes a ticket, so "the latest closure" considers all of them.</summary>
     public static readonly IReadOnlyList<string> AllClosures =
-        [ClosedByAgent, ClosedByAi, ClosedForCustomerInactivity, ClosedForDocumentDelivery];
+        [ClosedByAgent, ClosedByAi, ClosedForCustomerInactivity, ClosedForDocumentDelivery, ClosedForAiOnlyTimeout];
 }

@@ -14,6 +14,28 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
     public async Task AddAsync(Ticket ticket, CancellationToken cancellationToken = default) =>
         await dbContext.Tickets.AddAsync(ticket, cancellationToken);
 
+    public async Task<IReadOnlyList<long>> ListAiOnlyAutoCloseCandidateIdsAsync(
+        DateTime createdBeforeUtc, long afterTicketId, int batchSize, CancellationToken cancellationToken = default)
+    {
+        var openStatuses = new[] { TicketStatus.Open, TicketStatus.InProgress, TicketStatus.PendingCustomer };
+        return await dbContext.Tickets
+            .AsNoTracking()
+            .Where(t => t.TicketId > afterTicketId
+                && t.CreatedAtUtc < createdBeforeUtc
+                && openStatuses.Contains(t.TicketStatus)
+                && t.CurrentOwnerEmployeeId == null)
+            .Where(t => dbContext.TicketInteractions.Any(i => i.TicketId == t.TicketId && i.Source == InteractionContextSource.Genesys))
+            .Where(t => !dbContext.TicketInteractions.Any(i => i.TicketId == t.TicketId
+                && (i.Source != InteractionContextSource.Genesys || i.HandledByUserId != null || i.RequiresHumanFollowUp)))
+            .Where(t => !dbContext.TicketInteractionHandlers.Any(h => h.TicketId == t.TicketId))
+            .Where(t => !dbContext.TicketAgentHandoffs.Any(h => h.TicketId == t.TicketId
+                && h.Status != AgentHandoffStatus.Cancelled && h.Status != AgentHandoffStatus.NotRequired))
+            .OrderBy(t => t.TicketId)
+            .Select(t => t.TicketId)
+            .Take(batchSize)
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<int> CountByTicketNumberPrefixAsync(string ticketNumberPrefix, CancellationToken cancellationToken = default) =>
         dbContext.Tickets.CountAsync(t => t.TicketNumber.StartsWith(ticketNumberPrefix), cancellationToken);
 

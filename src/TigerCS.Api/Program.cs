@@ -2,6 +2,7 @@ using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.Extensions.Options;
 using TigerCS.Application.Modules.Collections;
+using TigerCS.Application.Modules.GenesysIntegration.Services;
 using TigerCS.Application.Modules.Ticketing.Services;
 using Microsoft.IdentityModel.Logging;
 using Microsoft.IdentityModel.Tokens;
@@ -310,6 +311,11 @@ using (var backgroundJobScope = app.Services.CreateScope())
     // so it is safe across restarts. Also a no-op when BackgroundJobs:Enabled
     // is false.
     app.Services.UseTigerCsRecurringChatbotInactivityClose(backgroundJobOptions);
+
+    // AI-only 18-hour closure — registered only where AiOnlyAutoClose:Enabled is true (default false everywhere, Production included).
+    app.Services.UseTigerCsRecurringAiOnlyAutoClose(
+        backgroundJobOptions,
+        backgroundJobScope.ServiceProvider.GetRequiredService<IOptions<AiOnlyAutoCloseOptions>>().Value);
 
     if (!backgroundJobOptions.Enabled)
     {
