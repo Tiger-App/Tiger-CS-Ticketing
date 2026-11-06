@@ -3252,17 +3252,53 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .dashboard-workspace .dash-attention .panel__title { font-size: var(--text-lg); }
 .dashboard-workspace .dash-attention .table-scroll { overflow-x: auto; }
 .dashboard-workspace .dash-attention .data-table th { padding: 6px 16px; background: transparent; font-size: var(--text-xs); color: var(--color-text-secondary); border-bottom: 0; }
-.dashboard-workspace .dash-attention .data-table td { padding: 10px 16px; font-size: var(--text-base); border-bottom: 0; }
+.dashboard-workspace .dash-attention .data-table td { padding: 14px 16px; font-size: var(--text-base); border-bottom: 0; vertical-align: middle; }
 .dashboard-workspace .dash-attention .data-table tbody tr:last-child td { border-bottom: 0; }
 .dashboard-workspace .dash-attention .data-table tbody tr:hover td { background: var(--tbl-hover); }
 .dashboard-workspace .dash-attention .data-table tbody tr:hover td:first-child { border-radius: 8px 0 0 8px; }
 .dashboard-workspace .dash-attention .data-table tbody tr:hover td:last-child { border-radius: 0 8px 8px 0; }
-.dashboard-workspace .dash-attention .data-table th:first-child, .dashboard-workspace .dash-attention .data-table td:first-child { width: 160px; white-space: nowrap; }
+.dashboard-workspace .dash-attention .data-table th:first-child, .dashboard-workspace .dash-attention .data-table td:first-child { width: 220px; white-space: nowrap; }
+.dashboard-workspace .dash-attention .data-table th:nth-child(3), .dashboard-workspace .dash-attention .data-table td:nth-child(3) { width: 270px; }
+.dashboard-workspace .dash-attention .data-table th:nth-child(4), .dashboard-workspace .dash-attention .data-table td:nth-child(4) { width: 230px; }
 .dashboard-workspace .dash-attention .data-table th:last-child, .dashboard-workspace .dash-attention .data-table td:last-child { width: 150px; text-align: right; white-space: nowrap; }
 .dashboard-workspace .dash-attention .ticket-id-link { display: inline-block; padding: 1px 8px; margin-left: -8px; border-radius: 6px; font-weight: 600; color: #2563EB; transition: background .12s ease; }
 .dashboard-workspace .dash-attention .ticket-id-link:hover { background: color-mix(in srgb, #3B82F6 10%, #fff); text-decoration: none; }
 .dashboard-workspace .dept-cell { display: flex; }
 .dashboard-workspace .dept-cell__name { overflow: visible; text-overflow: clip; white-space: normal; }
+
+/* Channels: one muted colour per channel id (stable whatever the filters), shared by the stacked bar, the legend icon and the table. */
+.dashboard-workspace .ch-c1 { --chc: #3B82F6; }
+.dashboard-workspace .ch-c2 { --chc: #64748B; }
+.dashboard-workspace .ch-c3 { --chc: #94A3B8; }
+.dashboard-workspace .ch-c4 { --chc: #E07A5F; }
+.dashboard-workspace .ch-c5 { --chc: #0F8B8D; }
+.dashboard-workspace .ch-c6 { --chc: #39916C; }
+.dashboard-workspace .ch-c7 { --chc: #8B5CF6; }
+.dashboard-workspace .ch-c8 { --chc: #6366F1; }
+.dashboard-workspace .ch-c9 { --chc: #C58A35; }
+.dashboard-workspace .ch-c10 { --chc: #BE4B8F; }
+.dashboard-workspace .ch-c11 { --chc: #4F6FB5; }
+.dashboard-workspace .ch-c12 { --chc: #7C6A9E; }
+.dashboard-workspace .ch-other { --chc: #8A94A6; }
+.dashboard-workspace .channel-icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 9px; background: color-mix(in srgb, var(--chc, #8A94A6) 11%, #fff); color: var(--chc, #8A94A6); }
+.dashboard-workspace .channel-icon svg { width: 17px; height: 17px; }
+.dashboard-workspace .channel-icon--sm { width: 26px; height: 26px; border-radius: 7px; }
+.dashboard-workspace .channel-icon--sm svg { width: 14px; height: 14px; }
+.dashboard-workspace .summary-seg { display: contents; }
+.dashboard-workspace .summary-bar .summary-seg .bar-fill { background: var(--chc, #8A94A6); }
+.dashboard-workspace .summary-bar .summary-seg + .summary-seg .bar-fill { margin-left: 1px; }
+.dashboard-workspace .dash-card--channel { container: channelcard / inline-size; }
+.dashboard-workspace .channel-legend { list-style: none; margin: 0; padding: 10px 12px 14px; display: grid; gap: 4px 8px; grid-template-columns: minmax(0, 1fr); }
+.dashboard-workspace .channel-legend__row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; color: var(--color-text); }
+.dashboard-workspace a.channel-legend__row:hover { background: var(--color-bg); }
+.dashboard-workspace .channel-legend__text { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.dashboard-workspace .channel-legend__label { font-size: var(--text-sm); line-height: 1.25; overflow-wrap: anywhere; }
+.dashboard-workspace .channel-legend__figures { font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+.dashboard-workspace .channel-legend__figures strong { color: var(--color-text); font-weight: 600; font-size: var(--text-sm); margin-right: 4px; }
+@container channelcard (min-width: 380px) { .dashboard-workspace .channel-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container channelcard (min-width: 600px) { .dashboard-workspace .channel-legend { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.dashboard-workspace .channel-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.dashboard-workspace .channel-cell__name { overflow-wrap: anywhere; }
 
 @media (max-width: 1100px) {
   .dashboard-workspace .dash-kpi-panel .kpi-grid--six { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -3291,7 +3327,15 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
   /* Each attention row is two lines — ticket and time, then the department. */
   .dashboard-workspace .dash-attention .data-table td { padding: 2px 0; border-bottom: 0; }
   .dashboard-workspace .dash-attention .data-table tr { padding: 8px 14px; }
-  .dashboard-workspace .dash-attention .data-table td:first-child, .dashboard-workspace .dash-attention .data-table td:last-child { width: auto; }
+  .dashboard-workspace .dash-attention .data-table td:first-child, .dashboard-workspace .dash-attention .data-table td:nth-child(3),
+  .dashboard-workspace .dash-attention .data-table td:nth-child(4), .dashboard-workspace .dash-attention .data-table td:last-child { width: auto; }
+  /* Row = ticket | created, department, then channel | last action. */
+  .dashboard-workspace .dash-attention .data-table td:nth-child(1) { grid-column: 1; grid-row: 1; }
+  .dashboard-workspace .dash-attention .data-table td:nth-child(5) { grid-column: 2; grid-row: 1; text-align: right; }
+  .dashboard-workspace .dash-attention .data-table td:nth-child(2) { grid-column: 1 / -1; grid-row: 2; }
+  .dashboard-workspace .dash-attention .data-table td:nth-child(3) { grid-column: 1; grid-row: 3; }
+  .dashboard-workspace .dash-attention .data-table td:nth-child(4) { grid-column: 2; grid-row: 3; text-align: right; color: var(--color-text-secondary); }
+  .dashboard-workspace .dash-attention .data-table td:nth-child(4)::before { content: "By "; }
   .dashboard-workspace .dash-attention .data-table tbody tr:hover td { background: transparent; }
   .dashboard-workspace .summary-legend { grid-template-columns: minmax(0, 1fr); }
 }

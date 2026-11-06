@@ -390,7 +390,8 @@ public sealed class DashboardOverviewTests : IDisposable
         Assert.Equal(1, overview.Kpis.SlaBreached);
         Assert.Equal(1, overview.VolumeTotal);
         Assert.Equal(1, CountOf(overview.VolumeByChannel, "Phone"));
-        Assert.DoesNotContain(overview.VolumeByChannel, r => r.Label == "WhatsApp");
+        // Every channel is listed, but the department head sees none of another department's WhatsApp tickets.
+        Assert.Equal(0, CountOf(overview.VolumeByChannel, "WhatsApp"));
         Assert.Single(overview.VolumeByDepartment);
         Assert.Equal("Collections", overview.VolumeByDepartment[0].Label);
         Assert.DoesNotContain(overview.PriorityBreakdown, r => r.Label == "Critical");

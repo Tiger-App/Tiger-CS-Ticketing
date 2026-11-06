@@ -426,10 +426,19 @@ public sealed class DashboardUiTests
     {
         var html = View("Dashboard.cshtml");
 
-        foreach (var column in new[] { "Ticket", "Department", "Created" })
+        string[] columns = ["Ticket", "Department", "Channel", "Last Action By", "Created"];
+        foreach (var column in columns)
         {
             Assert.Contains($"<th scope=\"col\">{column}</th>", html);
         }
+
+        // The agreed column order.
+        var positions = columns.Select(c => html.IndexOf($"<th scope=\"col\">{c}</th>", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(positions.Order(), positions);
+        // Channel and last actor come from the model - never computed or hard-coded in the view.
+        Assert.Contains("ticket.ChannelName", html);
+        Assert.Contains("ticket.LastActionByName", html);
+        Assert.Contains("DashboardChannelStyle.Icon(ticket.ChannelCode)", html);
 
         foreach (var removed in new[] { "Customer", "Unit / Project", "Request Type", "Priority", "Status", "Assigned To", "SLA" })
         {
@@ -632,5 +641,57 @@ public sealed class DashboardUiTests
         Assert.Contains("name=\"closureCategory\"", list);
         Assert.Contains("query[\"closureCategory\"]", client);
         Assert.Contains("\"closureCategory\"", views);
+    }
+
+    // ---------------------------------------------------------------
+    // Channel decoration: stable colour by id, glyph by code, nothing by display name
+    // ---------------------------------------------------------------
+
+    [Theory]
+    [InlineData("1", "ch-c1")]
+    [InlineData("11", "ch-c11")]
+    [InlineData("12", "ch-c12")]
+    [InlineData("13", "ch-c1")] // ids beyond the palette wrap
+    [InlineData(null, "ch-other")]
+    [InlineData("", "ch-other")]
+    [InlineData("abc", "ch-other")]
+    public void ChannelColour_IsKeyedOnTheChannelId_AndNeverOnItsPositionOrName(string? key, string expected) =>
+        Assert.Equal(expected, DashboardChannelStyle.ColorClass(key));
+
+    [Fact]
+    public void ChannelIcon_IsKeyedOnTheStableCode_WithAGenericGlyphForAnUnknownChannel()
+    {
+        string[] codes = ["PHONE", "WHATSAPP", "LIVE_CHAT", "WEBSITE", "MOBILE_APP", "INSTAGRAM", "FACEBOOK", "SOCIAL_DM", "WALK_IN_KIOSK"];
+        var icons = codes.Select(DashboardChannelStyle.Icon).ToList();
+        Assert.Equal(codes.Length, icons.Distinct().Count()); // every known channel is recognisable by its own glyph
+
+        var generic = DashboardChannelStyle.Icon("A_CHANNEL_ADDED_LATER");
+        Assert.DoesNotContain(generic, icons);
+        Assert.Equal(generic, DashboardChannelStyle.Icon(null));
+        Assert.Equal(DashboardChannelStyle.Icon("PHONE"), DashboardChannelStyle.Icon("phone")); // codes compare case-insensitively
+    }
+
+    [Fact]
+    public void ChannelPalette_DefinesEveryColourClassTheHelperCanEmit()
+    {
+        var css = File.ReadAllText(SourceFile(Path.Combine("TigerCS.Web", "wwwroot", "css", "site.css")));
+        for (var i = 1; i <= DashboardChannelStyle.PaletteSize; i++)
+        {
+            Assert.Contains($".dashboard-workspace .ch-c{i} {{ --chc: #", css, StringComparison.Ordinal);
+        }
+
+        Assert.Contains(".dashboard-workspace .ch-other { --chc: #", css, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ChannelSummary_KeepsTheBarFillMarkup_AndColoursBarLegendAndIconFromTheSameClass()
+    {
+        var partial = View("Shared", "_DashboardSummaryCard.cshtml");
+
+        // The segment keeps the exact width-class markup the Content-Security-Policy test relies on; colour rides on a wrapper.
+        Assert.Contains("<span class=\"bar-fill @row.BarWidthClass\"></span>", partial);
+        Assert.Contains("summary-seg @DashboardChannelStyle.ColorClass(row.Key)", partial);
+        Assert.Contains("channel-legend__item @DashboardChannelStyle.ColorClass(row.Key)", partial);
+        Assert.DoesNotContain("style=", partial);
     }
 }

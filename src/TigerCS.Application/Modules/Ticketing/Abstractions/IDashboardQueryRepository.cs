@@ -76,8 +76,8 @@ public sealed record DashboardOverviewQuery(
     Guid? OwnerVisibilityEmployeeId = null,
     bool IncludeGenesysIntake = false);
 
-/// <summary>One aggregated row: a dimension value (null key = the value is not recorded on the ticket, e.g. no originating channel, no request type, Unclassified priority) with its display label and count.</summary>
-public sealed record DashboardCountRow<TKey>(TKey? Key, string Label, int Count) where TKey : struct;
+/// <summary>One aggregated row: a dimension value (null key = the value is not recorded on the ticket, e.g. no originating channel, no request type, Unclassified priority) with its display label and count. <paramref name="Code"/> is the stable master-data code where the dimension has one (channels), so the UI can pick a glyph without comparing names.</summary>
+public sealed record DashboardCountRow<TKey>(TKey? Key, string Label, int Count, string? Code = null) where TKey : struct;
 
 /// <summary>One Recent/Critical row — display facts resolved by joins in the same query, never per row afterwards.</summary>
 public sealed record DashboardRecentTicketRow(
@@ -97,7 +97,11 @@ public sealed record DashboardRecentTicketRow(
     Guid? CurrentOwnerEmployeeId,
     string? OwnerName,
     DateTime CreatedAtUtc,
-    string? DepartmentCode = null);
+    string? DepartmentCode = null,
+    byte? ChannelId = null,
+    string? ChannelName = null,
+    string? ChannelCode = null,
+    string? LastActionByName = null);
 
 /// <summary>
 /// Every dashboard number, computed SQL-side over the query's scope. Counts

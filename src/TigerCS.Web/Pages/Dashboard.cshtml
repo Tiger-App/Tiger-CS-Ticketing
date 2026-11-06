@@ -320,6 +320,8 @@
                                 <tr>
                                     <th scope="col">Ticket</th>
                                     <th scope="col">Department</th>
+                                    <th scope="col">Channel</th>
+                                    <th scope="col">Last Action By</th>
                                     <th scope="col">Created</th>
                                 </tr>
                             </thead>
@@ -335,6 +337,21 @@
                                                 <span class="dept-cell__name">@deptName</span>
                                             </span>
                                         </td>
+                                        <td>
+                                            @if (ticket.ChannelName is { } channelName)
+                                            {
+                                                @* The channel of the ticket's originating interaction; icon and colour are the ones the Volume by Channel card uses. *@
+                                                <span class="channel-cell @DashboardChannelStyle.ColorClass(ticket.ChannelId?.ToString(CultureInfo.InvariantCulture))">
+                                                    <span class="channel-icon channel-icon--sm" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none">@Html.Raw(DashboardChannelStyle.Icon(ticket.ChannelCode))</svg></span>
+                                                    <span class="channel-cell__name">@channelName</span>
+                                                </span>
+                                            }
+                                            else
+                                            {
+                                                <span class="text-secondary">—</span>
+                                            }
+                                        </td>
+                                        <td class="dash-last-action">@(string.IsNullOrWhiteSpace(ticket.LastActionByName) ? "—" : ticket.LastActionByName)</td>
                                         <td class="text-secondary text-mono" title="@created.ToString("yyyy-MM-dd HH:mm")">@(created.Date == DateTime.Now.Date ? created.ToString("HH:mm") : created.ToString("MMM d, HH:mm"))</td>
                                     </tr>
                                 }
