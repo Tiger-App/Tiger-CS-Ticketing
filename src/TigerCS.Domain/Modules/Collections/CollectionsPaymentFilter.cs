@@ -34,14 +34,20 @@ public static class CollectionsPaymentFilters
     /// </summary>
     public static bool MinimumApplies(CollectionsPaymentFilter filter) => filter is not (CollectionsPaymentFilter.FullyPaid or CollectionsPaymentFilter.All);
 
-    /// <summary>Payment status of one instalment. Mirrors the SQL publish step; "Unknown" means the source cannot tell and nothing is guessed.</summary>
-    public static string Classify(decimal remaining, decimal? original, decimal? allocated, string? sourceStatus, bool breakdownPresent)
+    /// <summary>
+    /// Payment status of one instalment, from the verified REMAINING amount: 0 = FullyPaid, more = Unpaid (refined to PartiallyPaid only when the source's original and paid amounts are
+    /// present and consistent), missing or negative = Unknown. "Unknown" also covers a source that contradicts itself (Status Paid with a remainder owed, or a breakdown that does not add up):
+    /// it needs review, and nothing is guessed.
+    /// </summary>
+    public static string Classify(decimal? remaining, decimal? original, decimal? allocated, string? sourceStatus, bool breakdownPresent)
     {
+        if (remaining is not { } amount || amount < 0) return "Unknown";
+        if (amount > 0 && string.Equals(sourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase)) return "Unknown";
         if (breakdownPresent)
         {
-            if (original is null || allocated is null || original < 0 || allocated < 0 || Math.Abs(original.Value - allocated.Value - remaining) > 0.01m) return "Unknown";
-            return remaining == 0 ? "FullyPaid" : allocated > 0 ? "PartiallyPaid" : "Unpaid";
+            if (original is null || allocated is null || original < 0 || allocated < 0 || Math.Abs(original.Value - allocated.Value - amount) > 0.01m) return "Unknown";
+            return amount == 0 ? "FullyPaid" : allocated > 0 ? "PartiallyPaid" : "Unpaid";
         }
-        return remaining == 0 && string.Equals(sourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase) ? "FullyPaid" : "Unknown";
+        return amount == 0 ? "FullyPaid" : "Unpaid";
     }
 }

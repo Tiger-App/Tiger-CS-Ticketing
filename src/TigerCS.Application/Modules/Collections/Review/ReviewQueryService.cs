@@ -234,9 +234,9 @@ public sealed class ReviewQueryService(
     private async Task<ManualCalc> ManualCalculatedAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, CancellationToken ct)
     {
         // The date range, Payment status and minimum are about instalments, not about the stage record's own fields: they are applied by the calculation, not by the stored-record query.
-        // The review list's own status filter (Unpaid / PartiallyPaid / Paid / Unknown) applies only when the person chose one. Its default, UnpaidOrPartial, would silently drop every
-        // record whose payment status the source cannot confirm (with the deployed PACT procedures that is every open balance), and a Manual list would then be empty while the Auto
-        // preview, which never reads that status, shows the same customers. Such a record is listed, held back with its exact reason (PaymentStatusUnknown), never hidden.
+        // The review list's own status filter (Unpaid / PartiallyPaid / Paid / Unknown) applies only when the person chose one. Its default, UnpaidOrPartial, would silently drop a
+        // record whose remaining amount could not be determined reliably (Unknown), and a Manual list would then differ from the Auto preview, which never reads that status. Such a
+        // record is listed, held back with its exact reason (PaymentStatusUnknown), never hidden.
         var coarse = spec with
         {
             DueFrom = null, DueTo = null, MinRemaining = null, MaxRemaining = null, ValidationStatus = null,

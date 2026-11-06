@@ -336,7 +336,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "LegalNoticeReleaseRequired" => "Legal notices have not been released for customers. Nothing is sent until Legal releases them.",
         "LegalCaseNotApproved" => "An internal Legal referral is never sent to a customer.",
         "StaleSource" or "SourceReconciliationRequired" => "Refresh the approval data once the financial source is current and reconciled.",
-        "PaymentStatusUnknown" => "The financial source does not say whether this balance is unpaid or partially paid (the deployed PACT report cannot tell them apart). The customer stays listed but cannot be sent by either mode until the source confirms the status; this is a data rule, not the schedule.",
+        "PaymentStatusUnknown" => "The remaining amount of this balance cannot be determined reliably: it is missing or negative, or the source contradicts it (Status Paid with a remainder owed, or original and paid amounts that do not add up). Confirm the balance in PACT, refresh the approval data and preview again; this is a data rule, not the schedule.",
         "NoValidContact" or "CrmCustomerAmbiguous" or "CrmCompanyAmbiguous" or "ContactSourceConflict" or "CrmUnavailable" or "ConflictingContactDetails" =>
             "Review: fix the customer's contact in CRM or PACT, refresh the approval data and preview again.",
         _ => "Review: resolve the data problem at its source, refresh the approval data and preview again."
@@ -433,7 +433,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "ReminderTypeOverlap" => "Also in another campaign scheduled today",
         "LegalCaseNotApproved" => "Internal legal referral: never sent to a customer",
         "ContactedToday" => "Already contacted today (frequency limit)",
-        "PaymentStatusUnknown" => "Payment status unknown",
+        "PaymentStatusUnknown" => "Remaining amount cannot be determined reliably",
         "MissingCustomerIdentity" => "Customer identity missing",
         "DuplicateSourceRecord" => "Duplicate source record",
         "SourceAmountsInconsistent" => "Source amounts inconsistent",

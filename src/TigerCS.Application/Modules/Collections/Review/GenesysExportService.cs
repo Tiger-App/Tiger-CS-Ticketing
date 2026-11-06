@@ -217,7 +217,7 @@ public sealed class GenesysExportService(
         {
             reasons.Add($"{reason.Key}:{reason.Count()}");
             notices.Add(reason.Key == ReviewReasons.PaymentStatusUnknown
-                ? $"{reason.Count():N0} unit(s) have an unconfirmed payment status (PaymentStatusUnknown): their source amounts are written as they are, not classified as unpaid."
+                ? $"{reason.Count():N0} unit(s) have a remaining amount that could not be determined reliably (PaymentStatusUnknown): their source amounts are written as they are, not classified as unpaid."
                 : $"{reason.Count():N0} unit(s) need review ({reason.Key}): {ReviewReasons.Explain(reason.Key)}");
         }
         var heldBack = units.Count(u => u.Status != ReviewValidationStatus.Ready);

@@ -79,7 +79,7 @@ public sealed class ReviewDispatchTests
     public async Task NotReadyRecordsCanNeverBeSelected_EvenByKey()
     {
         using var h = new ReviewHarness();
-        h.Source.Items.AddRange([ReviewHarness.Row(1), ReviewHarness.Row(2, mobile: ""), ReviewHarness.Row(3) with { PlanAmount = null }]);
+        h.Source.Items.AddRange([ReviewHarness.Row(1), ReviewHarness.Row(2, mobile: ""), ReviewHarness.Row(3, status: "Paid")]);          // a remainder the source contradicts (status Paid): unknown, never sendable
         await h.RefreshAsync();
         using var scope = h.NewScope();
         var page = (await scope.Query.QueryAsync(h.Manager, new ReviewFilter(ReminderType: "CurrentMonth", PaymentStatus: "All"), 1, 25, CancellationToken.None)).Value!;

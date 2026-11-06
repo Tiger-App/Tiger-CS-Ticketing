@@ -140,12 +140,15 @@ public sealed class RcvReceivablesSource(
                 var company = reader.GetInt32(reader.GetOrdinal("CompanyId"));
                 var key = (company, reader.GetString(reader.GetOrdinal("TenantId")), reader.GetInt64(reader.GetOrdinal("UnitId")), reader.GetString(reader.GetOrdinal("UnitCode")));
                 if (!byUnit.TryGetValue(key, out var list)) byUnit[key] = list = [];
-                // PACT returns only the remaining amount: the original and paid amounts and whether the payment is unpaid or partly paid are unknown, never estimated.
+                // PACT returns only the remaining amount: the original and paid amounts are unknown, never estimated. The payment status follows the remaining amount (0 = paid, more = unpaid,
+                // contradicted or invalid = Unknown): the same rule as the campaign records and the customers API.
+                var remaining = reader.GetDecimal(reader.GetOrdinal("RemainingAmount"));
+                var sourceStatus = Text(reader, "SourceStatus") ?? "";
                 list.Add(new PactInstalmentRowDto(company, ReceivablesSnapshotStatusBuilder.CompanyName(company), null, null, (int)key.Item3, key.Item4, key.Item2, "",
                     reader.GetString(reader.GetOrdinal("Mobile")), reader.GetString(reader.GetOrdinal("Email")),
                     reader.GetString(reader.GetOrdinal("VoucherNumber")), reader.GetString(reader.GetOrdinal("ChequeNumber")),
-                    DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("DueDate"))), null, null, reader.GetDecimal(reader.GetOrdinal("RemainingAmount")),
-                    "Unknown", reader.GetString(reader.GetOrdinal("Classification")), Text(reader, "SourceStatus") ?? ""));
+                    DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("DueDate"))), null, null, remaining,
+                    CollectionsPaymentFilters.Classify(remaining, null, null, sourceStatus, false), reader.GetString(reader.GetOrdinal("Classification")), sourceStatus));
             }
         }
         catch (SqlException ex)
@@ -193,9 +196,12 @@ public sealed class RcvReceivablesSource(
                         Text(reader, "TowerNumber"), Text(reader, "TowerName"), reader.GetInt32(reader.GetOrdinal("AllRows")), reader.GetInt32(reader.GetOrdinal("OpenRows"))));
                 await reader.NextResultAsync(cancellationToken);
                 while (await reader.ReadAsync(cancellationToken))
+                {
+                    var remaining = reader.GetDecimal(reader.GetOrdinal("RemainingAmount"));
                     instalments.Add(new PactUnitInstalment(reader.GetInt32(reader.GetOrdinal("CompanyId")), reader.GetString(reader.GetOrdinal("TenantId")), (int)reader.GetInt64(reader.GetOrdinal("UnitId")),
-                        reader.GetString(reader.GetOrdinal("VoucherNumber")), DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("DueDate"))), reader.GetDecimal(reader.GetOrdinal("RemainingAmount")),
-                        null, null, "Unknown"));
+                        reader.GetString(reader.GetOrdinal("VoucherNumber")), DateOnly.FromDateTime(reader.GetDateTime(reader.GetOrdinal("DueDate"))), remaining,
+                        null, null, CollectionsPaymentFilters.Classify(remaining, null, null, Text(reader, "SourceStatus"), false)));
+                }
                 await reader.NextResultAsync(cancellationToken);
                 while (await reader.ReadAsync(cancellationToken)) links[reader.GetInt32(reader.GetOrdinal("CompanyId"))] = SqlCollectionsCrmOwnerStore.ReadLink(reader);
             }
