@@ -46,9 +46,6 @@ public enum CollectionsOutcome
 
     NotFound,
 
-    /// <summary>The file contains customers who were already exported; it is made only when the person confirms the repeat (409).</summary>
-    RepeatExport,
-
     /// <summary>The request conflicts with the current state (for example a reconciliation is already running) - 409.</summary>
     Conflict
 }

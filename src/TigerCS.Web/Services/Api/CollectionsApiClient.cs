@@ -108,15 +108,9 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         PostAsync<ConfirmDispatchRequest, DispatchDto>($"{ReviewBase}/dispatches", request,
             new Dictionary<string, string> { ["Idempotency-Key"] = request.IdempotencyKey }, cancellationToken);
 
-    /// <param name="request">The Manual selection.</param>
-    /// <param name="confirmRepeat">The person confirmed an export that contains customers who were exported before.</param>
-    /// <param name="cancellationToken">Cancellation.</param>
-    public Task<ApiResult<GenesysExportDto>> ExportForGenesysAsync(SelectionRequest request, CancellationToken cancellationToken, bool confirmRepeat = false, int? expectedRepeats = null) =>
-        PostAsync<SelectionRequest, GenesysExportDto>($"{ReviewBase}/export/genesys{Query(confirmRepeat, expectedRepeats)}", request, cancellationToken);
-
-    /// <summary>The query of a confirmed export: the repeat the person confirmed, and how many repeated customers they were shown with it.</summary>
-    private static string Query(bool confirmRepeat, int? expectedRepeats) =>
-        !confirmRepeat ? "" : "?confirmRepeat=true" + (expectedRepeats is { } shown ? $"&expectedRepeats={shown.ToString(System.Globalization.CultureInfo.InvariantCulture)}" : "");
+    /// <summary>"Export for Genesys": the download-only file of every customer matching the filters (or the ticked ones). The API audits it; a repeat is noted in the answer, never refused.</summary>
+    public Task<ApiResult<GenesysExportDto>> ExportForGenesysAsync(SelectionRequest request, CancellationToken cancellationToken) =>
+        PostAsync<SelectionRequest, GenesysExportDto>($"{ReviewBase}/export/genesys", request, cancellationToken);
 
     /// <summary>The Manual "Export review CSV": the filtered Manual list with status and reasons.</summary>
     public Task<ApiResult<ReviewExportDto>> ExportManualReviewAsync(ReviewFilter filter, CancellationToken cancellationToken) =>

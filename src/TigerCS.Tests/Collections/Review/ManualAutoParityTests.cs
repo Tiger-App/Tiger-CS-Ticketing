@@ -132,15 +132,19 @@ public sealed class ManualAutoParityTests
     }
 
     [Fact]
-    public async Task TheExportAndTheSend_UseTheManualPopulation_SoTheHeldBackCustomerIsNeverInAFile()
+    public async Task TheExportHoldsTheWholeManualPopulation_HeldBackCustomerIncludedAndSaidSo_WhileTheSendStillLeavesHimOut()
     {
         using var h = Harness();
         await h.RefreshAsync();
         using var scope = h.NewScope();
         var export = (await scope.Export.ExportAsync(h.Manager, new SelectionRequest(Manual(), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!;
         var rows = GenesysContactTemplate.ParseCsv(export.Csv);
-        Assert.Equal(2, export.RowCount);
-        Assert.DoesNotContain(rows.Skip(1), r => r[1] == "Customer 1");                                  // held back: unconfirmed payment status
+        Assert.Equal(3, export.RowCount);
+        Assert.Contains(rows.Skip(1), r => r[1] == "Customer 1" && r[4] == "500.00");                   // held back from sending (unconfirmed payment status), still in the file, as read
         Assert.Contains(rows.Skip(1), r => r[1] == "Customer 2" && r[4] == "130.00");
+        Assert.Equal(1, export.IncludedByStatus!["NeedsReview"]); Assert.False(export.DataVerified); Assert.Contains("PaymentStatusUnknown:1", export.UnverifiedReasons!);
+        // The send population is the Ready customers only: the same filters, without customer 1.
+        var send = (await scope.Query.SummarizeAsync(h.Manager, new SelectionRequest(Manual(), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!;
+        Assert.Equal(2, send.Count); Assert.DoesNotContain(send.Contacts, c => c.CustomerName == "Customer 1");
     }
 }

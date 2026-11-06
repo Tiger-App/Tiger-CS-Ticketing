@@ -99,15 +99,26 @@ public sealed record ReconcileBatchRequest(string Resolution, string Note);
 /// </summary>
 public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Blockers, bool CanSend = true);
 
+/// <summary>Units left out of an Export for Genesys file, by reason: the code, how many units, and the plain-language explanation.</summary>
+public sealed record GenesysExportExclusionDto(string Code, int Units, string Explanation);
+
 /// <summary>
-/// The "Export for Genesys" file: customers of a Manual selection in the format of the Genesys contact list they would be imported into. <c>Columns</c> is the file's header exactly. <c>SchemaVerified</c> is
-/// true when that list's real columns were read from Genesys and fit; false when the Genesys integration is not configured, so the documented six-column template was used: the file is then labelled
-/// "Template not verified against Genesys" (in <c>Notices</c> and in the file name). <c>RepeatedCustomers</c> is how many of the customers had already been exported (0 = none), confirmed by the person;
-/// <c>LastExportedAtUtc</c> is the latest earlier export of any of them.
+/// The "Export for Genesys" file: every customer matching the filters, in the format of the Genesys contact list the file is for. <c>Columns</c> is the file's header exactly. <c>RowCount</c> rows hold
+/// <c>UnitCount</c> customer units (<c>CombinedUnits</c> of them folded into <c>CombinedRows</c> rows of one customer on one number); <c>Exclusions</c> says which matching units are NOT in the file and why.
+/// <c>IncludedByStatus</c> counts the units by the status the Manual page shows (Ready, NeedsReview, Excluded, AlreadySent): a file is not a send, so held-back customers are in it.
+/// <c>DataVerified</c> is false when the financial data behind the amounts is not verified (unreconciled source, stale or not built today, or units whose data needs review, PaymentStatusUnknown
+/// included); <c>UnverifiedReasons</c> names why, and the file is labelled "Financial data not verified". <c>SchemaVerified</c> is true when the list's real columns were read from Genesys and fit;
+/// false when they could not be read (integration not configured, login refused, Genesys unreachable), so the documented six-column template was used and the file is labelled "Template not
+/// verified against Genesys". <c>RepeatedCustomers</c> is how many of the customers were exported before within the look-back (informational; a repeat is audited, never a block).
 /// </summary>
 public sealed record GenesysExportDto(
     string FileName, string Csv, int RowCount, string Campaign, string ContactList, string ContactListId, decimal TotalAmount, string Currency,
-    IReadOnlyList<string> Columns, bool SchemaVerified, IReadOnlyList<string> Notices, string Sha256, int RepeatedCustomers = 0, DateTime? LastExportedAtUtc = null);
+    IReadOnlyList<string> Columns, bool SchemaVerified, IReadOnlyList<string> Notices, string Sha256, int RepeatedCustomers = 0, DateTime? LastExportedAtUtc = null,
+    int UnitCount = 0, int CombinedRows = 0, int CombinedUnits = 0, IReadOnlyList<GenesysExportExclusionDto>? Exclusions = null, IReadOnlyDictionary<string, int>? IncludedByStatus = null,
+    bool DataVerified = true, IReadOnlyList<string>? UnverifiedReasons = null, int Skipped = 0)
+{
+    public int ExcludedUnits => Exclusions?.Sum(e => e.Units) ?? 0;
+}
 
 /// <summary>
 /// The Manual "Export review CSV": every customer of the filtered Manual list with the status and the exact reason a held-back customer cannot be sent, for people to review (not for Genesys).

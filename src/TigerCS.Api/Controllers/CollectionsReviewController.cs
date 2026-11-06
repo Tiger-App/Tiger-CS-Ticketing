@@ -74,15 +74,14 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
         Caller() is { } caller ? Result(await query.SummarizeAsync(caller, request, ct)) : Unauthorized();
 
     /// <summary>
-    /// "Export for Genesys": the customers of a Manual selection as a CSV in the format of the chosen Genesys contact list (six columns, exactly the values an upload would send). Read only: it uploads
-    /// nothing, queues nothing and marks nobody as sent; it is written to the audit trail. Needs the send right, like the send itself.
+    /// "Export for Genesys": every customer matching the filters (Manual or Auto, any status, any day) as a CSV in the format of the chosen Genesys contact list (six columns, exactly the values an
+    /// upload would send). Download only: it uploads nothing, queues nothing and marks nobody as sent; it is written to the audit trail, and a repeat is noted, never blocked. Needs the send right.
     /// </summary>
     [HttpPost("export/genesys")]
     [RequirePermission(Permissions.CollectionsSend)]
     [ProducesResponseType<GenesysExportDto>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> ExportForGenesys([FromBody] SelectionRequest request, [FromQuery] bool confirmRepeat = false, [FromQuery] int? expectedRepeats = null,
-        CancellationToken ct = default) =>
-        Caller() is { } caller ? Result(await genesysExport.ExportAsync(caller, request, ct, confirmRepeat, expectedRepeats)) : Unauthorized();
+    public async Task<IActionResult> ExportForGenesys([FromBody] SelectionRequest request, CancellationToken ct = default) =>
+        Caller() is { } caller ? Result(await genesysExport.ExportAsync(caller, request, ct)) : Unauthorized();
 
     /// <summary>
     /// The Manual "Export review CSV": every customer of the filtered Manual list with its status and reasons, for people to review. Not a Genesys file. Read only and audited; needs the send right.
@@ -187,7 +186,6 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
             CollectionsOutcome.InvalidRequest => (400, "InvalidRequest"),
             CollectionsOutcome.Disabled => (503, "Disabled"),
             CollectionsOutcome.NotFound => (404, "NotFound"),
-            CollectionsOutcome.RepeatExport => (409, "RepeatExport"),
             CollectionsOutcome.ReviewRequired => (409, "ReviewRequired"),
             CollectionsOutcome.DuplicateDispatch => (409, "DuplicateDispatch"),
             CollectionsOutcome.IdempotencyConflict => (409, "IdempotencyConflict"),

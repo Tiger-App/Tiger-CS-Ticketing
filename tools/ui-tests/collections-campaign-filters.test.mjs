@@ -47,6 +47,8 @@ const RESULTS = (blocked = false) => `
     <button type="button" data-clear-selection>Clear</button>
     <span data-selected-summary>0 selected</span>
     <span data-approve-reason>Only Ready customers can be sent.</span>
+    <button type="submit" data-export-genesys-button data-blocked="${blocked}" ${blocked ? 'disabled' : ''}>Export for Genesys</button>
+    <span data-export-genesys-reason>Downloads every customer matching the filters.</span>
   </form>
   <table><thead><tr><th><input type="checkbox" data-select-page /></th></tr></thead><tbody>
     <tr><td><input type="checkbox" class="campaign-select" data-unit-key="a" /></td></tr>
@@ -99,6 +101,24 @@ test('Preview Customers loads once with the filters, lifts the snapshot status, 
     const all = q('[data-all-matching]'); all.checked = true; all.dispatchEvent(new window.Event('change', { bubbles: true }));
     assert.equal(button.disabled, false, 'all eligible customers matching the filters');
     await tick();
+});
+
+test('Export for Genesys needs no selection: enabled with nothing ticked, and ticks only narrow it', async () => {
+    const { q, document, window, preview } = await boot();
+    await preview();
+    const exportButton = q('[data-export-genesys-button]');
+    assert.equal(exportButton.disabled, false, 'nothing ticked still exports every matching customer');
+    assert.equal(q('[data-approve-button]').disabled, true, 'sending still needs ticks');
+    assert.equal(q('[data-export-genesys-reason]').textContent, 'Downloads every customer matching the filters.');
+    const box = document.querySelector('.campaign-select'); box.checked = true; box.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(exportButton.disabled, false);
+    assert.match(q('[data-export-genesys-reason]').textContent, /^Only the 1 ticked customer\(s\) are exported\. Downloads every customer/);
+    const all = q('[data-all-matching]'); all.checked = true; all.dispatchEvent(new window.Event('change', { bubbles: true }));
+    assert.equal(q('[data-export-genesys-reason]').textContent, 'Downloads every customer matching the filters.');
+    // Only the server-side block (permission, no approval data) disables it.
+    const blockedPage = await boot({ blocked: true });
+    await blockedPage.preview();
+    assert.equal(blockedPage.q('[data-export-genesys-button]').disabled, true);
 });
 
 test('a reconciliation block keeps Approve & Send disabled whatever is ticked', async () => {
