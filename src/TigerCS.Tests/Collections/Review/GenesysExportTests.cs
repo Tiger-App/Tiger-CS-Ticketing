@@ -45,10 +45,11 @@ public sealed class GenesysExportTests
 
     private static SelectionRequest All(ReviewFilter filter) => new(filter, ReviewQueryService.ModeAllMatching);
 
-    private static async Task<CollectionsResult<GenesysExportDto>> ExportAsync(ReviewHarness h, SelectionRequest request, CollectionsCaller? caller = null)
+    /// <summary>Most tests export the same customers again and again; they confirm the repeat. The repeat check itself is tested in <see cref="GenesysExportRepeatTests"/>.</summary>
+    private static async Task<CollectionsResult<GenesysExportDto>> ExportAsync(ReviewHarness h, SelectionRequest request, CollectionsCaller? caller = null, bool confirmRepeat = true)
     {
         using var scope = h.NewScope();
-        return await scope.Export.ExportAsync(caller ?? h.Manager, request, CancellationToken.None);
+        return await scope.Export.ExportAsync(caller ?? h.Manager, request, CancellationToken.None, confirmRepeat);
     }
 
     private static List<List<string>> Parse(GenesysExportDto dto) => GenesysContactTemplate.ParseCsv(dto.Csv);
@@ -338,7 +339,7 @@ public sealed class GenesysExportTests
         var auth = new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository());
         var clock = new CollectionsClock(h.Options, h.Time);
         using var scope = h.NewScope();
-        var broken = new GenesysExportService(h.Options, h.Genesys, auth, clock, scope.Query, h.Client, new ThrowingAudit(), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), NullLogger<GenesysExportService>.Instance);
+        var broken = new GenesysExportService(h.Options, h.Genesys, auth, clock, scope.Query, h.Client, new ThrowingAudit(), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, scope.Store as IGenesysExportHistory ?? throw new InvalidOperationException(), NullLogger<GenesysExportService>.Instance);
         var result = await broken.ExportAsync(h.Manager, All(Manual()), CancellationToken.None);
         Assert.Equal(CollectionsOutcome.FinanceUnavailable, result.Outcome); Assert.Null(result.Value); Assert.Contains("no file was released", result.Detail);
     }

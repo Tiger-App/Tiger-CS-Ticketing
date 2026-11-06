@@ -108,6 +108,12 @@
                         <button class="btn" type="submit" asp-page-handler="ExportGenesys" aria-describedby="tip-export-genesys" data-export-genesys-button disabled="@(exportReason is not null)" data-blocked="@(exportReason is not null ? "true" : "false")">Export for Genesys</button>
                         <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-genesys", "Export for Genesys", exportTip, "data-export-genesys-reason"))" />
                     </span>
+                    @* Export review CSV: the whole filtered list with status and reasons, for people (not a Genesys file). Same button in Auto, where it is a link. *@
+                    <span class="campaign-action">
+                        @{ var reviewReason = Model.ExportManualReviewBlockedReason; }
+                        <button class="btn" type="submit" asp-page-handler="ExportReview" aria-describedby="tip-export-review-manual" data-export-review-manual disabled="@(reviewReason is not null)">Export review CSV</button>
+                        <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-review-manual", "Export review CSV", reviewReason ?? "Downloads every customer matching the filters, including the ones held back, with their status and the reason, for review. It is not a Genesys file and uploads nothing.", "data-export-review-reason"))" />
+                    </span>
                     <span class="campaign-tally" data-selected-summary aria-live="polite">@(counts.Ready > 0 ? "0 selected" : "No eligible customers")</span>
                     @if (counts.Ready > 0) { <button class="btn" type="button" data-clear-selection>Clear ticks</button> }
                 </div>

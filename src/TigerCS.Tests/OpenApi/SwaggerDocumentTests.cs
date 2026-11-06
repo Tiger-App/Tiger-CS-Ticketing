@@ -170,6 +170,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "POST /api/collections/review/suppression/sweep",
         "POST /api/collections/review/refresh",
         "POST /api/collections/review/export/genesys",
+        "POST /api/collections/review/export/review",
         "GET /api/collections/review/records",
         "GET /api/collections/review/reasons",
         "POST /api/collections/review/selection/summary",

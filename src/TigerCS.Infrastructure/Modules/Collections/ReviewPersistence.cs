@@ -183,11 +183,19 @@ public sealed class ReviewWriteRetryPolicy
     }
 }
 
-public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? retryPolicy = null) : IReviewStore
+public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? retryPolicy = null) : IReviewStore, IGenesysExportHistory
 {
     private readonly ReviewWriteRetryPolicy _retry = retryPolicy ?? new ReviewWriteRetryPolicy();
 
     private static readonly DispatchItemStatus[] LiveStatuses = [DispatchItemStatus.Approved, DispatchItemStatus.UploadedToGenesys, DispatchItemStatus.UnknownOutcome];
+
+    // ---------------------------------------------------------------- earlier file exports (audit trail, read only)
+
+    public async Task<IReadOnlyList<GenesysExportAuditRecord>> ListExportsAsync(string action, DateTime sinceUtc, int take, CancellationToken ct) =>
+        (await db.AuditEntries.AsNoTracking().Where(a => a.Action == action && a.OccurredAtUtc >= sinceUtc)
+            .OrderByDescending(a => a.OccurredAtUtc).Take(take)
+            .Select(a => new { a.OccurredAtUtc, a.ActorEmployeeId, a.AfterValue }).ToListAsync(ct))
+        .Select(a => new GenesysExportAuditRecord(a.OccurredAtUtc, a.ActorEmployeeId, a.AfterValue)).ToList();
 
     // ---------------------------------------------------------------- runs
 

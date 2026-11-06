@@ -98,8 +98,15 @@ public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Bloc
 
 /// <summary>
 /// The "Export for Genesys" file: customers of a Manual selection in the format of the Genesys contact list they would be imported into. <c>Columns</c> is the file's header exactly. <c>SchemaVerified</c> is
-/// true when that list's real columns were read from Genesys and fit; false when the Genesys integration is not configured, so the documented six-column template was used.
+/// true when that list's real columns were read from Genesys and fit; false when the Genesys integration is not configured, so the documented six-column template was used: the file is then labelled
+/// "Template not verified against Genesys" (in <c>Notices</c> and in the file name). <c>RepeatedCustomers</c> is how many of the customers had already been exported (0 = none), confirmed by the person;
+/// <c>LastExportedAtUtc</c> is the latest earlier export of any of them.
 /// </summary>
 public sealed record GenesysExportDto(
     string FileName, string Csv, int RowCount, string Campaign, string ContactList, string ContactListId, decimal TotalAmount, string Currency,
-    IReadOnlyList<string> Columns, bool SchemaVerified, IReadOnlyList<string> Notices, string Sha256);
+    IReadOnlyList<string> Columns, bool SchemaVerified, IReadOnlyList<string> Notices, string Sha256, int RepeatedCustomers = 0, DateTime? LastExportedAtUtc = null);
+
+/// <summary>
+/// The Manual "Export review CSV": every customer of the filtered Manual list with the status and the exact reason a held-back customer cannot be sent, for people to review (not for Genesys).
+/// </summary>
+public sealed record ReviewExportDto(string FileName, string Csv, int RowCount, int ReadyCount, string Sha256);

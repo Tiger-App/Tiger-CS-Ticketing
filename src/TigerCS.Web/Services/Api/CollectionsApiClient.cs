@@ -108,8 +108,15 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         PostAsync<ConfirmDispatchRequest, DispatchDto>($"{ReviewBase}/dispatches", request,
             new Dictionary<string, string> { ["Idempotency-Key"] = request.IdempotencyKey }, cancellationToken);
 
-    public Task<ApiResult<GenesysExportDto>> ExportForGenesysAsync(SelectionRequest request, CancellationToken cancellationToken) =>
-        PostAsync<SelectionRequest, GenesysExportDto>($"{ReviewBase}/export/genesys", request, cancellationToken);
+    /// <param name="request">The Manual selection.</param>
+    /// <param name="confirmRepeat">The person confirmed an export that contains customers who were exported before.</param>
+    /// <param name="cancellationToken">Cancellation.</param>
+    public Task<ApiResult<GenesysExportDto>> ExportForGenesysAsync(SelectionRequest request, CancellationToken cancellationToken, bool confirmRepeat = false) =>
+        PostAsync<SelectionRequest, GenesysExportDto>($"{ReviewBase}/export/genesys{(confirmRepeat ? "?confirmRepeat=true" : "")}", request, cancellationToken);
+
+    /// <summary>The Manual "Export review CSV": the filtered Manual list with status and reasons.</summary>
+    public Task<ApiResult<ReviewExportDto>> ExportManualReviewAsync(ReviewFilter filter, CancellationToken cancellationToken) =>
+        PostAsync<ReviewFilter, ReviewExportDto>($"{ReviewBase}/export/review", filter, cancellationToken);
 
     public Task<ApiResult<OverlapPageDto>> GetOverlapsAsync(int page, CancellationToken cancellationToken) =>
         GetAsync<OverlapPageDto>($"{ReviewBase}/overlaps?page={Id(page)}&pageSize=25", cancellationToken);

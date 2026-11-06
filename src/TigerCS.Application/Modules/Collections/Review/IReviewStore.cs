@@ -113,6 +113,16 @@ public interface IReviewRefreshRunner
     Task RunAsync(long runId, CancellationToken ct);
 }
 
+/// <summary>One earlier file export as the audit trail holds it: when, and the audit text (counts, filter, hash and customer fingerprints; never a customer's data).</summary>
+public sealed record GenesysExportAuditRecord(DateTime OccurredAtUtc, Guid? ActorEmployeeId, string? Details);
+
+/// <summary>Read access to the audit entries of earlier file exports, so a repeat export of the same customers can be noticed before another file is made. Read only.</summary>
+public interface IGenesysExportHistory
+{
+    /// <summary>The audit entries written by <paramref name="action"/> since <paramref name="sinceUtc"/>, newest first, at most <paramref name="take"/>.</summary>
+    Task<IReadOnlyList<GenesysExportAuditRecord>> ListExportsAsync(string action, DateTime sinceUtc, int take, CancellationToken ct);
+}
+
 public enum GenesysUploadOutcome
 {
     /// <summary>Genesys accepted the batch; contact ids were returned.</summary>

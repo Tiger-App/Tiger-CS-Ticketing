@@ -20,17 +20,39 @@ namespace TigerCS.Application.Modules.Collections.Review;
 /// Email Address, ReminderType, AmountDue, DueDate, with an E.164 phone, an amount with two decimals and a yyyy-MM-dd date. Nothing else about a customer is in the file.</item>
 /// <item>The columns come from the chosen list as it really is: when the Genesys integration is configured its columns are read (read only) and the export is refused if one of the six is missing or
 /// misnamed; extra columns of the list are kept, empty. Without the integration the documented template is used and the result says it was not verified.</item>
-/// <item>It is read only. It uploads nothing, queues nothing and does not mark anyone as sent (so it does not by itself stop a customer being exported or sent again); each export is written to the audit
-/// trail (who, when, campaign, list, count, total, the filter and a hash of the file, never a customer's data) before the file is released.</item>
+/// <item>It is read only. It uploads nothing, queues nothing and does not mark anyone as sent: a file is no proof that Genesys received anything, so the send protections (already sent, contacted today,
+/// idempotency) are neither used nor weakened here. Each export is written to the audit trail (who, when, campaign, list, count, total, the filter, a hash of the file and a one-way fingerprint of
+/// each customer's unit, never a customer's data) before the file is released.</item>
+/// <item>Because an export is not recorded as a send, the audit fingerprints are how a repeat is noticed: when any customer was exported within <c>ExportRepeatLookbackDays</c> the file is held
+/// (<see cref="CollectionsOutcome.RepeatExport"/>) until the person confirms the repeat, and the confirmed repeat is audited as such.</item>
+/// <item>When the list's columns could not be checked in Genesys the file is labelled "Template not verified against Genesys" (name and notices), never presented as verified.</item>
 /// </list>
 /// </summary>
 public sealed class GenesysExportService(
     CollectionsOptions options, GenesysOutboundOptions genesys, CollectionsAuthorizationService authorization, CollectionsClock clock,
-    ReviewQueryService query, IGenesysOutboundClient client, IAuditEntryWriter audit, ICollectionsUnitOfWork unitOfWork, ILogger<GenesysExportService> logger)
+    ReviewQueryService query, IGenesysOutboundClient client, IAuditEntryWriter audit, ICollectionsUnitOfWork unitOfWork, CollectionsReviewOptions reviewOptions, IGenesysExportHistory history,
+    ILogger<GenesysExportService> logger)
 {
     public const string AuditAction = "CollectionsGenesysFileExported", AuditEntityType = "CollectionsGenesysExport";
 
-    public async Task<CollectionsResult<GenesysExportDto>> ExportAsync(CollectionsCaller caller, SelectionRequest request, CancellationToken ct)
+    /// <summary>The label of a file whose contact-list columns were not read from Genesys.</summary>
+    public const string NotVerifiedLabel = "Template not verified against Genesys";
+
+    /// <summary>
+    /// The most earlier exports read for the repeat check. A window that holds this many cannot be checked in full, so the export stops rather than guessing that a customer is new.
+    /// </summary>
+    public const int MaxHistoryEntries = 5000;
+
+    /// <summary>
+    /// A one-way fingerprint of a customer's unit (company, tenant, unit): the same customer is recognised in every campaign type and month, and no customer data is kept.
+    /// </summary>
+    public static string Fingerprint(string customerUnitKey) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("genesys-export|" + customerUnitKey)))[..12];
+
+    /// <param name="caller">Who exports; needs the send right.</param>
+    /// <param name="request">The Manual selection: campaign, filters, contact list and the ticked customers (or all eligible).</param>
+    /// <param name="ct">Cancellation.</param>
+    /// <param name="confirmRepeat">The person has seen that some customers were already exported and wants the file anyway.</param>
+    public async Task<CollectionsResult<GenesysExportDto>> ExportAsync(CollectionsCaller caller, SelectionRequest request, CancellationToken ct, bool confirmRepeat = false)
     {
         // Authorization first: no data is read for an unauthorized caller. The file is the same customer list a send would use, so it needs the same right.
         if (!(await authorization.ResolveAsync(caller, ct)).CanSendReminders)
@@ -78,6 +100,16 @@ public sealed class GenesysExportService(
                 $"The file did not pass the Genesys template check ({check.Issues.Count} issue(s), for example {check.Issues.FirstOrDefault()?.Message ?? "unknown"}). Nothing was exported.");
         }
 
+        // Earlier exports of the same customers: warned about, and held until the person confirms. Failing to read the history stops the export (it is the only record of earlier files).
+        // The customer's unit, not the record: a record is one campaign type and month, and the same customer under another campaign is still the same customer.
+        var fingerprints = resolved.Records.Select(r => Fingerprint(ReviewQueryService.UnitKey(r.CompanyId, r.TenantId, r.UnitCode))).Distinct().ToList();
+        var repeat = await FindRepeatAsync(fingerprints, ct);
+        if (repeat.Problem is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, repeat.Problem);
+        if (repeat.Customers > 0 && !confirmRepeat)
+            return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.RepeatExport,
+                $"{repeat.Customers:N0} of the {fingerprints.Count:N0} customers in this file were already exported (latest: {repeat.LastUtc:dd MMM yyyy HH:mm} UTC, {repeat.Exports} earlier export(s)). " +
+                "An export does not mark anyone as sent, so nothing stops a second file. Confirm to export them again.");
+
         var total = resolved.Records.Sum(r => r.RemainingAmount ?? 0m);
         var currency = resolved.Records[0].Currency;
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(csv)));
@@ -88,7 +120,7 @@ public sealed class GenesysExportService(
         try
         {
             await audit.WriteAsync(caller.EmployeeId, AuditAction, AuditEntityType, hash[..16], null,
-                $"Campaign={type};ContactList={destination} ({listId});Rows={payloads.Count};Total={currency} {total:0.00};SchemaVerified={schema.Verified};Mode=Manual;Filter={JsonSerializer.Serialize(request.Filter)};Selection={request.Mode};Sha256={hash}",
+                $"Campaign={type};ContactList={destination} ({listId});Rows={payloads.Count};Total={currency} {total:0.00};SchemaVerified={schema.Verified}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")};Mode=Manual;Filter={JsonSerializer.Serialize(request.Filter)};Selection={request.Mode};Repeated={repeat.Customers}{(repeat.Customers > 0 ? ";RepeatConfirmed=true" : "")};Sha256={hash};Customers={string.Join(',', fingerprints)}",
                 Guid.NewGuid(), ct);
             await unitOfWork.SaveChangesAsync(ct);
         }
@@ -101,8 +133,48 @@ public sealed class GenesysExportService(
 
         var notices = new List<string>();
         if (!schema.Verified) notices.Add(schema.Notice!);
-        return CollectionsResult<GenesysExportDto>.Ok(new($"genesys-{type}-to-{destination}-{now:yyyyMMdd-HHmm}.csv", csv, payloads.Count, campaign, listLabel, listId, total, currency,
-            GenesysContactTemplate.Columns.Concat(schema.Columns.Where(c => !GenesysContactTemplate.Columns.Contains(c, StringComparer.Ordinal))).ToList(), schema.Verified, notices, hash));
+        if (repeat.Customers > 0) notices.Add($"{repeat.Customers:N0} customer(s) in this file were exported before (latest {repeat.LastUtc:dd MMM yyyy HH:mm} UTC). You confirmed the repeat; it is recorded in the audit trail.");
+        // The label travels in the file name (the CSV itself must stay the six-column template for the import), so a file that was not checked against the list is never mistaken for a verified one.
+        var fileName = $"genesys-{type}-to-{destination}-{now:yyyyMMdd-HHmm}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")}.csv";
+        return CollectionsResult<GenesysExportDto>.Ok(new(fileName, csv, payloads.Count, campaign, listLabel, listId, total, currency,
+            GenesysContactTemplate.Columns.Concat(schema.Columns.Where(c => !GenesysContactTemplate.Columns.Contains(c, StringComparer.Ordinal))).ToList(), schema.Verified, notices, hash,
+            repeat.Customers, repeat.Customers > 0 ? repeat.LastUtc : null));
+    }
+
+    private sealed record Repeat(int Customers, int Exports, DateTime LastUtc, string? Problem);
+
+    /// <summary>How many of these customers appear in an earlier export within the look-back, how many earlier exports that is, and the latest of them.</summary>
+    private async Task<Repeat> FindRepeatAsync(IReadOnlyCollection<string> fingerprints, CancellationToken ct)
+    {
+        var days = reviewOptions.ExportRepeatLookbackDays;
+        if (days <= 0) return new(0, 0, default, null);
+        IReadOnlyList<GenesysExportAuditRecord> earlier;
+        try { earlier = await history.ListExportsAsync(AuditAction, clock.UtcNow.AddDays(-Math.Min(days, 365)), MaxHistoryEntries, ct); }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            logger.LogError("Earlier Genesys exports could not be read ({ExceptionType}); the export was stopped.", ex.GetType().Name);
+            return new(0, 0, default, "Earlier exports could not be checked, so no file was made. Try again.");
+        }
+        if (earlier.Count >= MaxHistoryEntries)
+            return new(0, 0, default, $"{MaxHistoryEntries:N0} or more exports were made in the last {days} days, so the repeat check cannot cover them all and no file was made. Ask an administrator to review the export history.");
+        var wanted = fingerprints.ToHashSet(StringComparer.Ordinal);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        int exports = 0; var last = default(DateTime);
+        foreach (var entry in earlier)
+        {
+            var matches = PreviousFingerprints(entry.Details).Where(wanted.Contains).ToList();
+            if (matches.Count == 0) continue;
+            exports++; seen.UnionWith(matches);
+            if (entry.OccurredAtUtc > last) last = entry.OccurredAtUtc;
+        }
+        return new(seen.Count, exports, last, null);
+    }
+
+    private static IEnumerable<string> PreviousFingerprints(string? details)
+    {
+        const string marker = ";Customers=";
+        var at = details?.LastIndexOf(marker, StringComparison.Ordinal) ?? -1;
+        return at < 0 ? [] : details![(at + marker.Length)..].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
     }
 
     private sealed record Schema(IReadOnlyList<string> Columns, bool Verified, string? Notice, string? Problem);
@@ -115,7 +187,7 @@ public sealed class GenesysExportService(
     {
         if (!genesys.Enabled || string.IsNullOrWhiteSpace(genesys.ClientId) || string.IsNullOrWhiteSpace(genesys.ClientSecret))
             return new(GenesysContactTemplate.Columns, false,
-                $"The {listLabel} list's columns were not checked in Genesys because the integration is not configured here. The file uses the documented six-column template; check it against the list before importing.", null);
+                $"{NotVerifiedLabel}: the {listLabel} list's columns were not checked in Genesys because the integration is not configured here. The file uses the documented six-column template; check it against the list before importing.", null);
         GenesysContactListInfo list;
         try { list = await client.GetContactListAsync(listId, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }

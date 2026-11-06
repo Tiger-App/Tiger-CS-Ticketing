@@ -43,6 +43,11 @@ public sealed class CollectionsCampaignManualRenderTests
         public List<string> Blockers { get; } = [];
         public bool CanSend { get; set; } = true;
         public string? ExportError { get; set; }
+        public string? RepeatWarning { get; set; }
+        public bool SchemaVerified { get; set; } = true;
+        public string? LastExportQuery { get; private set; }
+        public string? LastReviewExportBody { get; private set; }
+        public string? ReviewExportError { get; set; }
         public string? LastExportBody { get; private set; }
         public int Exports { get; private set; }
         public string? LastSummaryBody { get; private set; }
@@ -61,9 +66,20 @@ public sealed class CollectionsCampaignManualRenderTests
             {
                 Exports++;
                 LastExportBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+                LastExportQuery = request.RequestUri.Query;
+                if (RepeatWarning is not null && !request.RequestUri.Query.Contains("confirmRepeat=true"))
+                    return new(HttpStatusCode.Conflict) { Content = JsonContent.Create(new { title = "RepeatExport", detail = RepeatWarning, status = 409, type = "https://tigercs.internal/problems/collections/RepeatExport" }) };
                 if (ExportError is not null) return new(HttpStatusCode.BadRequest) { Content = JsonContent.Create(new { title = "InvalidRequest", detail = ExportError, status = 400 }) };
-                return Json(new GenesysExportDto("genesys-CurrentMonth-to-FollowUp-20261106-0930.csv", "\"Phone\",\"CustomerName\",\"Email Address\",\"ReminderType\",\"AmountDue\",\"DueDate\"\r\n\"+971500000001\",\"Manual Customer 1\",\"m1@example.test\",\"Current Month\",\"500.00\",\"2026-09-20\"\r\n",
-                    1, "Current month reminder - day 14", "Follow Up", FollowUpList, 500m, "AED", ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], true, [], "ABC"));
+                var fileName = SchemaVerified ? "genesys-CurrentMonth-to-FollowUp-20261106-0930.csv" : "genesys-CurrentMonth-to-FollowUp-20261106-0930 (Template not verified against Genesys).csv";
+                return Json(new GenesysExportDto(fileName, "\"Phone\",\"CustomerName\",\"Email Address\",\"ReminderType\",\"AmountDue\",\"DueDate\"\r\n\"+971500000001\",\"Manual Customer 1\",\"m1@example.test\",\"Current Month\",\"500.00\",\"2026-09-20\"\r\n",
+                    1, "Current month reminder - day 14", "Follow Up", FollowUpList, 500m, "AED", ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], SchemaVerified,
+                    SchemaVerified ? [] : ["Template not verified against Genesys: the Follow Up list's columns were not checked in Genesys."], "ABC"));
+            }
+            if (path.EndsWith("/export/review"))
+            {
+                LastReviewExportBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+                if (ReviewExportError is not null) return new(HttpStatusCode.Conflict) { Content = JsonContent.Create(new { title = "ReviewRequired", detail = ReviewExportError, status = 409 }) };
+                return Json(new ReviewExportDto("collections-CurrentMonth-manual-review-20261106-0930.csv", "\"Customer\",\"Status\"\r\n\"Manual Customer 3\",\"Excluded\"\r\n", 5, 2, "DEF"));
             }
             if (path.EndsWith("/review/records"))
             {
@@ -373,7 +389,9 @@ public sealed class CollectionsCampaignManualRenderTests
         Assert.DoesNotContain("disabled", export); Assert.Contains("data-blocked=\"false\"", export);
         var tip = Decode(Regex.Match(html, "id=\"tip-export-genesys\"[^>]*>(.*?)</span>", RegexOptions.Singleline).Groups[1].Value);
         Assert.Contains("Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate", tip); Assert.Contains("uploads nothing", tip); Assert.Contains("audit trail", tip);
-        Assert.DoesNotContain("Export review CSV", html);                                                            // the review export belongs to the Auto preview
+        // The review export is its own third action, in Manual as in Auto: it is neither the Genesys export nor the send.
+        var review = Regex.Match(html, "<button[^>]*data-export-review-manual[^>]*>Export review CSV</button>").Value;
+        Assert.NotEmpty(review); Assert.Contains("handler=ExportReview", review); Assert.DoesNotContain("handler=ExportGenesys", review);
     }
 
     [Fact]
@@ -444,6 +462,89 @@ public sealed class CollectionsCampaignManualRenderTests
         using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
         var html = Decode(await (await client.PostAsync("/Collections/Campaigns?handler=ExportGenesys", new FormUrlEncodedContent(Form(await TokenAsync(client), ("sendingMode", "Auto"), ("selectionMode", "AllMatching"))))).Content.ReadAsStringAsync());
         Assert.Contains("switch to Manual", html); Assert.Equal(0, api.Exports);
+    }
+
+    // ------------------------------------------------------------------ repeated exports, the "not verified" label, and the Manual review export
+
+    [Fact]
+    public async Task ARepeatExport_IsNotDownloaded_TheWarningNamesWhatWasExported_AndOffersToExportAgain()
+    {
+        var api = NewApi(a => a.RepeatWarning = "2 of the 2 customers in this file were already exported (latest: 06 Nov 2026 09:30 UTC, 1 earlier export(s)). Confirm to export them again.");
+        using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
+        var response = await client.PostAsync("/Collections/Campaigns?handler=ExportGenesys", new FormUrlEncodedContent(Form(await TokenAsync(client),
+            ("selectionMode", "AllMatching"), ("contactList", "FollowUp"))));
+        Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);                                // no file
+        var html = Decode(await response.Content.ReadAsStringAsync());
+        Assert.Contains("data-repeat-export-warning", html); Assert.Contains("2 of the 2 customers", html); Assert.Contains("Export again", html);
+        Assert.DoesNotContain("data-approval-error", html);
+        Assert.DoesNotContain("confirmRepeat=true", api.LastExportQuery);
+        // The confirmation re-posts the same selection and filters with the confirmation.
+        Assert.Contains("name=\"confirmRepeat\" value=\"true\"", html); Assert.Contains("name=\"selectionMode\" value=\"AllMatching\"", html); Assert.Contains("name=\"contactList\" value=\"FollowUp\"", html);
+    }
+
+    [Fact]
+    public async Task ConfirmingTheRepeat_DownloadsTheFile_AndTellsTheApiItWasConfirmed()
+    {
+        var api = NewApi(a => a.RepeatWarning = "1 of the 1 customers in this file were already exported.");
+        using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
+        var response = await client.PostAsync("/Collections/Campaigns?handler=ExportGenesys", new FormUrlEncodedContent(Form(await TokenAsync(client),
+            ("selectionMode", "AllMatching"), ("contactList", "FollowUp"), ("confirmRepeat", "true"))));
+        Assert.Equal("text/csv", response.Content.Headers.ContentType?.MediaType);
+        Assert.Contains("confirmRepeat=true", api.LastExportQuery);
+    }
+
+    [Fact]
+    public async Task AnUnverifiedTemplate_IsLabelledInTheFileNameAndOnThePage()
+    {
+        var api = NewApi(a => a.SchemaVerified = false);
+        using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
+        var response = await client.PostAsync("/Collections/Campaigns?handler=ExportGenesys", new FormUrlEncodedContent(Form(await TokenAsync(client), ("selectionMode", "AllMatching"), ("contactList", "FollowUp"))));
+        Assert.Equal("text/csv", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("genesys-CurrentMonth-to-FollowUp-20261106-0930 (Template not verified against Genesys).csv",
+            response.Content.Headers.ContentDisposition?.FileNameStar ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"'));
+        var page = Decode(await (await client.GetAsync(Url)).Content.ReadAsStringAsync());
+        Assert.Contains("data-approval-notice", page); Assert.Contains("Template not verified against Genesys", page);
+    }
+
+    [Fact]
+    public async Task ManualHasItsOwnExportReviewCsv_ThatDownloadsTheFilteredList_AndSendsNothing()
+    {
+        var (html, _) = await LoadAsync();
+        Assert.Contains("data-export-review-manual", html); Assert.Contains("Export review CSV", html); Assert.Contains("Export for Genesys", html);   // both, as separate buttons
+        var api = NewApi();
+        using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
+        var response = await client.PostAsync("/Collections/Campaigns?handler=ExportReview", new FormUrlEncodedContent(Form(await TokenAsync(client), ("contactList", "FollowUp"))));
+        Assert.Equal("text/csv", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal("collections-CurrentMonth-manual-review-20261106-0930.csv", response.Content.Headers.ContentDisposition?.FileNameStar ?? response.Content.Headers.ContentDisposition?.FileName?.Trim('"'));
+        var bytes = await response.Content.ReadAsByteArrayAsync();
+        Assert.Equal(new byte[] { 0xEF, 0xBB, 0xBF }, bytes[..3]); Assert.Contains("Manual Customer 3", Encoding.UTF8.GetString(bytes[3..]));
+        Assert.Contains("\"sendingMode\":\"Manual\"", api.LastReviewExportBody); Assert.Contains("\"reminderType\":\"CurrentMonth\"", api.LastReviewExportBody);
+        Assert.Equal(0, api.Exports); Assert.Null(api.LastConfirmBody);
+    }
+
+    [Fact]
+    public async Task ManualExportReviewCsv_IsUnavailableWithoutThePermission_AndShowsRefusalsOnThePage()
+    {
+        var (html, _) = await LoadAsync(a => a.CanSend = false);
+        var button = Regex.Match(html, "<button[^>]*data-export-review-manual[^>]*>").Value;
+        Assert.Contains("disabled", button);
+        Assert.Contains("Collections send permission required", Decode(html));
+
+        var api = NewApi(a => a.ReviewExportError = "There is no approval data yet. Refresh the approval data, then export.");
+        using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
+        var page = Decode(await (await client.PostAsync("/Collections/Campaigns?handler=ExportReview", new FormUrlEncodedContent(Form(await TokenAsync(client))))).Content.ReadAsStringAsync());
+        Assert.Contains("data-approval-error", page); Assert.Contains("no approval data yet", page);
+    }
+
+    [Fact]
+    public async Task AutoKeepsItsExportReviewCsv_AndShowsNoManualExportControls()
+    {
+        var api = NewApi();
+        using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
+        // Auto keeps its own Export review CSV (the schedule preview's file, a link or a disabled button with its reason) and none of the Manual export controls.
+        var html = await (await client.GetAsync("/Collections/Campaigns?render=full&stage=CurrentMonthReminder&businessDate=2026-10-14&sendingMode=Auto")).Content.ReadAsStringAsync();
+        Assert.Matches("data-export-review(-unavailable)?[ >]", html);
+        Assert.DoesNotContain("data-export-review-manual", html); Assert.DoesNotContain("data-export-genesys-button", html);
     }
 
     // ------------------------------------------------------------------ refreshing the approval data by hand

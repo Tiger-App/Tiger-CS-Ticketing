@@ -21,7 +21,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/collections/review")]
 [Tags(OpenApiTags.Collections)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-public sealed class CollectionsReviewController(ReviewQueryService query, ReviewRefreshService refresh, DispatchService dispatch, DispatchAdminReportService adminReport, GenesysExportService genesysExport) : ControllerBase
+public sealed class CollectionsReviewController(ReviewQueryService query, ReviewRefreshService refresh, DispatchService dispatch, DispatchAdminReportService adminReport, GenesysExportService genesysExport, ManualReviewExportService reviewExport) : ControllerBase
 {
     public sealed record StartRefreshRequest(int? CompanyId);
 
@@ -79,8 +79,17 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
     [HttpPost("export/genesys")]
     [RequirePermission(Permissions.CollectionsSend)]
     [ProducesResponseType<GenesysExportDto>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> ExportForGenesys([FromBody] SelectionRequest request, CancellationToken ct) =>
-        Caller() is { } caller ? Result(await genesysExport.ExportAsync(caller, request, ct)) : Unauthorized();
+    public async Task<IActionResult> ExportForGenesys([FromBody] SelectionRequest request, [FromQuery] bool confirmRepeat = false, CancellationToken ct = default) =>
+        Caller() is { } caller ? Result(await genesysExport.ExportAsync(caller, request, ct, confirmRepeat)) : Unauthorized();
+
+    /// <summary>
+    /// The Manual "Export review CSV": every customer of the filtered Manual list with its status and reasons, for people to review. Not a Genesys file. Read only and audited; needs the send right.
+    /// </summary>
+    [HttpPost("export/review")]
+    [RequirePermission(Permissions.CollectionsSend)]
+    [ProducesResponseType<ReviewExportDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ExportReview([FromBody] ReviewFilter filter, CancellationToken ct) =>
+        Caller() is { } caller ? Result(await reviewExport.ExportAsync(caller, filter, ct)) : Unauthorized();
 
     /// <summary>Approves the exact list (count and fingerprint must match) and queues the revalidation-and-upload job.</summary>
     [HttpPost("dispatches")]
@@ -171,6 +180,7 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
             CollectionsOutcome.InvalidRequest => (400, "InvalidRequest"),
             CollectionsOutcome.Disabled => (503, "Disabled"),
             CollectionsOutcome.NotFound => (404, "NotFound"),
+            CollectionsOutcome.RepeatExport => (409, "RepeatExport"),
             CollectionsOutcome.ReviewRequired => (409, "ReviewRequired"),
             CollectionsOutcome.DuplicateDispatch => (409, "DuplicateDispatch"),
             CollectionsOutcome.IdempotencyConflict => (409, "IdempotencyConflict"),
