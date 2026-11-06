@@ -56,7 +56,7 @@ public sealed class TicketAcknowledgementHandler(
     protected override void OnSent(Ticket ticket, DateTime sentAtUtc) => ticket.RecordAcknowledgementSent(sentAtUtc);
 
     protected override async Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken)
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken)
     {
         // "Request type/category where appropriate": the request type is
         // the customer-recognisable classification when one was chosen;

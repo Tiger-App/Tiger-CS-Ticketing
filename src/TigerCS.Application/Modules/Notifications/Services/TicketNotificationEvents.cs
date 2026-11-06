@@ -50,12 +50,13 @@ public sealed class TicketNotificationEvents(IOutboxWriter outboxWriter, IAuditE
     /// seconds earlier would be noise (the handler also skips a Resolved event whose ticket is already Closed).
     /// </summary>
     public Task QueueLifecycleAsync(
-        string eventType, int eventVersion, Ticket ticket, Guid? actorEmployeeId, Guid correlationId, DateTime nowUtc, CancellationToken cancellationToken) =>
+        string eventType, int eventVersion, Ticket ticket, Guid? actorEmployeeId, Guid correlationId, DateTime nowUtc, CancellationToken cancellationToken,
+        string? closureKind = null) =>
         WriteAsync(
             eventType,
-            new TicketLifecycleEventPayload(ticket.TicketId, eventVersion, ticket.ReopenCount).ToJson(),
+            new TicketLifecycleEventPayload(ticket.TicketId, eventVersion, ticket.ReopenCount, closureKind).ToJson(),
             OutboxEventTypes.LifecycleIdempotencyKeyFor(eventType, ticket.TicketId, eventVersion, ticket.ReopenCount),
-            ticket, actorEmployeeId, correlationId, nowUtc, detail: null, cancellationToken);
+            ticket, actorEmployeeId, correlationId, nowUtc, detail: closureKind is null ? null : $"ClosureKind={closureKind}", cancellationToken);
 
     /// <summary>
     /// A Change Status operation. Only the two targets a customer cares about produce an event: <see cref="TicketStatus.InProgress"/>

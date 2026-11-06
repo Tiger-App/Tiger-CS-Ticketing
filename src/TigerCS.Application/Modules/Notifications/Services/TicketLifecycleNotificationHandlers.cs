@@ -64,7 +64,7 @@ public sealed class TicketResolvedNotificationHandler(
     }
 
     protected override async Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken)
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken)
     {
         var resolution = await resolutionRepository.GetCurrentAsync(ticket.TicketId, cancellationToken);
         var outcome = await OutcomeAsync(ticket, cancellationToken);
@@ -72,7 +72,7 @@ public sealed class TicketResolvedNotificationHandler(
         var model = new CustomerEmailTicketModel(
             ticket.TicketNumber,
             contact.DisplayName,
-            resolution?.ResolvedAtUtc ?? occurredAtUtc,
+            resolution?.ResolvedAtUtc ?? message.OccurredAtUtc,
             ResolutionStatus: CustomerEmailTemplates.DescribeResolution(outcome),
             ResolutionMessage: Policy.IncludeResolutionNote ? resolution?.ResolutionNote : null,
             TicketSubject: await subjectResolver.ResolveAsync(ticket, cancellationToken),
@@ -111,19 +111,21 @@ public sealed class TicketClosedNotificationHandler(
     protected override long? ParseTicketId(string payload) => TicketLifecycleEventPayload.FromJson(payload)?.TicketId;
 
     protected override async Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken)
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken)
     {
         // The outcome is always rendered (a system closure sends only this email); the agent's note only when configuration allows.
         var resolution = await resolutionRepository.GetCurrentAsync(ticket.TicketId, cancellationToken);
         var outcome = resolution?.ResolutionOutcome ?? (ticket.ResolutionOutcome is { } stored ? (ResolutionOutcome?)stored : null);
+        var closureKind = TicketLifecycleEventPayload.FromJson(message.Payload)?.ClosureKind;
 
         return CustomerEmailTemplates.TicketClosed(new CustomerEmailTicketModel(
             ticket.TicketNumber,
             contact.DisplayName,
-            occurredAtUtc,
+            message.OccurredAtUtc,
             ResolutionStatus: CustomerEmailTemplates.DescribeResolution(outcome),
             ResolutionMessage: Policy.IncludeResolutionNote ? resolution?.ResolutionNote : null,
-            ClosedForCustomerInactivity: resolution?.ClosedForCustomerInactivity == true,
+            ClosedForCustomerInactivity: resolution?.ClosedForCustomerInactivity == true || closureKind == ClosureKinds.CustomerInactivity,
+            ClosedForAiOnlyTimeout: closureKind == ClosureKinds.AiOnlyTimeout,
             TicketSubject: await subjectResolver.ResolveAsync(ticket, cancellationToken),
             Language: contact.Language,
             Branding: ModePolicy.Branding,
@@ -160,9 +162,9 @@ public sealed class TicketReopenedNotificationHandler(
             : null;
 
     protected override async Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken) =>
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken) =>
         CustomerEmailTemplates.TicketReopened(new CustomerEmailTicketModel(
-            ticket.TicketNumber, contact.DisplayName, occurredAtUtc,
+            ticket.TicketNumber, contact.DisplayName, message.OccurredAtUtc,
             TicketSubject: await subjectResolver.ResolveAsync(ticket, cancellationToken),
             Language: contact.Language, Branding: ModePolicy.Branding, IsTest: ModePolicy.IsTest));
 }
@@ -211,9 +213,9 @@ public sealed class TicketAssignedNotificationHandler(
     }
 
     protected override async Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken) =>
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken) =>
         CustomerEmailTemplates.TicketAssigned(new CustomerEmailTicketModel(
-            ticket.TicketNumber, contact.DisplayName, occurredAtUtc,
+            ticket.TicketNumber, contact.DisplayName, message.OccurredAtUtc,
             TicketSubject: await subjectResolver.ResolveAsync(ticket, cancellationToken),
             TicketStatus: ticket.TicketStatus.ToString(),
             Language: contact.Language, Branding: ModePolicy.Branding, IsTest: ModePolicy.IsTest));
@@ -246,9 +248,9 @@ public sealed class TicketInProgressNotificationHandler(
         StatusEventSupersession.For(ticket, TicketStatusChangedEventPayload.FromJson(message.Payload), TicketStatus.InProgress);
 
     protected override async Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken) =>
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken) =>
         CustomerEmailTemplates.TicketInProgress(new CustomerEmailTicketModel(
-            ticket.TicketNumber, contact.DisplayName, occurredAtUtc,
+            ticket.TicketNumber, contact.DisplayName, message.OccurredAtUtc,
             TicketSubject: await subjectResolver.ResolveAsync(ticket, cancellationToken),
             TicketStatus: nameof(TicketStatus.InProgress),
             Language: contact.Language, Branding: ModePolicy.Branding, IsTest: ModePolicy.IsTest));
@@ -283,12 +285,12 @@ public sealed class TicketPendingCustomerNotificationHandler(
         StatusEventSupersession.For(ticket, TicketStatusChangedEventPayload.FromJson(message.Payload), TicketStatus.PendingCustomer);
 
     protected override async Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken)
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken)
     {
         var pending = Policy.IncludeResolutionNote ? await pendingRecordRepository.GetOpenAsync(ticket.TicketId, cancellationToken) : null;
 
         return CustomerEmailTemplates.TicketWaitingForCustomer(new CustomerEmailTicketModel(
-            ticket.TicketNumber, contact.DisplayName, occurredAtUtc,
+            ticket.TicketNumber, contact.DisplayName, message.OccurredAtUtc,
             TicketSubject: await subjectResolver.ResolveAsync(ticket, cancellationToken),
             TicketStatus: nameof(TicketStatus.PendingCustomer),
             PendingReason: pending?.Reason,

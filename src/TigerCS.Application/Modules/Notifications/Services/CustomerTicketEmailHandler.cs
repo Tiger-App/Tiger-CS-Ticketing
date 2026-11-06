@@ -73,9 +73,9 @@ public abstract class CustomerTicketEmailHandler(
     /// <summary>Extracts the ticket identifier from the message payload; <c>null</c> when the payload cannot be parsed.</summary>
     protected abstract long? ParseTicketId(string payload);
 
-    /// <summary>Renders the email for this ticket and contact. Runs only once a deliverable recipient is known.</summary>
+    /// <summary>Renders the email for this ticket and contact. Runs only once a deliverable recipient is known. The message carries the event's time and payload.</summary>
     protected abstract Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken);
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken);
 
     /// <summary>A domain-level "already done" guard evaluated before anything else is touched. Default: none.</summary>
     protected virtual bool IsAlreadyDelivered(Ticket ticket) => false;
@@ -178,7 +178,7 @@ public abstract class CustomerTicketEmailHandler(
                 ticket, notification, message, contact.SkipReason ?? CustomerEmailSkipReasons.NoCustomerEmail, cancellationToken);
         }
 
-        var content = await BuildContentAsync(ticket, contact, message.OccurredAtUtc, cancellationToken);
+        var content = await BuildContentAsync(ticket, contact, message, cancellationToken);
 
         var result = await emailSender.SendAsync(
             new CustomerEmailRequest(

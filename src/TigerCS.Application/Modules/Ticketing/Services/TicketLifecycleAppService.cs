@@ -5,6 +5,7 @@ using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Application.Modules.Notifications;
+using TigerCS.Application.Modules.Notifications.Dto;
 using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.SlaAndEscalation.Services;
@@ -947,7 +948,7 @@ public sealed class TicketLifecycleAppService(
 
         await EnqueueLifecycleEventAsync(
             OutboxEventTypes.TicketClosed, OutboxEventTypes.TicketClosedVersion,
-            ticket, integrationEmployeeId, correlationId, now, cancellationToken);
+            ticket, integrationEmployeeId, correlationId, now, cancellationToken, ClosureKinds.CustomerInactivity);
 
         beforeCommit?.Invoke(now);
 
@@ -980,14 +981,15 @@ public sealed class TicketLifecycleAppService(
         string detail,
         CancellationToken cancellationToken = default) =>
         CloseBySystemAsync(
-            integrationEmployeeId, ticketId, outcome, reason, detail, "AutoCloseDocumentDelivery",
+            integrationEmployeeId, ticketId, outcome, reason, detail, "AutoCloseDocumentDelivery", ClosureKinds.DocumentDelivery,
             ticket => ticket.CloseForDocumentDelivery(outcome), beforeCommit: null, cancellationToken);
 
     /// <summary>
     /// Closes a ticket that only the AI virtual agent ever handled once it has stayed open past the AI-only time limit: the same system
     /// Resolved → Closed closure as document delivery, outcome <see cref="ResolutionOutcome.Resolved"/> (the ticket ends Closed, not Cancelled) with the supplied
-    /// <paramref name="reason"/>, audit action <c>AutoCloseAiOnlyTimeout</c>. <b>The customer is not notified</b>: no lifecycle event reaches the Outbox.
-    /// A ticket already Closed, or one a person owns, is left exactly as it is (nothing written twice).
+    /// <paramref name="reason"/>, audit action <c>AutoCloseAiOnlyTimeout</c>. The customer receives the single Closed email, which explains that
+    /// the request was handled by the virtual assistant and closed automatically after a period without activity (payload closure kind
+    /// <see cref="ClosureKinds.AiOnlyTimeout"/>). A ticket already Closed, or one a person owns, is left exactly as it is (nothing written twice).
     /// </summary>
     public Task<TicketMutationResult> CloseForAiOnlyTimeoutAsync(
         Guid integrationEmployeeId,
@@ -997,7 +999,7 @@ public sealed class TicketLifecycleAppService(
         CancellationToken cancellationToken = default) =>
         CloseBySystemAsync(
             integrationEmployeeId, ticketId, ResolutionOutcome.Resolved, reason, detail, TicketClosureAuditActions.ClosedForAiOnlyTimeout,
-            ticket => ticket.CloseForAiOnlyTimeout(), beforeCommit: null, cancellationToken, notifyCustomer: false);
+            ClosureKinds.AiOnlyTimeout, ticket => ticket.CloseForAiOnlyTimeout(), beforeCommit: null, cancellationToken);
 
     /// <summary>
     /// Closes the ticket when the Genesys AI reports it finished the conversation: the same Resolved → Closed system closure as document
@@ -1014,7 +1016,7 @@ public sealed class TicketLifecycleAppService(
         CancellationToken cancellationToken = default,
         bool releaseAutomaticOwner = false) =>
         CloseBySystemAsync(
-            integrationEmployeeId, ticketId, ResolutionOutcome.Resolved, reason, detail, "AutoCloseByAi",
+            integrationEmployeeId, ticketId, ResolutionOutcome.Resolved, reason, detail, "AutoCloseByAi", ClosureKinds.AiCompletion,
             ticket =>
             {
                 // The caller has established that the owner is only an AUTOMATIC pre-assignment nobody has acted on (see
@@ -1074,10 +1076,10 @@ public sealed class TicketLifecycleAppService(
         string reason,
         string detail,
         string auditAction,
+        string closureKind,
         Func<Ticket, TicketStatus> close,
         Action<DateTime>? beforeCommit,
-        CancellationToken cancellationToken,
-        bool notifyCustomer = true)
+        CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
 
@@ -1161,13 +1163,10 @@ public sealed class TicketLifecycleAppService(
                 resolutionAchievedAtUtc: now, settlingClosure: true);
         }
 
-        // notifyCustomer == false (AI-only time limit): no lifecycle event is written, so nothing reaches the customer.
-        if (notifyCustomer)
-        {
-            await EnqueueLifecycleEventAsync(
-                OutboxEventTypes.TicketClosed, OutboxEventTypes.TicketClosedVersion,
-                ticket, integrationEmployeeId, correlationId, now, cancellationToken);
-        }
+        // Every system closure tells the customer once, through the single Closed email; the closure kind lets it explain why.
+        await EnqueueLifecycleEventAsync(
+            OutboxEventTypes.TicketClosed, OutboxEventTypes.TicketClosedVersion,
+            ticket, integrationEmployeeId, correlationId, now, cancellationToken, closureKind);
 
         beforeCommit?.Invoke(now);
 
@@ -1201,8 +1200,9 @@ public sealed class TicketLifecycleAppService(
         Guid callerEmployeeId,
         Guid correlationId,
         DateTime nowUtc,
-        CancellationToken cancellationToken) =>
-        _notificationEvents.QueueLifecycleAsync(eventType, eventVersion, ticket, callerEmployeeId, correlationId, nowUtc, cancellationToken);
+        CancellationToken cancellationToken,
+        string? closureKind = null) =>
+        _notificationEvents.QueueLifecycleAsync(eventType, eventVersion, ticket, callerEmployeeId, correlationId, nowUtc, cancellationToken, closureKind);
 
     private async Task<WorkflowCapabilities?> ResolveCapabilitiesAsync(Ticket ticket, CancellationToken cancellationToken)
     {

@@ -1,5 +1,6 @@
 using TigerCS.Application.Modules.Notifications;
 using TigerCS.Application.Modules.Notifications.Abstractions;
+using TigerCS.Application.Modules.Notifications.Dto;
 using TigerCS.Domain.Infrastructure;
 using TigerCS.Domain.Modules.Notifications;
 using TigerCS.Domain.Modules.Ticketing;
@@ -280,6 +281,86 @@ public class CustomerLifecycleEmailHandlerTests
         Assert.Contains("Outcome: Resolved", email.Body, StringComparison.Ordinal);
         Assert.Contains("Subject: AC unit not cooling.", email.Body, StringComparison.Ordinal);
         Assert.DoesNotContain("Closed by AI", email.Body, StringComparison.Ordinal);
+    }
+
+    private static async Task<(NotificationServiceFixture F, Ticket Ticket)> SeedAiOnlyTimeoutClosureAsync(string? email = "ahmed@example.com")
+    {
+        var f = new NotificationServiceFixture();
+        var ticket = email is null ? await f.SeedUnverifiedTicketAsync() : await f.SeedVerifiedTicketAsync(email, "TG-CS-20261106-0300");
+        ticket.CloseForAiOnlyTimeout();
+        await f.Resolutions.AddAsync(new TicketResolution(
+            ticket.TicketId, ResolutionOutcome.Resolved, "AI Only – Auto Closed After 18 Hours", null, null, Guid.NewGuid(), f.Time.GetUtcNow().UtcDateTime));
+        return (f, ticket);
+    }
+
+    [Fact]
+    public async Task Closed_ByTheAiOnlyTimeLimit_SendsTheClosedEmail_ExplainingTheAutomaticClosure()
+    {
+        var (f, ticket) = await SeedAiOnlyTimeoutClosureAsync();
+        var message = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId, closureKind: ClosureKinds.AiOnlyTimeout);
+
+        var result = await f.CreateClosedHandler().HandleAsync(message);
+
+        Assert.Equal(OutboxHandlingOutcome.Succeeded, result.Outcome);
+        var email = Assert.Single(f.Email.Sent);
+        Assert.Equal("ahmed@example.com", email.ToAddress);
+        Assert.Equal("Your Ticket #TG-CS-20261106-0300 Has Been Closed", email.Subject);
+        Assert.Contains("handled by our virtual assistant", email.Body, StringComparison.Ordinal);
+        Assert.Contains("closed automatically", email.Body, StringComparison.Ordinal);
+        Assert.Contains("Status: Closed", email.Body, StringComparison.Ordinal);
+        Assert.Contains("Outcome: Resolved", email.Body, StringComparison.Ordinal);
+        Assert.DoesNotContain("AI Only – Auto Closed After 18 Hours", email.Body, StringComparison.Ordinal);
+        var notification = Assert.Single(f.Notifications.Notifications);
+        Assert.Equal(NotificationType.Closed, notification.NotificationType);
+        Assert.Equal(NotificationDeliveryStatus.Sent, notification.DeliveryStatus);
+        Assert.Contains(f.Audit.Entries, e =>
+            e.Action == NotificationAuditActions.NotificationDeliverySucceeded && e.EntityId == ticket.TicketId.ToString()
+            && e.AfterValue!.Contains("NotificationType=Closed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Closed_ByTheAiOnlyTimeLimit_InArabic()
+    {
+        var f = new NotificationServiceFixture();
+        var ticket = await f.SeedGenesysTicketAsync("fatima@example.com", customerName: "فاطمة المنصوري");
+        ticket.CloseForAiOnlyTimeout();
+        var message = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId, closureKind: ClosureKinds.AiOnlyTimeout);
+
+        await f.CreateClosedHandler().HandleAsync(message);
+
+        Assert.Contains("المساعد الافتراضي", Assert.Single(f.Email.Sent).Body, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Closed_ByTheAiOnlyTimeLimit_WithoutACustomerEmail_IsRecordedAsSkipped()
+    {
+        var (f, ticket) = await SeedAiOnlyTimeoutClosureAsync(email: null);
+        var message = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId, closureKind: ClosureKinds.AiOnlyTimeout);
+
+        var result = await f.CreateClosedHandler().HandleAsync(message);
+
+        Assert.Equal(OutboxHandlingOutcome.Succeeded, result.Outcome);
+        Assert.Empty(f.Email.Sent);
+        var notification = Assert.Single(f.Notifications.Notifications);
+        Assert.Equal(NotificationDeliveryStatus.Skipped, notification.DeliveryStatus);
+        var skipped = Assert.Single(f.Audit.Entries, e => e.Action == NotificationAuditActions.NotificationSkipped);
+        Assert.Equal(ticket.TicketId.ToString(), skipped.EntityId);
+        Assert.Contains($"Reason={CustomerEmailSkipReasons.NoCustomerEmail}", skipped.AfterValue, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Closed_ByTheAiOnlyTimeLimit_RedeliveredMessage_SendsExactlyOnce()
+    {
+        var (f, ticket) = await SeedAiOnlyTimeoutClosureAsync();
+        var message = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId, closureKind: ClosureKinds.AiOnlyTimeout);
+        var dispatcher = f.CreateDispatcher(f.CreateClosedHandler());
+
+        await dispatcher.DispatchPendingAsync();
+        typeof(OutboxMessage).GetProperty(nameof(OutboxMessage.Status))!.SetValue(message, OutboxMessageStatus.Pending); // a redelivery after a lost commit
+        await f.CreateClosedHandler().HandleAsync(message);
+
+        Assert.Single(f.Email.Sent);
+        Assert.Single(f.Notifications.Notifications);
     }
 
     // ---------------------------------------------------------------- reopened

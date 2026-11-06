@@ -247,7 +247,7 @@ public sealed class NotificationServiceFixture
     }
 
     public OutboxMessage EnqueueLifecycleEvent(
-        string eventType, long ticketId, int reopenCount = 0, Guid? correlationId = null, DateTime? occurredAtUtc = null)
+        string eventType, long ticketId, int reopenCount = 0, Guid? correlationId = null, DateTime? occurredAtUtc = null, string? closureKind = null)
     {
         var occurred = occurredAtUtc ?? Time.GetUtcNow().UtcDateTime;
         var record = new IdempotencyRecord(
@@ -258,7 +258,7 @@ public sealed class NotificationServiceFixture
         var message = new OutboxMessage(
             Guid.NewGuid(),
             eventType,
-            new TicketLifecycleEventPayload(ticketId, 1, reopenCount).ToJson(),
+            new TicketLifecycleEventPayload(ticketId, 1, reopenCount, closureKind).ToJson(),
             correlationId ?? Guid.NewGuid(),
             record,
             occurred);

@@ -106,6 +106,20 @@ public class LifecycleEmailTemplatesTests
     }
 
     [Fact]
+    public void Closed_ByTheAiOnlyTimeLimit_ExplainsTheAutomaticClosure()
+    {
+        var english = CustomerEmailTemplates.TicketClosed(Model() with { ResolutionStatus = "Resolved", ClosedForAiOnlyTimeout = true });
+        var arabic = CustomerEmailTemplates.TicketClosed(Model("ar") with { ResolutionStatus = "Resolved", ClosedForAiOnlyTimeout = true });
+
+        Assert.Contains("Your request was handled by our virtual assistant. As there was no further activity on it, it has now been closed automatically.", english.TextBody, StringComparison.Ordinal);
+        Assert.Contains("If you still need help with this matter", english.TextBody, StringComparison.Ordinal);
+        Assert.Contains("Outcome: Resolved", english.TextBody, StringComparison.Ordinal);
+        Assert.DoesNotContain("Thank you for giving us the opportunity", english.TextBody, StringComparison.Ordinal);
+        Assert.Contains("المساعد الافتراضي", arabic.TextBody, StringComparison.Ordinal);
+        Assert.Contains("تم إغلاقه تلقائياً", arabic.TextBody, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Created_AddsTheSubjectOnlyWhenItSaysMoreThanTheRequestType()
     {
         var same = CustomerEmailTemplates.TicketCreated(Model() with { RequestTypeName = "Maintenance Request" });

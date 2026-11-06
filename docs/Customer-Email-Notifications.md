@@ -18,7 +18,7 @@ a department employee, the Genesys AI, or an automatic rule):
 | Waiting for customer | `POST /api/tickets/{id}/status` to `PendingCustomer` | `We need your input – Ticket {TicketNumber}` | `PendingCustomer` |
 | Ticket resolved | `POST /api/tickets/{id}/resolution` (outcomes Resolved, Rejected, Duplicate) | `Your Ticket #{TicketNumber} Has Been Resolved` | `Resolved` |
 | Ticket cancelled | `POST /api/tickets/{id}/resolution` with outcome `Cancelled` | `Your request has been cancelled – Ticket {TicketNumber}` | `Cancelled` |
-| Ticket closed | `POST /api/tickets/{id}/close`; Genesys `closedByAi`; document-delivery closure; the chatbot customer-inactivity closure | `Your Ticket #{TicketNumber} Has Been Closed` | `Closed` |
+| Ticket closed | `POST /api/tickets/{id}/close`; Genesys `closedByAi`; document-delivery closure; the chatbot customer-inactivity closure; the AI-only 18-hour auto-close | `Your Ticket #{TicketNumber} Has Been Closed` | `Closed` |
 | Ticket reopened | `POST /api/tickets/{id}/reopen` | `Your request has been reopened – Ticket {TicketNumber}` | `Reopened` |
 
 **Internal (staff) emails**, delivered through the same Outbox and SMTP account, never redirected by the customer test mode:
@@ -31,7 +31,9 @@ a department employee, the Genesys AI, or an automatic rule):
 Every email carries the customer's name (when one is known and valid), the ticket number, the ticket subject (request type, category or
 the first line of the summary), the current status, the date, the Tiger Properties header/footer/signature, a plain-text body and a
 responsive HTML body, in English or Arabic according to the customer's name script. The "closed" email always states the outcome
-(`Resolved`, `Cancelled`, …) and, for the inactivity rule, says that no reply was received. Staff emails carry a **Ticket Details link**
+(`Resolved`, `Cancelled`, …) and explains an automatic closure: the inactivity rule says that no reply was received, the AI-only
+18-hour rule says the request was handled by the virtual assistant and closed automatically after no further activity (the `TicketClosed`
+payload carries a `closureKind` — `AiCompletion`, `AiOnlyTimeout`, `CustomerInactivity`, `DocumentDelivery` — for this). Staff emails carry a **Ticket Details link**
 (`{CustomerNotifications:PublicBaseUrl}/Tickets/{id}`). Customer emails carry no ticket URL: Ticket Details is a staff-only page and
 there is no customer portal (ISSUE-021); the only public page is the satisfaction review.
 
@@ -58,7 +60,6 @@ The acknowledgement is always sent; a resolution or closure from an earlier cycl
 
 - **Reassignment between colleagues** is internal routing: the customer still has "someone on it"; only the new assignee is told.
 - **Assignment in the creation transaction** (a rule or Round Robin pre-assignment at creation): the acknowledgement covers it.
-- **The AI-only 18-hour auto-close** (`AutoCloseAiOnlyTimeout`): an abandoned AI conversation nobody ever handled; deliberately silent.
 - **Customer activity signals** (`customerActive`, `awaitingCustomerReply`) without transcript lines; AI-chat lines while the ticket is
   still Open and nobody is handling it.
 - **Classification, priority changes, approvals, notes, attachments, SLA warnings/breaches/escalations**, department transfers that

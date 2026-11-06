@@ -242,7 +242,7 @@ public class TicketNotificationEventsTests
     }
 
     [Fact]
-    public async Task AiOnlyTimeoutClosure_QueuesNothing()
+    public async Task AiOnlyTimeoutClosure_QueuesOnlyTheClosedEvent_MarkedAsTheTimeLimitClosure()
     {
         var f = CreateLifecycle();
         var ticket = await SeedTicketAsync(f.Tickets);
@@ -250,7 +250,39 @@ public class TicketNotificationEventsTests
         var result = await f.Service.CloseForAiOnlyTimeoutAsync(Guid.NewGuid(), ticket.TicketId, "AI Only – Auto Closed After 18 Hours", "Handling=AI");
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
-        Assert.Empty(f.Outbox.Committed);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Equal([OutboxEventTypes.TicketClosed], Events(f.Outbox));
+        Assert.Equal(ClosureKinds.AiOnlyTimeout, TicketLifecycleEventPayload.FromJson(f.Outbox.Committed[0].Payload)!.ClosureKind);
+        Assert.Contains(
+            OutboxEventTypes.LifecycleIdempotencyKeyFor(OutboxEventTypes.TicketClosed, ticket.TicketId, 1, 0), f.Outbox.ReservedKeys);
+    }
+
+    [Fact]
+    public async Task AiOnlyTimeoutClosure_RetriedForTheSameTicket_QueuesNothingTwice()
+    {
+        var f = CreateLifecycle();
+        var ticket = await SeedTicketAsync(f.Tickets);
+        await f.Service.CloseForAiOnlyTimeoutAsync(Guid.NewGuid(), ticket.TicketId, "AI Only – Auto Closed After 18 Hours", "Handling=AI");
+
+        var again = await f.Service.CloseForAiOnlyTimeoutAsync(Guid.NewGuid(), ticket.TicketId, "AI Only – Auto Closed After 18 Hours", "Handling=AI");
+
+        Assert.Equal(TicketMutationOutcome.TicketClosed, again.Outcome);
+        Assert.Single(f.Outbox.Committed);
+    }
+
+    [Fact]
+    public async Task EveryClosureRule_NamesItselfInTheClosedEvent()
+    {
+        var f = CreateLifecycle();
+        var ai = await SeedTicketAsync(f.Tickets);
+        await f.Service.CloseForAiCompletionAsync(Guid.NewGuid(), ai.TicketId, "Closed by AI", "ConversationId=c");
+        var inactive = Ticket.CreateVerified("TG-CS-20261106-0003", 2, 10, 20, 5, 2, "x", Now);
+        await f.Tickets.AddAsync(inactive);
+        await f.Service.CloseForCustomerInactivityAsync(Guid.NewGuid(), inactive.TicketId, "No reply");
+
+        Assert.Equal(
+            [ClosureKinds.AiCompletion, ClosureKinds.CustomerInactivity],
+            f.Outbox.Committed.Select(m => TicketLifecycleEventPayload.FromJson(m.Payload)!.ClosureKind!).ToArray());
     }
 
     [Fact]

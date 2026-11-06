@@ -133,8 +133,13 @@ public static class CustomerEmailTemplates
             details.Add((t.Resolution, model.ResolutionMessage));
         }
 
-        var body = model.ClosedForCustomerInactivity ? t.ClosedInactivityBody : t.ClosedBody;
-        var followUp = model.ClosedForCustomerInactivity ? t.ClosedInactivityFollowUp : t.ClosedFollowUp;
+        // Automatic closures say why in plain words: the customer never saw an agent act, so "closed" alone would be unexplained.
+        var (body, followUp) = model switch
+        {
+            { ClosedForCustomerInactivity: true } => (t.ClosedInactivityBody, t.ClosedInactivityFollowUp),
+            { ClosedForAiOnlyTimeout: true } => (t.ClosedAiOnlyTimeoutBody, t.ClosedInactivityFollowUp),
+            _ => (t.ClosedBody, t.ClosedFollowUp)
+        };
 
         return Render(
             model,
@@ -605,6 +610,9 @@ public static class CustomerEmailTemplates
         public string ClosedInactivityBody => P(
             "We did not receive a reply from you, so your request has now been closed.",
             "لم نتلقَّ رداً منك، لذلك تم إغلاق طلبك الآن.");
+        public string ClosedAiOnlyTimeoutBody => P(
+            "Your request was handled by our virtual assistant. As there was no further activity on it, it has now been closed automatically.",
+            "تمت معالجة طلبك بواسطة المساعد الافتراضي. ونظراً لعدم وجود أي نشاط إضافي عليه، تم إغلاقه تلقائياً الآن.");
         public string ClosedInactivityFollowUp => P(
             "If you still need help with this matter, please contact us and quote your ticket number, and we will be glad to assist you.",
             "إذا كنت لا تزال بحاجة إلى مساعدة بخصوص هذا الموضوع، يرجى التواصل معنا وذكر رقم التذكرة وسيسعدنا مساعدتك.");
@@ -701,6 +709,7 @@ public static class CustomerEmailTemplates
 /// <param name="PendingReason">The agent's "waiting for customer" reason, only when configuration allows sharing agent-written notes.</param>
 /// <param name="ClosedForCustomerInactivity">The closure happened because the customer stopped replying; the "closed" email says so.</param>
 /// <param name="ResumedAfterWaiting">The "in progress" email follows a waiting-for-customer period (the customer replied).</param>
+/// <param name="ClosedForAiOnlyTimeout">The AI-only time-limit rule closed the ticket; the "closed" email explains the automatic closure.</param>
 public sealed record CustomerEmailTicketModel(
     string TicketNumber,
     string? CustomerName,
@@ -716,4 +725,5 @@ public sealed record CustomerEmailTicketModel(
     string? TicketStatus = null,
     string? PendingReason = null,
     bool ClosedForCustomerInactivity = false,
-    bool ResumedAfterWaiting = false);
+    bool ResumedAfterWaiting = false,
+    bool ClosedForAiOnlyTimeout = false);
