@@ -91,7 +91,7 @@ public sealed class CollectionsCampaignFilterTests
     {
         var api = new FakeCollectionsApi { IncludeNotEligible = true };
         using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
-        var html = await (await client.GetAsync($"/Collections/Campaigns?handler=Results&{Filters}")).Content.ReadAsStringAsync();
+        var html = await (await client.GetAsync($"/Collections/Campaigns?handler=Results&{Filters}&sendingMode=Manual")).Content.ReadAsStringAsync();
         var form = Regex.Match(html, "<form[^>]*data-approve-form.*?</form>", RegexOptions.Singleline).Value;
         Assert.NotEmpty(form);
         foreach (var expected in new[] { "name=\"stage\" value=\"LegalNotice\"", "name=\"towerId\" value=\"7\"", "name=\"dateFrom\" value=\"2026-09-01\"", "name=\"dateTo\" value=\"2026-10-31\"",
