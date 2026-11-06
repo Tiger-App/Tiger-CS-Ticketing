@@ -183,6 +183,25 @@ public class TicketAssignmentAppServiceTests
     }
 
     [Fact]
+    public async Task AssignAsync_DeactivatedDepartmentMember_NeverReceivesTheTicket()
+    {
+        var f = CreateService();
+        var ticket = await SeedTicketAsync(f.Tickets);
+        var target = Guid.NewGuid();
+        var inactive = new Employee(target, "Former Employee", false, DateTime.UtcNow);
+        inactive.Deactivate(DateTime.UtcNow);
+        var membership = new UserDepartmentAssignment(target, ticket.CurrentDepartmentId, true, DateTime.UtcNow, null);
+        typeof(UserDepartmentAssignment).GetProperty(nameof(UserDepartmentAssignment.Employee))!.SetValue(membership, inactive);
+        f.DepartmentAssignments.Assignments.Add(membership);
+
+        var result = await f.Service.AssignAsync(
+            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new AssignTicketRequestDto(target, []));
+
+        Assert.Equal(TicketMutationOutcome.EmployeeNotInDepartment, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
     public async Task AssignAsync_OnClosedTicket_ReturnsTicketClosed_NoDatabaseWrites()
     {
         var f = CreateService();

@@ -12,8 +12,15 @@ namespace TigerCS.Api.Controllers;
 [Route("api/admin/departments")]
 [Authorize(Policy = PolicyNames.SystemAdministrator)]
 [Tags(OpenApiTags.Administration)]
-public class AdminDepartmentsController(AdminDepartmentAppService departments) : AdminControllerBase
+public class AdminDepartmentsController(AdminDepartmentAppService departments, DepartmentCoverageService coverage) : AdminControllerBase
 {
+    /// <summary>Staffing coverage of every active department: active employees, employees eligible for automatic assignment, and an Unstaffed / NoAssignableEmployee flag. Read-only.</summary>
+    [HttpGet("coverage")]
+    [RequirePermission(Permissions.AdminConfigurationView)]
+    [ProducesResponseType<IReadOnlyList<DepartmentCoverageLine>>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Coverage(CancellationToken cancellationToken) =>
+        Ok(await coverage.GetAsync(cancellationToken));
+
     /// <summary>Every department with member, request-type and ticket-reference counts (inactive included by default).</summary>
     [HttpGet]
     [RequirePermission(Permissions.AdminConfigurationView)]
