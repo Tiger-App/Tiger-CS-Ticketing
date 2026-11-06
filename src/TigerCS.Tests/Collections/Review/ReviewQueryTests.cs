@@ -15,9 +15,9 @@ public sealed class ReviewQueryTests
         var h = new ReviewHarness();
         h.Source.Items.AddRange([
             ReviewHarness.Row(1, 500m),                                                // unpaid, ready
-            ReviewHarness.Row(2, 200m, plan: 500m, company: 32, project: "TP150"),     // partially paid, company 32
+            ReviewHarness.Row(2, 200m, plan: 500m, company: 32, project: "TP150"),     // partly paid (Unpaid: the remainder decides), company 32
             ReviewHarness.Row(3, 50m),                                                 // below the AED 100 default
-            ReviewHarness.Row(4, 800m) with { PlanAmount = null },                     // payment status unknown
+            ReviewHarness.Row(4, 800m, plan: 500m) with { AllocatedAmount = 100m },    // remaining above the original: the source contradicts itself, status unknown
             ReviewHarness.Row(5, 600m, mobile: ""),                                    // no callable phone
             ReviewHarness.Row(6, 1000m, day: 5, name: "Zainab Al Ali"),                // earlier in the month
         ]);
@@ -66,8 +66,8 @@ public sealed class ReviewQueryTests
         using var h = await SeededAsync();
         var all = await Query(h, new ReviewFilter(PaymentStatus: "All", MinRemaining: 0m, ReminderType: CurrentMonth));
         Assert.Equal(6, all.TotalCount);
-        Assert.Equal(["Customer 2"], Numbers(await Query(h, new ReviewFilter(PaymentStatus: "PartiallyPaid", ReminderType: CurrentMonth))));
-        Assert.Equal(["Customer 1", "Customer 3", "Customer 5", "Zainab Al Ali"],
+        Assert.Empty((await Query(h, new ReviewFilter(PaymentStatus: "PartiallyPaid", ReminderType: CurrentMonth))).Items);   // partly paid is Unpaid: the remainder decides
+        Assert.Equal(["Customer 1", "Customer 2", "Customer 3", "Customer 5", "Zainab Al Ali"],
             Numbers(await Query(h, new ReviewFilter(PaymentStatus: "Unpaid", MinRemaining: 0m, ReminderType: CurrentMonth))));
         Assert.Empty((await Query(h, new ReviewFilter(PaymentStatus: "Paid", MinRemaining: 0m, ReminderType: CurrentMonth))).Items);
         Assert.Equal(["Customer 4"], Numbers(await Query(h, new ReviewFilter(PaymentStatus: "Unknown", ReminderType: CurrentMonth))));

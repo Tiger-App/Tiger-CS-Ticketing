@@ -96,7 +96,8 @@ public static class ReviewRecordBuilder
                 var unresolved = unitRows.Any(r => !r.Money.IsResolved);
                 if (unresolved) reasons.Add(ReviewReasons.AmountPrecisionNeedsReview);
 
-                var statuses = stageRows.Select(r => PaymentStatusRules.Derive(r.Row.SourceStatus, r.Amount, r.Row.PlanAmount, context.StatusMap, r.Row.AllocatedAmount)).ToList();
+                // Payment status follows the verified remaining amount (0 = Paid, more = Unpaid); only a missing, invalid or contradicted remainder is Unknown and holds the record.
+                var statuses = stageRows.Select(r => PaymentStatusRules.Derive(r.Row.SourceStatus, r.Amount, r.Row.PlanAmount, r.Row.AllocatedAmount)).ToList();
                 if (stageRows.Any(r => r.Row is { PlanAmount: { } plan, AllocatedAmount: { } paid } && !PaymentStatusRules.AmountsAddUp(plan, paid, r.Money.Raw)))
                     reasons.Add(ReviewReasons.SourceAmountsInconsistent);
                 if (statuses.Contains(ReviewPaymentStatus.Paid) || stageRows.Any(r => string.Equals(r.Row.SourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase)))

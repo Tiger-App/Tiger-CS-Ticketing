@@ -157,17 +157,22 @@ public sealed class PactReceivableCustomersTests
     }
 
     [Fact]
-    public async Task VerifiedStatusMeaning_PaidIsPaid_InstallmentIsNeverUnpaidOrPartiallyPaid()
+    public async Task TheRemainingAmountDecidesThePaymentStatus_AndAPaidStatusWithARemainderIsContradictory()
     {
         var h = new Harness();
-        // Even an operator mapping must not turn "Installment" into a payment status: it cannot tell the two apart.
-        h.SqlOptions.SourceStatusMap["Installment"] = "Unpaid";
         h.Source.Items.AddRange([Row(5) with { SourceStatus = "Installment" }, Row(6, voucher: "P") with { SourceStatus = "Paid" }]);
         var c = Assert.Single((await h.Service.ListAsync(h.Agent)).Value!.Items);
-        Assert.All(c.Instalments, i => Assert.Equal("Unknown", i.PaymentStatus)); // Paid + positive remainder is contradictory
+        var by = c.Instalments.ToDictionary(i => i.DueDate.Day);
+        Assert.Equal("Unpaid", by[5].PaymentStatus);                                       // a positive remainder is unpaid, whatever the text says
+        Assert.Equal("Unknown", by[6].PaymentStatus);                                      // Paid + positive remainder is contradictory
         Assert.Equal(["Installment", "Paid"], c.Instalments.Select(i => i.SourceStatus));
-        Assert.Equal("Paid", PactReceivableCustomersAppService.PaymentStatus("Paid", 0m, new Dictionary<string, string>()));
-        Assert.Equal("Unknown", PactReceivableCustomersAppService.PaymentStatus("Installment", 10m, new Dictionary<string, string>()));
+        var none = new Dictionary<string, string>();
+        Assert.Equal("Paid", PactReceivableCustomersAppService.PaymentStatus("Paid", 0m, none));
+        Assert.Equal("Paid", PactReceivableCustomersAppService.PaymentStatus("Installment", 0m, none));
+        Assert.Equal("Unpaid", PactReceivableCustomersAppService.PaymentStatus("Installment", 10m, none));
+        Assert.Equal("Unpaid", PactReceivableCustomersAppService.PaymentStatus(null, 10m, none));
+        Assert.Equal("Unknown", PactReceivableCustomersAppService.PaymentStatus("Installment", null, none));
+        Assert.Equal("Unknown", PactReceivableCustomersAppService.PaymentStatus("Installment", -5m, none));
     }
 
     [Theory]
@@ -201,7 +206,7 @@ public sealed class PactReceivableCustomersTests
         Assert.Equal(("Unpaid", "DueToday"), (by[7].PaymentStatus, by[7].DueTiming));
         Assert.Equal(("Due", "Unpaid", "Upcoming"), (by[9].ReceivablesType, by[9].PaymentStatus, by[9].DueTiming));
         Assert.Equal("Unknown", by[6].PaymentStatus); // mapped Paid but a remainder is owed
-        Assert.Equal(("Unknown", "Weird"), (by[4].PaymentStatus, by[4].SourceStatus));
+        Assert.Equal(("Unpaid", "Weird"), (by[4].PaymentStatus, by[4].SourceStatus));   // an unmapped text does not matter: the remainder decides
         Assert.Equal(477m, c.DueAmount);
     }
 

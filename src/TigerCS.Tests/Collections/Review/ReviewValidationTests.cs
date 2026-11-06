@@ -121,21 +121,31 @@ public sealed class ReviewValidationTests
     }
 
     [Fact]
-    public void UnknownPaymentStatusIsVisibleButNotReady()
+    public void APositiveRemainderWithoutAPlanAmount_IsUnpaidAndReady()
     {
-        // The deployed report has no plan amount, so Installment cannot be classed unpaid or partially paid.
+        // The deployed report returns the remaining amount and "Installment" only: the remainder is the source of truth, so the record is Unpaid and sendable.
         var row = ReviewHarness.Row(1) with { PlanAmount = null };
         var record = Single([row]);
+        Assert.Equal(ReviewPaymentStatus.Unpaid, record.PaymentStatus);
+        Assert.DoesNotContain(ReviewReasons.PaymentStatusUnknown, Reasons(record));
+        Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
+    }
+
+    [Fact]
+    public void AContradictedRemainder_IsUnknown_VisibleButNotReady()
+    {
+        // The source says Paid but a remainder is owed: contradictory, needs review, never sent.
+        var record = Single([ReviewHarness.Row(1, status: "Paid")]);
         Assert.Equal(ReviewPaymentStatus.Unknown, record.PaymentStatus);
-        Assert.Contains(ReviewReasons.PaymentStatusUnknown, Reasons(record));
+        Assert.Contains(ReviewReasons.ContradictoryPaymentStatus, Reasons(record));
         Assert.Equal(ReviewValidationStatus.NeedsReview, record.ValidationStatus);
     }
 
     [Fact]
-    public void PartiallyPaidIsRecognisedFromPlanAmount()
+    public void APartlyPaidRemainder_IsUnpaid_WithTheRemainingAmount()
     {
         var record = Single([ReviewHarness.Row(1, amount: 200m, plan: 500m)]);
-        Assert.Equal(ReviewPaymentStatus.PartiallyPaid, record.PaymentStatus);
+        Assert.Equal(ReviewPaymentStatus.Unpaid, record.PaymentStatus);
         Assert.Equal(200m, record.RemainingAmount);
         Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
     }
@@ -228,7 +238,7 @@ public sealed class ReviewValidationTests
         // V2: original (PlanAmount) 500 = paid (AllocatedAmount) 200 + remaining 300.
         var consistent = ReviewHarness.Row(1, amount: 300m, plan: 500m) with { AllocatedAmount = 200m };
         var ok = Single([consistent]);
-        Assert.Equal(ReviewPaymentStatus.PartiallyPaid, ok.PaymentStatus);
+        Assert.Equal(ReviewPaymentStatus.Unpaid, ok.PaymentStatus);
         Assert.Equal(ReviewValidationStatus.Ready, ok.ValidationStatus);
 
         // Nothing paid: Unpaid, derived from AllocatedAmount = 0, not from the due date.
