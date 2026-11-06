@@ -1,6 +1,7 @@
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
+using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.IdentityAndAccess;
@@ -45,8 +46,11 @@ public sealed class AgentHandoffAppService(
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
     TimeProvider timeProvider,
-    ITicketNoteRepository? ticketNoteRepository = null)
+    ITicketNoteRepository? ticketNoteRepository = null,
+    IOutboxWriter? outboxWriter = null)
 {
+    private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
+
     /// <summary>
     /// The agent work list — every customer interaction waiting for a human,
     /// on every channel. Scoped by exactly the same visible-department rule
@@ -269,6 +273,13 @@ public sealed class AgentHandoffAppService(
                     note: "A human agent accepted the pending customer interaction.",
                     correlationId, now),
                 cancellationToken);
+        }
+
+        if (assignedTicket && _notificationEvents is not null)
+        {
+            // Queued after the status move so the customer email describes the ticket as it now is (a person is working on it). One
+            // event for "accepted and started": a separate "in progress" email seconds later would say the same thing twice.
+            await _notificationEvents.QueueAssignedAsync(ticket, beforeOwner, callerEmployeeId, callerEmployeeId, correlationId, now, cancellationToken);
         }
 
         // Ticket Activity: only when this call actually performed the claim,

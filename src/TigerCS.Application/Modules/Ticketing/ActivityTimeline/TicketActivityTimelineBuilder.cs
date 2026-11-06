@@ -1,5 +1,6 @@
 using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using System.Globalization;
+using TigerCS.Application.Modules.Notifications;
 using TigerCS.Domain.Audit;
 using TigerCS.Domain.Modules.Ticketing;
 
@@ -16,12 +17,23 @@ public static class TimelineAuditActions
     /// <summary>Written (forward-compatible, from this release on) when a human reply reaches TigerCS for a ticket that is already Closed. Its audit time is the moment TigerCS received it.</summary>
     public const string HumanActivityAfterClosure = "TicketHumanActivityAfterClosure";
 
+    /// <summary>Email notification events, written by the Outbox writer (queued) and the notification handlers (sent / failed / skipped), keyed by the ticket.</summary>
+    public static readonly IReadOnlyCollection<string> Notifications =
+    [
+        NotificationAuditActions.NotificationQueued,
+        NotificationAuditActions.NotificationDeliverySucceeded,
+        NotificationAuditActions.NotificationDeliveryFailed,
+        NotificationAuditActions.NotificationDeadLettered,
+        NotificationAuditActions.NotificationSkipped
+    ];
+
     /// <summary>Every audit action the timeline reads.</summary>
     public static readonly IReadOnlyCollection<string> All =
     [
         AutoCloseCustomerInactivity, AutoCloseByAi, AutoCloseDocumentDelivery, AutoCloseAiOnlyTimeout, HumanActivityAfterClosure,
         "GenesysRoutingChanged", "GenesysTranscriptAppended", "GenesysHumanFollowUpRequired",
-        "GenesysHandoffAutoRaisedOnConversationEnd", "GenesysConversationEnded"
+        "GenesysHandoffAutoRaisedOnConversationEnd", "GenesysConversationEnded",
+        .. Notifications
     ];
 }
 
@@ -103,6 +115,7 @@ public static class TicketActivityTimelineBuilder
         AddHandoffs(s, ctx, entries);
         AddHandlers(s, ctx, entries, gaps);
         AddAuditMilestones(s, ctx, entries);
+        AddNotifications(s, entries);
         AddOwnership(s, ctx, entries);
         AddLifecycle(s, ctx, entries);
         var closures = AddClosures(s, ctx, entries, gaps);
@@ -597,6 +610,79 @@ public static class TicketActivityTimelineBuilder
             }
         }
     }
+
+    // ------------------------------------------------------------------ email notifications
+
+    /// <summary>
+    /// The email notification trail: queued (in the operation's own transaction), then sent, failed or skipped by the dispatcher. One
+    /// entry per audit row, so a retried delivery shows each attempt. Recipient addresses are never in the audit trail and so never here.
+    /// </summary>
+    private static void AddNotifications(TicketTimelineSources s, List<Entry> entries)
+    {
+        foreach (var audit in s.AuditEntries.Where(a => a.EntityType == NotificationAuditActions.NotificationEntityType))
+        {
+            var after = ParseKv(audit.AfterValue);
+            if (!BelongsToTicket(after, s.TicketId))
+            {
+                continue;
+            }
+
+            var (eventType, eventName, severity, detail) = audit.Action switch
+            {
+                NotificationAuditActions.NotificationQueued => ("EmailQueued", "Email queued", "Info", "Queued for delivery by the notification dispatcher."),
+                NotificationAuditActions.NotificationDeliverySucceeded => ("EmailSent", "Email sent", "Info", "Accepted by the email provider."),
+                NotificationAuditActions.NotificationDeliveryFailed => ("EmailFailed", "Email failed", "Warning", "The email provider reported a failure; delivery will be retried."),
+                NotificationAuditActions.NotificationDeadLettered => ("EmailFailed", "Email failed", "Warning", "Delivery failed permanently (dead-lettered); no further attempt will be made."),
+                NotificationAuditActions.NotificationSkipped => ("EmailSkipped", "Email skipped", "Info", "Deliberately not sent."),
+                _ => (null, null, null, null)
+            };
+
+            if (eventType is null)
+            {
+                continue;
+            }
+
+            var audience = Pick(after, "Audience", "Customer") == "Internal" ? "staff" : "customer";
+            var what = DescribeNotification(Pick(after, "NotificationType", Pick(after, "EventType", string.Empty)));
+            var reason = after.TryGetValue("Reason", out var r) && !string.IsNullOrWhiteSpace(r) ? DescribeSkipReason(r) : null;
+
+            entries.Add(Make(
+                audit.OccurredAtUtc, eventType, $"{eventName!}: {what}", "Notification", TimelineActorTypes.System, "TigerCS",
+                $"{detail} ({audience} email).", SourceAudit, rank: 7, reason: reason, severity: severity!));
+        }
+    }
+
+    /// <summary>Plain wording for a <c>NotificationType</c> or Outbox <c>EventType</c> name as it appears in the audit value.</summary>
+    internal static string DescribeNotification(string typeOrEvent) => typeOrEvent switch
+    {
+        "Acknowledgement" or "TicketCreated" => "ticket created",
+        "Assigned" or "TicketAssigned" => "ticket assigned",
+        "InProgress" or "TicketInProgress" => "in progress",
+        "PendingCustomer" or "TicketPendingCustomer" => "waiting for customer",
+        "Resolved" or "TicketResolved" => "ticket resolved",
+        "Cancelled" => "ticket cancelled",
+        "Closed" or "TicketClosed" => "ticket closed",
+        "Reopened" or "TicketReopened" => "ticket reopened",
+        "AgentAssigned" or "TicketAssignedToAgent" => "assigned to agent",
+        "CustomerReplyReceived" => "customer reply received",
+        "" => "notification",
+        _ => typeOrEvent
+    };
+
+    internal static string DescribeSkipReason(string code) => code switch
+    {
+        "NotificationsDisabled" => "Email notifications are switched off.",
+        "NoCustomerEmail" => "The ticket has no customer email address.",
+        "InvalidCustomerEmail" => "The customer's email address is not valid.",
+        "EventTooOld" => "The event was too old to send when the dispatcher reached it.",
+        "TestEmailMissing" => "Test mode is on but no test mailbox is configured.",
+        "SupersededByClosure" => "The ticket was already closed; the closure email carries the outcome.",
+        "SupersededByLaterUpdate" => "The ticket had already moved on; the later update was emailed instead.",
+        "NoAgentEmail" => "The staff member has no email address on their account.",
+        "AgentNotFound" => "The staff member's account no longer exists.",
+        "PermanentProviderFailure" => "The email provider rejected the message.",
+        _ => code
+    };
 
     // ------------------------------------------------------------------ ownership & transfers
 

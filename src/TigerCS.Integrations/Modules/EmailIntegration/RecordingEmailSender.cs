@@ -53,7 +53,7 @@ public sealed class RecordingEmailSender(ILogger<RecordingEmailSender> logger) :
 
         _recorded.Enqueue(new RecordedEmail(
             message.ToAddress, message.Subject, message.Body, message.CorrelationId,
-            message.Attachments?.Select(a => a.FileName).ToList(), message.HtmlBody));
+            message.Attachments?.Select(a => a.FileName).ToList(), message.HtmlBody, message.Audience));
 
         while (_recorded.Count > MaxRecordedDeliveries && _recorded.TryDequeue(out _))
         {
@@ -100,6 +100,7 @@ public sealed class RecordingEmailSender(ILogger<RecordingEmailSender> logger) :
 /// <param name="Body">Rendered body. In memory only — never logged, never persisted.</param>
 /// <param name="CorrelationId">ADR-0014's correlation ID.</param>
 /// <param name="AttachmentFileNames">Names of attached files (never their content), so a test can see a document copy was attached.</param>
+/// <param name="Audience">Customer or staff mail, so a test can tell the two apart.</param>
 public sealed record RecordedEmail(
     string ToAddress, string Subject, string Body, Guid CorrelationId, IReadOnlyList<string>? AttachmentFileNames = null,
-    string? HtmlBody = null);
+    string? HtmlBody = null, EmailAudience Audience = EmailAudience.Customer);

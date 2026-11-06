@@ -4,6 +4,7 @@ using System.Net.Http.Json;
 using TigerCS.Application.Modules.CustomerVerification.Dto;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.Notifications;
+using TigerCS.Application.Modules.Notifications.Abstractions;
 using TigerCS.Application.Modules.SlaAndEscalation.Dto;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Infrastructure;
@@ -66,8 +67,9 @@ public class CustomerLifecycleNotificationIntegrationTests : LifecycleIntegratio
         Assert.Equal(0, result.DeadLettered);
         Assert.Equal(0, result.Failed);
 
+        // Customer mail only: the worker also receives the staff "assigned to you" email, which is not the customer's story.
         var mine = _factory.EmailSender.Recorded
-            .Where(e => e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal))
+            .Where(e => e.Audience == EmailAudience.Customer && e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal))
             .Select(e => e.Subject)
             .OrderBy(s => s)
             .ToList();
@@ -80,14 +82,22 @@ public class CustomerLifecycleNotificationIntegrationTests : LifecycleIntegratio
             ],
             mine);
         Assert.All(
-            _factory.EmailSender.Recorded.Where(e => e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal)),
+            _factory.EmailSender.Recorded.Where(e => e.Audience == EmailAudience.Customer && e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal)),
             e => Assert.Equal("ahmed.alfarsi@example.com", e.ToAddress));
 
         var notifications = await _factory.GetNotificationsAsync(ticket.TicketId);
         Assert.Equal(
             [NotificationType.Acknowledgement, NotificationType.Resolved, NotificationType.Closed, NotificationType.Reopened],
-            notifications.OrderBy(n => n.NotificationType).Select(n => n.NotificationType).ToArray());
-        Assert.All(notifications, n => Assert.Equal(NotificationDeliveryStatus.Sent, n.DeliveryStatus));
+            notifications.Where(n => n.DeliveryStatus == NotificationDeliveryStatus.Sent && n.RecipientEmployeeId is null)
+                .OrderBy(n => n.NotificationType).Select(n => n.NotificationType).ToArray());
+        // The assignment and the start of work happened within the same dispatch window as the resolution: coalesced into the
+        // emails that describe where the ticket ended up, and recorded as skipped rather than silently dropped.
+        Assert.All(
+            notifications.Where(n => n.NotificationType is NotificationType.Assigned or NotificationType.InProgress),
+            n => Assert.Equal(NotificationDeliveryStatus.Skipped, n.DeliveryStatus));
+        Assert.Contains(notifications, n => n.NotificationType == NotificationType.Assigned);
+        Assert.Contains(notifications, n => n.NotificationType == NotificationType.InProgress);
+        Assert.DoesNotContain(notifications, n => n.DeliveryStatus is NotificationDeliveryStatus.Failed or NotificationDeliveryStatus.DeadLettered);
 
         foreach (var eventType in new[] { OutboxEventTypes.TicketResolved, OutboxEventTypes.TicketClosed, OutboxEventTypes.TicketReopened })
         {

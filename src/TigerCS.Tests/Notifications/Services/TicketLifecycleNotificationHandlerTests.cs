@@ -140,10 +140,11 @@ public class TicketLifecycleNotificationHandlerTests
         var ticket = await f.SeedVerifiedTicketAsync("ahmed@example.com");
         await f.ResolveAsync(ticket);
         var resolved = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketResolved, ticket.TicketId);
+        // Delivered while the ticket is still Resolved; a closure that follows later is its own notification.
+        await f.CreateResolvedHandler().HandleAsync(resolved);
         ticket.Close();
         var closed = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId);
 
-        await f.CreateResolvedHandler().HandleAsync(resolved);
         await f.CreateClosedHandler().HandleAsync(closed);
 
         Assert.Equal(2, f.Email.Sent.Count);
@@ -236,15 +237,17 @@ public class TicketLifecycleNotificationHandlerTests
         var ticket = await f.SeedVerifiedTicketAsync("ahmed@example.com");
         await f.ResolveAsync(ticket);
         f.EnqueueLifecycleEvent(OutboxEventTypes.TicketResolved, ticket.TicketId);
-        ticket.Close();
-        f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId);
 
         var dispatcher = f.CreateDispatcher(
             f.CreateHandler(), f.CreateResolvedHandler(), f.CreateClosedHandler(), f.CreateReopenedHandler());
-        var result = await dispatcher.DispatchPendingAsync();
+        var first = await dispatcher.DispatchPendingAsync();
+        ticket.Close();
+        f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId);
+        var second = await dispatcher.DispatchPendingAsync();
 
-        Assert.Equal(2, result.Processed);
-        Assert.Equal(0, result.DeadLettered);
+        Assert.Equal(1, first.Processed);
+        Assert.Equal(1, second.Processed);
+        Assert.Equal(0, first.DeadLettered + second.DeadLettered);
         Assert.Collection(
             f.Email.Sent.OrderBy(e => e.Subject),
             e => Assert.EndsWith("Has Been Closed", e.Subject, StringComparison.Ordinal),

@@ -1,4 +1,5 @@
 using TigerCS.Application.Abstractions;
+using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Domain.Modules.Ticketing;
 
@@ -50,8 +51,11 @@ public sealed class CollectionsTicketRoutingService(
     ITicketAssignmentRepository ticketAssignments,
     ITicketAssignmentHistoryRepository history,
     IAuditEntryWriter auditWriter,
-    CollectionsOptions options)
+    CollectionsOptions options,
+    IOutboxWriter? outboxWriter = null)
 {
+    private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
+
     /// <param name="ticket">The ticket, already moved into its new department.</param>
     /// <param name="departmentEntry">True when the ticket has just entered Collections (a new stint): earlier manual assignments belong to a previous stint and do not block it.</param>
     /// <param name="fromCallCenter">True when the ticket came from the Call Center: its Call Center agent never stays the owner in Collections - a collector replaces them, or the ticket is released to the Collections queue.</param>
@@ -106,6 +110,8 @@ public sealed class CollectionsTicketRoutingService(
             beforeValue: previousOwner?.ToString(),
             afterValue: $"AssignedEmployeeId={collector};DepartmentId={ticket.CurrentDepartmentId};Mode=CollectionsTower;TowerId={tower.TowerId};Tower={tower.TowerCode};Unit={resolution.UnitNumber ?? "(none)"};Month={year}-{month:00};Trigger=CollectionsEntry",
             correlationId, cancellationToken);
+        if (_notificationEvents is not null)
+            await _notificationEvents.QueueAssignedAsync(ticket, previousOwner, collector, actorEmployeeId: null, correlationId, nowUtc, cancellationToken);
         return new(CollectionsRoutingOutcome.Assigned, collector);
     }
 

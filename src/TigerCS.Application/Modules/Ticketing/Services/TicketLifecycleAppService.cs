@@ -5,7 +5,7 @@ using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Application.Modules.Notifications;
-using TigerCS.Application.Modules.Notifications.Dto;
+using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Application.Modules.Ticketing.Dto;
@@ -57,6 +57,9 @@ public sealed class TicketLifecycleAppService(
 {
     /// <summary>Matches the <c>TicketStatusHistory.Note</c> column, so a long reason is never lost to a database truncation error mid-transaction.</summary>
     public const int ReopenReasonMaxLength = 1000;
+
+    /// <summary>Records the customer-facing (and internal) notification events of every operation here, in the operation's own transaction.</summary>
+    private readonly TicketNotificationEvents _notificationEvents = new(outboxWriter, auditWriter);
 
     public async Task<TicketMutationResult> ChangeStatusAsync(
         Guid callerEmployeeId,
@@ -190,6 +193,10 @@ public sealed class TicketLifecycleAppService(
             beforeValue: oldStatus.ToString(),
             afterValue: targetPendingKind is not null ? $"{newStatus};PendingReason={request.PendingReason}" : newStatus.ToString(),
             correlationId, cancellationToken);
+
+        // The customer hears about work starting (or resuming) and about waiting on them; the handler decides at delivery time whether
+        // the ticket has already moved on, so a status that changes again within the dispatch window produces one email, not two.
+        await _notificationEvents.QueueStatusChangedAsync(ticket, oldStatus, newStatus, callerEmployeeId, correlationId, now, cancellationToken);
 
         // ISSUE-018: entering Pending Customer pauses the Resolution SLA
         // (non-Critical), returning to work resumes it and extends the
@@ -1144,12 +1151,8 @@ public sealed class TicketLifecycleAppService(
 
         if (outcome == ResolutionOutcome.Resolved)
         {
-            if (notifyCustomer)
-            {
-                await EnqueueLifecycleEventAsync(
-                    OutboxEventTypes.TicketResolved, OutboxEventTypes.TicketResolvedVersion,
-                    ticket, integrationEmployeeId, correlationId, now, cancellationToken);
-            }
+            // Deliberately no TicketResolved event: this closure goes from working straight to Closed in one write, and the single
+            // Closed email carries the outcome ("Resolved"). Two emails seconds apart for one action would only confuse the customer.
 
             // The ticket is already Closed in memory here, so the processor used to answer TicketClosed and the Resolution SLA of a
             // system-closed Resolved ticket was never settled (it stayed Running). Settle the Resolution clock - and only that one - now.
@@ -1191,42 +1194,15 @@ public sealed class TicketLifecycleAppService(
     /// rendered and delivered later by the Outbox dispatcher, so an SMTP
     /// failure can never fail this operation.
     /// </summary>
-    private async Task EnqueueLifecycleEventAsync(
+    private Task EnqueueLifecycleEventAsync(
         string eventType,
         int eventVersion,
         Ticket ticket,
         Guid callerEmployeeId,
         Guid correlationId,
         DateTime nowUtc,
-        CancellationToken cancellationToken)
-    {
-        var payload = new TicketLifecycleEventPayload(ticket.TicketId, eventVersion, ticket.ReopenCount);
-
-        var message = await outboxWriter.WriteAsync(
-            eventType,
-            payload.ToJson(),
-            correlationId,
-            OutboxEventTypes.LifecycleIdempotencyKeyFor(eventType, ticket.TicketId, eventVersion, ticket.ReopenCount),
-            nowUtc,
-            cancellationToken);
-
-        if (message is null)
-        {
-            // Already enqueued for this occurrence (a retried request); the
-            // first row stands.
-            return;
-        }
-
-        await auditWriter.WriteAsync(
-            callerEmployeeId,
-            NotificationAuditActions.NotificationQueued,
-            NotificationAuditActions.OutboxMessageEntityType,
-            message.OutboxMessageId.ToString(),
-            beforeValue: null,
-            afterValue: $"EventType={eventType};TicketId={ticket.TicketId};Status=Pending",
-            correlationId,
-            cancellationToken);
-    }
+        CancellationToken cancellationToken) =>
+        _notificationEvents.QueueLifecycleAsync(eventType, eventVersion, ticket, callerEmployeeId, correlationId, nowUtc, cancellationToken);
 
     private async Task<WorkflowCapabilities?> ResolveCapabilitiesAsync(Ticket ticket, CancellationToken cancellationToken)
     {

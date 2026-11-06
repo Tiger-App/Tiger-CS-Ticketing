@@ -1,6 +1,7 @@
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
+using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.Reporting.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
@@ -123,8 +124,22 @@ public sealed class TicketAutoAssignmentService(
     IServiceIdentityRegistry? serviceIdentities = null,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
     ITicketNoteRepository? ticketNoteRepository = null,
-    TigerCS.Application.Modules.Collections.CollectionsOptions? collectionsOptions = null)
+    TigerCS.Application.Modules.Collections.CollectionsOptions? collectionsOptions = null,
+    IOutboxWriter? outboxWriter = null)
 {
+    /// <summary>
+    /// Notification events for every assignment made here (rule, Round Robin, preserved agent, confirmed handler, answering agent,
+    /// self-assignment): the customer learns the ticket has an owner, the colleague learns it landed on their desk. Null when the host
+    /// did not wire an Outbox writer (older fixtures) — then no event is recorded.
+    /// </summary>
+    private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
+
+    private Task NotifyAssignedAsync(
+        Ticket ticket, Guid? previousOwnerEmployeeId, Guid assignedEmployeeId, Guid? actorEmployeeId, Guid correlationId, DateTime nowUtc,
+        CancellationToken cancellationToken) =>
+        _notificationEvents?.QueueAssignedAsync(ticket, previousOwnerEmployeeId, assignedEmployeeId, actorEmployeeId, correlationId, nowUtc, cancellationToken)
+        ?? Task.CompletedTask;
+
     /// <summary>
     /// Runs inside the caller's creation transaction, after the ticket row
     /// exists (its real TicketId is needed for the assignment/audit rows) —
@@ -201,6 +216,7 @@ public sealed class TicketAutoAssignmentService(
             afterValue: $"AssignedEmployeeId={primaryEmployeeId};DepartmentId={ticket.CurrentDepartmentId};Mode={rule.Mode};RuleId={rule.RequestTypeAssignmentRuleId};Trigger={trigger}"
                 + (rule.TeamName is { } teamName ? $";Team={teamName}" : string.Empty),
             correlationId, cancellationToken);
+        await NotifyAssignedAsync(ticket, previousOwnerEmployeeId, primaryEmployeeId, actorEmployeeId: null, correlationId, nowUtc, cancellationToken);
 
         return new AutoAssignmentResult(AutoAssignmentOutcome.AssignedToPrimary, primaryEmployeeId, teamMembers);
     }
@@ -376,6 +392,7 @@ public sealed class TicketAutoAssignmentService(
             beforeValue: "Unassigned",
             afterValue: $"AssignedEmployeeId={preferred};DepartmentId={ticket.CurrentDepartmentId};Mode=PreservedCsAgent;Trigger={trigger}",
             correlationId, cancellationToken);
+        await NotifyAssignedAsync(ticket, previousOwnerEmployeeId: null, preferred, actorEmployeeId: null, correlationId, nowUtc, cancellationToken);
         return new AutoAssignmentResult(AutoAssignmentOutcome.PreservedCsAgent, preferred);
     }
 
@@ -508,6 +525,7 @@ public sealed class TicketAutoAssignmentService(
             afterValue: $"AssignedEmployeeId={next};DepartmentId={ticket.CurrentDepartmentId};Mode={AssignmentMode.RoundRobin};"
                 + $"{(ruleId is { } r ? $"RuleId={r};" : string.Empty)}{(poolDepartmentId is not null ? $"Pool=SharedCsAgents;PoolDepartmentId={poolDepartment};" : string.Empty)}Trigger={trigger}",
             correlationId, cancellationToken);
+        await NotifyAssignedAsync(ticket, previousOwnerEmployeeId, next, actorEmployeeId: null, correlationId, nowUtc, cancellationToken);
 
         return new AutoAssignmentResult(AutoAssignmentOutcome.AssignedRoundRobin, next);
     }
@@ -744,6 +762,7 @@ public sealed class TicketAutoAssignmentService(
                     + (reportedByEmployeeId is { } by ? $";ReportedBy={by}" : string.Empty)
                     + (previousOwner is not null && ticket.CurrentDepartmentId == callCenter.DepartmentId && !wrote ? $";ReplacedAutomaticPreAssignment={previousOwner}" : string.Empty),
                 correlationId, cancellationToken);
+            await NotifyAssignedAsync(ticket, previousOwner, agentId, actorEmployeeId: agentId, correlationId, nowUtc, cancellationToken);
 
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedToAnsweringAgent, agentId, Wrote: true);
         }
@@ -857,6 +876,7 @@ public sealed class TicketAutoAssignmentService(
             beforeValue: "Unassigned",
             afterValue: $"AssignedEmployeeId={handlerEmployeeId};DepartmentId={ticket.CurrentDepartmentId};Mode=ConfirmedHandler;Trigger={trigger}",
             correlationId, cancellationToken);
+        await NotifyAssignedAsync(ticket, previousOwnerEmployeeId: null, handlerEmployeeId, actorEmployeeId: handlerEmployeeId, correlationId, nowUtc, cancellationToken);
         return new AutoAssignmentResult(AutoAssignmentOutcome.PreservedCsAgent, handlerEmployeeId);
     }
 
@@ -938,6 +958,7 @@ public sealed class TicketAutoAssignmentService(
             beforeValue: "DepartmentQueue",
             afterValue: $"AssignedEmployeeId={creatorEmployeeId};DepartmentId={ticket.CurrentDepartmentId};Trigger={AutoAssignmentTrigger.TicketCreated};Reason=Created by this agent",
             correlationId, cancellationToken);
+        await NotifyAssignedAsync(ticket, previousOwnerEmployeeId: null, creatorEmployeeId, actorEmployeeId: creatorEmployeeId, correlationId, nowUtc, cancellationToken);
 
         return true;
     }
