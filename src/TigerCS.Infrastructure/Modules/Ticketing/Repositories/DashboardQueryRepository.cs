@@ -17,6 +17,14 @@ namespace TigerCS.Infrastructure.Modules.Ticketing.Repositories;
 public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenPolicy? reopenPolicy = null, TimeProvider? clock = null) : IDashboardQueryRepository
 {
     private const string NotRecordedChannelLabel = "No channel recorded";
+
+    /// <summary>Tickets whose originating channel id matches no Channels row — kept, never dropped, under one honest bucket.</summary>
+    private const string OtherChannelLabel = "Other";
+
+    private const string OtherChannelCode = "OTHER";
+
+    /// <summary>How the virtual agent is named in "Last action by" — it is a participant in the conversation, not a person.</summary>
+    public const string AiActorLabel = "AI Assistant";
     private const string NoRequestTypeLabel = "No request type";
     private const string UnclassifiedPriorityLabel = "Not set";
 
@@ -101,12 +109,13 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
             .GroupBy(x => x.ChannelId)
             .Select(g => new { Key = g.Key, Count = g.Count() })
             .ToListAsync(cancellationToken);
-        var channelIds = channelCounts.Where(c => c.Key is not null).Select(c => c.Key!.Value).ToList();
-        var channelNames = channelIds.Count == 0
-            ? new Dictionary<byte, string>()
-            : await dbContext.Channels.AsNoTracking()
-                .Where(c => channelIds.Contains(c.ChannelId))
-                .ToDictionaryAsync(c => c.ChannelId, c => c.Name, cancellationToken);
+        // The full channel catalogue, read once: it names every volume row, drives the zero rows
+        // and resolves the channel shown beside each Recent ticket.
+        var channelCatalogue = await dbContext.Channels.AsNoTracking()
+            .OrderBy(c => c.DisplayOrder).ThenBy(c => c.Name)
+            .Select(c => new ChannelInfo(c.ChannelId, c.Name, c.Code, c.IsActive))
+            .ToListAsync(cancellationToken);
+        var channelRows = BuildChannelVolumeRows(channelCatalogue, channelCounts.Select(c => (c.Key, c.Count)).ToList());
 
         var requestTypeCounts = await volume
             .GroupBy(t => t.RequestTypeId)
@@ -203,6 +212,8 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
                 x.DepartmentCode))
             .ToListAsync(cancellationToken);
 
+        var recentTickets = await EnrichRecentTicketsAsync(recentRows, channelCatalogue, cancellationToken);
+
         return new DashboardOverviewSnapshot(
             openTickets,
             myTickets,
@@ -211,8 +222,7 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
             dueToday,
             pendingApproval,
             volumeTotal,
-            Ordered(channelCounts.Select(c => new DashboardCountRow<byte>(
-                c.Key, c.Key is { } id ? channelNames.GetValueOrDefault(id, $"Channel {id}") : NotRecordedChannelLabel, c.Count))),
+            Ordered(channelRows),
             Ordered(requestTypeCounts.Select(c => new DashboardCountRow<int>(
                 c.Key, c.Key is { } id ? requestTypeNames.GetValueOrDefault(id, $"Request type {id}") : NoRequestTypeLabel, c.Count))),
             Ordered(departmentCounts.Select(c => new DashboardCountRow<int>(
@@ -225,7 +235,7 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
             Enum.GetValues<BacklogAgeBucket>()
                 .Select(b => new DashboardCountRow<BacklogAgeBucket>(b, b.ToString(), ageingByBucket.GetValueOrDefault(b)))
                 .ToList(),
-            recentRows,
+            recentTickets,
             closure);
     }
 
@@ -287,6 +297,195 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
             .ToListAsync(cancellationToken);
 
         return new DashboardFilterOptionsSnapshot(departments, agents, channels, requestTypes, priorities);
+    }
+
+    private sealed record ChannelInfo(byte ChannelId, string Name, string Code, bool IsActive);
+
+    /// <summary>One candidate "last action" of a ticket: when it happened and who did it (an employee id, or an already-known display name such as the virtual agent).</summary>
+    private sealed class ActionRow
+    {
+        public long TicketId { get; init; }
+        public DateTime AtUtc { get; init; }
+        public Guid? EmployeeId { get; init; }
+        public string? Name { get; init; }
+    }
+
+    /// <summary>
+    /// Volume by originating channel, built from the whole Channels catalogue so every channel is
+    /// listed: active channels always (zero when idle), retired channels only while they still
+    /// carry tickets in the range. Channels sharing a display name are merged into one row, ids
+    /// that match no catalogue row are summed into a single "Other" row, and tickets with no
+    /// originating interaction stay in "No channel recorded" — so the rows always add up to
+    /// every ticket counted and nothing is dropped or double-counted.
+    /// </summary>
+    private static IReadOnlyList<DashboardCountRow<byte>> BuildChannelVolumeRows(
+        IReadOnlyList<ChannelInfo> catalogue, IReadOnlyList<(byte? Key, int Count)> counts)
+    {
+        var known = catalogue.Select(c => c.ChannelId).ToHashSet();
+        var countById = new Dictionary<byte, int>();
+        var unmapped = 0;
+        var unrecorded = 0;
+        foreach (var (key, count) in counts)
+        {
+            if (key is not { } id)
+            {
+                unrecorded += count;
+            }
+            else if (known.Contains(id))
+            {
+                countById[id] = countById.GetValueOrDefault(id) + count;
+            }
+            else
+            {
+                unmapped += count;
+            }
+        }
+
+        var rows = new List<DashboardCountRow<byte>>();
+        foreach (var sameName in catalogue
+            .Where(c => c.IsActive || countById.GetValueOrDefault(c.ChannelId) > 0)
+            .GroupBy(c => c.Name.Trim(), StringComparer.OrdinalIgnoreCase))
+        {
+            var representative = sameName.OrderByDescending(c => c.IsActive).ThenBy(c => c.ChannelId).First();
+            rows.Add(new DashboardCountRow<byte>(
+                representative.ChannelId, representative.Name, sameName.Sum(c => countById.GetValueOrDefault(c.ChannelId)), representative.Code));
+        }
+
+        if (unmapped > 0)
+        {
+            rows.Add(new DashboardCountRow<byte>(null, OtherChannelLabel, unmapped, OtherChannelCode));
+        }
+
+        if (unrecorded > 0)
+        {
+            rows.Add(new DashboardCountRow<byte>(null, NotRecordedChannelLabel, unrecorded));
+        }
+
+        return rows;
+    }
+
+    /// <summary>Adds each Recent ticket's originating channel and last meaningful actor — a fixed handful of set-based queries for all rows together, never one per ticket.</summary>
+    private async Task<IReadOnlyList<DashboardRecentTicketRow>> EnrichRecentTicketsAsync(
+        IReadOnlyList<DashboardRecentTicketRow> rows, IReadOnlyList<ChannelInfo> channels, CancellationToken cancellationToken)
+    {
+        if (rows.Count == 0)
+        {
+            return rows;
+        }
+
+        var ticketIds = rows.Select(r => r.TicketId).ToList();
+        var originating = await dbContext.TicketInteractions.AsNoTracking()
+            .Where(i => i.IsOriginatingInteraction && ticketIds.Contains(i.TicketId))
+            .OrderBy(i => i.TicketInteractionId)
+            .Select(i => new { i.TicketId, i.ChannelId })
+            .ToListAsync(cancellationToken);
+        var channelByTicket = originating.GroupBy(o => o.TicketId).ToDictionary(g => g.Key, g => g.First().ChannelId);
+        var channelById = channels.ToDictionary(c => c.ChannelId);
+        var lastActions = await LastMeaningfulActionsAsync(ticketIds, cancellationToken);
+
+        return rows.Select(r =>
+        {
+            byte? channelId = channelByTicket.TryGetValue(r.TicketId, out var id) ? id : null;
+            var channel = channelId is { } cid && channelById.TryGetValue(cid, out var info) ? info : null;
+            return r with
+            {
+                ChannelId = channel?.ChannelId,
+                ChannelName = channelId is null ? null : channel?.Name ?? OtherChannelLabel,
+                ChannelCode = channelId is null ? null : channel?.Code ?? OtherChannelCode,
+                LastActionByName = lastActions.GetValueOrDefault(r.TicketId)
+            };
+        }).ToList();
+    }
+
+    /// <summary>
+    /// Who performed the most recent meaningful action on each ticket, read from the structured
+    /// activity stores the ticket's own Activity timeline is built from: a status change, an
+    /// assignment, a workflow event (transfer, approval, reclassification, handoff…), a ticket
+    /// note, and the conversation's human-agent and virtual-agent replies. Only actions with a
+    /// recorded actor count — system-driven rows (no actor, <c>ActorIsSystem</c>, SLA/escalation
+    /// housekeeping, automatic routing, customer and platform transcript lines) are skipped, so a
+    /// background job can never be shown as the last handler, and the ticket's creator or current
+    /// owner is never assumed. The virtual agent reads "AI Assistant". One query per store for all
+    /// tickets together; tickets with no qualifying action are simply absent.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<long, string>> LastMeaningfulActionsAsync(
+        IReadOnlyList<long> ticketIds, CancellationToken cancellationToken)
+    {
+        var candidates = new List<ActionRow>();
+
+        candidates.AddRange(await dbContext.TicketStatusHistoryEntries.AsNoTracking()
+            .Where(h => ticketIds.Contains(h.TicketId) && h.Dimension == TicketStatusDimension.TicketStatus
+                && h.ActorEmployeeId != null && !h.ActorIsSystem)
+            .GroupBy(h => h.TicketId)
+            .Select(g => g.OrderByDescending(h => h.OccurredAtUtc).ThenByDescending(h => h.TicketStatusHistoryId)
+                .Select(h => new ActionRow { TicketId = h.TicketId, AtUtc = h.OccurredAtUtc, EmployeeId = h.ActorEmployeeId })
+                .First())
+            .ToListAsync(cancellationToken));
+
+        candidates.AddRange(await dbContext.TicketAssignments.AsNoTracking()
+            .Where(a => ticketIds.Contains(a.TicketId) && a.AssigningActorEmployeeId != null)
+            .GroupBy(a => a.TicketId)
+            .Select(g => g.OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
+                .Select(a => new ActionRow { TicketId = a.TicketId, AtUtc = a.AssignedAtUtc, EmployeeId = a.AssigningActorEmployeeId })
+                .First())
+            .ToListAsync(cancellationToken));
+
+        candidates.AddRange(await dbContext.TicketWorkflowEvents.AsNoTracking()
+            .Where(e => ticketIds.Contains(e.TicketId) && e.ActorEmployeeId != null)
+            .GroupBy(e => e.TicketId)
+            .Select(g => g.OrderByDescending(e => e.OccurredAtUtc).ThenByDescending(e => e.TicketWorkflowEventId)
+                .Select(e => new ActionRow { TicketId = e.TicketId, AtUtc = e.OccurredAtUtc, EmployeeId = e.ActorEmployeeId })
+                .First())
+            .ToListAsync(cancellationToken));
+
+        candidates.AddRange(await dbContext.TicketNotes.AsNoTracking()
+            .Where(n => ticketIds.Contains(n.TicketId))
+            .GroupBy(n => n.TicketId)
+            .Select(g => g.OrderByDescending(n => n.CreatedAtUtc).ThenByDescending(n => n.TicketNoteId)
+                .Select(n => new ActionRow { TicketId = n.TicketId, AtUtc = n.CreatedAtUtc, EmployeeId = n.AuthorEmployeeId })
+                .First())
+            .ToListAsync(cancellationToken));
+
+        candidates.AddRange(await dbContext.TicketInteractionMessages.AsNoTracking()
+            .Join(dbContext.TicketInteractions.AsNoTracking().Where(i => ticketIds.Contains(i.TicketId)),
+                m => m.TicketInteractionId, i => i.TicketInteractionId, (m, i) => new { i.TicketId, Message = m })
+            .Where(x => x.Message.Sender == InteractionMessageSender.VirtualAgent
+                || (x.Message.Sender == InteractionMessageSender.HumanAgent && x.Message.SenderName != null && x.Message.SenderName != ""))
+            .GroupBy(x => x.TicketId)
+            .Select(g => g.OrderByDescending(x => x.Message.SentAtUtc).ThenByDescending(x => x.Message.TicketInteractionMessageId)
+                .Select(x => new ActionRow
+                {
+                    TicketId = x.TicketId,
+                    AtUtc = x.Message.SentAtUtc,
+                    Name = x.Message.Sender == InteractionMessageSender.VirtualAgent ? AiActorLabel : x.Message.SenderName
+                })
+                .First())
+            .ToListAsync(cancellationToken));
+
+        var employeeIds = candidates.Where(c => c.EmployeeId is not null).Select(c => c.EmployeeId!.Value).Distinct().ToList();
+        var employeeNames = employeeIds.Count == 0
+            ? new Dictionary<Guid, string>()
+            : await dbContext.Employees.AsNoTracking()
+                .Where(e => employeeIds.Contains(e.EmployeeId))
+                .ToDictionaryAsync(e => e.EmployeeId, e => e.DisplayName, cancellationToken);
+
+        var result = new Dictionary<long, string>();
+        foreach (var ticketGroup in candidates.GroupBy(c => c.TicketId))
+        {
+            // The newest candidate whose actor can actually be named: an unresolvable actor is never replaced by a guess.
+            var name = ticketGroup
+                .OrderByDescending(c => c.AtUtc)
+                .Select(c => !string.IsNullOrWhiteSpace(c.Name) ? c.Name
+                    : c.EmployeeId is { } id && employeeNames.TryGetValue(id, out var display) && !string.IsNullOrWhiteSpace(display) ? display
+                    : null)
+                .FirstOrDefault(n => n is not null);
+            if (name is not null)
+            {
+                result[ticketGroup.Key] = name;
+            }
+        }
+
+        return result;
     }
 
     /// <summary>Largest first, ties by label; a "not recorded" row (null key) sorts after every real value of the same count.</summary>
