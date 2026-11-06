@@ -50,6 +50,20 @@ normalized so the first UAT run confirms or corrects it.
 | `AmountPrecisionNeedsReview` | The check was `amount != Round(amount, 2)` on a value converted from a **float** column. A settled instalment can come out as 1E-12 (a "positive balance" with a precision flag), and float arithmetic leaves noise on others. | The reader records whether the column is floating point. Float values within AED 0.0001 of a fils amount are snapped (a remainder that snaps to 0 is a settled instalment, not a receivable). **Anything else with more than two decimals stays flagged**, is never rounded for display, carries no quoted amount (`RemainingAmount = null`) and keeps the raw source value. |
 | `NoValidContact` | The phone normalizer only accepted `+…`, `00…`, `05…` (10 chars) and `971…` (12 chars), and counted an **email** as a valid contact although the campaign is voice. Rejected: `501234567` (leading zero lost), `971 0 50…`, numbers with `.` `/` `\`, `04…` landlines, `(0)`. | New `PhoneNormalizer` repairs those UAE forms, accepts valid international numbers, and **never guesses** between two different numbers in one field. A voice campaign needs a callable phone; an email alone no longer qualifies. |
 
+## Payment classification (the remaining-amount rule)
+
+The verified **remaining amount** PACT returns for an instalment is the source of truth, in the Receivables list, the Campaign preview, the Manual and Auto eligibility, the send and
+the Genesys export alike (`PaymentStatusRules.Derive`, `CollectionsPaymentFilters.Classify`, `PactReceivableCustomersAppService.PaymentStatus`):
+
+| Remaining amount | Status | Campaign eligibility |
+|---|---|---|
+| `0` | Paid (`FullyPaid` in Receivables) | not a receivable: never a record, never in an amount |
+| `> 0` | Unpaid (Receivables refines to `PartiallyPaid` only when the V2 original and paid amounts are present and consistent) | eligible on this rule; every other rule still applies |
+| NULL, negative, or contradicted by the source (Status `Paid` with a remainder owed; a V2 original / paid / remaining that do not add up or a remainder above the original) | Unknown: **Needs Review** (`PaymentStatusUnknown`, with `ContradictoryPaymentStatus` or `SourceAmountsInconsistent` when that is the cause) | held back, visible with the reason |
+
+Unpaid and partly paid are no longer told apart for eligibility; the report's own `Status` text and any configured text mapping never decide the status, and neither does the due
+date. Due / Overdue stay a classification of the instalment's due date against the current Dubai month (`CollectionsDueMonth`).
+
 ## Validation rules (stored reasons)
 
 Needs review: `SourceReconciliationRequired`, `AmountPrecisionNeedsReview`, `NoValidContact`, `PaymentStatusUnknown`, `StaleSource`,

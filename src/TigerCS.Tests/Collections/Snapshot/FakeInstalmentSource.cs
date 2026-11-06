@@ -93,7 +93,7 @@ public sealed class FakeInstalmentSource(DateTime nowUtc) : IPactReceivablesSour
         var loaded = Companies.Values.Where(c => scope is null || c.CompanyId == scope).ToList();
         var status = ReceivablesSnapshotComposer.BuildStatus(request.From, request.To, loaded, [], nowUtc, 90);
         var filter = request.PaymentFilter;
-        var unavailable = (filter is "paid" or "all" && loaded.Any(c => c.HasSnapshot && !c.PaidRetained)) || (filter is "unpaid" or "partial" && loaded.Any(c => c.HasSnapshot && !c.BreakdownAvailable));
+        var unavailable = (filter is "paid" or "all" && loaded.Any(c => c.HasSnapshot && !c.PaidRetained)) || (filter is "partial" && loaded.Any(c => c.HasSnapshot && !c.BreakdownAvailable));
         var empty = new PactInstalmentTotalsDto(0, 0, 0, 0, 0, 0, 0, 0, 0);
         if (unavailable) return Task.FromResult(new PactInstalmentsPage(empty, [], true, status, ReceivablesSnapshotComposer.ReadAt(status), 0));
 

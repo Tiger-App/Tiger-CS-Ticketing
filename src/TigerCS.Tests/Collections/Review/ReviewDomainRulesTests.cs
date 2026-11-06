@@ -85,47 +85,45 @@ public sealed class ReviewDomainRulesTests
     }
 
     [Fact]
-    public void PaymentStatusComesFromVerifiedSourceFieldsOnly()
+    public void PaymentStatusFollowsTheVerifiedRemainingAmount()
     {
-        // The deployed procedures report only Paid / Installment, which cannot separate unpaid from partially paid.
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 500m, planAmount: null));
-        // The reviewed V2 report adds the instalment's plan amount.
-        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Installment", 500m, 500m));
-        Assert.Equal(ReviewPaymentStatus.PartiallyPaid, PaymentStatusRules.Derive("Installment", 200m, 500m));
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 600m, 500m)); // remaining above plan is inconsistent
-        Assert.Equal(ReviewPaymentStatus.Paid, PaymentStatusRules.Derive("Paid", 0m, 500m));
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Paid", 50m, 500m));        // contradictory
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive(null, 500m, 500m));
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Whatever", 500m, 500m));
+        // The remaining amount PACT returns is the source of truth: zero is Paid, a positive remainder is Unpaid, whatever the report's own Status text says ("Installment" or nothing).
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Installment", 500m));
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive(null, 500m));
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Whatever", 500m));
+        Assert.Equal(ReviewPaymentStatus.Paid, PaymentStatusRules.Derive("Paid", 0m));
+        Assert.Equal(ReviewPaymentStatus.Paid, PaymentStatusRules.Derive("Installment", 0m));
+        // Partly paid is not told apart from unpaid: the campaigns collect what remains.
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Installment", 200m, 500m));
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Installment", 300m, 500m, 200m));
+        // Missing, invalid or contradicted remainders need review.
+        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", null));
+        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", -1m));
+        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Paid", 50m, 500m));            // the source says Paid but a remainder is owed
+        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 600m, 500m));    // remaining above the original is inconsistent
     }
 
     [Fact]
-    public void PaidAndRemainingFromTheSourceDecideTheStatus_WhenTheyAddUp()
+    public void TheV2BreakdownMustAgreeWithTheRemainder_OtherwiseTheStatusIsUnknown()
     {
-        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Installment", 500m, 500m, null, 0m));
-        Assert.Equal(ReviewPaymentStatus.PartiallyPaid, PaymentStatusRules.Derive("Installment", 300m, 500m, null, 200m));
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 300m, 500m, null, 100m));   // 100 + 300 != 500
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 300m, 500m, null, -200m));
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 0.5m, 0m, null, 0.5m));
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Installment", 500m, 500m, 0m));
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Installment", 300m, 500m, 200m));
+        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 300m, 500m, 100m));   // 100 + 300 != 500
+        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 300m, 500m, -200m));
+        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 0.5m, 0m, 0.5m));
+        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 300m, -500m));
         Assert.True(PaymentStatusRules.AmountsAddUp(500.0000m, 200.0000m, 300.00004m));
         Assert.False(PaymentStatusRules.AmountsAddUp(500m, 200m, 300.01m));
     }
 
     [Fact]
-    public void OnlyAConfiguredVerifiedMappingCanGiveAnUnknownSourceValueAStatus()
+    public void NoTextMappingAndNoDueDateEverDecidesPaymentStatus()
     {
-        var map = new Dictionary<string, string> { ["Open"] = "Unpaid", ["Part"] = "PartiallyPaid", ["Bogus"] = "Paid" };
-        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Open", 10m, null, map));
-        Assert.Equal(ReviewPaymentStatus.PartiallyPaid, PaymentStatusRules.Derive("part", 10m, null, map));
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Bogus", 10m, null, map)); // a mapping can't declare a balance paid
-    }
-
-    [Fact]
-    public void DueDateAloneNeverDecidesPaymentStatus()
-    {
-        // The same remaining balance is Unknown whether the date is long overdue or in the future.
-        Assert.Equal(ReviewPaymentStatus.Unknown, PaymentStatusRules.Derive("Installment", 500m, null));
+        // The same remaining balance has the same status whether the date is long overdue or in the future, and whatever text the source attaches to it.
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Open", 10m));
+        Assert.Equal(ReviewPaymentStatus.Unpaid, PaymentStatusRules.Derive("Part", 10m));
         Assert.DoesNotContain(typeof(PaymentStatusRules).GetMethod(nameof(PaymentStatusRules.Derive))!.GetParameters(), p => p.ParameterType == typeof(DateOnly));
+        Assert.DoesNotContain(typeof(PaymentStatusRules).GetMethod(nameof(PaymentStatusRules.Derive))!.GetParameters(), p => p.ParameterType.Name.Contains("Dictionary"));
     }
 
     [Fact]

@@ -4,55 +4,43 @@ public enum ReviewPaymentStatus
 {
     Unknown = 0,
     Unpaid = 1,
+    /// <summary>Kept for rows stored before the remaining-amount rule; the rule itself no longer separates partly paid from unpaid.</summary>
     PartiallyPaid = 2,
     Paid = 3
 }
 
 /// <summary>
-/// Payment status comes only from verified source fields. The deployed PACT report reports <c>Paid</c> or
-/// <c>Installment</c> and nothing else, and <c>Installment</c> cannot separate unpaid from partially paid, so with
-/// the deployed procedures every open balance is <see cref="ReviewPaymentStatus.Unknown"/>. The reviewed V2 report
-/// also returns the instalment's PlanAmount: a remainder equal to the plan is Unpaid, a smaller positive remainder is
-/// PartiallyPaid. A due date never decides payment status.
+/// Payment status comes from the verified REMAINING amount PACT returns for the instalment, the one figure every procedure reports:
+/// <list type="bullet">
+/// <item>remaining = 0: <see cref="ReviewPaymentStatus.Paid"/>;</item>
+/// <item>remaining &gt; 0: <see cref="ReviewPaymentStatus.Unpaid"/> (partly paid or not; the campaigns collect what remains, so the two are not told apart);</item>
+/// <item>remaining missing, negative, or contradicted by the source: <see cref="ReviewPaymentStatus.Unknown"/>, which needs review. The source contradicts itself when it says <c>Paid</c> but a
+/// remainder is owed, or when the V2 report's original and paid amounts do not add up to the remainder (or the remainder exceeds the original).</item>
+/// </list>
+/// A due date never decides payment status, and a configured text mapping never overrides the remaining amount.
 /// </summary>
 public static class PaymentStatusRules
 {
-    public static ReviewPaymentStatus Derive(string? sourceStatus, decimal remaining, decimal? planAmount,
-        IReadOnlyDictionary<string, string>? verifiedMap = null, decimal? allocatedAmount = null)
+    public static ReviewPaymentStatus Derive(string? sourceStatus, decimal? remaining, decimal? planAmount = null, decimal? allocatedAmount = null)
     {
-        var status = sourceStatus?.Trim();
-        if (string.IsNullOrEmpty(status)) return ReviewPaymentStatus.Unknown;
-        if (status.Equals("Paid", StringComparison.OrdinalIgnoreCase))
-            return remaining <= 0 ? ReviewPaymentStatus.Paid : ReviewPaymentStatus.Unknown; // contradictory
-        if (remaining <= 0) return ReviewPaymentStatus.Unknown;
-
-        if (status.Equals("Installment", StringComparison.OrdinalIgnoreCase))
+        if (remaining is not { } amount || amount < 0) return ReviewPaymentStatus.Unknown;                                        // missing or invalid
+        if (string.Equals(sourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase) && amount > 0) return ReviewPaymentStatus.Unknown;   // contradictory
+        if (planAmount is { } original)
         {
-            // V2 reports original (plan), paid (allocated) and remaining. They must add up; otherwise the status is not confirmed.
-            if (allocatedAmount is { } paid && planAmount is { } original)
-            {
-                if (original <= 0 || paid < 0 || !AmountsAddUp(original, paid, remaining)) return ReviewPaymentStatus.Unknown;
-                return paid == 0 ? ReviewPaymentStatus.Unpaid : ReviewPaymentStatus.PartiallyPaid;
-            }
-            if (planAmount is not { } plan || plan <= 0 || remaining > plan) return ReviewPaymentStatus.Unknown;
-            return remaining == plan ? ReviewPaymentStatus.Unpaid : ReviewPaymentStatus.PartiallyPaid;
+            // The V2 breakdown must agree with the remainder: original = paid + remaining, and a remainder never exceeds the original.
+            if (original < 0 || amount > original + Tolerance) return ReviewPaymentStatus.Unknown;
+            if (allocatedAmount is { } paid && (paid < 0 || !AmountsAddUp(original, paid, amount))) return ReviewPaymentStatus.Unknown;
         }
-
-        var mapped = verifiedMap?.FirstOrDefault(p => p.Key.Trim().Equals(status, StringComparison.OrdinalIgnoreCase)).Value;
-        if (mapped is not null)
-            return mapped.Trim().ToLowerInvariant() switch
-            {
-                "unpaid" => ReviewPaymentStatus.Unpaid,
-                "partiallypaid" => ReviewPaymentStatus.PartiallyPaid,
-                _ => ReviewPaymentStatus.Unknown
-            };
-        return ReviewPaymentStatus.Unknown;
+        else if (allocatedAmount is { } paid && paid < 0) return ReviewPaymentStatus.Unknown;
+        return amount == 0 ? ReviewPaymentStatus.Paid : ReviewPaymentStatus.Unpaid;
     }
 
-    /// <summary>original = paid + remaining, to the source's four-decimal precision.</summary>
-    public static bool AmountsAddUp(decimal original, decimal paid, decimal remaining) => Math.Abs(original - paid - remaining) < 0.00005m;
+    private const decimal Tolerance = 0.00005m;
 
-    /// <summary>One unit combines several instalments: all must be known, otherwise Unknown; mixed unpaid/partial is PartiallyPaid.</summary>
+    /// <summary>original = paid + remaining, to the source's four-decimal precision.</summary>
+    public static bool AmountsAddUp(decimal original, decimal paid, decimal remaining) => Math.Abs(original - paid - remaining) < Tolerance;
+
+    /// <summary>One unit combines several open instalments: all must be known and open, otherwise Unknown. (A Paid instalment is not a receivable and never reaches a record.)</summary>
     public static ReviewPaymentStatus Combine(IReadOnlyCollection<ReviewPaymentStatus> statuses)
     {
         if (statuses.Count == 0 || statuses.Any(s => s is ReviewPaymentStatus.Unknown or ReviewPaymentStatus.Paid)) return ReviewPaymentStatus.Unknown;

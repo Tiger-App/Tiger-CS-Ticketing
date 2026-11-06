@@ -56,7 +56,7 @@ public static class ReviewReasons
         new(SourceReconciliationRequired, ReasonKind.NeedsReview, "The financial source has not been reconciled with PACT accounts for this procedure yet, so its balances cannot be trusted for a send."),
         new(AmountPrecisionNeedsReview, ReasonKind.NeedsReview, "The source amount has more than two decimal places that are not simple rounding noise. The real balance must be confirmed in PACT; it was not rounded."),
         new(NoValidContact, ReasonKind.NeedsReview, "There is no valid phone number that the voice campaign can call (missing, wrong length, not a UAE/international number, or several numbers in one field)."),
-        new(PaymentStatusUnknown, ReasonKind.NeedsReview, "The source does not confirm whether this balance is unpaid or partially paid. It stays visible but cannot be sent."),
+        new(PaymentStatusUnknown, ReasonKind.NeedsReview, "The remaining amount of this balance cannot be determined reliably (missing, negative, or contradicted by the source's status or its original and paid amounts). It stays visible but cannot be sent."),
         new(StaleSource, ReasonKind.NeedsReview, "The financial data was read too long ago. Refresh the data before sending."),
         new(MissingUnitIdentity, ReasonKind.NeedsReview, "The record has no valid unit identity, so the balance cannot be tied to one apartment."),
         new(MissingCustomerIdentity, ReasonKind.NeedsReview, "The customer, company or name is missing on the source record."),

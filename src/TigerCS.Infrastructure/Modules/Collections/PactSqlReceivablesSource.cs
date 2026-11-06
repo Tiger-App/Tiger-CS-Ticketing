@@ -124,7 +124,7 @@ public sealed class PactSqlReceivablesSource(
                 // residue (e.g. 1E-12 on a settled instalment) can be told apart from a genuine sub-fils source amount.
                 var amountType = reader.GetFieldType(columns["Amount"]);
                 var amountIsFloat = amountType == typeof(double) || amountType == typeof(float);
-                // PlanAmount (V2 only) lets the review separate Unpaid from PartiallyPaid; the deployed procedures omit it.
+                // PlanAmount (V2 only) lets the review check that the remainder is consistent with the original amount; the deployed procedures omit it.
                 decimal? plan = columns.TryGetValue("PlanAmount", out var planIndex) && !reader.IsDBNull(planIndex)
                     ? Convert.ToDecimal(reader.GetValue(planIndex), CultureInfo.InvariantCulture) : null;
                 // AllocatedAmount (V2 only) is the paid part of the instalment: original = paid + remaining.

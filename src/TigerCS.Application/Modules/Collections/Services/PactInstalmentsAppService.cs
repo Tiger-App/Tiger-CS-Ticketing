@@ -151,11 +151,12 @@ public sealed class PactInstalmentsAppService(
         var status = result.Snapshot;
         // The CRM side of the units' contacts (the by-unit page links them): a CRM service problem is reported, never shown as units without a CRM mobile.
         var crm = byUnit && links is not null ? CrmContactStatusDto.From(await links.GetAvailabilityAsync(cancellationToken)) : null;
-        var views = new PaymentViewAvailabilityDto(true, status.BreakdownAvailable, status.BreakdownAvailable, status.PaidRetained, status.PaidRetained, status.UnclassifiedRows);
+        // Unpaid is any positive remainder (the remaining-amount rule), so it is always available; Partially paid is a refinement that needs the source's original and paid amounts.
+        var views = new PaymentViewAvailabilityDto(true, true, status.BreakdownAvailable, status.PaidRetained, status.PaidRetained, status.UnclassifiedRows);
         if (result.Unavailable)
             return CollectionsResult<PactInstalmentsPageDto>.Fail(CollectionsOutcome.InvalidRequest, filter is CollectionsPaymentFilter.FullyPaid or CollectionsPaymentFilter.All
                 ? "Fully paid instalments are not in the loaded data yet, so Fully paid and All cannot be shown. Reload the data to retain them."
-                : "The source does not return the original and paid amounts, so Unpaid and Partially paid cannot be told apart. Use Outstanding.");
+                : "The source does not return the original and paid amounts, so Partially paid cannot be told apart from Unpaid. Use Unpaid or Outstanding.");
 
         var notes = new List<string>(PactReceivableCustomersAppService.WindowNotes(from, to, monthStart, monthEnd))
         {
@@ -164,7 +165,7 @@ public sealed class PactInstalmentsAppService(
         if (!minApplies) notes.Add("The minimum outstanding amount is not applied to Fully paid and All, so paid rows are never hidden.");
         else notes.Add($"Only instalments whose remaining unpaid amount is at least {min:0.##} {sourceOptions.Currency} are listed and counted.");
         if (filter == CollectionsPaymentFilter.Outstanding && status.UnclassifiedRows > 0)
-            notes.Add($"{status.UnclassifiedRows:N0} instalment(s) show \"Needs verification\": the source does not say whether they are unpaid or partially paid.");
+            notes.Add($"{status.UnclassifiedRows:N0} instalment(s) show \"Needs verification\": their remaining amount is missing, invalid or contradicted by the source.");
 
         return CollectionsResult<PactInstalmentsPageDto>.Ok(new PactInstalmentsPageDto(today, monthStart, monthEnd, from, to, towerId,
             CollectionsPaymentFilters.ToWire(filter), min, minApplies, sourceOptions.Currency, result.Totals, page, pageSize, result.Rows, status, views, notes,

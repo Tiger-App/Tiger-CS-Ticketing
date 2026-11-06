@@ -23,10 +23,10 @@ public sealed class GenesysExportIndependenceTests
         return h;
     }
 
-    /// <summary>Customer 1 is Ready; customer 2's payment status cannot be confirmed (no plan amount: PaymentStatusUnknown, Needs review); customer 3 has no callable number.</summary>
+    /// <summary>Customer 1 is Ready; customer 2's remaining amount is contradicted by the source (above the original: PaymentStatusUnknown, Needs review); customer 3 has no callable number.</summary>
     private static PactReceivableInstalment[] Mixed() =>
     [
-        ReviewHarness.Row(1, 5000m, day: 20), ReviewHarness.Row(2, 700m, day: 20) with { PlanAmount = null }, ReviewHarness.Row(3, 900m, day: 20, mobile: "123")
+        ReviewHarness.Row(1, 5000m, day: 20), ReviewHarness.Row(2, 700m, day: 20, plan: 500m) with { AllocatedAmount = 100m }, ReviewHarness.Row(3, 900m, day: 20, mobile: "123")
     ];
 
     private static ReviewFilter Filter(string mode, string type = "CurrentMonth", Func<ReviewFilter, ReviewFilter>? with = null)
@@ -64,8 +64,8 @@ public sealed class GenesysExportIndependenceTests
         Assert.Equal(2, dto.RowCount); Assert.Equal(["Customer 1", "Customer 2"], rows.Skip(1).Select(r => r[1]));
         Assert.Equal(["5000.00", "700.00"], rows.Skip(1).Select(r => r[4]));
         Assert.Equal(new Dictionary<string, int> { ["Ready"] = 1, ["NeedsReview"] = 1 }, dto.IncludedByStatus);
-        Assert.False(dto.DataVerified); Assert.Equal(["PaymentStatusUnknown:1"], dto.UnverifiedReasons);
-        Assert.Contains(dto.Notices, n => n.Contains("1 unit(s) have an unconfirmed payment status (PaymentStatusUnknown)") && n.Contains("not classified as unpaid"));
+        Assert.False(dto.DataVerified); Assert.Contains("PaymentStatusUnknown:1", dto.UnverifiedReasons!); Assert.Contains("SourceAmountsInconsistent:1", dto.UnverifiedReasons!);
+        Assert.Contains(dto.Notices, n => n.Contains("1 unit(s) have a remaining amount that could not be determined reliably (PaymentStatusUnknown)") && n.Contains("not classified as unpaid"));
         Assert.Contains(dto.Notices, n => n.Contains("1 of the 2 customer unit(s) in this file are held back from sending (Needs review 1)"));
         Assert.Equal([(GenesysExportRows.NoCallablePhone, 1)], dto.Exclusions!.Select(e => (e.Code, e.Units)));
         Assert.EndsWith($" ({GenesysExportService.NotVerifiedLabel}) ({GenesysExportService.UnverifiedDataLabel}).csv", dto.FileName);

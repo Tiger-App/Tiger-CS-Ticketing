@@ -109,12 +109,21 @@ public sealed class InstalmentFilterTests
     [Theory]
     [InlineData(0, "Paid", "FullyPaid")]
     [InlineData(0, "paid", "FullyPaid")]
-    [InlineData(0, "Installment", "Unknown")]            // zero remaining but the source does not say Paid
-    [InlineData(250, "Installment", "Unknown")]          // Installment does not distinguish unpaid from partially paid
-    [InlineData(250, "Paid", "Unknown")]                 // contradictory
-    [InlineData(250, null, "Unknown")]
-    public void DeployedShape_OnlyPaidWithZeroRemainingIsVerifiable(double remaining, string? sourceStatus, string expected) =>
+    [InlineData(0, "Installment", "FullyPaid")]          // zero remaining is paid, whatever the source's text says
+    [InlineData(250, "Installment", "Unpaid")]           // a positive remainder is unpaid (partly paid is not told apart without the breakdown)
+    [InlineData(250, null, "Unpaid")]
+    [InlineData(250, "Paid", "Unknown")]                 // contradictory: the source says Paid but a remainder is owed
+    [InlineData(-1, "Installment", "Unknown")]           // a negative remainder is invalid
+    public void DeployedShape_TheRemainingAmountDecides_AndContradictionsNeedVerification(double remaining, string? sourceStatus, string expected) =>
         Assert.Equal(expected, CollectionsPaymentFilters.Classify((decimal)remaining, null, null, sourceStatus, false));
+
+    [Fact]
+    public void AMissingRemainingAmount_IsUnknown_InEitherShape()
+    {
+        Assert.Equal("Unknown", CollectionsPaymentFilters.Classify(null, null, null, "Installment", false));
+        Assert.Equal("Unknown", CollectionsPaymentFilters.Classify(null, 1000m, 400m, "Installment", true));
+        Assert.Equal("Unknown", CollectionsPaymentFilters.Classify(600m, 1000m, 400m, "Paid", true));     // the breakdown adds up, but the source says Paid: contradictory
+    }
 
     private static Harness Seed()
     {
@@ -234,18 +243,20 @@ public sealed class InstalmentFilterTests
     }
 
     [Fact]
-    public async Task UnpaidAndPartial_AreRefused_WhenTheSourceDoesNotReturnOriginalAndPaidAmounts()
+    public async Task OnlyPartial_IsRefused_WhenTheSourceDoesNotReturnOriginalAndPaidAmounts_UnpaidFollowsTheRemainder()
     {
         var h = new Harness();
         h.Source.Companies[4] = FakeInstalmentSource.Loaded(4, Now, true, breakdown: false);
         h.Source.Companies[32] = FakeInstalmentSource.Loaded(32, Now, true, breakdown: false);
         h.Source.Rows.AddRange([Inst(D(2026, 9, 10), 250m, null, null, breakdown: false), Inst(D(2026, 9, 11), 0m, null, null, breakdown: false)]);
-        foreach (var status in new[] { "unpaid", "partial" }) Assert.Contains("cannot be told apart", (await h.Service.ListAsync(h.Agent, paymentStatus: status)).Detail);
+        Assert.Contains("cannot be told apart", (await h.Service.ListAsync(h.Agent, paymentStatus: "partial")).Detail);
         var outstanding = (await h.Service.ListAsync(h.Agent, minAmount: 0)).Value!;
         var row = Assert.Single(outstanding.Items);
-        Assert.Equal(("Unknown", null, null), (row.PaymentStatus, row.OriginalAmount, row.PaidAmount));       // nothing is invented
-        Assert.False(outstanding.Views.Unpaid); Assert.True(outstanding.Views.FullyPaid);
-        var paid = (await h.Service.ListAsync(h.Agent, paymentStatus: "paid")).Value!;                          // the one verifiable status still works
+        Assert.Equal(("Unpaid", null, null), (row.PaymentStatus, row.OriginalAmount, row.PaidAmount));        // the remainder decides; the original and paid amounts are not invented
+        Assert.True(outstanding.Views.Unpaid); Assert.False(outstanding.Views.PartiallyPaid); Assert.True(outstanding.Views.FullyPaid);
+        var unpaid = (await h.Service.ListAsync(h.Agent, paymentStatus: "unpaid", minAmount: 0)).Value!;
+        Assert.Equal("Unpaid", Assert.Single(unpaid.Items).PaymentStatus);
+        var paid = (await h.Service.ListAsync(h.Agent, paymentStatus: "paid")).Value!;
         Assert.Equal("FullyPaid", Assert.Single(paid.Items).PaymentStatus);
     }
 
