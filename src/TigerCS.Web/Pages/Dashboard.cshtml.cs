@@ -11,7 +11,7 @@ namespace TigerCS.Web.Pages;
 public sealed record KpiCard(string Label, int Value, string? Emphasis = null, string? Href = null, string? Hint = null);
 
 /// <summary>One bar row of a breakdown card: label left, bar centre, count and percentage right. <see cref="Href"/> is null for an informational row (a value not recorded on the ticket), which is not a drill-down.</summary>
-public sealed record DashboardBarRow(string Label, int Count, double Percentage, string? Href)
+public sealed record DashboardBarRow(string Label, int Count, double Percentage, string? Href, string? Key = null, string? Code = null)
 {
     /// <summary>The percentage as displayed — one decimal at most, invariant, never NaN.</summary>
     public string PercentageText => Percentage.ToString("0.#", CultureInfo.InvariantCulture) + "%";
@@ -210,5 +210,42 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
             i.Key is null ? i.Label : labelFor(i.Label),
             i.Count,
             i.Percentage,
-            i.Key is null ? null : hrefForKey(i.Key))).ToList();
+            i.Key is null ? null : hrefForKey(i.Key),
+            i.Key,
+            i.Code)).ToList();
+}
+
+/// <summary>
+/// Decoration for channels on the Dashboard — a glyph keyed on the channel's stable <c>Code</c> and a colour keyed on its id, never on its
+/// display name or position, so a channel keeps the same icon and colour in the volume card, its legend, the stacked bar and the ticket
+/// table whatever the filters or the date range. A channel the map does not know (an administrator-added one) gets the generic glyph and
+/// the next palette colour for its id; nothing here decides what is shown, only how.
+/// </summary>
+public static class DashboardChannelStyle
+{
+    /// <summary>The palette has this many colours (<c>.ch-c1</c> … in site.css); ids beyond it wrap.</summary>
+    public const int PaletteSize = 12;
+
+    private const string S = "stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"";
+
+    /// <summary>The colour class for a channel id (<c>ch-c1</c> … <c>ch-c12</c>); <c>ch-other</c> for the unmapped / not-recorded rows, which have no id.</summary>
+    public static string ColorClass(string? key) =>
+        int.TryParse(key, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id) && id > 0
+            ? "ch-c" + (((id - 1) % PaletteSize) + 1).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "ch-other";
+
+    /// <summary>Inner SVG markup (24x24 viewBox, currentColor strokes) for a channel code.</summary>
+    public static string Icon(string? code) => (code ?? string.Empty).ToUpperInvariant() switch
+    {
+        "PHONE" => $"<path d=\"M5 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L15 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 3 6a2 2 0 0 1 2-2Z\" {S}/>",
+        "WHATSAPP" => $"<path d=\"M12 3a9 9 0 0 0-7.7 13.6L3 21l4.5-1.2A9 9 0 1 0 12 3Z\" {S}/><path d=\"M9 9c0 3.3 2.7 6 6 6l1.2-1.6-2-1-.9.8a3.6 3.6 0 0 1-1.6-1.6l.8-.9-1-2L9 9Z\" {S}/>",
+        "LIVE_CHAT" => $"<path d=\"M4 5h16v11H9l-5 4V5Z\" {S}/><path d=\"M8.5 10.5h.01M12 10.5h.01M15.5 10.5h.01\" {S}/>",
+        "WEBSITE" => $"<circle cx=\"12\" cy=\"12\" r=\"9\" {S}/><path d=\"M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18\" {S}/>",
+        "MOBILE_APP" => $"<rect x=\"7\" y=\"2.5\" width=\"10\" height=\"19\" rx=\"2.2\" {S}/><path d=\"M11 18.5h2\" {S}/>",
+        "INSTAGRAM" => $"<rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"5\" {S}/><circle cx=\"12\" cy=\"12\" r=\"3.6\" {S}/><path d=\"M16.8 7.2h.01\" {S}/>",
+        "FACEBOOK" => $"<path d=\"M14 8h2V5h-2.5A3.5 3.5 0 0 0 10 8.5V11H8v3h2v6h3v-6h2.2l.6-3H13V8.5c0-.3.3-.5 1-.5Z\" {S}/>",
+        "SOCIAL_DM" => $"<path d=\"M21 3 3 10l7 3 3 7 8-17Z\" {S}/><path d=\"M10 13l11-10\" {S}/>",
+        "WALK_IN_KIOSK" => $"<path d=\"M3 21V9l9-6 9 6v12\" {S}/><path d=\"M9 21v-6h6v6\" {S}/>",
+        _ => $"<path d=\"M5 12h.01M12 12h.01M19 12h.01\" {S}/>",
+    };
 }
