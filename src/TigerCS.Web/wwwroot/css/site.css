@@ -2990,27 +2990,24 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .page--workspace .tw-actions-btn { height: 34px; padding: 0 12px 0 16px; border-radius: 8px; font-size: 13px; gap: 6px; box-shadow: none; }
 .page--workspace .ic--btn { width: 16px; height: 16px; }
 
-/* -- Information grid: Customer · Phone · Project/Unit · Assigned To. The name gets a double-width track so it reads on one line;
-      the grid wraps by available width instead of fixed column fractions, with no dividers. -- */
-.page--workspace .tw-head__people { padding: 10px 16px 12px; font-size: 13px; }
-.page--workspace .tw-who { grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 10px 20px; }
-.page--workspace .tw-who .tw-fact, .page--workspace .tw-who .tw-fact:first-child, .page--workspace .tw-who .tw-fact:last-child,
-.page--workspace .tw-who .tw-fact:nth-child(odd), .page--workspace .tw-who .tw-fact:nth-child(even), .page--workspace .tw-who .tw-fact:nth-child(n+3) {
-  padding: 0; border: 0; gap: 8px; align-items: flex-start;
-}
-.page--workspace .tw-who .tw-fact--name { grid-column: span 2; }
-.page--workspace .tw-who .ic--fact { display: block; width: 18px; height: 18px; margin-top: 2px; color: var(--tw-muted); }
-.page--workspace .tw-fact__k { font-size: 12px; line-height: 18px; color: var(--tw-muted); }
-.page--workspace .tw-fact__v { font-size: 14px; line-height: 20px; min-height: 0; }
-.page--workspace .tw-fact__sub { font-size: 12px; line-height: 18px; color: var(--tw-muted); }
+/* -- Information section: two balanced columns. Left = Customer (name, phone, email); right = Ticket assignment (assigned to, project / unit).
+      Label above value, labels quiet, values prominent; one column on narrow screens. -- */
+.page--workspace .tw-head__people { padding: 12px 16px 14px; font-size: 13px; }
+.page--workspace .tw-who { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 40px; align-items: start; }
+.page--workspace .tw-col { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+.page--workspace .tw-who .tw-fact, .page--workspace .tw-who .tw-fact:first-child, .page--workspace .tw-who .tw-fact:last-child { padding: 0; border: 0; gap: 0; }
+.page--workspace .tw-fact__body { gap: 2px; width: 100%; }
+.page--workspace .tw-fact__k { font-size: 12px; line-height: 16px; font-weight: 400; color: var(--tw-muted); }
+.page--workspace .tw-fact__v, .page--workspace .tw-owner .tw-fact__v, .page--workspace .tw-fact__v--unit { display: flex; font-size: 14px; line-height: 20px; font-weight: 600; min-height: 0; color: var(--tw-ink); }
+.page--workspace .tw-fact__v.is-muted { font-weight: 400; color: var(--tw-muted); }
+.page--workspace .tw-fact__sub { display: inline; font-size: 12px; line-height: 18px; color: var(--tw-muted); }
 .page--workspace .tw-who__name { font-size: 14px; }
-.page--workspace .tw-verif { line-height: 20px; padding: 0 8px; font-size: 12px; border-radius: 6px; }
+.page--workspace .tw-verif { line-height: 18px; padding: 0 6px; font-size: 12px; border-radius: 4px; }
 .page--workspace .tw-route { font-size: 12px; line-height: 18px; }
 .page--workspace .tw-route--awaiting { color: var(--color-warning-text); }
 .page--workspace .btn-reassign { height: 26px; padding: 0 10px; font-size: 12px; border-radius: 6px; }
 @media (max-width: 720px) {
-  .page--workspace .tw-who { grid-template-columns: minmax(0, 1fr); gap: 10px; }
-  .page--workspace .tw-who .tw-fact--name { grid-column: auto; }
+  .page--workspace .tw-who { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .page--workspace .tw-head__top { flex-wrap: wrap; }
 }
 
