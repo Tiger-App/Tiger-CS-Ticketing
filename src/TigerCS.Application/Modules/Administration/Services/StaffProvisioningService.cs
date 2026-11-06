@@ -5,7 +5,14 @@ using TigerCS.Domain.Modules.IdentityAndAccess;
 namespace TigerCS.Application.Modules.Administration.Services;
 
 /// <summary>One person to be provisioned. The department is named by its stable <c>Code</c> (never by a new record) and the role must be an existing fixed role.</summary>
-public sealed record StaffRosterEntry(string FullName, string Email, string DepartmentCode, string Role);
+public sealed record StaffRosterEntry(string FullName, string Email, string DepartmentCode, string Role, string? UserName = null)
+{
+    /// <summary>The Identity user name the account is looked up and created by: the explicit <see cref="UserName"/> (department accounts have no email), otherwise the email.</summary>
+    public string Identifier => (UserName ?? Email).Trim();
+
+    /// <summary>The email stored on the account: none for a department-level account.</summary>
+    public string? AccountEmail => UserName is null ? Email.Trim() : null;
+}
 
 /// <summary>
 /// The staff requested for provisioning. Customer Services users are CS Agents (the existing front-line role). Registration users are
@@ -17,6 +24,22 @@ public static class StaffRoster
 {
     public const string CustomerServiceDepartmentCode = "CS";
     public const string RegistrationDepartmentCode = "REG";
+
+    /// <summary>
+    /// Department-level (shared) accounts: not people. Same existing non-administrative role, primary membership of their own department,
+    /// no email. They are ordinary Identity users, deliberately NOT configured service identities (that list confines an account to the
+    /// integration surface, which would stop it working tickets), so the Round Robin exclusion of service identities is untouched.
+    /// </summary>
+    public static readonly IReadOnlyList<StaffRosterEntry> DepartmentAccounts =
+    [
+        new("Accounting", "", "ACC", Roles.DepartmentEmployee, UserName: "Accounting"),
+        new("Facilities Management", "", "FM", Roles.DepartmentEmployee, UserName: "FacilitiesManagement"),
+        new("Leasing Customer Services", "", "LCS", Roles.DepartmentEmployee, UserName: "LeasingCustomerServices")
+    ];
+
+    /// <summary>Identity user names of the department-level accounts, so reports can tell them apart from individual employees.</summary>
+    public static readonly IReadOnlyCollection<string> DepartmentAccountUserNames =
+        DepartmentAccounts.Select(a => a.Identifier).ToList();
 
     public static readonly IReadOnlyList<StaffRosterEntry> RequestedStaff =
     [
@@ -98,11 +121,11 @@ public sealed class StaffProvisioningService(
         foreach (var entry in roster)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var email = entry.Email.Trim();
+            var email = entry.Identifier;
 
             if (!seen.Add(email))
             {
-                lines.Add(Skip(entry, "Duplicate email within the roster; listed once."));
+                lines.Add(Skip(entry, "Duplicate email/user name within the roster; listed once."));
                 continue;
             }
 
@@ -146,7 +169,7 @@ public sealed class StaffProvisioningService(
 
             var result = await userService.CreateAsync(
                 actorEmployeeId!.Value,
-                new CreateUserRequestDto(email.ToLowerInvariant(), email, entry.FullName.Trim(), IsGeynessStaff: false,
+                new CreateUserRequestDto(entry.UserName is null ? email.ToLowerInvariant() : email, entry.AccountEmail, entry.FullName.Trim(), IsGeynessStaff: false,
                     passwordFor!(entry), [entry.Role], dept.DepartmentId),
                 cancellationToken);
 
