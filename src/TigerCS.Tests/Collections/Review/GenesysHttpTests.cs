@@ -142,6 +142,29 @@ public sealed class GenesysHttpTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
     }
 
+    [Theory]
+    [InlineData("{\"error\":\"invalid_client\",\"description\":\"client authentication failed\"}", "HTTP 400, invalid_client")]
+    [InlineData("{\"error\":\"unsupported_grant_type\"}", "HTTP 400, unsupported_grant_type")]
+    [InlineData("{\"error\":\"<script>alert(1)</script>\"}", "HTTP 400).")]
+    [InlineData("not json", "HTTP 400).")]
+    [InlineData("", "HTTP 400).")]
+    public async Task ARefusedTokenRequest_NamesTheOAuthErrorCode_AndNothingElseFromTheBody(string body, string expected)
+    {
+        var log = new CapturingLogger<GenesysTokenProvider>();
+        var tokens = new GenesysTokenProvider(new HttpClient(new BadRequestTokenHandler(body)), Options(), TimeProvider.System, log);
+        var ex = await Assert.ThrowsAsync<GenesysAuthenticationException>(() => tokens.GetTokenAsync(CancellationToken.None));
+        Assert.Contains(expected, ex.Message);
+        Assert.DoesNotContain("client authentication failed", ex.Message); Assert.DoesNotContain("<script>", ex.Message);
+        Assert.DoesNotContain(ClientSecret, ex.Message + string.Join('\n', log.Lines));
+        Assert.Contains(log.Lines, l => l.Contains("HTTP 400"));
+    }
+
+    private sealed class BadRequestTokenHandler(string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(Json(HttpStatusCode.BadRequest, body));
+    }
+
     // ------------------------------------------------------------ request shape
 
     [Fact]

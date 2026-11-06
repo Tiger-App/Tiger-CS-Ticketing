@@ -89,11 +89,11 @@ else if (Model.Report is { } report)
                     <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-review-reason", "Why Export review CSV is unavailable", exportProblem, "data-export-review-reason"))" />
                 </span>
             }
-            @* Export for Genesys: the same audited, template-checked file as in Manual, of every financially eligible customer of these filters, schedule or not. It uploads nothing and
+            @* Export for Genesys: the same audited file as in Manual, of every customer matching these filters, schedule or not, held-back ones included. It uploads nothing and
                marks nobody as sent; Auto's sending readiness and scheduler are untouched. *@
             @{
                 var genesysReason = Model.ExportGenesysBlockedReason;
-                var genesysTip = genesysReason ?? "Downloads every financially eligible customer of these filters, on any day, as a CSV in the format of the campaign's Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate) for a manual import. Customers held back by financial, contact, identity, legal or duplicate rules are left out. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
+                var genesysTip = genesysReason ?? $"Downloads every customer matching these filters, on any day and held-back ones included, as a CSV in the format of the {Model.ExportDestinationLabel} Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate) for a manual import, with the Due / Overdue amounts of the filters. It does not depend on sending eligibility: unverified data is labelled on the file. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
             }
             @if (genesysReason is null)
             {
