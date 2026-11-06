@@ -143,10 +143,9 @@ public static class StaffProvisioningCommand
                 if (!await reader.ReadAsync()) throw new InvalidOperationException("Could not identify SQL Server.");
                 var server = reader.GetString(0);
                 var database = reader.GetString(1);
-                if (!string.Equals(server, SeedSafety.Server, StringComparison.OrdinalIgnoreCase)
-                    || !string.Equals(database, expectedDatabase, StringComparison.OrdinalIgnoreCase))
+                if (SeedSafety.VerifyTarget(cs.DataSource, server, database, expectedDatabase) is { } targetProblem)
                 {
-                    Console.Error.WriteLine($"BLOCKED: unexpected SQL target (server {server}, database {database}).");
+                    Console.Error.WriteLine($"BLOCKED: unexpected SQL target - {targetProblem}");
                     return 1;
                 }
 

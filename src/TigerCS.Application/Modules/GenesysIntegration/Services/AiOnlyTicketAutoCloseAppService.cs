@@ -62,7 +62,7 @@ public enum AiOnlyAutoCloseOutcome
 ///
 /// <para>
 /// <b>Closure</b> goes through <see cref="TicketLifecycleAppService.CloseForAiOnlyTimeoutAsync"/>: the existing system Resolved → Closed path,
-/// outcome Cancelled, reason <see cref="ClosureReason"/>, status history and an <c>AutoCloseAiOnlyTimeout</c> audit entry, in one transaction.
+/// outcome Resolved (final status Closed, never Cancelled), reason <see cref="ClosureReason"/>, status history and an <c>AutoCloseAiOnlyTimeout</c> audit entry, in one transaction.
 /// No customer notification is enqueued. Conversation history, interactions and every other ticket field are untouched.
 /// </para>
 ///
@@ -83,7 +83,7 @@ public sealed class AiOnlyTicketAutoCloseAppService(
     TimeProvider timeProvider)
 {
     /// <summary>The exact closure reason recorded on the resolution, status history and audit entry.</summary>
-    public const string ClosureReason = "Automatically closed - AI only (18 hours)";
+    public const string ClosureReason = "AI Only – Auto Closed After 18 Hours";
 
     public AiOnlyAutoCloseOptions Options => options;
 

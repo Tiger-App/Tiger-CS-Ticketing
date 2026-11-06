@@ -77,8 +77,9 @@ public class AiOnlyAutoCloseTests
 
         var ticket = f.Tickets.All.Single();
         Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
-        Assert.Equal((byte)ResolutionOutcome.Cancelled, ticket.ResolutionOutcome);
-        Assert.Equal("Automatically closed - AI only (18 hours)", AiOnlyTicketAutoCloseAppService.ClosureReason);
+        Assert.Equal((byte)ResolutionOutcome.Resolved, ticket.ResolutionOutcome);
+        Assert.NotEqual((byte)ResolutionOutcome.Cancelled, ticket.ResolutionOutcome);
+        Assert.Equal("AI Only – Auto Closed After 18 Hours", AiOnlyTicketAutoCloseAppService.ClosureReason);
         Assert.Equal(AiOnlyTicketAutoCloseAppService.ClosureReason, Assert.Single(f.Resolutions.Added).ResolutionNote);
 
         // Open → Resolved, outcome, Resolved → Closed: system actions carrying the reason (the ticket history).
@@ -104,6 +105,22 @@ public class AiOnlyAutoCloseTests
         Assert.Equal(TicketStatus.Closed, f.Tickets.All.Single().TicketStatus);
         Assert.Equal(before, f.Outbox.Committed.Count);
         Assert.DoesNotContain(f.Outbox.Committed, m => m.EventType is "TicketClosed" or "TicketResolved");
+    }
+
+    [Fact]
+    public async Task Closure_PreservesTheAiOnlyHandlingState()
+    {
+        var (f, ticketId, _) = await IngestAsync();
+        f.Clock.Advance(Threshold + TimeSpan.FromMinutes(1));
+
+        Assert.Equal(AiOnlyAutoCloseOutcome.Closed, await f.AiOnlyClose.TryCloseAsync(ticketId));
+
+        var interaction = f.Interactions.All.Single();
+        Assert.Null(interaction.HandledByUserId);
+        Assert.False(interaction.RequiresHumanFollowUp);
+        Assert.Null(f.Tickets.All.Single().CurrentOwnerEmployeeId);
+        var history = await f.InteractionQuery.GetForTicketAsync(Guid.NewGuid(), [TigerCS.Domain.Modules.IdentityAndAccess.Roles.CsSupervisor], ticketId);
+        Assert.Equal("Ai", history.Response!.Interactions.Single().HandlingState);
     }
 
     [Fact]

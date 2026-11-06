@@ -978,7 +978,7 @@ public sealed class TicketLifecycleAppService(
 
     /// <summary>
     /// Closes a ticket that only the AI virtual agent ever handled once it has stayed open past the AI-only time limit: the same system
-    /// Resolved → Closed closure as document delivery, outcome <see cref="ResolutionOutcome.Cancelled"/> with the supplied
+    /// Resolved → Closed closure as document delivery, outcome <see cref="ResolutionOutcome.Resolved"/> (the ticket ends Closed, not Cancelled) with the supplied
     /// <paramref name="reason"/>, audit action <c>AutoCloseAiOnlyTimeout</c>. <b>The customer is not notified</b>: no lifecycle event reaches the Outbox.
     /// A ticket already Closed, or one a person owns, is left exactly as it is (nothing written twice).
     /// </summary>
@@ -989,7 +989,7 @@ public sealed class TicketLifecycleAppService(
         string detail,
         CancellationToken cancellationToken = default) =>
         CloseBySystemAsync(
-            integrationEmployeeId, ticketId, ResolutionOutcome.Cancelled, reason, detail, TicketClosureAuditActions.ClosedForAiOnlyTimeout,
+            integrationEmployeeId, ticketId, ResolutionOutcome.Resolved, reason, detail, TicketClosureAuditActions.ClosedForAiOnlyTimeout,
             ticket => ticket.CloseForAiOnlyTimeout(), beforeCommit: null, cancellationToken, notifyCustomer: false);
 
     /// <summary>

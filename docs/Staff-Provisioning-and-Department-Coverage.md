@@ -38,6 +38,8 @@ dotnet run --project src/TigerCS.ProductionSeeder -- provision-staff --target pr
   --actor-email <active System Administrator email> --credentials-out ./one-time-credentials.txt
 ```
 
+Target check: the connection string's Data Source must be `TGAESHJDBP02` or its approved IP `10.10.10.124` (exact; any other host, FQDN or IP is refused), and the server itself must also report `@@SERVERNAME` = `TGAESHJDBP02` and `DB_NAME()` = the expected database. A refusal prints the reported values with invisible characters escaped.
+
 Behaviour: users are created through `AdminUserAppService.CreateAsync` (same code as User Management, audited under the named administrator). Matching is by email/user name, case-insensitive, so a re-run creates nothing. An existing account is **never modified**: if it exists with another role/department, is deactivated, or is incomplete, it is reported as *Skipped* for a person to review (exit code 2). Departments are found by code; a missing or inactive one skips the user. Nothing is created in `Departments` or `AspNetRoles`.
 
 | Full name | Email | Department | Role |
