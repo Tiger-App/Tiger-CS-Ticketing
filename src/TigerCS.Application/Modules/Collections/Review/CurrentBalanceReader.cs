@@ -27,13 +27,13 @@ public sealed class CurrentBalanceReader(PactReceivablesOptions sourceOptions, I
     {
         var started = Stopwatch.GetTimestamp();
         var latest = asOfDates.Max();
-        var from = DateOnly.FromDateTime(sourceOptions.StartDate);
+        var from = ReviewRefreshService.ReadStart;   // the same window as the refresh (and the preview), so the amounts can be compared
         var to = new DateOnly(latest.Year, latest.Month, DateTime.DaysInMonth(latest.Year, latest.Month));
         using var budget = CancellationTokenSource.CreateLinkedTokenSource(ct);
         budget.CancelAfter(TimeSpan.FromSeconds(sourceOptions.RequestBudgetSeconds));
 
         var snapshots = await Task.WhenAll(companies.Distinct().Select(company =>
-            source.ReadAsync(new PactReceivablesRequest(from, to, company, MinAmount: decimal.Round(sourceOptions.DefaultMinOutstandingAmount, 4)), budget.Token)));
+            source.ReadAsync(new PactReceivablesRequest(from, to, company, MinAmount: ReviewRefreshService.ReadMinimumAmount), budget.Token)));   // the same read as the refresh, so the amounts can be compared
 
         // A local snapshot that is stale, not loaded or does not cover the window must never be read as "no balance left": the dispatch would then
         // treat every approved record as paid. The revalidation fails (nothing is sent) until the snapshot is fresh and complete.

@@ -446,6 +446,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped(sp => sp.GetRequiredService<IOptions<CollectionsReviewOptions>>().Value);
         services.AddScoped<IReviewStore, ReviewStore>();
         services.AddScoped<IGenesysExportHistory, ReviewStore>();
+        services.AddScoped<IGenesysExportLock, GenesysExportRunLock>();
         services.AddScoped<ReviewQueryService>();
         services.AddScoped<ReviewRefreshService>();
         services.AddScoped<IReviewRefreshRunner>(sp => sp.GetRequiredService<ReviewRefreshService>());

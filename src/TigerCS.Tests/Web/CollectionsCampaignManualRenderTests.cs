@@ -415,13 +415,6 @@ public sealed class CollectionsCampaignManualRenderTests
     }
 
     [Fact]
-    public async Task AutoMode_HasNoExportForGenesys()
-    {
-        var (html, _) = await LoadAsync(url: "/Collections/Campaigns?render=full&stage=CurrentMonthReminder&businessDate=2026-10-14&sendingMode=Auto");
-        Assert.DoesNotContain("data-export-genesys-button", html); Assert.DoesNotContain("Export for Genesys", html);
-    }
-
-    [Fact]
     public async Task PostingTheExport_DownloadsTheCsv_ForTheSelectionAndFilters_AndSendsNothing()
     {
         var api = NewApi();
@@ -456,12 +449,16 @@ public sealed class CollectionsCampaignManualRenderTests
     }
 
     [Fact]
-    public async Task ExportingFromAutoMode_IsRefused_WithoutCallingTheApi()
+    public async Task ExportingFromAutoMode_DownloadsTheSameFile_ForEveryEligibleCustomer_AndSendsNothing()
     {
+        // Auto has no ticks: the export is always of all eligible customers of the filters. The mode travels to the API (for the audit); the API builds the same financially eligible population.
         var api = NewApi();
         using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
-        var html = Decode(await (await client.PostAsync("/Collections/Campaigns?handler=ExportGenesys", new FormUrlEncodedContent(Form(await TokenAsync(client), ("sendingMode", "Auto"), ("selectionMode", "AllMatching"))))).Content.ReadAsStringAsync());
-        Assert.Contains("switch to Manual", html); Assert.Equal(0, api.Exports);
+        var response = await client.PostAsync("/Collections/Campaigns?handler=ExportGenesys", new FormUrlEncodedContent(Form(await TokenAsync(client), ("sendingMode", "Auto"), ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1"))));
+        Assert.Equal("text/csv", response.Content.Headers.ContentType?.MediaType);
+        Assert.Equal(1, api.Exports);
+        Assert.Contains("\"sendingMode\":\"Auto\"", api.LastExportBody); Assert.Contains("AllMatching", api.LastExportBody); Assert.DoesNotContain("4|3001|TP140-1", api.LastExportBody);
+        Assert.Null(api.LastConfirmBody);
     }
 
     // ------------------------------------------------------------------ repeated exports, the "not verified" label, and the Manual review export
@@ -537,14 +534,30 @@ public sealed class CollectionsCampaignManualRenderTests
     }
 
     [Fact]
-    public async Task AutoKeepsItsExportReviewCsv_AndShowsNoManualExportControls()
+    public async Task AutoKeepsItsExportReviewCsv_AndHasTheSameExportForGenesysButton_ButNoSendControls()
     {
         var api = NewApi();
         using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
-        // Auto keeps its own Export review CSV (the schedule preview's file, a link or a disabled button with its reason) and none of the Manual export controls.
+        // Auto keeps its own Export review CSV (the schedule preview's file) and gets the same audited Export for Genesys as Manual; it never gets Send to Genesys or the Manual review export.
         var html = await (await client.GetAsync("/Collections/Campaigns?render=full&stage=CurrentMonthReminder&businessDate=2026-10-14&sendingMode=Auto")).Content.ReadAsStringAsync();
         Assert.Matches("data-export-review(-unavailable)?[ >]", html);
-        Assert.DoesNotContain("data-export-review-manual", html); Assert.DoesNotContain("data-export-genesys-button", html);
+        var export = Regex.Match(html, "<button[^>]*data-export-genesys-button[^>]*>").Value;
+        Assert.NotEmpty(export); Assert.Contains("Export for Genesys", html); Assert.DoesNotContain("Export Genesys CSV", html);   // the old unaudited Auto file is gone
+        Assert.DoesNotContain("disabled", export); Assert.Contains("data-blocked=\"false\"", export);                             // approval data is current in the fake
+        Assert.Contains("name=\"selectionMode\" value=\"AllMatching\"", html); Assert.Contains("name=\"sendingMode\" value=\"Auto\"", html);
+        Assert.DoesNotContain("data-export-review-manual", html); Assert.DoesNotContain("data-approve-button", html); Assert.DoesNotContain("data-send-to-genesys", html);
+    }
+
+    [Fact]
+    public async Task OnTheAutoPage_TheExportIsBlockedByMissingOrOldApprovalData_AndARefreshIsOffered()
+    {
+        var (missing, _) = await LoadAsync(a => a.Run = null, "/Collections/Campaigns?render=full&stage=CurrentMonthReminder&businessDate=2026-10-14&sendingMode=Auto");
+        var button = Regex.Match(missing, "<button[^>]*data-export-genesys-button[^>]*>").Value;
+        Assert.Contains("disabled", button); Assert.Contains("no approval data yet", Decode(missing)); Assert.Contains("data-refresh-approval", missing);
+        // Without the send permission (the preview's CanExportReview) the button is disabled, and no export request can be posted from the page.
+        var (noRight, _) = await LoadAsync(a => ((FakeCollectionsApi)a.InnerHandler!).ExportForbidden = true, "/Collections/Campaigns?render=full&stage=CurrentMonthReminder&businessDate=2026-10-14&sendingMode=Auto");
+        Assert.Contains("disabled", Regex.Match(noRight, "<button[^>]*data-export-genesys-button[^>]*>").Value); Assert.DoesNotContain("handler=ExportGenesys", noRight);
+        Assert.Contains("does not have permission", Decode(noRight));
     }
 
     // ------------------------------------------------------------------ refreshing the approval data by hand

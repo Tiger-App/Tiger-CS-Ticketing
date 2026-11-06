@@ -297,6 +297,17 @@ internal sealed class ReviewHarness : IDisposable
             : new DbContextOptionsBuilder<TigerCsDbContext>().UseSqlite($"Data Source={_file};Pooling=False;Default Timeout=60"))
         .AddInterceptors(Faults, new CommitFaults(Faults), new CommandFaults(Faults)).Options);
 
+    /// <summary>The export lock for tests that do not race: always free. The lock's own behaviour is tested with <see cref="GenesysExportRunLockTests"/>.</summary>
+    public sealed class FreeExportLock : IGenesysExportLock
+    {
+        public Task<IAsyncDisposable?> TryAcquireAsync(TimeSpan wait, CancellationToken ct) => Task.FromResult<IAsyncDisposable?>(new NoLock());
+
+        private sealed class NoLock : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        }
+    }
+
     public sealed class Scope(TigerCsDbContext context, ReviewHarness h) : IDisposable
     {
         public IReviewStore Store { get; } = new ReviewStore(context, h.RetryPolicy);
@@ -320,8 +331,8 @@ internal sealed class ReviewHarness : IDisposable
             var balances = new CurrentBalanceReader(h.Sql, h.Source, Refresh, NullLogger<CurrentBalanceReader>.Instance);
             Dispatch = new DispatchService(h.Options, h.Genesys, auth, clock, Store, h.Scheduler, client ?? h.Client, Query, balances,
                 NullLogger<DispatchService>.Instance);
-            Export = new GenesysExportService(h.Options, h.Genesys, auth, clock, Query, client ?? h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, new ReviewStore(context, h.RetryPolicy), NullLogger<GenesysExportService>.Instance);
-            ReviewExport = new ManualReviewExportService(h.Options, auth, clock, Query, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), NullLogger<ManualReviewExportService>.Instance);
+            Export = new GenesysExportService(h.Options, h.Sql, h.Genesys, auth, clock, Query, client ?? h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, new ReviewStore(context, h.RetryPolicy), new FreeExportLock(), NullLogger<GenesysExportService>.Instance);
+            ReviewExport = new ManualReviewExportService(h.Options, h.Sql, auth, clock, Query, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), NullLogger<ManualReviewExportService>.Instance);
             Auto = new AutoDispatchService(h.Options, h.Campaign, clock, Store, Query, Refresh, Dispatch, NullLogger<AutoDispatchService>.Instance);
             AdminReport = new DispatchAdminReportService(h.Campaign, Store, h.Email, clock, auth, NullLogger<DispatchAdminReportService>.Instance);
             Suppression = new SuppressionService(h.Options, h.Genesys, clock, Store, client ?? h.Client, balances, NullLogger<SuppressionService>.Instance);

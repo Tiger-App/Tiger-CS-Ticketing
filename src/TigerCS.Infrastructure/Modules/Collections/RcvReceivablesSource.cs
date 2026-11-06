@@ -40,9 +40,13 @@ public sealed class RcvReceivablesSource(
         var companies = new List<SnapshotCompanyRaw>();
         var rows = new List<PactReceivableInstalment>();
         var limit = Math.Clamp(pactOptions.MaxSourceRows, 1, 1_000_000);
+        // dbo.CollectionsTowers (the tower picker and filter), read before the lines so that each row can carry its tower's local id: the procedure returns the tower NUMBER and name only, while
+        // the review records (the Manual list) filter by TowerId. Without the id a Manual tower filter matched nobody, although the preview, which filters inside the procedure, listed the tower.
+        var towers = new Dictionary<(int Company, string Number), int>();
         try
         {
             await using var connection = await OpenAsync(cancellationToken);
+            towers = await ReadTowerIdsAsync(connection, cancellationToken);
             await using var command = Procedure(connection, "dbo.usp_CollectionsRcv_GetLines");
             command.Parameters.Add("@CompanyId", SqlDbType.Int).Value = (object?)request.CompanyId ?? DBNull.Value;
             command.Parameters.Add("@TowerId", SqlDbType.Int).Value = (object?)request.TowerId ?? DBNull.Value;
@@ -73,7 +77,7 @@ public sealed class RcvReceivablesSource(
             throw new PactReceivablesSourceException("The local receivables snapshot could not be read.");
         }
 
-        var snapshot = ReceivablesSnapshotComposer.Compose(from, request.ThroughDate, companies, [], rows, timeProvider.GetUtcNow().UtcDateTime, options.MaxAgeMinutes, MaxRunMinutes);
+        var snapshot = ReceivablesSnapshotComposer.Compose(from, request.ThroughDate, companies, [], ResolveTowerIds(rows, towers), timeProvider.GetUtcNow().UtcDateTime, options.MaxAgeMinutes, MaxRunMinutes);
         snapshot = snapshot with { Snapshot = WithSchedule(snapshot.Snapshot!) };
         logger.LogInformation("Receivables snapshot read: {Rows} rows, {Loaded}/{Scope} companies loaded, oldest success {ReadAt:O}, window {From:yyyy-MM-dd}..{To:yyyy-MM-dd}.",
             rows.Count, snapshot.Snapshot!.Companies.Count(c => c.HasSnapshot), snapshot.Snapshot.Companies.Count, snapshot.ReadAtUtc, from, request.ThroughDate);
@@ -236,6 +240,38 @@ public sealed class RcvReceivablesSource(
             throw new PactReceivablesSourceException("The PACT unit/account directory could not be read.");
         }
         return new PactAccountDirectory(matches, account, options.AccountDirectoryComplete, "PACT receivables procedure (p4/p32AccountReceivables), settled instalments included", asOf);
+    }
+
+    /// <summary>
+    /// The local id of each tower by (company, trimmed tower number), from <c>dbo.CollectionsTowers</c>, the table the procedures filter towers with. A number that is listed more than once for
+    /// one company resolves to no id: a tower is never guessed.
+    /// </summary>
+    private async Task<Dictionary<(int Company, string Number), int>> ReadTowerIdsAsync(SqlConnection connection, CancellationToken cancellationToken)
+    {
+        var found = new Dictionary<(int Company, string Number), int>();
+        var ambiguous = new HashSet<(int Company, string Number)>();
+        await using var command = new SqlCommand("SELECT TowerId, CompanyId, LTRIM(RTRIM(CONVERT(nvarchar(20), TowerNumber))) AS TowerNumber FROM dbo.CollectionsTowers", connection)
+        { CommandTimeout = Math.Clamp(options.ReadCommandTimeoutSeconds, 1, 600) };
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken))
+        {
+            if (reader.IsDBNull(2)) continue;
+            var key = (reader.GetInt32(1), reader.GetString(2));
+            if (key.Item2.Length == 0) continue;
+            if (!found.TryAdd(key, reader.GetInt32(0))) ambiguous.Add(key);
+        }
+        foreach (var key in ambiguous) found.Remove(key);
+        return found;
+    }
+
+    /// <summary>
+    /// Each row with its tower's local id, resolved from the company and the tower NUMBER the procedure returns. A row whose tower is not in the table, or has no number, keeps a null id: the Manual
+    /// tower filter then cannot match it, and the page says so instead of listing nobody silently. A row that already carries an id is left alone.
+    /// </summary>
+    public static List<PactReceivableInstalment> ResolveTowerIds(IReadOnlyList<PactReceivableInstalment> rows, IReadOnlyDictionary<(int Company, string Number), int> towers)
+    {
+        if (towers.Count == 0) return rows.ToList();
+        return rows.Select(r => r.TowerId is null && r.TowerNumber is { } number && towers.TryGetValue((r.CompanyId, number.Trim()), out var id) ? r with { TowerId = id } : r).ToList();
     }
 
     private async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken)

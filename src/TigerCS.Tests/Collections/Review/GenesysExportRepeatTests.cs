@@ -7,6 +7,9 @@ using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Domain.Audit;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Collections.Review;
+using TigerCS.Application.Abstractions;
+using TigerCS.Infrastructure.Modules.Collections;
+using TigerCS.Infrastructure.Persistence;
 using TigerCS.Tests.IdentityAndAccess.Fakes;
 
 namespace TigerCS.Tests.Collections.Review;
@@ -56,8 +59,8 @@ public sealed class GenesysExportRepeatTests
         Assert.Equal(2, audit.Count);
         Assert.All(audit, a => { Assert.Equal(h.Manager.EmployeeId, a.ActorEmployeeId); Assert.Contains("Repeated=0", a.AfterValue); Assert.Contains(";Customers=", a.AfterValue); });
         foreach (var personal in new[] { "Customer 1", "Customer 2", "+97150", "example.test", "T0001", "TP140-1" }) Assert.All(audit, a => Assert.DoesNotContain(personal, a.AfterValue));
-        Assert.Single(audit[0].AfterValue!.Split(";Customers=")[1].Split(','));                // one fingerprint per customer
-        Assert.Equal(2, audit[1].AfterValue!.Split(";Customers=")[1].Split(',').Length);
+        Assert.Equal(2, audit[0].AfterValue!.Split(";Customers=")[1].Split(',').Length);        // two fingerprints per customer: the unit and the number
+        Assert.Equal(4, audit[1].AfterValue!.Split(";Customers=")[1].Split(',').Length);
     }
 
     [Fact]
@@ -134,9 +137,9 @@ public sealed class GenesysExportRepeatTests
         using var h = await SeededAsync();
         using var context = h.CreateContext();
         using var scope = h.NewScope();
-        var broken = new GenesysExportService(h.Options, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time),
+        var broken = new GenesysExportService(h.Options, h.Sql, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time),
             scope.Query, h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review,
-            new ThrowingHistory(), NullLogger<GenesysExportService>.Instance);
+            new ThrowingHistory(), new ReviewHarness.FreeExportLock(), NullLogger<GenesysExportService>.Instance);
         var result = await broken.ExportAsync(h.Manager, All(), CancellationToken.None);
         Assert.Equal(CollectionsOutcome.FinanceUnavailable, result.Outcome); Assert.Null(result.Value); Assert.Contains("no file was made", result.Detail);
         Assert.Empty(await AuditAsync(h, GenesysExportService.AuditAction));
@@ -158,9 +161,9 @@ public sealed class GenesysExportRepeatTests
     {
         using var context = h.CreateContext();
         using var scope = h.NewScope();
-        var service = new GenesysExportService(h.Options, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time),
+        var service = new GenesysExportService(h.Options, h.Sql, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time),
             scope.Query, h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review,
-            history, NullLogger<GenesysExportService>.Instance);
+            history, new ReviewHarness.FreeExportLock(), NullLogger<GenesysExportService>.Instance);
         return await service.ExportAsync(h.Manager, All(), CancellationToken.None);
     }
 
@@ -205,6 +208,94 @@ public sealed class GenesysExportRepeatTests
         Assert.Equal(3, summary.Count);                                                         // contact frequency (ContactedToday) only counts real uploads
         using var scope = h.NewScope();
         Assert.True((await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).IsSuccess);
+    }
+
+    [Fact]
+    public async Task TheLookBackIsThirtyDays_AnExportWithinItIsARepeat_AndAnOlderOneIsNot()
+    {
+        // The existing 30-day window: a repeat within it is held for confirmation; beyond it, the customer is not warned about.
+        using var h = await SeededAsync();
+        Assert.True((await ExportAsync(h, All())).IsSuccess);
+        await AgeExportsAsync(h, days: 20);
+        Assert.Equal(CollectionsOutcome.RepeatExport, (await ExportAsync(h, All())).Outcome);
+        await AgeExportsAsync(h, days: 40);
+        Assert.True((await ExportAsync(h, All())).IsSuccess);
+    }
+
+    /// <summary>Moves the recorded export audit entries back in time, as if they had been made that many days ago.</summary>
+    private static async Task AgeExportsAsync(ReviewHarness h, int days)
+    {
+        using var context = h.CreateContext();
+        var when = h.Time.GetUtcNow().UtcDateTime.AddDays(-days);
+        await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE \"AuditEntries\" SET \"OccurredAtUtc\" = {when} WHERE \"Action\" = {GenesysExportService.AuditAction}");
+    }
+
+    [Fact]
+    public async Task TheAuditIsWrittenWhileTheExportLockIsHeld_AndTheLockIsReleasedAfterwards()
+    {
+        using var h = await SeededAsync();
+        using var context = h.CreateContext();
+        using var scope = h.NewScope();
+        var gate = new RecordingLock();
+        var audit = new HeldWhenAudited(new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), gate);
+        var service = Service(h, scope.Query, context, gate, audit);
+        Assert.True((await service.ExportAsync(h.Manager, All(), CancellationToken.None)).IsSuccess);
+        Assert.Equal(new[] { true }, audit.HeldAtEachWrite);                  // the repeat check and the audit happen inside the lock
+        Assert.False(gate.Held);                                              // and the lock is released once the audit is written
+    }
+
+    [Fact]
+    public async Task WhileAnotherExportIsRecording_ANewExportCannotGetIn_AndNothingIsReleased()
+    {
+        using var h = await SeededAsync();
+        using var context = h.CreateContext();
+        using var scope = h.NewScope();
+        var result = await Service(h, scope.Query, context, new BusyLock()).ExportAsync(h.Manager, All(), CancellationToken.None);
+        Assert.Equal(CollectionsOutcome.FinanceUnavailable, result.Outcome); Assert.Null(result.Value); Assert.Contains("Try again", result.Detail);
+        Assert.Empty(await AuditAsync(h, GenesysExportService.AuditAction));                 // no audit row, so no file
+    }
+
+    private static GenesysExportService Service(ReviewHarness h, ReviewQueryService query, TigerCsDbContext context, IGenesysExportLock gate, IAuditEntryWriter? audit = null) =>
+        new(h.Options, h.Sql, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time), query, h.Client,
+            audit ?? new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review,
+            new ReviewStore(context, h.RetryPolicy), gate, NullLogger<GenesysExportService>.Instance);
+
+    /// <summary>Records whether the lock is held at each audit write.</summary>
+    private sealed class HeldWhenAudited(IAuditEntryWriter inner, RecordingLock gate) : IAuditEntryWriter
+    {
+        public List<bool> HeldAtEachWrite { get; } = [];
+
+        public Task WriteAsync(Guid? actorEmployeeId, string action, string entityType, string? entityId, string? beforeValue, string? afterValue, Guid correlationId, CancellationToken cancellationToken = default)
+        {
+            HeldAtEachWrite.Add(gate.Held);
+            return inner.WriteAsync(actorEmployeeId, action, entityType, entityId, beforeValue, afterValue, correlationId, cancellationToken);
+        }
+    }
+
+    private sealed class RecordingLock : IGenesysExportLock
+    {
+        public bool Held { get; private set; }
+
+        public Task<IAsyncDisposable?> TryAcquireAsync(TimeSpan wait, CancellationToken ct)
+        {
+            Held = true;
+            return Task.FromResult<IAsyncDisposable?>(new Release(this));
+        }
+
+        private sealed class Release(RecordingLock owner) : IAsyncDisposable
+        {
+            public ValueTask DisposeAsync()
+            {
+                owner.Held = false;
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
+    /// <summary>A lock another export holds for the whole wait.</summary>
+    private sealed class BusyLock : IGenesysExportLock
+    {
+        public Task<IAsyncDisposable?> TryAcquireAsync(TimeSpan wait, CancellationToken ct) => Task.FromResult<IAsyncDisposable?>(null);
     }
 
     // ------------------------------------------------------------ the label when the schema was not verified

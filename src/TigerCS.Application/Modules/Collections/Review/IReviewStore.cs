@@ -123,6 +123,16 @@ public interface IGenesysExportHistory
     Task<IReadOnlyList<GenesysExportAuditRecord>> ListExportsAsync(string action, DateTime sinceUtc, int take, CancellationToken ct);
 }
 
+/// <summary>
+/// One file export at a time across the application: the repeat check and its audit entry run inside the lock, so two simultaneous exports cannot both miss each other's entry. The lock is
+/// held only for that step, not while the file is built.
+/// </summary>
+public interface IGenesysExportLock
+{
+    /// <summary>Waits up to <paramref name="wait"/> for the lock; disposing the handle releases it. Null when another export is still recording its audit entry.</summary>
+    Task<IAsyncDisposable?> TryAcquireAsync(TimeSpan wait, CancellationToken ct);
+}
+
 public enum GenesysUploadOutcome
 {
     /// <summary>Genesys accepted the batch; contact ids were returned.</summary>
