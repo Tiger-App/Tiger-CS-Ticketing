@@ -287,7 +287,28 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         : null;
 
     /// <summary>Why Export for Genesys is unavailable (null = available): the same data and permission rules as sending, without the sending-only settings.</summary>
-    public string? ExportGenesysBlockedReason => IsManual ? ManualBlockedReason(forExport: true) : "Export for Genesys is a Manual action.";
+    public string? ExportGenesysBlockedReason => IsManual ? ManualBlockedReason(forExport: true) : AutoExportBlockedReason();
+
+    /// <summary>
+    /// Why Export for Genesys is unavailable on the Auto page (null = available). The file holds the financially eligible customers of the filters whatever the schedule says, so it needs the
+    /// same approval data a Manual list needs (built today, reconciled, not stale) and the send permission; never the scheduled date, the live-dispatch switch or background jobs.
+    /// </summary>
+    private string? AutoExportBlockedReason()
+    {
+        if (Report is not { } report) return "Preview customers first.";
+        if (!report.CanExportReview) return "Your account does not have permission to export campaign lists (Collections send permission required).";
+        // The preview's own data rules, as for the review export: a stale or partly loaded snapshot and an unreconciled source block every file of this page.
+        if (report.Snapshot is { IsReady: false } snapshot) return ExportDataProblem(snapshot);
+        if (!report.FinancialSourceValidated) return "The financial source is not reconciled, so nothing can be exported.";
+        if (Run is not { } run) return "There is no approval data yet. Refresh the approval data, then export.";
+        if (!run.SourceReconciled) return "The financial source is not reconciled, so nothing can be exported.";
+        if (run.IsStale || run.Status != "Completed") return "The approval data is stale or still being prepared. Refresh the approval data, then export.";
+        if (run.AsOfDate != CollectionsDisplay.DubaiToday()) return $"The approval data was built for {run.AsOfDate:dd MMM yyyy}, not today. Refresh the approval data, then export.";
+        return null;
+    }
+
+    /// <summary>On the Auto page the export is blocked by the approval data alone (missing, stale, or built on another day): the refresh button is then offered beside it.</summary>
+    public bool AutoExportNeedsRefresh => !IsManual && Report is { CanExportReview: true } && (Run is null || Run.IsStale || Run.Status != "Completed" || Run.AsOfDate != CollectionsDisplay.DubaiToday());
 
     /// <summary>What a person can do about a Manual hold: the review workflow behind each exact reason.</summary>
     public static string ManualAdvice(string code) => code switch
@@ -298,6 +319,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "LegalNoticeReleaseRequired" => "Legal notices have not been released for customers. Nothing is sent until Legal releases them.",
         "LegalCaseNotApproved" => "An internal Legal referral is never sent to a customer.",
         "StaleSource" or "SourceReconciliationRequired" => "Refresh the approval data once the financial source is current and reconciled.",
+        "PaymentStatusUnknown" => "The financial source does not say whether this balance is unpaid or partially paid (the deployed PACT report cannot tell them apart). The customer stays listed but cannot be sent by either mode until the source confirms the status; this is a data rule, not the schedule.",
         "NoValidContact" or "CrmCustomerAmbiguous" or "CrmCompanyAmbiguous" or "ContactSourceConflict" or "CrmUnavailable" or "ConflictingContactDetails" =>
             "Review: fix the customer's contact in CRM or PACT, refresh the approval data and preview again.",
         _ => "Review: resolve the data problem at its source, refresh the approval data and preview again."
@@ -488,8 +510,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         {
             // A refresh that is already running shows its progress; one that finished moments ago is not repeated (in-process refreshes are rate limited), and the person is told so.
             // A newly started refresh is always Queued, so a Completed run in the answer is the reused one.
-            if (started.Value is { Status: "Completed" } done)
+            if (started.Value is { Status: "Completed", IsStale: false } done)
                 TempData["ApprovalNotice"] = $"The approval data was refreshed at {done.CompletedAtUtc:HH:mm} UTC and is current. A refresh is not repeated within a minute; try again later if the source data has changed.";
+            else if (started.Value is { Status: "Completed" } stale)
+                TempData["ApprovalNotice"] = $"The approval data from {stale.CompletedAtUtc:HH:mm} UTC was reused (a refresh is not repeated within a minute), but its source read is already stale. Try again in a minute.";
             return LocalRedirect(target);
         }
         SetFiltersFromForm();
@@ -532,14 +556,14 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// "Export for Genesys": the file the selected (or all eligible) customers would be uploaded as, in the format of the chosen contact list, for a manual import. Read only; recorded in the audit
     /// trail by the API. The file is served as UTF-8 with a byte-order mark, like the other CSV downloads of this page, so that names in Arabic open correctly in a spreadsheet.
     /// </summary>
-    public async Task<IActionResult> OnPostExportGenesysAsync(string? selectionMode, string? unitKeys, bool confirmRepeat = false, CancellationToken ct = default)
+    public async Task<IActionResult> OnPostExportGenesysAsync(string? selectionMode, string? unitKeys, bool confirmRepeat = false, int? expectedRepeats = null, CancellationToken ct = default)
     {
         SetFiltersFromForm();
         await EnsureTowersAsync(ct);
-        if (!IsManual) return await AutoModeRefusedAsync(ct);
-        SelectionMode = string.Equals(selectionMode, ReviewQueryService.ModeAllMatching, StringComparison.OrdinalIgnoreCase) ? ReviewQueryService.ModeAllMatching : ReviewQueryService.ModeSelectedUnits;
-        UnitKeys = unitKeys ?? "";
-        var result = await api.ExportForGenesysAsync(BuildSelection(), ct, confirmRepeat);
+        // Both modes export. Auto has no ticks, so its file holds every financially eligible customer of the filters; Manual exports the ticked customers, or all eligible. Neither sends anything.
+        SelectionMode = !IsManual || string.Equals(selectionMode, ReviewQueryService.ModeAllMatching, StringComparison.OrdinalIgnoreCase) ? ReviewQueryService.ModeAllMatching : ReviewQueryService.ModeSelectedUnits;
+        UnitKeys = IsManual ? unitKeys ?? "" : "";
+        var result = await api.ExportForGenesysAsync(BuildSelection(), ct, confirmRepeat, expectedRepeats);
         if (result.IsSuccess && result.Value is { } file)
         {
             // The file is a download, so what the person must know about it is also shown on the next page view: a file not checked against the Genesys list, and a confirmed repeat.
@@ -552,6 +576,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (result.Outcome == ApiOutcome.Conflict && result.ProblemType?.EndsWith("/RepeatExport", StringComparison.Ordinal) == true)
         {
             RepeatExportWarning = result.Detail;
+            RepeatExportCount = RepeatCountOf(result.Detail);
             return Page();
         }
         ApprovalError = Describe(result.Outcome, result.Detail);
@@ -574,6 +599,16 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
 
     /// <summary>Set when the Genesys export found customers who were exported before: the text names how many and when, and the page offers "Export again".</summary>
     public string? RepeatExportWarning { get; private set; }
+
+    /// <summary>How many repeated customers the warning shows: the "Export again" confirmation carries it, so a repeat that appears later is shown again first.</summary>
+    public int? RepeatExportCount { get; private set; }
+
+    /// <summary>The leading count of the export warning ("N of the M customers ..."), written by the API's RepeatExport message.</summary>
+    private static int? RepeatCountOf(string? warning)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(warning ?? "", @"^([\d,]+) of the ");
+        return match.Success && int.TryParse(match.Groups[1].Value.Replace(",", ""), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : null;
+    }
 
     /// <summary>A person sends only in Manual. Auto campaigns are dispatched by the scheduled Auto dispatcher (while AutoSendingEnabled is on), never from this page.</summary>
     private async Task<IActionResult> AutoModeRefusedAsync(CancellationToken ct)

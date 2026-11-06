@@ -42,12 +42,17 @@ public sealed class CollectionsReviewOptions
 
     /// <summary>
     /// A file export (Export for Genesys) does not mark anyone as sent. To keep the same customers from being exported over and over unnoticed, an export that contains customers exported within this many
-    /// days is held until the person confirms it (the page says who was exported when). The default of 90 days spans the month-to-month repeats a monthly reminder cycle produces. 0 turns the check off. 1-365.
+    /// days is held until the person confirms it (the page says who was exported when). The default is 30 days. A customer last exported further back than this is not warned about. 0 turns the check off. 1-365.
     /// </summary>
-    public int ExportRepeatLookbackDays { get; set; } = 90;
+    public int ExportRepeatLookbackDays { get; set; } = 30;
 
     /// <summary>Review records of runs older than the newest N completed runs are deleted.</summary>
     public int RunsToKeep { get; set; } = 2;
+
+    /// <summary>
+    /// The most customers one Manual list can hold. A list that needs more than one pass to read is refused, never cut short: a silently partial list would under-report and under-count.
+    /// </summary>
+    public int ManualListCapacity { get; set; } = 100_000;
 }
 
 /// <summary>

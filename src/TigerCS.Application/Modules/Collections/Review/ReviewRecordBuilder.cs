@@ -9,10 +9,15 @@ using TigerCS.Domain.Modules.Collections.Review;
 
 namespace TigerCS.Application.Modules.Collections.Review;
 
+/// <summary>
+/// What one build of review records knows about its run. <c>PolicyStart</c> is the first due date the stage policy looks at (the configured PACT start date), the same as the Campaigns
+/// preview's eligibility scope: instalments due before it never make a unit a candidate or change a stage amount, but they ARE kept in the unit's stored instalments, so a Manual amount, a
+/// Due / Overdue figure and the Minimum Total see the customer's whole history exactly as the preview does. A null <c>PolicyStart</c> puts every instalment read in the policy scope.
+/// </summary>
 public sealed record ReviewBuildContext(
     DateOnly AsOfDate, DateTime SourceReadAtUtc, string SourceLabel, string Currency, bool SourceReconciled,
     bool LegalNoticeReleased, bool LegalCaseApproved, decimal FloatTolerance,
-    IReadOnlyDictionary<string, string> StatusMap, CrmLinkSet? Crm = null);
+    IReadOnlyDictionary<string, string> StatusMap, CrmLinkSet? Crm = null, DateOnly? PolicyStart = null);
 
 public sealed record ReviewBuildResult(IReadOnlyList<CollectionsReviewRecord> Records, int FloatNormalizedRows, int SettledRows, int CancelledRows = 0);
 
@@ -65,16 +70,18 @@ public static class ReviewRecordBuilder
             var contactConflict = unitRows.Select(r => (r.Row.FullName.Trim(), Phone: PhoneNormalizer.Normalize(r.Row.Mobile).E164,
                 Email: NormalizeEmail(r.Row.Email), r.Row.ProjectCode)).Distinct().Count() > 1;
 
-            // The customer's unpaid instalments, stored on every stage record: a Manual send calculates its amount from them and the person's filters.
+            // The customer's unpaid instalments, ALL of them, stored on every stage record: a Manual send calculates its amount from them and the person's filters, like the preview's
+            // Due / Overdue / Total columns. The stage policy itself looks only from the configured start date on, exactly as the preview decides who is a candidate.
             var instalmentsJson = FilteredAmounts.Serialize(unitRows.Select(r => new FilterInstalment(r.Due, r.Amount)));
+            var policyRows = context.PolicyStart is { } policyStart ? unitRows.Where(r => r.Due >= policyStart).ToList() : unitRows;
             foreach (var stage in Enum.GetValues<CollectionsCampaignStage>())
             {
-                var instalments = unitRows.Select(r => new CampaignInstalment(r.Due, r.Amount)).ToList();
+                var instalments = policyRows.Select(r => new CampaignInstalment(r.Due, r.Amount)).ToList();
                 var amount = CollectionsCampaignPolicy.Evaluate(instalments, stage, context.AsOfDate);
                 if (amount.Reason is "NoQualifyingBalance" or "BelowThreshold") continue;
 
                 var qualifying = CollectionsCampaignPolicy.Qualifying(instalments, stage, context.AsOfDate);
-                var stageRows = unitRows.Where(r => qualifying.Any(q => q.DueDate == r.Due && q.RemainingAmount == r.Amount)).ToList();
+                var stageRows = policyRows.Where(r => qualifying.Any(q => q.DueDate == r.Due && q.RemainingAmount == r.Amount)).ToList();
                 var reasons = new List<string>();
 
                 if (amount.Reason == "AmbiguousInstalments")
@@ -84,7 +91,9 @@ public static class ReviewRecordBuilder
                     if (exact.Count > 0) reasons.Add(ReviewReasons.DuplicateSourceRecord);
                     if (sameDate.Count > exact.Count) reasons.Add(ReviewReasons.AmbiguousInstalments);
                 }
-                var unresolved = stageRows.Any(r => !r.Money.IsResolved);
+                // A balance that cannot be stated in fils anywhere in the unit's unpaid instalments holds every stage record of the unit: a Manual amount is calculated from all of them, so an
+                // unresolved instalment outside this stage would otherwise be summed in and rounded into a sendable amount.
+                var unresolved = unitRows.Any(r => !r.Money.IsResolved);
                 if (unresolved) reasons.Add(ReviewReasons.AmountPrecisionNeedsReview);
 
                 var statuses = stageRows.Select(r => PaymentStatusRules.Derive(r.Row.SourceStatus, r.Amount, r.Row.PlanAmount, context.StatusMap, r.Row.AllocatedAmount)).ToList();

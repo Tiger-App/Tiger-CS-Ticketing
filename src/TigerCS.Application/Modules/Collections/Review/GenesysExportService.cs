@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -29,7 +30,7 @@ namespace TigerCS.Application.Modules.Collections.Review;
 /// </list>
 /// </summary>
 public sealed class GenesysExportService(
-    CollectionsOptions options, GenesysOutboundOptions genesys, CollectionsAuthorizationService authorization, CollectionsClock clock,
+    CollectionsOptions options, PactReceivablesOptions sourceOptions, GenesysOutboundOptions genesys, CollectionsAuthorizationService authorization, CollectionsClock clock,
     ReviewQueryService query, IGenesysOutboundClient client, IAuditEntryWriter audit, ICollectionsUnitOfWork unitOfWork, CollectionsReviewOptions reviewOptions, IGenesysExportHistory history,
     IGenesysExportLock exportLock, ILogger<GenesysExportService> logger)
 {
@@ -51,20 +52,27 @@ public sealed class GenesysExportService(
     /// </summary>
     public static string Fingerprint(string customerUnitKey) => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes("genesys-export|" + customerUnitKey)))[..12];
 
+    /// <summary>The same one-way fingerprint for a phone number: the number that is dialled, whichever unit it was written against.</summary>
+    public static string PhoneFingerprint(string phone) => Fingerprint("phone|" + phone);
+
     /// <param name="caller">Who exports; needs the send right.</param>
     /// <param name="request">The Manual selection: campaign, filters, contact list and the ticked customers (or all eligible).</param>
     /// <param name="ct">Cancellation.</param>
     /// <param name="confirmRepeat">The person has seen that some customers were already exported and wants the file anyway.</param>
-    public async Task<CollectionsResult<GenesysExportDto>> ExportAsync(CollectionsCaller caller, SelectionRequest request, CancellationToken ct, bool confirmRepeat = false)
+    /// <param name="expectedRepeats">How many repeated customers the person was shown with that confirmation. If the count is different now (a repeat appeared after the warning), the file is not made.</param>
+    public async Task<CollectionsResult<GenesysExportDto>> ExportAsync(CollectionsCaller caller, SelectionRequest request, CancellationToken ct, bool confirmRepeat = false, int? expectedRepeats = null)
     {
         // Authorization first: no data is read for an unauthorized caller. The file is the same customer list a send would use, so it needs the same right.
         if (!(await authorization.ResolveAsync(caller, ct)).CanSendReminders)
             return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.Forbidden);
-        if (!options.Enabled) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.Disabled);
-        if (!CollectionsSendingModes.IsManual(request.Filter?.SendingMode))
-            return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, "Export for Genesys is a Manual action: choose Manual and a campaign type.");
-
-        var resolved = await query.ResolveAsync(request, ct);
+        // The financial source must be on too, as for the Auto export: stored data is not released while its switch is off.
+        if (!options.Enabled || !sourceOptions.Enabled) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.Disabled);
+        // Both modes export the same customers. The schedule is never a condition of an export, so the population is the Manual one (financially eligible customers, including those outside
+        // today's schedule) whichever mode the export was started from; the mode is kept for the audit trail only. Nothing is sent by either.
+        if (!CollectionsSendingModes.TryParse(request.Filter?.SendingMode, out var mode))
+            return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, "Export for Genesys is for the Manual or the Auto list.");
+        var population = request with { Filter = (request.Filter ?? new ReviewFilter()) with { SendingMode = CollectionsSendingModes.Manual } };
+        var resolved = await query.ResolveAsync(population, ct);
         if (resolved.Error is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, resolved.Error);
         if (resolved.Records.Count == 0) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, "No Ready customers are selected.");
         if (query.IsStale(resolved.Run!)) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.ReviewRequired, "The review data is stale. Refresh it and review again.");
@@ -103,8 +111,10 @@ public sealed class GenesysExportService(
                 $"The file did not pass the Genesys template check ({check.Issues.Count} issue(s), for example {check.Issues.FirstOrDefault()?.Message ?? "unknown"}). Nothing was exported.");
         }
 
-        // The customer's unit, not the record: a record is one campaign type and month, and the same customer under another campaign is still the same customer.
-        var fingerprints = resolved.Records.Select(r => Fingerprint(ReviewQueryService.UnitKey(r.CompanyId, r.TenantId, r.UnitCode))).Distinct().ToList();
+        // A customer is recognised by its unit AND by its number: the same customer on another unit, or the same unit under another number, is still the person being called again.
+        var customers = resolved.Records.Select(r => new ExportedCustomer(
+            Fingerprint(ReviewQueryService.UnitKey(r.CompanyId, r.TenantId, r.UnitCode)), r.Phone.Length > 0 ? PhoneFingerprint(r.Phone) : null)).ToList();
+        var fingerprints = customers.SelectMany(c => c.Phone is { } phone ? new[] { c.Unit, phone } : new[] { c.Unit }).Distinct().ToList();
         var total = resolved.Records.Sum(r => r.RemainingAmount ?? 0m);
         var currency = resolved.Records[0].Currency;
         var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(csv)));
@@ -119,18 +129,23 @@ public sealed class GenesysExportService(
         try
         {
             // Earlier exports of the same customers: warned about, and held until the person confirms. Failing to read the history stops the export (it is the only record of earlier files).
-            repeat = await FindRepeatAsync(fingerprints, ct);
+            repeat = await FindRepeatAsync(customers, ct);
             if (repeat.Problem is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, repeat.Problem);
             if (repeat.Customers > 0 && !confirmRepeat)
                 return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.RepeatExport,
-                    $"{repeat.Customers:N0} of the {fingerprints.Count:N0} customers in this file were already exported (latest: {repeat.LastUtc:dd MMM yyyy HH:mm} UTC, {repeat.Exports} earlier export(s)). " +
+                    $"{repeat.Customers:N0} of the {customers.Count:N0} customers in this file were already exported (latest: {repeat.LastUtc:dd MMM yyyy HH:mm} UTC, {repeat.Exports} earlier export(s)). " +
                     "An export does not mark anyone as sent, so nothing stops a second file. Confirm to export them again.");
+            // The confirmation was given for the repeats the person was shown. If the number has changed since (another export, another person), they are warned again first.
+            if (repeat.Customers > 0 && expectedRepeats is { } shown && shown != repeat.Customers)
+                return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.RepeatExport,
+                    $"The number of customers already exported has changed, from {shown:N0} to {repeat.Customers:N0}, since the warning. Review the list and confirm again.");
 
             // Audit first, then release: an export of customer contact data is never handed out without its record. The record holds counts, the filter and a hash, no customer data.
             try
             {
+                // The customer search text is a name or number typed by a person: the audit keeps only whether one was given.
                 await audit.WriteAsync(caller.EmployeeId, AuditAction, AuditEntityType, hash[..16], null,
-                    $"Campaign={type};ContactList={destination} ({listId});Rows={payloads.Count};Total={currency} {total:0.00};SchemaVerified={schema.Verified}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")};Mode=Manual;Filter={JsonSerializer.Serialize(request.Filter)};Selection={request.Mode};Repeated={repeat.Customers}{(repeat.Customers > 0 ? ";RepeatConfirmed=true" : "")};Sha256={hash};Customers={string.Join(',', fingerprints)}",
+                    $"Campaign={type};ContactList={destination} ({listId});Rows={payloads.Count};Total={currency} {total.ToString("0.00", CultureInfo.InvariantCulture)};SchemaVerified={schema.Verified}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")};Mode={mode};Population=Financial;Filter={JsonSerializer.Serialize(request.Filter is { } f ? f with { Customer = null } : null)};CustomerSearch={!string.IsNullOrWhiteSpace(request.Filter?.Customer)};Selection={request.Mode};Repeated={repeat.Customers}{(repeat.Customers > 0 ? ";RepeatConfirmed=true" : "")};Sha256={hash};Customers={string.Join(',', fingerprints)}",
                     Guid.NewGuid(), ct);
                 await unitOfWork.SaveChangesAsync(ct);
             }
@@ -148,6 +163,8 @@ public sealed class GenesysExportService(
 
         var notices = new List<string>();
         if (!schema.Verified) notices.Add(schema.Notice!);
+        if (resolved.Skipped > 0)
+            notices.Add($"{resolved.Skipped:N0} selected customer(s) were left out because they are no longer Ready (paid, already sent or changed). The file holds the rest.");
         if (repeat.Customers > 0) notices.Add($"{repeat.Customers:N0} customer(s) in this file were exported before (latest {repeat.LastUtc:dd MMM yyyy HH:mm} UTC). You confirmed the repeat; it is recorded in the audit trail.");
         // The label travels in the file name (the CSV itself must stay the six-column template for the import), so a file that was not checked against the list is never mistaken for a verified one.
         var fileName = $"genesys-{type}-to-{destination}-{now:yyyyMMdd-HHmm}{(schema.Verified ? "" : $" ({NotVerifiedLabel})")}.csv";
@@ -158,8 +175,11 @@ public sealed class GenesysExportService(
 
     private sealed record Repeat(int Customers, int Exports, DateTime LastUtc, string? Problem);
 
+    /// <summary>One record of the selection as the repeat check sees it: the fingerprint of its unit and of its number (when it has one).</summary>
+    private sealed record ExportedCustomer(string Unit, string? Phone);
+
     /// <summary>How many of these customers appear in an earlier export within the look-back, how many earlier exports that is, and the latest of them.</summary>
-    private async Task<Repeat> FindRepeatAsync(IReadOnlyCollection<string> fingerprints, CancellationToken ct)
+    private async Task<Repeat> FindRepeatAsync(IReadOnlyList<ExportedCustomer> customers, CancellationToken ct)
     {
         var days = reviewOptions.ExportRepeatLookbackDays;
         if (days <= 0) return new(0, 0, default, null);
@@ -172,17 +192,35 @@ public sealed class GenesysExportService(
         }
         if (earlier.Count >= MaxHistoryEntries)
             return new(0, 0, default, $"{MaxHistoryEntries:N0} or more exports were made in the last {days} days, so the repeat check cannot cover them all and no file was made. Ask an administrator to review the export history.");
-        var wanted = fingerprints.ToHashSet(StringComparer.Ordinal);
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // Each fingerprint maps back to the customers (units) it identifies: a number on two units is one person, and a unit under two numbers is one unit.
+        var byFingerprint = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        foreach (var c in customers)
+        {
+            AddTo(byFingerprint, c.Unit, c.Unit);
+            if (c.Phone is { } phone) AddTo(byFingerprint, phone, c.Unit);
+        }
+        var repeated = new HashSet<string>(StringComparer.Ordinal);
         int exports = 0; var last = default(DateTime);
         foreach (var entry in earlier)
         {
-            var matches = PreviousFingerprints(entry.Details).Where(wanted.Contains).ToList();
-            if (matches.Count == 0) continue;
-            exports++; seen.UnionWith(matches);
+            var hit = false;
+            foreach (var fingerprint in PreviousFingerprints(entry.Details))
+            {
+                if (!byFingerprint.TryGetValue(fingerprint, out var units)) continue;
+                hit = true;
+                repeated.UnionWith(units);
+            }
+            if (!hit) continue;
+            exports++;
             if (entry.OccurredAtUtc > last) last = entry.OccurredAtUtc;
         }
-        return new(seen.Count, exports, last, null);
+        return new(repeated.Count, exports, last, null);
+    }
+
+    private static void AddTo(Dictionary<string, List<string>> map, string fingerprint, string unit)
+    {
+        if (!map.TryGetValue(fingerprint, out var units)) map[fingerprint] = units = [];
+        units.Add(unit);
     }
 
     private static IEnumerable<string> PreviousFingerprints(string? details)

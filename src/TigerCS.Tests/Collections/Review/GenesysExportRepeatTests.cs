@@ -59,8 +59,8 @@ public sealed class GenesysExportRepeatTests
         Assert.Equal(2, audit.Count);
         Assert.All(audit, a => { Assert.Equal(h.Manager.EmployeeId, a.ActorEmployeeId); Assert.Contains("Repeated=0", a.AfterValue); Assert.Contains(";Customers=", a.AfterValue); });
         foreach (var personal in new[] { "Customer 1", "Customer 2", "+97150", "example.test", "T0001", "TP140-1" }) Assert.All(audit, a => Assert.DoesNotContain(personal, a.AfterValue));
-        Assert.Single(audit[0].AfterValue!.Split(";Customers=")[1].Split(','));                // one fingerprint per customer
-        Assert.Equal(2, audit[1].AfterValue!.Split(";Customers=")[1].Split(',').Length);
+        Assert.Equal(2, audit[0].AfterValue!.Split(";Customers=")[1].Split(',').Length);        // two fingerprints per customer: the unit and the number
+        Assert.Equal(4, audit[1].AfterValue!.Split(";Customers=")[1].Split(',').Length);
     }
 
     [Fact]
@@ -137,7 +137,7 @@ public sealed class GenesysExportRepeatTests
         using var h = await SeededAsync();
         using var context = h.CreateContext();
         using var scope = h.NewScope();
-        var broken = new GenesysExportService(h.Options, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time),
+        var broken = new GenesysExportService(h.Options, h.Sql, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time),
             scope.Query, h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review,
             new ThrowingHistory(), new ReviewHarness.FreeExportLock(), NullLogger<GenesysExportService>.Instance);
         var result = await broken.ExportAsync(h.Manager, All(), CancellationToken.None);
@@ -161,7 +161,7 @@ public sealed class GenesysExportRepeatTests
     {
         using var context = h.CreateContext();
         using var scope = h.NewScope();
-        var service = new GenesysExportService(h.Options, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time),
+        var service = new GenesysExportService(h.Options, h.Sql, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time),
             scope.Query, h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review,
             history, new ReviewHarness.FreeExportLock(), NullLogger<GenesysExportService>.Instance);
         return await service.ExportAsync(h.Manager, All(), CancellationToken.None);
@@ -211,14 +211,14 @@ public sealed class GenesysExportRepeatTests
     }
 
     [Fact]
-    public async Task TheLookBackIsNinetyDays_SoAnExportFromTwoMonthsAgoIsStillARepeat_AndAnOlderOneIsNot()
+    public async Task TheLookBackIsThirtyDays_AnExportWithinItIsARepeat_AndAnOlderOneIsNot()
     {
-        // A monthly reminder cycle contacts the same customers again the next month: the look-back must span that, not stop at 30 days.
+        // The existing 30-day window: a repeat within it is held for confirmation; beyond it, the customer is not warned about.
         using var h = await SeededAsync();
         Assert.True((await ExportAsync(h, All())).IsSuccess);
-        await AgeExportsAsync(h, days: 60);
+        await AgeExportsAsync(h, days: 20);
         Assert.Equal(CollectionsOutcome.RepeatExport, (await ExportAsync(h, All())).Outcome);
-        await AgeExportsAsync(h, days: 100);
+        await AgeExportsAsync(h, days: 40);
         Assert.True((await ExportAsync(h, All())).IsSuccess);
     }
 
@@ -256,7 +256,7 @@ public sealed class GenesysExportRepeatTests
     }
 
     private static GenesysExportService Service(ReviewHarness h, ReviewQueryService query, TigerCsDbContext context, IGenesysExportLock gate, IAuditEntryWriter? audit = null) =>
-        new(h.Options, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time), query, h.Client,
+        new(h.Options, h.Sql, h.Genesys, new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository()), new CollectionsClock(h.Options, h.Time), query, h.Client,
             audit ?? new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review,
             new ReviewStore(context, h.RetryPolicy), gate, NullLogger<GenesysExportService>.Instance);
 

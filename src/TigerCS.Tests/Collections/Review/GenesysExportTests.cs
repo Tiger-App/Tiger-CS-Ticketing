@@ -194,8 +194,11 @@ public sealed class GenesysExportTests
         using var h = await SeededAsync();
         Assert.Equal(CollectionsOutcome.Forbidden, (await ExportAsync(h, All(Manual()), h.Agent)).Outcome);
         Assert.Equal(CollectionsOutcome.Forbidden, (await ExportAsync(h, All(Manual()), h.Reporting)).Outcome);
-        var auto = await ExportAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto")));
-        Assert.Equal(CollectionsOutcome.InvalidRequest, auto.Outcome); Assert.Contains("Manual action", auto.Detail);
+        // Started from the Auto page, the export holds the same financially eligible customers as from Manual: the schedule is never a condition of a file, and nothing is sent.
+        var auto = (await ExportAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto", MinRemaining: 0m)))).Value!;
+        var manual = (await ExportAsync(h, All(Manual()))).Value!;
+        Assert.Equal(manual.Csv, auto.Csv); Assert.Equal(manual.TotalAmount, auto.TotalAmount);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, (await ExportAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Nonsense")))).Outcome);
         Assert.Equal(CollectionsOutcome.InvalidRequest, (await ExportAsync(h, All(new ReviewFilter(SendingMode: "Manual")))).Outcome);          // no campaign type
         h.Time.Advance(TimeSpan.FromDays(1));                                                         // the data was built yesterday
         var stale = await ExportAsync(h, All(Manual()));
@@ -339,7 +342,7 @@ public sealed class GenesysExportTests
         var auth = new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository());
         var clock = new CollectionsClock(h.Options, h.Time);
         using var scope = h.NewScope();
-        var broken = new GenesysExportService(h.Options, h.Genesys, auth, clock, scope.Query, h.Client, new ThrowingAudit(), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, scope.Store as IGenesysExportHistory ?? throw new InvalidOperationException(), new ReviewHarness.FreeExportLock(), NullLogger<GenesysExportService>.Instance);
+        var broken = new GenesysExportService(h.Options, h.Sql, h.Genesys, auth, clock, scope.Query, h.Client, new ThrowingAudit(), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, scope.Store as IGenesysExportHistory ?? throw new InvalidOperationException(), new ReviewHarness.FreeExportLock(), NullLogger<GenesysExportService>.Instance);
         var result = await broken.ExportAsync(h.Manager, All(Manual()), CancellationToken.None);
         Assert.Equal(CollectionsOutcome.FinanceUnavailable, result.Outcome); Assert.Null(result.Value); Assert.Contains("no file was released", result.Detail);
     }

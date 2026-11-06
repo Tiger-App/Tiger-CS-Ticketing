@@ -24,7 +24,7 @@ public sealed class ManualListCoverageTests
     public async Task AFromDateBeforeTheApprovalDataStarts_IsRefused_InThePreviewTheExportAndTheReviewFile()
     {
         using var h = await SeededAsync(2);
-        var earlier = Manual(new DateOnly(2025, 6, 1));
+        var earlier = Manual(new DateOnly(1999, 6, 1));                                                    // the approval data reads the whole history from 2000 on, like the preview
         using var scope = h.NewScope();
         var page = await scope.Query.QueryAsync(h.Manager, earlier, 1, 50, CancellationToken.None);
         Assert.Equal(CollectionsOutcome.InvalidRequest, page.Outcome); Assert.Contains("holds instalments due from", page.Detail);
@@ -39,9 +39,13 @@ public sealed class ManualListCoverageTests
     {
         using var h = await SeededAsync(2);
         using var scope = h.NewScope();
-        var fromStart = Manual(new DateOnly(2026, 1, 1));
-        Assert.True((await scope.Query.QueryAsync(h.Manager, fromStart, 1, 50, CancellationToken.None)).IsSuccess);
-        Assert.True((await scope.Export.ExportAsync(h.Manager, new SelectionRequest(fromStart, ReviewQueryService.ModeAllMatching), CancellationToken.None)).IsSuccess);
+        foreach (var from in new[] { new DateOnly(2000, 1, 1), new DateOnly(2025, 6, 1), new DateOnly(2026, 1, 1) })                   // any date inside the stored history
+        {
+            var filter = Manual(from);
+            Assert.True((await scope.Query.QueryAsync(h.Manager, filter, 1, 50, CancellationToken.None)).IsSuccess);
+            // The same customers are exported three times here, so the repeats are confirmed (the repeat check itself is tested in GenesysExportRepeatTests).
+            Assert.True((await scope.Export.ExportAsync(h.Manager, new SelectionRequest(filter, ReviewQueryService.ModeAllMatching), CancellationToken.None, confirmRepeat: true)).IsSuccess);
+        }
     }
 
     [Fact]

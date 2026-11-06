@@ -17,7 +17,7 @@ namespace TigerCS.Application.Modules.Collections.Review;
 /// nothing and changes nothing; like the Auto review export it needs the send right, and each export is written to the audit trail (counts, filter and file hash, never a customer's data).
 /// </summary>
 public sealed class ManualReviewExportService(
-    CollectionsOptions options, CollectionsAuthorizationService authorization, CollectionsClock clock, ReviewQueryService query,
+    CollectionsOptions options, PactReceivablesOptions sourceOptions, CollectionsAuthorizationService authorization, CollectionsClock clock, ReviewQueryService query,
     IAuditEntryWriter audit, ICollectionsUnitOfWork unitOfWork, ILogger<ManualReviewExportService> logger)
 {
     public const string AuditAction = "CollectionsReviewFileExported", AuditEntityType = "CollectionsReviewExport";
@@ -34,7 +34,7 @@ public sealed class ManualReviewExportService(
     {
         if (!(await authorization.ResolveAsync(caller, ct)).CanSendReminders)
             return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.Forbidden);
-        if (!options.Enabled) return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.Disabled);
+        if (!options.Enabled || !sourceOptions.Enabled) return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.Disabled);
         if (!CollectionsSendingModes.IsManual(filter?.SendingMode))
             return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.InvalidRequest, "This review export is for Manual. Auto has its own review export.");
 
