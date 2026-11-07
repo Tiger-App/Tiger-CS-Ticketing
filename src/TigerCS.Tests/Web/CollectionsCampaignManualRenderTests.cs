@@ -79,7 +79,7 @@ public sealed class CollectionsCampaignManualRenderTests
                 if (ExportRepeated > 0) notices.Add($"{ExportRepeated} of the 1 customer unit(s) in this file were exported before within the last 30 days (latest 05 Nov 2026 09:30 UTC, 1 earlier export(s)).");
                 return Json(new GenesysExportDto(fileName, "\"Phone\",\"CustomerName\",\"Email Address\",\"ReminderType\",\"AmountDue\",\"DueDate\"\r\n\"+971500000001\",\"Manual Customer 1\",\"m1@example.test\",\"Current Month\",\"500.00\",\"2026-09-20\"\r\n",
                     1, "Current month reminder - day 14", "Follow Up", FollowUpList, 500m, "AED", ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], SchemaVerified,
-                    notices, "ABC", ExportRepeated, ExportRepeated > 0 ? new DateTime(2026, 11, 5, 9, 30, 0, DateTimeKind.Utc) : null, 1, 0, 0,
+                    notices, "ABC", ExportRepeated, ExportRepeated > 0 ? new DateTime(2026, 11, 5, 9, 30, 0, DateTimeKind.Utc) : null, 1,
                     ExportExcluded > 0 ? [new GenesysExportExclusionDto("NoCallablePhone", ExportExcluded, "No valid international (E.164) phone number.")] : [],
                     new Dictionary<string, int> { ["Ready"] = 1 }, ExportDataVerified, ExportDataVerified ? [] : ["SourceReconciliationRequired"]));
             }
@@ -536,9 +536,8 @@ public sealed class CollectionsCampaignManualRenderTests
         var file = new GenesysExportDto("genesys-CurrentMonth-to-CurrentMonth-20261106-0930.csv", "", 37, "Current month reminder - day 14", "Current Month", CurrentMonthList, 123456.5m, "AED",
             ["Phone"], true, [], "ABC", UnitCount: 37, DataVerified: true);
         Assert.Equal("Exported 37 row(s) for the Current Month list to genesys-CurrentMonth-to-CurrentMonth-20261106-0930.csv (AED 123,456.50).", TigerCsWeb::TigerCS.Web.Pages.Collections.CampaignsModel.ExportNotice(file));
-        var combined = file with { RowCount = 36, UnitCount = 37, CombinedRows = 1, CombinedUnits = 2, Notices = ["2 unit(s) of the same customer on one number were combined into 1 row(s), with the amounts added up and the earliest due date."] };
-        Assert.StartsWith("Exported 36 row(s) (37 customer units) for the Current Month list", TigerCsWeb::TigerCS.Web.Pages.Collections.CampaignsModel.ExportNotice(combined));
-        Assert.EndsWith("combined into 1 row(s), with the amounts added up and the earliest due date.", TigerCsWeb::TigerCS.Web.Pages.Collections.CampaignsModel.ExportNotice(combined));
+        var leftOut = file with { RowCount = 36, UnitCount = 36, Exclusions = [new("NoCallablePhone", 1, "No valid phone.")], ExcludedRecords = [new(4, "T0009", "TP140-9", "Customer 9", "CurrentMonth", "NoCallablePhone")] };
+        Assert.Contains("Left out: 1 unit(s) (TP140-9: NoCallablePhone).", TigerCsWeb::TigerCS.Web.Pages.Collections.CampaignsModel.ExportNotice(leftOut));
     }
 
     [Fact]

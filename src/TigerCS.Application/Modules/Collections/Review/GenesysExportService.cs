@@ -17,8 +17,8 @@ namespace TigerCS.Application.Modules.Collections.Review;
 /// <item><b>Who is in it.</b> Every customer unit of the chosen campaign type that matches Tower, Payment status, From / To and Minimum Total (<see cref="ReviewQueryService.ResolveForExportAsync"/>),
 /// in both modes, on any day, whatever its validation status: Ready, Needs review, held back (reconciliation, PaymentStatusUnknown, legal, shared phone) and already sent alike. The amounts are the
 /// ones Preview shows: the one Manual calculation over each unit's stored instalments. Only the person's ticks narrow it (Manual); nothing has to be selected.</item>
-/// <item><b>Rows.</b> <see cref="GenesysExportRows"/>: one row per phone number; several units of the same customer on one number are added up (earliest due date kept); units without a calculable
-/// amount, without a callable number, with an ambiguous allocation between units, or sharing a number with a different customer are left out and COUNTED, never silently dropped and never guessed.
+/// <item><b>Rows.</b> <see cref="GenesysExportRows"/>: one row per customer unit, exactly the records Preview lists; a phone number is never a key (nothing is merged, added up, de-duplicated or left
+/// out because of it). A unit without a calculable amount or a callable number is left out and NAMED with its reason, never silently dropped and never guessed.
 /// Each row is built by <see cref="DispatchService.ToPayload"/>, the code that builds a real upload, and written with <see cref="GenesysContactTemplate.WriteCsv(IEnumerable{GenesysContactPayload}, IReadOnlyList{string})"/>:
 /// the six columns Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate, in that order and format. Nothing else about a customer is in the file.</item>
 /// <item><b>Columns.</b> When the Genesys integration can read the chosen list, its real columns are used and a list that lacks or misnames a template column refuses the export (an incompatibility
@@ -97,7 +97,7 @@ public sealed class GenesysExportService(
         var rows = GenesysExportRows.Build(resolved.Candidates);
         if (rows.Rows.Count == 0)
             return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest,
-                $"None of the {resolved.Candidates.Count:N0} matching customer(s) could be exported: {Summary(rows.Exclusions)}. Nothing was exported.");
+                $"None of the {resolved.Candidates.Count:N0} matching customer(s) could be exported: {Summary(rows.Exclusions)}. Records: {Named(rows.ExcludedRecords)}. Nothing was exported.");
 
         // The rows are built by the upload's own code, so every value is exactly what an upload would send.
         var payloads = rows.Rows.Select(r => DispatchService.ToPayload(Item(r), listId, genesys)).ToList();
@@ -151,8 +151,8 @@ public sealed class GenesysExportService(
         var notices = new List<string>();
         if (!schema.Verified) notices.Add(schema.Notice!);
         notices.AddRange(data.Notices);
-        if (rows.Exclusions.Count > 0) notices.Add($"{rows.ExcludedUnits:N0} of the {resolved.Candidates.Count:N0} matching customer unit(s) are not in the file: {Summary(rows.Exclusions)}.");
-        if (rows.CombinedRows > 0) notices.Add($"{rows.CombinedUnits:N0} unit(s) of the same customer on one number were combined into {rows.CombinedRows:N0} row(s), with the amounts added up and the earliest due date.");
+        if (rows.Exclusions.Count > 0)
+            notices.Add($"{rows.ExcludedUnits:N0} of the {resolved.Candidates.Count:N0} matching customer unit(s) are not in the file: {Summary(rows.Exclusions)}. Records: {Named(rows.ExcludedRecords)}.");
         if (resolved.Skipped > 0) notices.Add($"{resolved.Skipped:N0} ticked customer(s) no longer match these filters (paid or changed) and are not in the file.");
         if (repeat.Notice is not null) notices.Add(repeat.Notice);
         // The labels travel in the file name (the CSV itself must stay the six-column template for the import), so an unverified file is never mistaken for a verified one.
@@ -160,8 +160,9 @@ public sealed class GenesysExportService(
         var fileName = $"genesys-{type}-to-{destination}-{now:yyyyMMdd-HHmm}{labels}.csv";
         return CollectionsResult<GenesysExportDto>.Ok(new(fileName, csv, payloads.Count, CampaignReminderTypes.StageName(type), listLabel, listId, total, currency,
             GenesysContactTemplate.Columns.Concat(schema.Columns.Where(c => !GenesysContactTemplate.Columns.Contains(c, StringComparer.Ordinal))).ToList(), schema.Verified, notices, hash,
-            repeat.Customers, repeat.Customers > 0 ? repeat.LastUtc : null, units.Count, rows.CombinedRows, rows.CombinedUnits,
-            rows.Exclusions.Select(e => new GenesysExportExclusionDto(e.Code, e.Units, e.Explanation)).ToList(), byStatus, data.Verified, data.Reasons, resolved.Skipped));
+            repeat.Customers, repeat.Customers > 0 ? repeat.LastUtc : null, units.Count,
+            rows.Exclusions.Select(e => new GenesysExportExclusionDto(e.Code, e.Units, e.Explanation)).ToList(), byStatus, data.Verified, data.Reasons, resolved.Skipped,
+            rows.ExcludedRecords.Select(e => new GenesysExportExcludedRecordDto(e.CompanyId, e.TenantId, e.UnitCode, e.CustomerName, e.ReminderType, e.Code)).ToList()));
     }
 
     /// <summary>The dispatch item a row would be uploaded as: the same fields a real send fills, so <see cref="DispatchService.ToPayload"/> formats the row exactly as an upload.</summary>
@@ -173,6 +174,13 @@ public sealed class GenesysExportService(
 
     private static string Summary(IReadOnlyList<GenesysExportExclusion> exclusions) =>
         string.Join("; ", exclusions.Select(e => $"{e.Units:N0} {e.Code} ({e.Explanation.TrimEnd('.')})"));
+
+    /// <summary>The excluded units by unit code and reason (the first twenty, then a count), so the person knows exactly which records to fix.</summary>
+    private static string Named(IReadOnlyList<GenesysExportExcludedRecord> records)
+    {
+        var shown = records.Take(20).Select(r => $"{r.UnitCode} ({r.Code})");
+        return string.Join(", ", shown) + (records.Count > 20 ? $" and {records.Count - 20:N0} more" : "");
+    }
 
     // ---------------------------------------------------------------- verification of the data behind the amounts
 
@@ -252,7 +260,6 @@ public sealed class GenesysExportService(
         var text = new StringBuilder();
         text.Append("Campaign=").Append(type).Append(";ContactList=").Append(destination).Append(" (").Append(listId).Append(')');
         text.Append(";Rows=").Append(rows.Rows.Count.ToString(CultureInfo.InvariantCulture)).Append(";Units=").Append(rows.Rows.Sum(r => r.Units.Count).ToString(CultureInfo.InvariantCulture));
-        text.Append(";CombinedRows=").Append(rows.CombinedRows.ToString(CultureInfo.InvariantCulture)).Append(";CombinedUnits=").Append(rows.CombinedUnits.ToString(CultureInfo.InvariantCulture));
         text.Append(";Excluded=").Append(rows.ExcludedUnits.ToString(CultureInfo.InvariantCulture));
         text.Append(";Exclusions=").Append(string.Join(',', rows.Exclusions.Select(e => $"{e.Code}:{e.Units.ToString(CultureInfo.InvariantCulture)}")));
         text.Append(";Total=").Append(currency).Append(' ').Append(total.ToString("0.00", CultureInfo.InvariantCulture));
