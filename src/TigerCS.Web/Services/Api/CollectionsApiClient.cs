@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Web;
 using Microsoft.Extensions.Logging;
 using TigerCS.Application.Modules.Collections.Dto;
+using TigerCS.Application.Modules.Collections.History;
 using TigerCS.Application.Modules.Collections.Reconciliation;
 using TigerCS.Application.Modules.Collections.Review;
 
@@ -71,6 +72,44 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
 
     public Task<ApiResult<ReconciliationRunDto>> StartReconciliationAsync(int? companyId, CancellationToken cancellationToken) =>
         PostAsync<object, ReconciliationRunDto>("api/collections/reconciliation/run", new { companyId }, cancellationToken);
+
+    // ---- Genesys Campaign History (read only: stored submissions, their records and the audit trail of downloaded files; nothing here uploads or resends)
+
+    private const string HistoryBase = "api/collections/genesys-history";
+
+    public Task<ApiResult<GenesysHistoryPageDto>> GetGenesysHistoryAsync(GenesysHistoryFilter filter, int page, CancellationToken cancellationToken)
+    {
+        var query = HttpUtility.ParseQueryString(string.Empty);
+        void Add(string name, string? value) { if (!string.IsNullOrWhiteSpace(value)) query[name] = value; }
+        Add("from", filter.From?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)); Add("to", filter.To?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
+        Add("stage", filter.Stage); Add("status", filter.Status); Add("mode", filter.Mode); Add("employeeId", filter.EmployeeId?.ToString("D")); Add("list", filter.List); Add("search", filter.Search);
+        query["page"] = Id(page);
+        query["pageSize"] = "25";
+        return GetAsync<GenesysHistoryPageDto>($"{HistoryBase}/submissions?{query}", cancellationToken);
+    }
+
+    public Task<ApiResult<GenesysSubmissionDetailDto>> GetGenesysSubmissionAsync(Guid submissionId, CancellationToken cancellationToken) =>
+        GetAsync<GenesysSubmissionDetailDto>($"{HistoryBase}/submissions/{submissionId:D}", cancellationToken);
+
+    public Task<ApiResult<GenesysRecordsPageDto>> GetGenesysSubmissionRecordsAsync(Guid submissionId, string? result, string? search, int page, CancellationToken cancellationToken)
+    {
+        var query = HttpUtility.ParseQueryString(string.Empty);
+        if (!string.IsNullOrWhiteSpace(result)) query["result"] = result;
+        if (!string.IsNullOrWhiteSpace(search)) query["search"] = search;
+        query["page"] = Id(page);
+        query["pageSize"] = "50";
+        return GetAsync<GenesysRecordsPageDto>($"{HistoryBase}/submissions/{submissionId:D}/records?{query}", cancellationToken);
+    }
+
+    public Task<ApiResult<GenesysExportHistoryPageDto>> GetGenesysExportHistoryAsync(DateOnly? from, DateOnly? to, int page, CancellationToken cancellationToken)
+    {
+        var query = HttpUtility.ParseQueryString(string.Empty);
+        if (from is { } f) query["from"] = f.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (to is { } t) query["to"] = t.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        query["page"] = Id(page);
+        query["pageSize"] = "25";
+        return GetAsync<GenesysExportHistoryPageDto>($"{HistoryBase}/exports?{query}", cancellationToken);
+    }
 
     // ---- review and approval (stored review data; the page never reads the financial source)
 

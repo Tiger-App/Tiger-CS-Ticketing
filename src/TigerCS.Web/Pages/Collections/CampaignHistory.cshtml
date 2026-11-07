@@ -1,0 +1,181 @@
+@page "/Collections/CampaignHistory"
+@model TigerCS.Web.Pages.Collections.CampaignHistoryModel
+@using TigerCS.Application.Modules.Collections.History
+@using TigerCS.Web.Pages.Collections
+@using TigerCS.Web.Services.Api
+@{
+    ViewData["Title"] = "Genesys Campaign History";
+    ViewData["ActiveNav"] = "collections";
+    Layout = "_Layout";
+    var exportsTab = Model.ShowExports;
+}
+<link rel="stylesheet" href="~/css/collections-snapshot.css" asp-append-version="true" />
+<link rel="stylesheet" href="~/css/collections-history.css" asp-append-version="true" />
+<div class="page receivables-workspace history-page">
+    <div class="page-header">
+        <div>
+            <p class="receivables-eyebrow">Collections</p>
+            <h1 class="page-title">Genesys Campaign History</h1>
+            <p class="receivables-meta">Every campaign submission from TigerCS to Genesys. Read only: nothing on this page changes data or sends anything to Genesys. Times are Dubai time.</p>
+        </div>
+        <div class="page-header__actions"><a class="btn" href="/Collections/Campaigns">Campaigns</a><a class="btn" href="/Collections/Receivables">Receivables</a></div>
+    </div>
+
+    <nav class="history-tabs" aria-label="History views">
+        <a class="history-tab @(exportsTab ? "" : "is-active")" href="@Model.PageUrl(1, CampaignHistoryModel.SubmissionsTab)" aria-current="@(exportsTab ? null : "page")" data-history-tab="submissions">Submissions</a>
+        <a class="history-tab @(exportsTab ? "is-active" : "")" href="@Model.PageUrl(1, CampaignHistoryModel.ExportsTab)" aria-current="@(exportsTab ? "page" : null)" data-history-tab="exports">Export history</a>
+    </nav>
+
+    @if (exportsTab)
+    {
+        <form class="filter-bar history-filters" method="get" action="/Collections/CampaignHistory" data-history-filters>
+            <input type="hidden" name="tab" value="exports" />
+            <div class="field-group"><label class="field-label" for="hFrom">From</label><input class="field-input" type="date" id="hFrom" name="from" value="@Model.From?.ToString("yyyy-MM-dd")" /></div>
+            <div class="field-group"><label class="field-label" for="hTo">To</label><input class="field-input" type="date" id="hTo" name="to" value="@Model.To?.ToString("yyyy-MM-dd")" /></div>
+            <div class="filter-bar__submit"><button class="btn btn-gold" type="submit">Apply</button><a class="btn btn-ghost" href="/Collections/CampaignHistory?tab=exports">Clear</a></div>
+        </form>
+
+        @if (Model.Exports is not { } exports)
+        {
+            <div class="panel"><div class="error-state" role="alert" data-history-error><p>@(Model.Outcome == ApiOutcome.Forbidden ? "Your account does not have permission to view the export history: it needs the same right as Export for Genesys." : CampaignHistoryModel.ProblemText(Model.Outcome, Model.Error))</p></div></div>
+        }
+        else
+        {
+            <p class="receivables-notice" role="note" data-export-notice>@exports.Notice</p>
+            @if (exports.Items.Count == 0)
+            {
+                <div class="empty-state" data-history-empty><p class="empty-state__title">@(Model.HasFilter ? "No downloaded files match these dates." : "No file has been downloaded with Export for Genesys yet.")</p></div>
+            }
+            else
+            {
+                <div class="receivables-table-wrap">
+                    <table class="receivables-table history-table" data-export-table>
+                        <thead><tr><th>Downloaded</th><th>By</th><th>Campaign</th><th>Contact list format</th><th>List</th><th class="num">Rows</th><th class="num">Units</th><th class="num">Total (AED)</th><th>Checks</th><th>File</th></tr></thead>
+                        <tbody>
+                        @foreach (var e in exports.Items)
+                        {
+                            <tr data-export-row>
+                                <td>@CollectionsDisplay.DubaiTime(e.ExportedAtUtc)</td>
+                                <td>@e.ExportedByName</td>
+                                <td>@(e.ReminderLabel ?? "—")</td>
+                                <td>@(e.ContactList ?? "—")</td>
+                                <td>@(e.Mode ?? "—")</td>
+                                <td class="num">@(e.Rows?.ToString("N0") ?? "—")</td>
+                                <td class="num">@(e.Units?.ToString("N0") ?? "—")</td>
+                                <td class="num">@(e.TotalAmount is { } t ? CampaignHistoryModel.Money(t) : "—")</td>
+                                <td>
+                                    @if (e.DataVerified == false) { <span class="receivables-tag">Financial data not verified</span> }
+                                    @if (e.SchemaVerified == false) { <span class="receivables-tag">Template not verified</span> }
+                                    @if (e.DataVerified != false && e.SchemaVerified != false) { <span class="receivables-meta">Verified</span> }
+                                    @if (e.Repeated is > 0) { <span class="receivables-meta">@e.Repeated repeated</span> }
+                                </td>
+                                <td><code>@(e.FileFingerprint ?? "—")</code></td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="receivables-pagination">
+                    <span>Page @exports.Page of @Model.TotalPages(exports.TotalCount, exports.PageSize) · @exports.TotalCount file(s)</span>
+                    <div>
+                        @if (exports.Page > 1) { <a class="btn btn-sm" href="@Model.PageUrl(exports.Page - 1)">Previous</a> }
+                        @if (exports.Page < Model.TotalPages(exports.TotalCount, exports.PageSize)) { <a class="btn btn-sm" href="@Model.PageUrl(exports.Page + 1)">Next</a> }
+                    </div>
+                </div>
+            }
+        }
+    }
+    else
+    {
+        @if (Model.Submissions is not { } data)
+        {
+            <div class="panel"><div class="error-state" role="alert" data-history-error><p>@CampaignHistoryModel.ProblemText(Model.Outcome, Model.Error)</p></div></div>
+        }
+        else
+        {
+            var summary = data.Summary;
+            <div class="history-cards" data-history-summary>
+                <div class="history-card"><span class="history-card__value" data-card="submissions">@summary.Submissions.ToString("N0")</span><span class="history-card__label">Submissions</span></div>
+                <div class="history-card"><span class="history-card__value" data-card="records">@summary.Records.ToString("N0")</span><span class="history-card__label">Unit records submitted</span></div>
+                <div class="history-card"><span class="history-card__value" data-card="amount">@CampaignHistoryModel.Money(summary.TotalAmount)</span><span class="history-card__label">Submitted amount (AED)</span></div>
+                <div class="history-card"><span class="history-card__value" data-card="confirmed">@summary.ConfirmedRecords.ToString("N0")</span><span class="history-card__label">Records confirmed by Genesys</span></div>
+                <div class="history-card @(summary.NeedAttention > 0 ? "history-card--attention" : "")"><span class="history-card__value" data-card="attention">@summary.NeedAttention.ToString("N0")</span><span class="history-card__label">Submissions failed, partial or unknown</span></div>
+            </div>
+            <p class="receivables-meta history-note" data-call-outcome-note>@data.CallOutcomeNote</p>
+
+            <form class="filter-bar history-filters" method="get" action="/Collections/CampaignHistory" data-history-filters>
+                <div class="field-group filter-bar__search">
+                    <label class="field-label" for="hSearch">Search</label>
+                    <input class="field-input" type="search" id="hSearch" name="search" maxlength="100" value="@Model.Search" placeholder="Unit code, customer name or Genesys id" />
+                </div>
+                <div class="field-group"><label class="field-label" for="hFrom">From</label><input class="field-input" type="date" id="hFrom" name="from" value="@Model.From?.ToString("yyyy-MM-dd")" /></div>
+                <div class="field-group"><label class="field-label" for="hTo">To</label><input class="field-input" type="date" id="hTo" name="to" value="@Model.To?.ToString("yyyy-MM-dd")" /></div>
+                <div class="field-group">
+                    <label class="field-label" for="hStage">Campaign</label>
+                    <select class="field-select" id="hStage" name="stage"><option value="">All campaigns</option>@foreach (var o in data.Options.Stages) { <option value="@o.Value" selected="@(string.Equals(Model.Stage, o.Value, StringComparison.OrdinalIgnoreCase))">@o.Label</option> }</select>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="hStatus">Status</label>
+                    <select class="field-select" id="hStatus" name="status"><option value="">All statuses</option>@foreach (var o in data.Options.Statuses) { <option value="@o.Value" selected="@(string.Equals(Model.Status, o.Value, StringComparison.OrdinalIgnoreCase))">@o.Label</option> }</select>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="hMode">Mode</label>
+                    <select class="field-select" id="hMode" name="mode"><option value="">Manual and Auto</option>@foreach (var o in data.Options.Modes) { <option value="@o.Value" selected="@(string.Equals(Model.Mode, o.Value, StringComparison.OrdinalIgnoreCase))">@o.Label</option> }</select>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="hEmployee">Employee</label>
+                    <select class="field-select" id="hEmployee" name="employee"><option value="">All employees</option>@foreach (var o in data.Options.Employees) { <option value="@o.Value" selected="@(Model.Employee?.ToString("D") == o.Value)">@o.Label</option> }</select>
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="hList">Destination list</label>
+                    <select class="field-select" id="hList" name="list"><option value="">All lists</option>@foreach (var o in data.Options.Lists) { <option value="@o.Value" selected="@(string.Equals(Model.List, o.Value, StringComparison.OrdinalIgnoreCase))">@o.Label</option> }</select>
+                </div>
+                <div class="filter-bar__submit"><button class="btn btn-gold" type="submit">Apply</button><a class="btn btn-ghost" href="/Collections/CampaignHistory">Clear</a></div>
+            </form>
+
+            @if (data.Items.Count == 0)
+            {
+                <div class="empty-state" data-history-empty>
+                    <p class="empty-state__title">@(Model.HasFilter ? "No submissions match these filters." : "No campaign has been submitted to Genesys yet.")</p>
+                    @if (Model.HasFilter) { <a class="btn" href="/Collections/CampaignHistory">Clear filters</a> }
+                    else { <p class="receivables-meta">A submission appears here when a Manual send is approved or an Auto campaign is dispatched. Downloaded CSV files are listed under Export history.</p> }
+                </div>
+            }
+            else
+            {
+                <div class="receivables-table-wrap">
+                    <table class="receivables-table history-table" data-history-table>
+                        <thead><tr><th>Submitted (Dubai)</th><th>Campaign stage</th><th>Mode</th><th>Destination list</th><th>Submitted by</th><th class="num">Unit records</th><th class="num">Amount (AED)</th><th>Upload status</th><th>Genesys reference</th><th><span class="visually-hidden">Details</span></th></tr></thead>
+                        <tbody>
+                        @foreach (var s in data.Items)
+                        {
+                            <tr data-submission="@s.SubmissionId" data-status="@s.Status">
+                                <td>@CollectionsDisplay.DubaiTime(s.SubmittedAtUtc ?? s.ApprovedAtUtc)@if (s.SubmittedAtUtc is null) { <span class="receivables-meta">approved, not submitted</span> }</td>
+                                <td><strong>@s.StageName</strong><span class="receivables-meta">@s.ReminderLabel</span></td>
+                                <td data-mode>@s.Mode</td>
+                                <td>@(s.ContactListLabel ?? "—")</td>
+                                <td>@s.SubmittedByName</td>
+                                <td class="num" data-records>@s.UnitRecords.ToString("N0")@if (s.FiguresBasis == "Approved") { <span class="receivables-meta">approved</span> }</td>
+                                <td class="num" data-amount>@CampaignHistoryModel.Money(s.TotalAmount)@if (s.OtherCurrencyRecords > 0) { <span class="receivables-meta">+ @s.OtherCurrencyRecords in another currency</span> }</td>
+                                <td>
+                                    <span class="history-badge @CampaignHistoryModel.BadgeClass(s.Status)" title="@s.StatusExplanation" data-status-badge>@s.StatusLabel</span>
+                                    <span class="receivables-meta history-explain" data-status-explanation>@s.StatusExplanation</span>
+                                </td>
+                                <td>@if (s.GenesysReference is { } reference) { <code>@reference</code> } else { <span class="receivables-meta">Not provided by Genesys</span> }</td>
+                                <td><a class="btn btn-sm" href="/Collections/CampaignHistory/@s.SubmissionId.ToString("D")" data-view-details>View Details</a></td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+                <div class="receivables-pagination">
+                    <span>Page @data.Page of @Model.TotalPages(data.TotalCount, data.PageSize) · @data.TotalCount submission(s)</span>
+                    <div>
+                        @if (data.Page > 1) { <a class="btn btn-sm" href="@Model.PageUrl(data.Page - 1)">Previous</a> }
+                        @if (data.Page < Model.TotalPages(data.TotalCount, data.PageSize)) { <a class="btn btn-sm" href="@Model.PageUrl(data.Page + 1)">Next</a> }
+                    </div>
+                </div>
+            }
+        }
+    }
+</div>

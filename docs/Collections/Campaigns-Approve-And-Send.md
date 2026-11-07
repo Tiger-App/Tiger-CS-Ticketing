@@ -16,6 +16,17 @@ Select Customers -> Send to Genesys -> Genesys + Admin Email, on **Collections C
 Nothing here bypasses financial reconciliation (`Collections:Campaigns:FinancialSourceValidated`), the dispatch restrictions, or `Collections:GenesysOutbound:LiveCustomerDispatchEnabled`
 (which stays off until someone enables it deliberately).
 
+### The confirmation dialog (what the person sees while it sends)
+
+`collections-campaign-confirm.js` takes over the Confirm button (the plain form post, with its redirect to the send page, remains the no-JavaScript fallback; the request carries the same fields, the same idempotency key and the same server-side checks).
+
+1. **Pressing Confirm** disables the button at once, closes the form (paging buttons, acknowledgement, Cancel / Escape) and shows, at the top of the dialog, a spinner with "Sending to Genesys... Please do not close this window." Repeated clicks, Enter and repeated submit events send exactly **one** request; the browser also warns before the tab is left.
+2. **The server answers** with JSON (`X-Requested-With: tigercs-confirm`): *accepted* means only that the approval was created and queued. The dialog keeps loading and follows that send's own status (`?handler=Send`, which now carries the counts) until it ends.
+3. **Only then** it reports the outcome with the real numbers: "Sent to Genesys: N unit record(s) uploaded." when Genesys accepted every approved contact; partial, rejected, unconfirmed, stopped-for-review and failed sends are each worded as what they are and never as success.
+4. **A refusal** shows the backend's own message. **Try again** appears only for a definite refusal that created nothing (service unavailable / busy) and re-sends the same idempotency key, so it can never approve twice. A changed list, a failed financial check or a permission refusal has no retry: preview the list again.
+5. **An unknown outcome** (no answer in time, unreachable, a login or error page instead of JSON, a status that cannot be read, a send running past its limit) is never retried automatically and offers no retry: the form stays closed and the dialog says to check the recent sends first (with a link to that send when its id is known).
+6. **Page state is kept**: the page is not navigated; campaign, filters and Manual mode stay as they were, and "Back to the list" returns to the same preview. The ticked customers are cleared only once the approval was accepted.
+
 ## Sending modes: exactly two, Manual and Auto
 The **Sending mode** selector on Collections Campaigns has two options.
 

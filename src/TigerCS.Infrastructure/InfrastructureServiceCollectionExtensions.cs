@@ -459,6 +459,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<AutoDispatchService>();
         services.AddScoped<DispatchAdminReportService>();
         services.AddScoped<SuppressionService>();
+        // Genesys Campaign History: read-only over the dispatch / batch / item / audit data the approval and upload already persist.
+        services.AddScoped<TigerCS.Application.Modules.Collections.History.IGenesysHistoryStore, GenesysHistoryStore>();
+        services.AddScoped<TigerCS.Application.Modules.Collections.History.GenesysHistoryService>();
         services.AddScoped<CollectionsAccountQueryAppService>();
         services.AddScoped<ICollectionsCustomerProfiles, CustomerDirectoryCollectionsProfiles>();
         services.AddScoped(sp => sp.GetRequiredService<IOptions<CollectionsEdsmOptions>>().Value);

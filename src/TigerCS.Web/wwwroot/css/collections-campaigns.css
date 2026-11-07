@@ -153,5 +153,35 @@
 .manual-confirm { max-width: min(46rem, 94vw); width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px); background: var(--color-surface); color: inherit; padding: 0; }
 .manual-confirm::backdrop { background: rgba(0, 0, 0, .45); }
 .manual-confirm .review-confirm { margin: 0; border: 0; }
+/* The confirmation dialog never grows past the window: the title and the sending / result state stay at the top, the list scrolls, and the buttons stay in view at the bottom. */
+.manual-confirm[open] { display: flex; flex-direction: column; max-height: 92vh; }
+.manual-confirm .review-confirm { display: flex; flex-direction: column; min-height: 0; max-height: 92vh; padding: 0; }
+.manual-confirm .review-confirm > h2 { flex: none; margin: 0; padding: var(--space-3, 12px) var(--space-4, 16px); }
+.manual-confirm .review-confirm__body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 var(--space-4, 16px) var(--space-3, 12px); }
+.manual-confirm .review-confirm__footer { flex: none; padding: var(--space-3, 12px) var(--space-4, 16px); border-top: 1px solid var(--color-border); background: var(--color-surface); }
+.manual-confirm .review-confirm__status { margin: 0 var(--space-4, 16px) var(--space-2, 8px); }
+.review-confirm__status { display: flex; align-items: flex-start; gap: var(--space-3, 12px); padding: var(--space-3, 12px); border-radius: 6px; border-left: 4px solid currentColor; color: #35506b; background: #eaf1f8; outline: none; }
+.review-confirm__status[hidden], .review-confirm__status [hidden] { display: none; }
+.review-confirm__status-text { flex: 1 1 auto; min-width: 0; }
+.review-confirm__status p { margin: 0; }
+.review-confirm__status-title { font-weight: 700; }
+.review-confirm__status-detail { margin-top: var(--space-1, 4px); overflow-wrap: anywhere; }
+.review-confirm__status-actions { margin-top: var(--space-2, 8px); display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); }
+.review-confirm__status[data-confirm-state="success"] { color: #146c43; background: #e8f5ee; }
+.review-confirm__status[data-confirm-state="partial"], .review-confirm__status[data-confirm-state="unknown"] { color: #8a5a00; background: #fff4de; }
+.review-confirm__status[data-confirm-state="failure"], .review-confirm__status[data-confirm-state="refused"] { color: #a11d2b; background: #fdecee; }
+.review-confirm__status-detail, .review-confirm__status-actions { color: var(--color-text, inherit); }
+.review-confirm__status-title { color: inherit; }
+@media (prefers-color-scheme: dark) {
+    .review-confirm__status { color: #9ec1e6; background: #14283b; }
+    .review-confirm__status[data-confirm-state="success"] { color: #7fd6a4; background: #12301f; }
+    .review-confirm__status[data-confirm-state="partial"], .review-confirm__status[data-confirm-state="unknown"] { color: #f0c77a; background: #3a2b0c; }
+    .review-confirm__status[data-confirm-state="failure"], .review-confirm__status[data-confirm-state="refused"] { color: #f39aa4; background: #3d151a; }
+}
+.confirm-spinner { flex: none; width: 1.5rem; height: 1.5rem; border: 3px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: confirm-spin .8s linear infinite; }
+@keyframes confirm-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .confirm-spinner { animation-duration: 2.4s; } }
+.review-confirm [aria-busy="true"] , .review-confirm[aria-busy="true"] [data-confirm-button] { cursor: progress; }
+a[aria-disabled="true"] { pointer-events: none; opacity: .5; }
 .campaign-approve__list { display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--text-xs); font-weight: 600; color: var(--color-text-secondary); }
 .campaign-approve__list .field-select { min-width: 12rem; }
