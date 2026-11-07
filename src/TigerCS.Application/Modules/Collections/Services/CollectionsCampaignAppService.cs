@@ -289,7 +289,7 @@ public sealed class CollectionsCampaignAppService(
         if (sourceOptions.Currency != "AED") reasons.Add("CurrencyNeedsReview");
         if (!fresh) reasons.Add("StaleSource");
         if (coverageIncomplete) reasons.Add("CoverageIncomplete");
-        if (!sourceReconciled) reasons.Add("SourceReconciliationRequired");
+        // The reconciliation gate is report-wide (FinancialSourceValidated / SourceGate), never a per-unit reason: a unit's own status says what is wrong with the unit.
         if (Has(CollectionsCampaignFlags.NoValidContact)) reasons.Add("NoValidContact");
         if (Has(CollectionsCampaignFlags.CrmCustomerAmbiguous)) reasons.Add("CrmCustomerAmbiguous");
         if (Has(CollectionsCampaignFlags.ContactSourceConflict)) reasons.Add("ContactSourceConflict");
@@ -428,6 +428,9 @@ public sealed class CollectionsCampaignAppService(
         {
             // The Genesys file carries ONLY ready units; units the stage rule does not make eligible stay in the review file with their balances but are never sent. Any unit that is eligible
             // yet not ready (needs review, preview only, internal) blocks the file: the list must be reviewed first.
+            if (!report.FinancialSourceValidated)
+                return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest,
+                    "The financial source is not reconciled, so no Genesys file is made from the preview. " + (report.SourceGate?.Message ?? ""));
             if (report.Stage == nameof(CollectionsCampaignStage.LegalReferral) || report.BusinessDate != report.LiveBusinessDate || !report.IsScheduledDate
                 || report.Items.Any(c => c.Status is not ("Ready" or "NotEligible")) || !report.Items.Any(c => c.Status == "Ready"))
                 return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest,

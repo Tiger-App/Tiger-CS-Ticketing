@@ -107,7 +107,9 @@ public sealed class ReviewPersistenceResilienceTests
         Assert.False(run.SourceReconciled);
         using var scope = h.NewScope();
         var summary = (await scope.Query.SummarizeAsync(h.Manager, new SelectionRequest(new ReviewFilter(ReminderType: "CurrentMonth"), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!;
-        Assert.Equal(0, summary.Count);                                         // nothing is Ready, so nothing can be approved or sent
+        Assert.False(summary.SourceReconciled);                                 // the gate is recorded on the run; the approval refuses on it
+        var refused = await scope.Dispatch.ConfirmAsync(h.Manager, new ConfirmDispatchRequest(new SelectionRequest(new ReviewFilter(ReminderType: "CurrentMonth"), ReviewQueryService.ModeAllMatching), summary.Count, summary.Fingerprint, "retry-gate", true), CancellationToken.None);
+        Assert.Equal(TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("not reconciled", refused.Detail);
     }
 
     [Fact]

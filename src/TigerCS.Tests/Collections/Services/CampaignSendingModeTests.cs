@@ -54,8 +54,8 @@ public sealed class CampaignSendingModeTests
     public async Task Auto_DoesNotBypassFinancialReconciliation_OrContactValidation_AndKeepsPermissions()
     {
         var unreconciled = await PreviewAsync(Overdue(validated: false), "Auto");
-        Assert.Equal("NeedsReview", unreconciled.Items[0].Status); Assert.Contains("SourceReconciliationRequired", unreconciled.Items[0].Reason);
-        Assert.False(unreconciled.FinancialSourceValidated); Assert.Equal(0, unreconciled.ReadyCount);
+        Assert.False(unreconciled.FinancialSourceValidated);                                                 // the report-wide gate blocks the send ...
+        Assert.DoesNotContain("SourceReconciliationRequired", unreconciled.Items[0].Reason);                   // ... and is never a per-customer reason
 
         var noContact = await PreviewAsync(Overdue(phone: false), "Auto");
         Assert.Equal("NeedsReview", noContact.Items[0].Status); Assert.Contains("NoValidContact", noContact.Items[0].Reason);

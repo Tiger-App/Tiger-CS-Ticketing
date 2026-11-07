@@ -129,10 +129,10 @@ public sealed class CampaignSqlEngineTests
         var referral = (await Service(new EngineSource(PageAt(3, 2, referralDay.AddMinutes(-5), referralDay, clean)), nowUtc: referralDay).PreviewAsync(Manager, "LegalReferral", new DateOnly(2026, 10, 30))).Value!;
         Assert.Equal(("InternalReview", "InternalLegalReferralOnly"), (referral.Items[0].Status, referral.Items[0].Reason));
         Assert.Equal((0, 2), (referral.ReadyCount, referral.ReviewCount));
-        // Unvalidated financial source / non-AED currency: everything needs review.
+        // Unvalidated financial source: the report says so once and sending is blocked; the units keep their own status. Non-AED currency: everything needs review.
         var unvalidated = (await Service(new EngineSource(Page(3, 2, null, clean)), validated: false).PreviewAsync(Manager, "CurrentMonthReminder", new DateOnly(2026, 10, 14))).Value!;
-        Assert.Equal((0, 5), (unvalidated.ReadyCount, unvalidated.ReviewCount));
-        Assert.Equal("SourceReconciliationRequired", unvalidated.Items[0].Reason);
+        Assert.False(unvalidated.FinancialSourceValidated); Assert.Equal((3, 2), (unvalidated.ReadyCount, unvalidated.ReviewCount));
+        Assert.DoesNotContain("SourceReconciliationRequired", unvalidated.Items[0].Reason);
         var usd = (await Service(new EngineSource(Page(3, 2, null, clean)), currency: "USD").PreviewAsync(Manager, "CurrentMonthReminder", new DateOnly(2026, 10, 14))).Value!;
         Assert.Equal("CurrencyNeedsReview", usd.Items[0].Reason);
     }
@@ -145,7 +145,7 @@ public sealed class CampaignSqlEngineTests
             | CollectionsCampaignFlags.NoValidContact;
         var report = (await Service(new EngineSource(Page(0, 1, Now.AddHours(-10), Unit("A", all, amount: null))), validated: false)
             .PreviewAsync(Manager, "CurrentMonthReminder", new DateOnly(2026, 10, 14))).Value!;
-        Assert.Equal("AmbiguousInstalments;AmountPrecisionNeedsReview;MissingUnitIdentity;ConflictingContactDetails;UnitAllocationNeedsReview;ContradictoryPaymentStatus;StaleSource;SourceReconciliationRequired;NoValidContact",
+        Assert.Equal("AmbiguousInstalments;AmountPrecisionNeedsReview;MissingUnitIdentity;ConflictingContactDetails;UnitAllocationNeedsReview;ContradictoryPaymentStatus;StaleSource;NoValidContact",
             report.Items[0].Reason);
         Assert.Null(report.Items[0].Amount);                                       // an ambiguous unit has no amount
     }

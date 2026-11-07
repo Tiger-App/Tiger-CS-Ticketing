@@ -93,7 +93,10 @@ public sealed class GenesysExportIndependenceTests
         Assert.Equal(1, dto.RowCount); Assert.False(dto.DataVerified); Assert.Contains(ReviewReasons.SourceReconciliationRequired, dto.UnverifiedReasons!);
         Assert.Contains("DataVerified=False", await AuditAsync(h));
         using var scope = h.NewScope();
-        Assert.Equal(0, (await scope.Query.SummarizeAsync(h.Manager, All(Filter("Manual")), CancellationToken.None)).Value!.Count);   // nothing can be sent
+        var summary = (await scope.Query.SummarizeAsync(h.Manager, All(Filter("Manual")), CancellationToken.None)).Value!;
+        Assert.False(summary.SourceReconciled);
+        var refused = await scope.Dispatch.ConfirmAsync(h.Manager, new ConfirmDispatchRequest(All(Filter("Manual")), summary.Count, summary.Fingerprint, "gate-" + mode, true), CancellationToken.None);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("not reconciled", refused.Detail);   // nothing can be sent
     }
 
     [Fact]

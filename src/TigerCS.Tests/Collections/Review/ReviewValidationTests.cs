@@ -30,12 +30,12 @@ public sealed class ReviewValidationTests
     }
 
     [Fact]
-    public void SourceReconciliationRequired_HasARealCause_AndIsNotSilentlyCleared()
+    public void AnUnreconciledSource_IsNotACustomerReason_TheRecordKeepsItsOwnStatus()
     {
-        // Cause: the reconciliation sign-off does not cover the configured procedure.
+        // Reconciliation is a property of the source: the run records it and the send refuses on it (ReconciliationGateTests). A sound customer stays Ready, never "Needs review" for it.
         var record = Single([ReviewHarness.Row(1)], context: Context(reconciled: false));
-        Assert.Equal(ReviewValidationStatus.NeedsReview, record.ValidationStatus);
-        Assert.Contains(ReviewReasons.SourceReconciliationRequired, Reasons(record));
+        Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
+        Assert.DoesNotContain(ReviewReasons.SourceReconciliationRequired, Reasons(record));
     }
 
     [Fact]
