@@ -35,7 +35,7 @@
             <div class="receivables-notice receivables-notice--warning" role="alert" data-source-status="NotReconciled" data-source-gate="@(gate?.Code ?? "SignOffMissing")">
                 <span>The financial source has not been reconciled against PACT for the configured procedure, so nothing can be approved or sent.</span>
                 @if (gate is not null) { <span class="receivables-meta" data-source-gate-reason>@gate.Message</span> }
-                <a class="btn btn-sm" href="/Collections/Reconciliation" data-reconciliation-link>@(gate?.Code is "EvidenceNotRun" or "EvidenceExpired" or "EvidenceError" ? "Run the consistency check" : "Show the differences")</a>
+                <a class="btn btn-sm" href="/Collections/Reconciliation" data-reconciliation-link>@(gate?.Code is "EvidenceNotRun" or "EvidenceExpired" or "EvidenceError" or "EvidenceSuperseded" ? "Run the consistency check" : "Show the differences")</a>
             </div>
         }
         @if (failed is not null || crmShown)

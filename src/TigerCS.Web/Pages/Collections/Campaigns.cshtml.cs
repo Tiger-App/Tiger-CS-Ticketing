@@ -336,6 +336,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "LegalNoticeReleaseRequired" => "Legal notices have not been released for customers. Nothing is sent until Legal releases them.",
         "LegalCaseNotApproved" => "An internal Legal referral is never sent to a customer.",
         "StaleSource" or "SourceReconciliationRequired" => "Refresh the approval data once the financial source is current and reconciled.",
+        "SourceMismatchUnresolved" => "This unit's snapshot differs from PACT even after a refresh (a synchronization or mapping defect). Investigate it on the Financial reconciliation page; other customers are not held back by it.",
         "PaymentStatusUnknown" => "The remaining amount of this balance cannot be determined reliably: it is missing or negative, or the source contradicts it (Status Paid with a remainder owed, or original and paid amounts that do not add up). Confirm the balance in PACT, refresh the approval data and preview again; this is a data rule, not the schedule.",
         "NoValidContact" or "CrmCustomerAmbiguous" or "CrmCompanyAmbiguous" or "ContactSourceConflict" or "CrmUnavailable" or "ConflictingContactDetails" =>
             "Review: fix the customer's contact in CRM or PACT, refresh the approval data and preview again.",
@@ -412,6 +413,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "StaleSource" => "Financial data is older than the allowed age",
         "CoverageIncomplete" => "The selected dates are not fully loaded",
         "SourceReconciliationRequired" => "Financial source not reconciled",
+        "SourceMismatchUnresolved" => "Snapshot differs from PACT after a refresh (investigate)",
         "NoValidContact" => "No valid mobile or email in CRM or PACT",
         "CrmCustomerAmbiguous" => "Several CRM customers match",
         "CrmCompanyAmbiguous" => "CRM sale cannot be tied to one company",

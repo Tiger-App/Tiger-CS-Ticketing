@@ -66,10 +66,34 @@ date. Due / Overdue stay a classification of the instalment's due date against t
 
 ## Validation rules (stored reasons)
 
-Financial reconciliation is a **separate gate of the source**, not a customer reason: `SourceGate` decides it once (sign-off `FinancialSourceValidated`, the procedure, the
-snapshot-consistency evidence), the run records it (`CollectionsReviewRun.SourceReconciled`), and the send refuses on it at approval (`DispatchService`), again right before the upload
-(revalidation) and in the Auto dispatcher (`NotReconciled`). A customer whose own data is sound is **Ready** on the page while the gate is closed; the page and the summary say the source is
+Financial reconciliation is a **separate gate of the source**, not a customer reason: `SourceGate` decides it (sign-off `FinancialSourceValidated`, the procedure, the
+snapshot-consistency evidence) **per company**, the run records whether the companies it covers are reconciled (`CollectionsReviewRun.SourceReconciled`), and the send refuses the customers of a
+closed company at approval (`DispatchService`), again right before the upload (revalidation, bound to the snapshot publish the balances were just read from) and in the Auto dispatcher
+(`NotReconciled`; the reconciled company is dispatched on its own). A customer whose own data is sound is **Ready** on the page while the gate is closed; the page and the summary say the source is
 not reconciled, once. `SourceReconciliationRequired` is kept as the code of that gate (the Genesys export's unverified-data label); it is no longer stored on records.
+
+### PACT is the source, the snapshot its synchronized copy
+
+PACT is authoritative; `dbo.CollectionsRcvLine` is a copy refreshed from `p4/p32AccountReceivables` (every two hours, at start-up, on Retry: a full replace per company, published atomically
+only when the result is complete, of the right company and not an implausible shrink; a failed or partial attempt keeps the previous publish, so an instalment PACT no longer returns is retired
+only by a successful complete refresh). A difference between the two is therefore a **synchronization to repair**, not a reason to stop Collections:
+
+1. **The check follows the data.** After each successful refresh of a company its snapshot-consistency check runs by itself, in the same job (`Collections:Campaigns:ReconcileAfterRefresh`,
+   default true; `IPostRefreshReconciliation`). Evidence is bound to the publish it compared: a company republished after its last check is `Superseded` (gate code `EvidenceSuperseded`,
+   closed) until the new publish is checked. Nothing older is silently reused.
+2. **One controlled refresh, then compare again.** When a check finds differences (new instalments in PACT, changed remaining amounts, moved due dates, instalments no longer returned, new or
+   missing units, payments that reduce a remainder to zero), or the snapshot is older than `ReconciliationMaxSnapshotAgeMinutes`, that company is refreshed from PACT once
+   (`ReconciliationRecoveryRefresh`, default true; trigger source `Reconciliation`, which never starts another check) and compared again. The exact differences of the first comparison are
+   kept on the run (`Recovery.ComparisonBefore`) and logged. A difference that was only the time since the previous refresh is **Recovered** (the run passes).
+3. **A persistent difference is a defect, held per unit.** Differences confirmed after a successful refresh are a synchronization or mapping defect to investigate: the run is `Failed` with
+   `PersistentAfterRefresh`, the company's gate is `ReconciledWithHeldUnits`, and only the listed units are held back (`SourceMismatchUnresolved`, Needs review, stamped on their records by the
+   refresh and by the revalidation). Every other unit of that company, and the other company, stay Ready and sendable. Only when the differing units could not all be listed
+   (`ReconciliationMaxDifferences`) or the recovery refresh itself failed does the company stay closed (`EvidenceFailed`). Never more than one refresh per company per run; a failed refresh is
+   not retried by the check (the next scheduled refresh is the retry).
+4. **Receivables, the Campaign preview and Export for Genesys** keep using the latest published snapshot; freshness (`SnapshotStatusDto`) and the gate per company are shown. The export
+   labels unverified data; it never blocks.
+5. **Send to Genesys** uses no stale or unverified amount: a closed company is refused, a held unit is Needs review, a publish after the approval that has not been checked stops the upload
+   (`ReviewRequired`), and the revalidation compares every approved record with the current snapshot. Sign-off (`FinancialSourceValidated`) and `AutoSendingEnabled` are never set by a check.
 
 Needs review: `AmountPrecisionNeedsReview`, `NoValidContact`, `PaymentStatusUnknown`, `StaleSource`,
 `MissingUnitIdentity`, `MissingCustomerIdentity`, `UnitAllocationNeedsReview`, `AmbiguousInstalments`, `DuplicateSourceRecord`,
@@ -226,6 +250,9 @@ Non-secret keys are in `appsettings.json`; supply secrets by user-secrets/enviro
 | `Collections:Campaigns:ValidatedProcedureSuffix` | `""` | procedure the reconciliation covered |
 | `Collections:Campaigns:ReconciliationReference` | – | evidence reference |
 | `Collections:Campaigns:LegalNoticeExportEnabled` / `LegalCaseDispatchApproved` | `false` / `false` | see blocker 4 |
+| `Collections:Campaigns:ReconcileAfterRefresh` | `true` | run the company's snapshot-consistency check by itself right after each successful snapshot refresh (scheduled, start-up, Retry) |
+| `Collections:Campaigns:ReconciliationRecoveryRefresh` | `true` | when a check finds differences or the snapshot is too old, refresh that company from PACT once and compare again in the same run; a persisting difference holds only its units |
+| `Collections:Campaigns:ReconciliationStartDate` | `2014-01-01` | first due date of the snapshot-consistency check; the window ends at the end of the current month. Both sides (snapshot and a direct read of the same PACT procedure) are read for that window; it never reaches before the snapshot coverage (`ReceivablesSnapshot:SourceFromDate`, 2000-01-01). The Campaigns scope (`PactReceivables:StartDate`) and the Receivables filters are separate |
 | `Collections:Review:DefaultMinimumRemaining` | `100` | AED |
 | `Collections:Review:MaxSelection` | `20000` | one approval |
 | `Collections:Review:FloatNoiseTolerance` | `0.0001` | AED |
@@ -272,3 +299,37 @@ configured integration accounts, System Administrator override). Authorization r
 `dotnet build src/TigerCS.slnx -c Release` → 0 warnings, 0 errors. `dotnet test` → 3,931 passed, 0 failed (152 new: domain rules, validation, filters/paging,
 dispatch/authorization/duplicates/concurrency on a real SQLite database, Genesys HTTP/token behaviour against a mocked handler, page rendering, endpoint authorization).
 Not exercised: real PACT, real Genesys, SQL Server (the migration and filtered indexes were generated for SQL Server; tests run on SQLite).
+
+## UAT: PACT synchronization, reconciliation recovery and the per-company gate
+
+Environment: UAT with `BackgroundJobs:Enabled=true`, the linked server and the direct `PACTRPT` connection configured, `Collections:GenesysOutbound:LiveCustomerDispatchEnabled=false`
+(nothing is sent to a customer at any step), `AutoSendingEnabled=false`, `FinancialSourceValidated` as committed (false) for steps 1-6 and set to true (UAT only, with
+`ValidatedProcedureSuffix=""` and a `ReconciliationReference`) for steps 7-10. The checks read PACT; they never write to it.
+
+1. **The check follows the refresh.** Start the API; both companies load (`RefreshOnStartup`). Open `/Collections/Reconciliation`: within a few minutes of each company's refresh a run
+   "run by itself after the snapshot refresh" appears for that company, Passed, with "snapshot published" equal to the company's last refresh time on `/Collections/Receivables`.
+2. **Changed amount / paid instalment / new unit.** In UAT PACT (or by waiting for real payments) change the remaining amount of one instalment, settle another, and add one. Press *Dubai
+   only*. Expected: the latest run shows the company **Passed** with the recovery line "The first comparison found N differing unit(s); the company's snapshot was refreshed from PACT once
+   (Succeeded) and the second comparison agrees". Receivables shows the new amounts, the settled instalment is gone, the new unit is listed. Only one refresh attempt of that company is recorded
+   in `dbo.CollectionsRcvRun` with `TriggerSource = 'Reconciliation'`.
+3. **Persistent difference (mapping defect).** In the UAT database only, edit one published line in `dbo.CollectionsRcvLine` (change its Amount) AND make the UAT refresh procedure
+   reproduce it (or run the check while a known linked-server/direct discrepancy exists). Press *Dubai only*. Expected: the company is **Failed**, the recovery line says "the differences
+   persist: a synchronization or mapping defect to investigate", the unit is listed, and the gate panel shows Dubai as "Reconciled; some units held back" with that unit under *Held back*.
+   `dbo.CollectionsRcvRun` shows exactly one `Reconciliation` attempt for the run (no retry loop).
+4. **Partial refresh failure.** Make the UAT linked server unavailable for one company (or lower `RefreshCommandTimeoutSeconds` to 5 for the test) and press *Run (both companies)*.
+   Expected: the affected company shows "could not be refreshed ... the previous snapshot is still in use", its previous snapshot is still served on Receivables (same last-success time,
+   same rows), the other company's result is unaffected.
+5. **Stale snapshot.** Stop the API for longer than `ReconciliationMaxSnapshotAgeMinutes`, start it with `RefreshOnStartup=false`, press *Dubai only*. Expected: no "minutes old" error; the
+   recovery line says the snapshot was too old and was refreshed first, then Passed.
+6. **Gate without sign-off.** With `FinancialSourceValidated=false`, Campaigns Manual mode shows every clean customer **Ready** and the status strip says the source is not reconciled
+   (SignOffMissing); *Approve & Send* is blocked by that gate alone. Export for Genesys still downloads, labelled "Financial data not verified".
+7. **Per-company gate.** Set `FinancialSourceValidated=true` (UAT only). With both companies Passed, Manual mode's summary says the source is reconciled. Make Sharjah's direct read fail
+   (wrong `PACTRPT` password for one run) and run *Sharjah only*: the gate shows Sharjah "Not reconciled" and Dubai "Reconciled". A Manual list filtered to Dubai is accepted at approval
+   (no upload happens: live dispatch is off); a list containing Sharjah is refused with "not reconciled for Tiger Group Sharjah" and names Dubai as still sendable.
+8. **Held unit.** With step 3's persistent difference in place and the sign-off set, refresh the approval data. Expected: that unit is **Needs review** with reason "Snapshot differs from PACT
+   after a refresh (investigate)"; every other unit of the company is Ready; `Counts.Ready` excludes only that unit.
+9. **Refresh between approval and send.** Approve a Manual list (dispatch stays queued because live dispatch is off; or, with the Genesys sandbox, allow it to execute). Press *Retry* on the
+   company on Receivables so a new publish happens before the dispatch executes, and stop the after-refresh check from passing (step 7's failure). Expected: the dispatch ends
+   **ReviewRequired** with "not reconciled for ... republished ... has not been checked yet"; nothing was uploaded.
+10. **Nothing auto-enabled.** After every step above, `Collections:Campaigns:FinancialSourceValidated` and `AutoSendingEnabled` are exactly what was configured; no run changed them
+    (they are configuration only). The six Genesys CSV columns are unchanged (`GenesysContactTemplate`).

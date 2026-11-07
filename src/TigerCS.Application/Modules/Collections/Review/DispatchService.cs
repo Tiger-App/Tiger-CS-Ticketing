@@ -85,10 +85,10 @@ public sealed class DispatchService(
         if (resolved.Error is not null) return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, resolved.Error);
         if (resolved.Records.Count == 0)
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, "No Ready records are selected.");
-        // The reconciliation gate: one decision about the SOURCE (sign-off, procedure, automated evidence), recorded on the run and checked here and again before the upload. A customer's own
-        // Ready status says the customer's data is sound; it never says the source is reconciled.
-        if (!resolved.Run!.SourceReconciled)
-            return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, NotReconciledMessage);
+        // The reconciliation gate: one decision about the SOURCE per company (sign-off, procedure, automated evidence), checked here as it stands NOW and again before the upload. A customer's
+        // own Ready status says the customer's data is sound; it never says the source is reconciled. A company that is not reconciled refuses its customers; it never holds the other company back.
+        if (ReviewRefreshService.ClosedMessage(balances.Gate(), resolved.Records.Select(r => r.CompanyId)) is { } closed)
+            return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, closed);
         var fingerprint = ReviewQueryService.Fingerprint(resolved.Records);
         if (resolved.Records.Count != request.ExpectedCount || !string.Equals(fingerprint, request.ExpectedFingerprint, StringComparison.OrdinalIgnoreCase))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
@@ -360,10 +360,9 @@ public sealed class DispatchService(
         }
 
         // The reconciliation gate again, with the configuration as it is NOW: a sign-off withdrawn or evidence expired since the approval stops the upload.
-        if (!balances.SourceReconciled)
-            return await StopAsync(dispatch, DispatchStatus.ReviewRequired, NotReconciledMessage + " Nothing was sent.", ct);
-
         var companies = items.Select(i => i.CompanyId).Distinct().Order().ToList();
+        if (ReviewRefreshService.ClosedMessage(balances.Gate(), companies) is { } closedNow)
+            return await StopAsync(dispatch, DispatchStatus.ReviewRequired, closedNow + " Nothing was sent.", ct);
         await store.SetDispatchPhaseAsync(dispatch.CollectionsDispatchId, $"Checking current balances (company {string.Join(" and ", companies)}); this can take several minutes", ct);
         CurrentBalanceReader.Result read;
         try
@@ -377,6 +376,9 @@ public sealed class DispatchService(
         // The lease may have been lost between the last heartbeat and now; do not write on someone else's dispatch.
         if (!await store.RenewLeaseAsync(dispatch.CollectionsDispatchId, owner, clock.UtcNow, LeaseTtl, ct)) throw new LeaseLostException();
         await store.SetRevalidationMsAsync(dispatch.CollectionsDispatchId, read.ElapsedMs, ct);
+        // ... and once more bound to the snapshot publish the balances were just read from: a refresh between the approval and now that has not been checked yet is not sent on.
+        if (ReviewRefreshService.ClosedMessage(read.Gate, companies) is { } closedForPublish)
+            return await StopAsync(dispatch, DispatchStatus.ReviewRequired, closedForPublish + " Nothing was sent.", ct);
         var current = read.ByAsOfDate[asOf];
 
         var settled = new List<CollectionsDispatchItem>(cancelledItems);

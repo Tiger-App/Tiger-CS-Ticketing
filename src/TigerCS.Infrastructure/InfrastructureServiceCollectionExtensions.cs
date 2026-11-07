@@ -440,6 +440,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<TigerCS.Application.Modules.Collections.Reconciliation.IReconciliationSource, PactDirectReconciliationSource>();
         services.AddSingleton<TigerCS.Application.Modules.Collections.Reconciliation.IReconciliationLauncher, InProcessReconciliationLauncher>();
         services.AddScoped<TigerCS.Application.Modules.Collections.Reconciliation.FinancialReconciliationService>();
+        // The check that follows each successful snapshot refresh of a company (the refresh jobs call it; the service also refreshes a company once when a check finds differences).
+        services.AddScoped<TigerCS.Application.Modules.Collections.Reconciliation.IPostRefreshReconciliation>(sp => sp.GetRequiredService<TigerCS.Application.Modules.Collections.Reconciliation.FinancialReconciliationService>());
         services.AddScoped<CollectionsCampaignAppService>();
         // Review and approval workflow: stored review data, explicit refresh/dispatch jobs, Genesys outbound upload.
         services.Configure<CollectionsReviewOptions>(configuration.GetSection(CollectionsReviewOptions.SectionName));

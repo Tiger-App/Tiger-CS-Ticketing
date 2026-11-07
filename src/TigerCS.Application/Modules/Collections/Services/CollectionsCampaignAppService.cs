@@ -180,9 +180,14 @@ public sealed class CollectionsCampaignAppService(
             ? status.IsFresh
             : readAtUtc.Kind == DateTimeKind.Utc && !clock.IsStale(readAtUtc) && readAtUtc <= clock.UtcNow.AddMinutes(1);
         var coverageIncomplete = snapshotStatus is { RangeCovered: false };
+        // The gate per company (one company's missing evidence never holds the other back) and the units a reconciled company holds back one by one.
+        var heldUnits = gate.HeldUnitKeys();
+        var scopeReconciled = companyId is { } scopedCompany ? gate.IsOpen(scopedCompany) : gate.Reconciled;
         CollectionsCampaignContactDto ToContact(CampaignUnitFacts f)
         {
-            var (unitStatus, reasons) = Compose(f.Flags | (int)crmUnavailableFlag, fresh, coverageIncomplete, gate.Reconciled, selected, date, dates);
+            var (unitStatus, reasons) = Compose(f.Flags | (int)crmUnavailableFlag, fresh, coverageIncomplete, gate.IsOpen(f.CompanyId), selected, date, dates);
+            if (heldUnits.Count > 0 && heldUnits.Contains((f.CompanyId, f.TenantId.Trim(), (long)(f.UnitId ?? 0))) && unitStatus is "Ready" or "PreviewOnly" or "NeedsReview")
+            { unitStatus = "NeedsReview"; reasons = [.. reasons.Where(r => r != "OutsideSchedule"), "SourceMismatchUnresolved"]; }
             var identity = $"{f.CompanyId}:{f.TenantId}:{f.UnitId}:{f.UnitCode}:{cycle}";
             var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
             return new CollectionsCampaignContactDto(id, $"ext:Pact:{f.TenantId}", f.CompanyId, f.TenantId, f.FullName, f.Phone, f.Email,
@@ -203,7 +208,7 @@ public sealed class CollectionsCampaignAppService(
                     "The export exceeds the row limit. Filter by company or customer; no partial file was created.");
             // Every unit-level reason makes a unit NeedsReview whatever the global gates are; a unit without one gets the status a hypothetical clean
             // unit would get, so Ready / NeedsReview counts are exact over the whole filtered set without materialising it.
-            var cleanStatus = Compose((int)crmUnavailableFlag, fresh, coverageIncomplete, gate.Reconciled, selected, date, dates).Status;
+            var cleanStatus = Compose((int)crmUnavailableFlag, fresh, coverageIncomplete, scopeReconciled, selected, date, dates).Status;
             count = sqlPage.Total;
             ready = cleanStatus == "Ready" ? sqlPage.Clean : 0;
             review = sqlPage.Review + (cleanStatus == "NeedsReview" ? sqlPage.Clean : 0);
@@ -249,7 +254,7 @@ public sealed class CollectionsCampaignAppService(
         }
         return CollectionsResult<CollectionsCampaignPreviewDto>.Ok(new(date, clock.BusinessDate, readAtUtc,
             "PACT receivables (companies 4 and 32)", selected.ToString(), cycle, dates, dates.Contains(date),
-            gate.Reconciled, sqlPage is null && snapshot!.LegacyExclusionsApplied, permissions.CanSendReminders,
+            scopeReconciled, sqlPage is null && snapshot!.LegacyExclusionsApplied, permissions.CanSendReminders,
             count, ready, review, page, pageSize, items,
             from, to, CollectionsCampaignPolicy.RangeNotes(selected, date, eligibleFrom, to), towerId, snapshotStatus, min,
             new ServerTimingsDto(sourceMs, total.Elapsed.TotalMilliseconds - sourceMs, total.Elapsed.TotalMilliseconds), CrmContactStatusDto.From(crmSet.Availability), notEligible,
@@ -289,7 +294,8 @@ public sealed class CollectionsCampaignAppService(
         if (sourceOptions.Currency != "AED") reasons.Add("CurrencyNeedsReview");
         if (!fresh) reasons.Add("StaleSource");
         if (coverageIncomplete) reasons.Add("CoverageIncomplete");
-        // The reconciliation gate is report-wide (FinancialSourceValidated / SourceGate), never a per-unit reason: a unit's own status says what is wrong with the unit.
+        // The reconciliation gate is company-wide (FinancialSourceValidated / SourceGate), never a per-unit reason: a unit's own status says what is wrong with the unit. The one per-unit
+        // case is the unit's own data: a unit whose snapshot differs persistently from PACT is marked SourceMismatchUnresolved by the caller.
         if (Has(CollectionsCampaignFlags.NoValidContact)) reasons.Add("NoValidContact");
         if (Has(CollectionsCampaignFlags.CrmCustomerAmbiguous)) reasons.Add("CrmCustomerAmbiguous");
         if (Has(CollectionsCampaignFlags.ContactSourceConflict)) reasons.Add("ContactSourceConflict");

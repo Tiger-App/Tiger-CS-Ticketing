@@ -22,6 +22,8 @@ public sealed class FakeSnapshotSource(DateTime nowUtc) : IPactReceivablesSource
     public int Reads { get; private set; }
     public PactReceivablesRequest? LastRequest { get; private set; }
     public int MaxAgeMinutes { get; set; } = 90;
+    /// <summary>The clock the age of a company's snapshot is judged against (a test that moves its clock sets it).</summary>
+    public Func<DateTime> NowUtc { get; set; } = () => nowUtc;
 
     public static SnapshotCompanyRaw Healthy(int company, DateTime successUtc) => new(company, true, successUtc, successUtc, "Succeeded", null, 0, 10,
         new DateOnly(2000, 1, 1), new DateOnly(2099, 12, 31), 0, 0m, 0, 0m, 0, 0);
@@ -71,7 +73,7 @@ public sealed class FakeSnapshotSource(DateTime nowUtc) : IPactReceivablesSource
             .Select(r => WithTower(r)).Where(r => r.TowerNumber is null || r.TowerId is null)
             .GroupBy(r => (r.CompanyId, r.TowerNumber))
             .Select(g => new UnmatchedTowerDto(g.Key.CompanyId, g.Key.TowerNumber, g.Key.TowerNumber is null ? "NoTowerNumber" : "NoMatchingTower", g.Count(), g.Sum(x => x.Amount))).ToList();
-        return Task.FromResult(ReceivablesSnapshotComposer.Compose(from, request.ThroughDate, loaded, unmatched, rows, nowUtc, MaxAgeMinutes));
+        return Task.FromResult(ReceivablesSnapshotComposer.Compose(from, request.ThroughDate, loaded, unmatched, rows, NowUtc(), MaxAgeMinutes));
     }
 
     private PactReceivableInstalment WithTower(PactReceivableInstalment row)

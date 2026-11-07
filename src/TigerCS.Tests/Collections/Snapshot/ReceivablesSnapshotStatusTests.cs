@@ -113,9 +113,32 @@ public sealed class ReceivablesSnapshotStatusTests
         public Task<ReceivablesRefreshResult> RefreshAsync(string triggerSource, int? companyId, CancellationToken cancellationToken, DateOnly? fromDate = null, DateOnly? throughDate = null) => Task.FromResult(result);
     }
 
-    private static Task Run(string status, params ReceivablesRefreshCompanyResult[] companies) =>
-        new CollectionsReceivablesRefreshJob(new Refresher(new ReceivablesRefreshResult(Guid.NewGuid(), status, "m", companies)), NullLogger<CollectionsReceivablesRefreshJob>.Instance)
+    private sealed class PostRefresh : TigerCS.Application.Modules.Collections.Reconciliation.IPostRefreshReconciliation
+    {
+        public List<int> Companies { get; } = [];
+        public Task<TigerCS.Application.Modules.Collections.Reconciliation.ReconciliationRunDto?> RunAfterRefreshAsync(int companyId, CancellationToken cancellationToken)
+        { Companies.Add(companyId); return Task.FromResult<TigerCS.Application.Modules.Collections.Reconciliation.ReconciliationRunDto?>(null); }
+    }
+
+    private static Task Run(string status, params ReceivablesRefreshCompanyResult[] companies) => Run(status, null, companies);
+
+    private static Task Run(string status, PostRefresh? reconciliation, params ReceivablesRefreshCompanyResult[] companies) =>
+        new CollectionsReceivablesRefreshJob(new Refresher(new ReceivablesRefreshResult(Guid.NewGuid(), status, "m", companies)), NullLogger<CollectionsReceivablesRefreshJob>.Instance, reconciliation)
             .RunAsync(4, CancellationToken.None);
+
+    [Fact]
+    public async Task Job_RunsTheSnapshotConsistencyCheckOfTheCompany_OnlyAfterItsRefreshSucceeded()
+    {
+        var after = new PostRefresh();
+        await Run("Succeeded", after, new ReceivablesRefreshCompanyResult(4, "Succeeded", 10, 5, 4, 1, 0, null, null));
+        Assert.Equal([4], after.Companies);                                                  // the refreshed company, in the same job, after the publish
+        await Run("AlreadyRunning", after);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Run("Failed", after, new ReceivablesRefreshCompanyResult(4, "Failed", null, null, null, null, null, 7416, "x")));
+        Assert.Equal([4], after.Companies);                                                  // a skipped or failed refresh publishes nothing, so nothing is checked
+        var retry = new CollectionsReceivablesCompanyRetryJob(new Refresher(new ReceivablesRefreshResult(Guid.NewGuid(), "Succeeded", null, [new(32, "Succeeded", 10, 5, 4, 1, 0, null, null)])), NullLogger<CollectionsReceivablesCompanyRetryJob>.Instance, after);
+        await retry.RunAsync(32, CancellationToken.None);
+        Assert.Equal([4, 32], after.Companies);                                              // the Retry button's refresh is followed by the check too
+    }
 
     [Fact]
     public async Task Job_SucceedsSilently_AndTreatsAnOverlapAsASkipNotAnError()

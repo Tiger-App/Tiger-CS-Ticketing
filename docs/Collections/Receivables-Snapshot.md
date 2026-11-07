@@ -30,6 +30,8 @@ Opening a page or changing a filter reads the last published copy; it never call
 * **Timeout / cancel / restart.** The refresh has its own command timeout (`RefreshCommandTimeoutSeconds`, 1800). On timeout or cancellation the application closes the connection, records the reason on the attempt and tries to close it; if the SQL session is still inside the PACT call (a linked-server call may not honour a cancel until PACT answers) the company stays honestly *Loading* until that session ends, then the next status read closes it as `Failed` with the recorded reason. A killed process leaves a `Running` row without a lock holder: closed as `Abandoned` by the next status read or refresh. Nothing is closed by age.
 * **Retry** re-runs **only the named company**. Two refreshes of one company cannot overlap (in-process gate + SQL lock: the second returns `AlreadyRunning`); the two companies refresh independently, in parallel.
 * Exports, Review approval and Genesys dispatch stay blocked for missing or stale data (`Freshness`, `RangeCovered`).
+* **After a successful refresh the company is checked against a fresh direct read of the same PACT procedure** (`FinancialReconciliationService`, in the same job). Differences trigger one
+  controlled refresh of that company and a second comparison; only units that still differ are held back from sending. See *Collections-Review-And-Genesys-Dispatch.md*, "PACT is the source".
 
 ## 3. What the pages show (all dates are Asia/Dubai)
 

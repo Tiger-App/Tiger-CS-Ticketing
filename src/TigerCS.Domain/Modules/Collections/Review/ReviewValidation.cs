@@ -20,6 +20,11 @@ public sealed record ReviewReasonInfo(string Code, ReasonKind Kind, string Expla
 public static class ReviewReasons
 {
     public const string SourceReconciliationRequired = "SourceReconciliationRequired";
+    /// <summary>
+    /// The unit's remaining amounts in the snapshot differ from a fresh read of the PACT procedure, and a refresh of the snapshot did not resolve the difference (a synchronization or
+    /// mapping defect). Only this unit is held back; the reconciliation diagnostics list the instalments that differ.
+    /// </summary>
+    public const string SourceMismatchUnresolved = "SourceMismatchUnresolved";
     public const string AmountPrecisionNeedsReview = "AmountPrecisionNeedsReview";
     public const string NoValidContact = "NoValidContact";
     public const string PaymentStatusUnknown = "PaymentStatusUnknown";
@@ -54,6 +59,7 @@ public static class ReviewReasons
     public static readonly IReadOnlyList<ReviewReasonInfo> All =
     [
         new(SourceReconciliationRequired, ReasonKind.NeedsReview, "The financial source has not been reconciled with PACT accounts for this procedure yet, so its balances cannot be trusted for a send. This is a property of the source (one gate for every customer), not of this customer's data."),
+        new(SourceMismatchUnresolved, ReasonKind.NeedsReview, "This unit's remaining amounts in the snapshot differ from a fresh read of PACT, and refreshing the snapshot did not resolve the difference. That is a synchronization or mapping defect to investigate (see Financial reconciliation); only this unit is held back."),
         new(AmountPrecisionNeedsReview, ReasonKind.NeedsReview, "The source amount has more than two decimal places that are not simple rounding noise. The real balance must be confirmed in PACT; it was not rounded."),
         new(NoValidContact, ReasonKind.NeedsReview, "There is no valid phone number that the voice campaign can call (missing, wrong length, not a UAE/international number, or several numbers in one field)."),
         new(PaymentStatusUnknown, ReasonKind.NeedsReview, "The remaining amount of this balance cannot be determined reliably (missing, negative, or contradicted by the source's status or its original and paid amounts). It stays visible but cannot be sent."),
