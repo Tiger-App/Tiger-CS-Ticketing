@@ -43,9 +43,11 @@ public static class ReviewReasons
     /// because sending it on the manual date would call the same unit twice, or the same number for two units, on that day.
     /// </summary>
     public const string ManualReminderTypeOverlap = "ManualReminderTypeOverlap";
+    /// <summary>No longer produced (each unit is its own call, whatever its number); kept so review data stored before that decision still reads. A refresh clears it.</summary>
     public const string ManualSharedPhone = "ManualSharedPhone";
     public const string LegalNoticeReleaseRequired = "LegalNoticeReleaseRequired";
     public const string LegalCaseNotApproved = "LegalCaseNotApproved";
+    /// <summary>No longer produced (each unit is its own call, whatever its number); kept so review data stored before that decision still reads. A refresh clears it.</summary>
     public const string SharedPhoneMultipleUnits = "SharedPhoneMultipleUnits";
     public const string ReminderTypeOverlap = "ReminderTypeOverlap";
     public const string SourceAmountsInconsistent = "SourceAmountsInconsistent";
@@ -74,7 +76,7 @@ public static class ReviewReasons
         new(CurrencyNeedsReview, ReasonKind.NeedsReview, "The currency is not AED; amounts cannot be added or sent until reviewed."),
         new(OutsideSchedule, ReasonKind.Exclusion, "Today is not a scheduled send day for this reminder type. In Manual mode an authorized person can still send it today."),
         new(ManualReminderTypeOverlap, ReasonKind.ManualOnly, "Manual sending is held back: this unit already qualifies for another reminder type that is scheduled today, so it would be called twice."),
-        new(ManualSharedPhone, ReasonKind.ManualOnly, "Manual sending is held back: the same phone number is on several units that would be sent today, so it would be called once per record."),
+        new(ManualSharedPhone, ReasonKind.ManualOnly, "Stored before the per-unit calling decision: a phone number shared by several units no longer holds a record back (each unit is its own call). Refresh the approval data."),
         new(LegalNoticeReleaseRequired, ReasonKind.Exclusion, "Sending legal notices to customers has not been released (needs an approved legal workflow)."),
         new(LegalCaseNotApproved, ReasonKind.Exclusion, "Legal Case records are internal Legal referrals; calling customers for them needs an explicit business decision."),
         new(SourceAmountsInconsistent, ReasonKind.NeedsReview, "The source's original amount, paid amount and remaining amount do not add up (original must equal paid plus remaining)."),
@@ -83,7 +85,7 @@ public static class ReviewReasons
         new(ContactSourceConflict, ReasonKind.NeedsReview, "CRM and PACT give different phone numbers (or e-mails) for this unit. Two different people are never merged; CRM alone is shown and a person must confirm."),
         new(CrmUnavailable, ReasonKind.NeedsReview, "CRM contact data is switched on but could not be used (never loaded, too old, or unreadable), so the contact may be incomplete. This is a service problem, not a missing value in CRM; nothing is sent until it is back."),
         new(ContactedToday, ReasonKind.Exclusion, "This customer was already added to a Genesys contact list today. The contact-frequency limit is one contact per customer per day; try again tomorrow."),
-        new(SharedPhoneMultipleUnits, ReasonKind.Exclusion, "The same phone number is on several units (or several customers). Sending would call it once per record, and the business has not yet decided how to handle that, so these records are held back."),
+        new(SharedPhoneMultipleUnits, ReasonKind.Exclusion, "Stored before the per-unit calling decision: a phone number shared by several units no longer holds a record back (each unit is its own call). Refresh the approval data."),
         new(ReminderTypeOverlap, ReasonKind.Exclusion, "This unit qualifies for more than one reminder type today (for example Current Month and Legal Notice on day 14). Sending both would call twice on the same day, and the business has not yet decided which takes priority, so these records are held back.")
     ];
 

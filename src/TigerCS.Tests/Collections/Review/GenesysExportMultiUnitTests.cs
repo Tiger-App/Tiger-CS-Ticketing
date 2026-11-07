@@ -7,7 +7,7 @@ using TigerCS.Domain.Modules.Collections.Review;
 namespace TigerCS.Tests.Collections.Review;
 
 /// <summary>
-/// One customer who owns several units, and phone numbers. The SEND rule is unchanged: a number on several units is held back from sending (<c>ManualSharedPhone</c>). The FILE is one row per
+/// One customer who owns several units, and phone numbers. Send and the FILE follow the same per-unit rule: a number on several units holds nothing back. The FILE is one row per
 /// unit, exactly as Preview lists them: a phone number never merges, adds up, de-duplicates or drops a record. A unit is left out only when a mandatory field is genuinely missing, and it is
 /// then named. The harness clock is 15 Oct 2026.
 /// </summary>
@@ -42,16 +42,15 @@ public sealed class GenesysExportMultiUnitTests
     }
 
     [Fact]
-    public async Task OneNumberOnTwoUnitsOfOneCustomer_IsTwoRows_EachWithItsOwnAmountAndDueDate_WhileSendingStaysHeldBack()
+    public async Task OneNumberOnTwoUnitsOfOneCustomer_IsTwoRows_EachWithItsOwnAmountAndDueDate_AndBothAreSendable()
     {
         using var h = await SeededAsync(UnitOne("971500000001"), UnitTwo("971500000001"));
         using (var scope = h.NewScope())
         {
-            // The send rule is untouched: the page holds both units back, and nothing can be approved.
+            // Send follows the same per-unit rule: both units are Ready, each its own call.
             var page = (await scope.Query.QueryAsync(h.Manager, Manual(), 1, 50, CancellationToken.None)).Value!;
-            Assert.Equal(2, page.Items.Count); Assert.DoesNotContain(page.Items, i => i.ValidationStatus == "Ready");
-            Assert.All(page.Items, i => Assert.Contains(i.Reasons, r => r.Code == ReviewReasons.ManualSharedPhone));
-            Assert.Equal(0, (await scope.Query.SummarizeAsync(h.Manager, new SelectionRequest(Manual(), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!.Count);
+            Assert.Equal(2, page.Items.Count); Assert.All(page.Items, i => Assert.Equal("Ready", i.ValidationStatus));
+            Assert.Equal(2, (await scope.Query.SummarizeAsync(h.Manager, new SelectionRequest(Manual(), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!.Count);
         }
         var dto = (await ExportAsync(h)).Value!;
         var rows = GenesysContactTemplate.ParseCsv(dto.Csv);
@@ -60,9 +59,9 @@ public sealed class GenesysExportMultiUnitTests
         Assert.Equal(new[] { "+971500000001", "Customer 1", "700.00", "2026-10-25" }, new[] { rows[2][0], rows[2][1], rows[2][4], rows[2][5] });
         Assert.Equal(5700m, dto.TotalAmount);
         Assert.DoesNotContain(dto.Notices, n => n.Contains("combined"));
-        Assert.Contains(dto.Notices, n => n.Contains("2 of the 2 customer unit(s) in this file are held back from sending (Held back 2)"));
+        Assert.DoesNotContain(dto.Notices, n => n.Contains("held back from sending"));
         var audit = await AuditAsync(h);
-        Assert.Contains("Rows=2;Units=2;Excluded=0", audit); Assert.Contains("Total=AED 5700.00", audit); Assert.Contains("IncludedByStatus=Excluded:2", audit);
+        Assert.Contains("Rows=2;Units=2;Excluded=0", audit); Assert.Contains("Total=AED 5700.00", audit); Assert.Contains("IncludedByStatus=Ready:2", audit);
         Assert.Equal(3, audit.Split(";Customers=")[1].Split(',').Distinct().Count());        // two unit fingerprints and the one number, recorded once
     }
 

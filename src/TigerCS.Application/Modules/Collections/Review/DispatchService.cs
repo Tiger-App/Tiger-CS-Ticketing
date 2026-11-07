@@ -95,10 +95,11 @@ public sealed class DispatchService(
                 "The records, amounts or contacts changed since this list was shown. Review the current list and confirm again.");
         if (query.IsStale(resolved.Run!))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired, "The review data is stale. Refresh it and review again.");
-        // Defence in depth: such records are already held back as Excluded, so this can only happen through a stale or tampered list.
-        if (ReviewQueryService.SharedPhones(resolved.Records).Records > 0 || resolved.Records.Any(r => !IsVoiceEligible(r.Phone)))
+        // Defence in depth: such records are already held back, so this can only happen through a stale or tampered list. A number shared by several units is NOT refused: each unit is its own
+        // contact record and its own call (the confirmed business decision); the unit-level duplicate protections (record key, live-record index, contact-frequency per unit) stay in force.
+        if (resolved.Records.Any(r => !IsVoiceEligible(r.Phone)))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
-                "The list contains records that share a phone number or have no callable phone. Repeated calls are blocked pending a business decision; review the current list.");
+                "The list contains records without a callable phone number. Review the current list.");
         var types = resolved.Records.Select(r => r.ReminderType).Distinct().ToList();
         var manual = CollectionsSendingModes.IsManual(request.Selection.Filter?.SendingMode);
         if (manual && types.Count != 1)

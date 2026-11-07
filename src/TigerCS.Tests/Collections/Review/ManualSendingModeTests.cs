@@ -105,11 +105,11 @@ public sealed class ManualSendingModeTests
     [Fact]
     public void ManualWaivesOnlyTheSchedule_EveryOtherReasonKeepsTheRecordOut()
     {
-        // Two customers on one number, a bad contact, an unreconciled source, an internal legal referral: none of them is manually sendable.
+        // Two customers on one number are each their own call (the confirmed per-unit decision): both sendable, nothing merged. A bad contact, an unreconciled source and an internal legal referral stay out.
         var shared = ReviewRecordBuilder.Build([ReviewHarness.Row(3, mobile: "971500000001"), ReviewHarness.Row(4, mobile: "971500000001")], Context(Today)).Records
             .Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(2, shared.Count);
-        Assert.All(shared, r => { Assert.Contains(ReviewReasons.ManualSharedPhone, ReviewRecordBuilder.Parse(r.Reasons)); Assert.False(ReviewRecordBuilder.IsManuallySendable(r)); });
+        Assert.All(shared, r => { Assert.DoesNotContain(ReviewReasons.ManualSharedPhone, ReviewRecordBuilder.Parse(r.Reasons)); Assert.True(ReviewRecordBuilder.IsManuallySendable(r)); });
         var noPhone = ReviewRecordBuilder.Build([ReviewHarness.Row(5, mobile: "123")], Context(Today)).Records.First(r => r.ReminderType == CampaignReminderType.CurrentMonth);
         Assert.False(ReviewRecordBuilder.IsManuallySendable(noPhone)); Assert.Contains(ReviewReasons.NoValidContact, ReviewRecordBuilder.Parse(noPhone.Reasons));
         var unreconciled = ReviewRecordBuilder.Build([ReviewHarness.Row(6)], Context(Today) with { SourceReconciled = false }).Records.First();
@@ -216,7 +216,7 @@ public sealed class ManualSendingModeTests
     // ------------------------------------------------------------ safety rules are not bypassed
 
     [Fact]
-    public async Task Manual_DoesNotBypassReconciliation_Permissions_Contacts_OrSharedPhones()
+    public async Task Manual_DoesNotBypassReconciliation_Permissions_OrContacts_AndASharedNumberHoldsNobodyBack()
     {
         using var unreconciled = await SeededAsync(h => h.Campaign.FinancialSourceValidated = false);
         var summary = (await SummaryAsync(unreconciled, All(Manual()))).Value!;
@@ -234,9 +234,8 @@ public sealed class ManualSendingModeTests
 
         using var shared = await SeededAsync(null, true, ReviewHarness.Row(3, mobile: "971500000001"), ReviewHarness.Row(4, mobile: "971500000001"), ReviewHarness.Row(5));
         var page = await ListAsync(shared, Manual());
-        Assert.Equal(1, page.Counts.Ready);
-        Assert.All(page.Items.Where(i => i.ValidationStatus != "Ready"), i => { Assert.Equal("Excluded", i.ValidationStatus); Assert.Contains(i.Reasons, r => r.Code == ReviewReasons.ManualSharedPhone); Assert.DoesNotContain(i.Reasons, r => r.Code == ReviewReasons.OutsideSchedule); });
-        Assert.Equal(1, (await SummaryAsync(shared, All(Manual()))).Value!.Count);
+        Assert.Equal(3, page.Counts.Ready);                                                               // a shared number holds nobody back: each unit is its own call
+        Assert.Equal(3, (await SummaryAsync(shared, All(Manual()))).Value!.Count);
 
         using var ok = await SeededAsync();
         Assert.Equal(CollectionsOutcome.Forbidden, (await SummaryAsync(ok, All(Manual()), ok.Agent)).Outcome);

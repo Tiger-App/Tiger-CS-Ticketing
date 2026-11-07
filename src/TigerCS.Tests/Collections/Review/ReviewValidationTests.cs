@@ -186,12 +186,12 @@ public sealed class ReviewValidationTests
         var records = ReviewRecordBuilder.Build([first, second], Context()).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(2, records.Count);
         Assert.Equal(new decimal?[] { 300m, 450m }, records.OrderBy(r => r.DueDate).Select(r => r.RemainingAmount));
-        // One customer, two units, one phone: held back (repeated calls), not merged and not resolved by choosing a unit.
-        Assert.All(records, r => { Assert.Equal(ReviewValidationStatus.Excluded, r.ValidationStatus); Assert.Contains(ReviewReasons.SharedPhoneMultipleUnits, Reasons(r)); });
+        // One customer, two units, one phone: two Ready records, each its own call (the confirmed per-unit decision); not merged and not resolved by choosing a unit.
+        Assert.All(records, r => { Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus); Assert.DoesNotContain(ReviewReasons.SharedPhoneMultipleUnits, Reasons(r)); });
     }
 
     [Fact]
-    public void ThePhoneSharedByTwoUnitsBlocksBoth_NothingIsMergedOrChosen()
+    public void ThePhoneSharedByTwoUnits_HoldsNeither_NothingIsMergedOrChosen()
     {
         var a = ReviewHarness.Row(1, mobile: "0500003001", amount: 300m);
         var b = ReviewHarness.Row(2, mobile: "0500003001", amount: 450m);
@@ -200,8 +200,8 @@ public sealed class ReviewValidationTests
         Assert.Equal(new decimal?[] { 300m, 450m }, records.OrderBy(r => r.RemainingAmount).Select(r => r.RemainingAmount));
         Assert.All(records, r =>
         {
-            Assert.Contains(ReviewReasons.SharedPhoneMultipleUnits, Reasons(r));
-            Assert.Equal(ReviewValidationStatus.Excluded, r.ValidationStatus);  // blocked pending the business decision; no acknowledgement can release it
+            Assert.DoesNotContain(ReviewReasons.SharedPhoneMultipleUnits, Reasons(r));
+            Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus);     // a repeated number alone never produces a hold
         });
     }
 
