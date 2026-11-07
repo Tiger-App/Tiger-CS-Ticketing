@@ -84,6 +84,11 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         await LoadApprovalStateAsync(cancellationToken);
         if (TempData["ApprovalError"] is string error) ApprovalError = error;
         if (TempData["ApprovalNotice"] is string notice) ApprovalNotice = notice;
+        if (TempData["GenesysCheck"] is string checkJson)
+        {
+            try { GenesysCheck = System.Text.Json.JsonSerializer.Deserialize<GenesysConnectionCheckDto>(checkJson); }
+            catch (System.Text.Json.JsonException) { /* an unreadable result is simply not shown */ }
+        }
     }
 
     /// <summary>The results area only (HTML fragment): summary, snapshot status, table, pagination and export links.</summary>
@@ -547,6 +552,30 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
             ? "The Tiger CS API did not confirm the outcome (it did not answer in time, could not be reached or sent an unusable reply), so it is not known whether this send was approved."
             : result.Outcome == ApiOutcome.Conflict ? result.Detail ?? "The list changed. Review the current list and confirm again." : Describe(result.Outcome, result.Detail);
         return new(false, null, null, 0, message, unknown, result.Outcome is ApiOutcome.ServiceUnavailable or ApiOutcome.Locked, result.Outcome.ToString());
+    }
+
+    /// <summary>The result of the last read-only Genesys connection check (shown once, after the redirect back to the same preview).</summary>
+    public GenesysConnectionCheckDto? GenesysCheck { get; private set; }
+
+    /// <summary>The check is offered where a send stopped because Genesys could not be checked (or is not configured), to people who may send.</summary>
+    public bool OffersGenesysCheck => CanSend && ApprovalError is { } error && error.Contains("Genesys", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A read-only check of the Genesys integration (never an upload): region consistency, OAuth client and organization, every configured contact list. The result is carried to the page the person
+    /// came from (same campaign, filters and Manual mode) and shown there once.
+    /// </summary>
+    public async Task<IActionResult> OnPostCheckGenesysAsync(string? returnUrl, CancellationToken ct)
+    {
+        var target = !string.IsNullOrEmpty(returnUrl) && Url.IsLocalUrl(returnUrl) ? returnUrl : "/Collections/Campaigns";
+        var result = await api.CheckGenesysConnectionAsync(ct);
+        if (result.IsSuccess && result.Value is { } check)
+        {
+            // TempData travels in a cookie: keep the lines short.
+            string Short(string text) => text.Length > 400 ? text[..400] + "…" : text;
+            TempData["GenesysCheck"] = System.Text.Json.JsonSerializer.Serialize(check with { Lines = check.Lines.Select(l => l with { Detail = Short(l.Detail) }).ToList() });
+        }
+        else TempData["ApprovalError"] = Describe(result.Outcome, result.Detail);
+        return LocalRedirect(target);
     }
 
     public async Task<IActionResult> OnPostRefreshApprovalAsync(string? returnUrl, CancellationToken ct)

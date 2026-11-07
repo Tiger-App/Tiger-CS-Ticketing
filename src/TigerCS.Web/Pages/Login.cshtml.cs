@@ -55,7 +55,10 @@ public sealed class LoginModel(AuthApiClient authApiClient) : PageModel
                     ExpiresUtc = response.ExpiresAtUtc
                 });
 
-            return LocalRedirect(!string.IsNullOrEmpty(returnUrl) && Url.IsLocalUrl(returnUrl) ? returnUrl : "/Tickets");
+            // A page the person asked for comes first; otherwise Collections for anyone with Collections access, else the landing they already had. The session cookie is not
+            // readable on this request yet, so the decision uses the roles just returned by the Api (no per-user overrides); "/" decides with them on later visits.
+            return LocalRedirect(!string.IsNullOrEmpty(returnUrl) && Url.IsLocalUrl(returnUrl) ? returnUrl
+                : LandingPage.For(response.Roles, ViewerPermissions.None, "/Tickets"));
         }
 
         ErrorMessage = result.Outcome switch

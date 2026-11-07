@@ -168,8 +168,15 @@ public sealed record GenesysCampaignCreateResult(GenesysUploadOutcome Outcome, i
 /// <summary>A Genesys contact list as far as this integration cares: the names of its columns (data columns and phone columns).</summary>
 public sealed record GenesysContactListInfo(GenesysUploadOutcome Outcome, int? HttpStatus, IReadOnlyList<string> Columns, string? Error);
 
+/// <summary>The organization the OAuth client belongs to (GET /api/v2/organizations/me): proves the token, the API region and which organization the configured contact list ids are looked up in.</summary>
+public sealed record GenesysOrganizationInfo(GenesysUploadOutcome Outcome, int? HttpStatus, string? Id, string? Name, string? Error);
+
 public interface IGenesysOutboundClient
 {
+    /// <summary>GET /api/v2/organizations/me (read only): which organization and region the configured credentials reach.</summary>
+    Task<GenesysOrganizationInfo> GetOrganizationAsync(CancellationToken ct) =>
+        Task.FromResult(new GenesysOrganizationInfo(GenesysUploadOutcome.Unknown, null, null, null, "This client cannot read the organization."));
+
     /// <summary>GET /api/v2/outbound/contactlists/{contactListId} (read only): the list's column names, to check that an upload will fit it.</summary>
     Task<GenesysContactListInfo> GetContactListAsync(string contactListId, CancellationToken ct) =>
         Task.FromResult(new GenesysContactListInfo(GenesysUploadOutcome.Unknown, null, [], "This client cannot read contact lists."));

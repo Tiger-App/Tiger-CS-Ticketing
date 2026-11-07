@@ -47,11 +47,22 @@ public sealed class FakeGenesysClient : IGenesysOutboundClient
     public List<string> CampaignChecks { get; } = [];
     public Queue<GenesysUploadOutcome> ListCheckScript { get; } = new();
 
+    /// <summary>A scripted answer for one contact list (for example Rejected with HTTP 404 or 403); takes precedence over <see cref="ListColumns"/>.</summary>
+    public Dictionary<string, GenesysContactListInfo> ListAnswers { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The organization the fake OAuth client belongs to (null = the default test organization).</summary>
+    public GenesysOrganizationInfo? Organization { get; set; }
+    public int OrganizationChecks { get; private set; }
+    public Task<GenesysOrganizationInfo> GetOrganizationAsync(CancellationToken ct)
+    {
+        lock (_gate) { OrganizationChecks++; return Task.FromResult(Organization ?? new GenesysOrganizationInfo(GenesysUploadOutcome.Accepted, 200, "org-1", "Tiger Test Org", null)); }
+    }
+
     public Task<GenesysContactListInfo> GetContactListAsync(string contactListId, CancellationToken ct)
     {
         lock (_gate)
         {
             ListChecks.Add(contactListId);
+            if (ListAnswers.TryGetValue(contactListId, out var answer)) return Task.FromResult(answer);
             var outcome = ListCheckScript.Count > 0 ? ListCheckScript.Dequeue() : GenesysUploadOutcome.Accepted;
             if (outcome != GenesysUploadOutcome.Accepted) return Task.FromResult(new GenesysContactListInfo(outcome, null, [], "Genesys could not be reached."));
             return Task.FromResult(new GenesysContactListInfo(outcome, 200, ListColumns.TryGetValue(contactListId, out var columns) ? columns : ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], null));
