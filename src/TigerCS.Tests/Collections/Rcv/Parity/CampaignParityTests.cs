@@ -255,7 +255,7 @@ public sealed class CampaignParityTests
         Assert.Equal(10, stagesWithUnits);                                                              // every stage has candidates, with and without the legal-notice release
         Assert.Contains("LegalNoticeReleaseRequired", reasons); Assert.Contains("InternalLegalReferralOnly", reasons); Assert.Contains("InternalReview", statuses);
         foreach (var expected in new[] { "Qualifies", "AmbiguousInstalments", "ConflictingContactDetails", "UnitAllocationNeedsReview", "ContradictoryPaymentStatus", "NoValidContact",
-                                         "CrmCustomerAmbiguous", "ContactSourceConflict" })
+                                         "CrmCustomerAmbiguous" })
             Assert.Contains(expected, reasons);                                                         // the review reasons the edge data is built to trigger
         Assert.Contains("Ready", statuses); Assert.Contains("NeedsReview", statuses);
         Assert.True(withAmount > 20 && withoutAmount > 0 && withDue > 0, $"amounts {withAmount}/{withoutAmount}, due {withDue}");   // priced units, ambiguous (no amount) units, units due today

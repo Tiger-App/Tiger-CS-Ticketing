@@ -154,10 +154,10 @@ public sealed class PerUnitCallsTests
         Assert.Equal("NotReconciled", (await scope.Auto.RunAsync(CancellationToken.None)).Stages.Single(s => s.Stage == "CurrentMonth").Outcome);
     }
 
-    // 9: a contact source conflict still holds the unit, and only that unit
+    // 9: a different CRM contact does not hold the unit: CRM's contact is used and every unit is still its own call
 
     [Fact]
-    public async Task AContactSourceConflict_StillHoldsThatUnit_WhileTheOtherUnitsOnTheNumberAreSent()
+    public async Task ADifferentCrmContact_DoesNotHoldTheUnit_AndEveryUnitIsStillItsOwnCall()
     {
         var store = new FakeCrmOwnerStore { LastSuccessUtc = ReviewHarness.Now.AddMinutes(-20) };
         await store.ReplaceAsync([new CrmOwnerRow("TP140-2001", "TP140", "1", 10, 8, 1, 5001, 7, "Crm Customer 1", "+966508650505", "c1@example.test", "+966508650505", "c1@example.test", "Blue Wave")], default, null);
@@ -165,14 +165,16 @@ public sealed class PerUnitCallsTests
         using var h = await SeededAsync(x => x.Links = links);
         using var scope = h.NewScope();
         var page = (await scope.Query.QueryAsync(h.Manager, Manual(), 1, 50, CancellationToken.None)).Value!;
-        var conflict = page.Items.Single(i => i.UnitCode == "TP140-2001");
-        Assert.Equal("NeedsReview", conflict.ValidationStatus); Assert.Contains(conflict.Reasons, r => r.Code == ReviewReasons.ContactSourceConflict);
-        Assert.Equal(2, page.Counts.Ready);
+        var crmUnit = page.Items.Single(i => i.UnitCode == "TP140-2001");
+        Assert.Equal("Ready", crmUnit.ValidationStatus); Assert.DoesNotContain(crmUnit.Reasons, r => r.Code == ReviewReasons.ContactSourceConflict);
+        Assert.Equal("+966508650505", crmUnit.Phone);          // CRM's number, not PACT's
+        Assert.Equal(3, page.Counts.Ready);
         var (summary, confirm) = await h.PrepareAsync(h.All(Manual()), "conflict");
-        Assert.Equal(2, summary.Count);
+        Assert.Equal(3, summary.Count);
         Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
         await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
-        Assert.Equal(["300.00", "725.00"], h.Client.Calls.Single().Contacts.Select(c => c.AmountDue).Order());
+        Assert.Equal(["300.00", "450.00", "725.00"], h.Client.Calls.Single().Contacts.Select(c => c.AmountDue).Order());
+        Assert.Contains(h.Client.Calls.Single().Contacts, c => c.Phone == "+966508650505");
     }
 
     // 10: Manual and Auto decide the same way

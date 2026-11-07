@@ -298,7 +298,6 @@ public sealed class CollectionsCampaignAppService(
         // case is the unit's own data: a unit whose snapshot differs persistently from PACT is marked SourceMismatchUnresolved by the caller.
         if (Has(CollectionsCampaignFlags.NoValidContact)) reasons.Add("NoValidContact");
         if (Has(CollectionsCampaignFlags.CrmCustomerAmbiguous)) reasons.Add("CrmCustomerAmbiguous");
-        if (Has(CollectionsCampaignFlags.ContactSourceConflict)) reasons.Add("ContactSourceConflict");
         if (Has(CollectionsCampaignFlags.CrmCompanyAmbiguous)) reasons.Add("CrmCompanyAmbiguous");
         if (Has(CollectionsCampaignFlags.CrmUnavailable)) reasons.Add("CrmUnavailable");
         var status = reasons.Count > 0 ? "NeedsReview" : "Ready";
@@ -386,8 +385,8 @@ public sealed class CollectionsCampaignAppService(
                 if (amount.Amount is { } value && value != decimal.Round(value, 2)) flags |= CollectionsCampaignFlags.AmountPrecisionNeedsReview;
                 if (key.UnitId is not > 0 || string.IsNullOrWhiteSpace(key.Code) || key.Code == "0")
                     flags |= CollectionsCampaignFlags.MissingUnitIdentity;
-                if (basis.Select(r => (r.FullName.Trim(), Phone: CollectionsContactNormalizer.NormalizePhone(r.Mobile),
-                        Email: CollectionsContactNormalizer.NormalizeEmail(r.Email), r.ProjectCode)).Distinct().Count() > 1)
+                if (basis.Select(r => linked.CrmStatus == CrmLinkStatus.Single ? ("", "", "", r.ProjectCode) : (r.FullName.Trim(), CollectionsContactNormalizer.NormalizePhone(r.Mobile),
+                        CollectionsContactNormalizer.NormalizeEmail(r.Email), r.ProjectCode)).Distinct().Count() > 1)
                     flags |= CollectionsCampaignFlags.ConflictingContactDetails;
                 if (ambiguousTenants.Contains((key.CompanyId, key.Tenant))) flags |= CollectionsCampaignFlags.UnitAllocationNeedsReview;
                 if (basis.Any(r => string.Equals(r.SourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase)))

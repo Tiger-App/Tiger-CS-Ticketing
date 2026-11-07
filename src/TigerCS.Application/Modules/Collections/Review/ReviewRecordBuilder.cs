@@ -68,8 +68,10 @@ public static class ReviewRecordBuilder
             var linked = crm.Link(unit.Key.CompanyId, unit.Key.Code,
                 new SourceContact(first.FullName.Trim(), PhoneNormalizer.Normalize(first.Mobile).E164, NormalizeEmail(first.Email)));
             var email = linked.Email;
-            var contactConflict = unitRows.Select(r => (r.Row.FullName.Trim(), Phone: PhoneNormalizer.Normalize(r.Row.Mobile).E164,
-                Email: NormalizeEmail(r.Row.Email), r.Row.ProjectCode)).Distinct().Count() > 1;
+            // PACT rows that disagree on name / phone / e-mail only matter when CRM does not supply the contact: for a uniquely identified CRM customer the CRM contact is used.
+            var crmSupplies = linked.CrmStatus == CrmLinkStatus.Single;
+            var contactConflict = unitRows.Select(r => crmSupplies ? ("", "", "", r.Row.ProjectCode) : (r.Row.FullName.Trim(), PhoneNormalizer.Normalize(r.Row.Mobile).E164,
+                NormalizeEmail(r.Row.Email), r.Row.ProjectCode)).Distinct().Count() > 1;
 
             // The customer's unpaid instalments, ALL of them, stored on every stage record: a Manual send calculates its amount from them and the person's filters, like the preview's
             // Due / Overdue / Total columns. The stage policy itself looks only from the configured start date on, exactly as the preview decides who is a candidate.
@@ -121,7 +123,6 @@ public static class ReviewRecordBuilder
                 if (linked.Phone.Length == 0) reasons.Add(ReviewReasons.NoValidContact);
                 if (linked.CrmCustomerAmbiguous) reasons.Add(ReviewReasons.CrmCustomerAmbiguous);
                 if (linked.CrmCompanyAmbiguous) reasons.Add(ReviewReasons.CrmCompanyAmbiguous);
-                if (linked.SourceConflict) reasons.Add(ReviewReasons.ContactSourceConflict);
                 if (crm.Availability.Blocks) reasons.Add(ReviewReasons.CrmUnavailable);
 
                 if (!CollectionsCampaignPolicy.ScheduledDates(stage, context.AsOfDate).Contains(context.AsOfDate))
