@@ -6,7 +6,7 @@ using TigerCS.Domain.Modules.Collections.Review;
 namespace TigerCS.Application.Modules.Collections.Review;
 
 /// <param name="Stage">The campaign type.</param>
-/// <param name="Outcome"><c>Dispatched</c>, <c>AlreadyDispatched</c>, <c>NothingReady</c>, <c>NotReleased</c>, <c>Refused</c>.</param>
+/// <param name="Outcome"><c>Dispatched</c>, <c>AlreadyDispatched</c>, <c>NotReconciled</c>, <c>NothingReady</c>, <c>NotReleased</c>, <c>Refused</c>.</param>
 /// <param name="Detail">Why, when the campaign was not dispatched.</param>
 /// <param name="Count">How many customers the dispatch carries.</param>
 public sealed record AutoDispatchStageResult(string Stage, string Outcome, string? Detail, int Count);
@@ -77,6 +77,7 @@ public sealed class AutoDispatchService(
         var request = new SelectionRequest(new ReviewFilter(ReminderType: type.ToString(), SendingMode: CollectionsSendingModes.Auto), ReviewQueryService.ModeAllMatching);
         var resolved = await query.ResolveAsync(request, ct);
         if (resolved.Error is not null) return new(type.ToString(), "Refused", resolved.Error, 0);
+        if (!refresh.SourceReconciled) return new(type.ToString(), "NotReconciled", DispatchService.NotReconciledMessage, 0);
         if (resolved.Records.Count == 0) return new(type.ToString(), "NothingReady", "No customer is Ready for this campaign.", 0);
 
         // The operator who switched AutoSendingEnabled on accepted that the campaign's own Genesys campaign dials what is uploaded to its list; there is no person to tick the box.

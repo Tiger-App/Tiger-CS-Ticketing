@@ -113,7 +113,8 @@ public static class ReviewRecordBuilder
                 if (contactConflict) reasons.Add(ReviewReasons.ConflictingContactDetails);
                 if (ambiguousTenants.Contains((unit.Key.CompanyId, unit.Key.Tenant))) reasons.Add(ReviewReasons.UnitAllocationNeedsReview);
                 if (!context.Currency.Equals("AED", StringComparison.Ordinal)) reasons.Add(ReviewReasons.CurrencyNeedsReview);
-                if (!context.SourceReconciled) reasons.Add(ReviewReasons.SourceReconciliationRequired);
+                // Reconciliation is a property of the SOURCE, not of the customer: the run records it (CollectionsReviewRun.SourceReconciled) and the send refuses on it as one gate.
+                // It is never stamped on each record, so a customer's own status says what is wrong with the customer's data, and nothing else.
                 if (linked.Phone.Length == 0) reasons.Add(ReviewReasons.NoValidContact);
                 if (linked.CrmCustomerAmbiguous) reasons.Add(ReviewReasons.CrmCustomerAmbiguous);
                 if (linked.CrmCompanyAmbiguous) reasons.Add(ReviewReasons.CrmCompanyAmbiguous);

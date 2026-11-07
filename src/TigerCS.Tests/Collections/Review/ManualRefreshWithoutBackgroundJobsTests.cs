@@ -79,8 +79,10 @@ public sealed class ManualRefreshWithoutBackgroundJobsTests
         Assert.Equal("Completed", run!.Status); Assert.False(run.SourceReconciled);                    // the run says so ...
         using var scope = h.NewScope();
         var page = (await scope.Query.QueryAsync(h.Manager, new ReviewFilter(ReminderType: "CurrentMonth"), 1, 50, CancellationToken.None)).Value!;
-        Assert.Equal(0, page.Counts.Ready);                                                            // ... and every record is held back for reconciliation
-        Assert.All(page.Items, i => Assert.Contains(i.Reasons, r => r.Code == "SourceReconciliationRequired"));
+        Assert.True(page.Counts.Ready > 0);                                                            // ... the customers keep their own status ...
+        Assert.All(page.Items, i => Assert.DoesNotContain(i.Reasons, r => r.Code == "SourceReconciliationRequired"));
+        var summary = (await scope.Query.SummarizeAsync(h.Manager, new SelectionRequest(new ReviewFilter(ReminderType: "CurrentMonth"), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!;
+        Assert.False(summary.SourceReconciled);                                                        // ... and the send gate is the source's, so nothing can be approved
     }
 
     [Fact]

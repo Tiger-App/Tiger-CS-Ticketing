@@ -172,7 +172,7 @@ public sealed class AutoDispatchServiceTests
     public async Task Reconciliation_Contacts_SharedPhones_AndLegalRestrictions_StillKeepCustomersOut()
     {
         using var unreconciled = await SeededAsync(configure: h => h.Campaign.FinancialSourceValidated = false);
-        Assert.Equal("NothingReady", CurrentMonth(await RunAsync(unreconciled)).Outcome); Assert.Empty(unreconciled.Scheduler.Dispatches);
+        Assert.Equal("NotReconciled", CurrentMonth(await RunAsync(unreconciled)).Outcome); Assert.Empty(unreconciled.Scheduler.Dispatches);
 
         using var contacts = await SeededAsync(rows: [ReviewHarness.Row(1, mobile: "123"), ReviewHarness.Row(2, mobile: "971500000009"), ReviewHarness.Row(3, mobile: "971500000009"), ReviewHarness.Row(4)]);
         var result = CurrentMonth(await RunAsync(contacts));

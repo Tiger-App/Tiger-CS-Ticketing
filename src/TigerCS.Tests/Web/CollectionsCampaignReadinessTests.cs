@@ -79,7 +79,7 @@ public sealed class CollectionsCampaignReadinessTests
         var reasons = Regex.Matches(html, "data-not-ready-reason>(.*?)</li>", RegexOptions.Singleline).Select(m => System.Net.WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
         Assert.Contains(reasons, r => r.Contains("reconciled", StringComparison.OrdinalIgnoreCase));
         Assert.Contains(reasons, r => r.StartsWith("Financial data:", StringComparison.Ordinal));
-        Assert.Contains(reasons, r => r.Contains("Financial source not reconciled (1 on this page)", StringComparison.Ordinal));   // the per-customer reason, in words
+        Assert.DoesNotContain(reasons, r => r.Contains("(1 on this page)", StringComparison.Ordinal) && r.Contains("reconciled", StringComparison.OrdinalIgnoreCase));   // the gate is report-wide, never per customer
         Assert.DoesNotContain(reasons, r => r.Contains("SourceReconciliationRequired", StringComparison.Ordinal));                // never a raw code
 
         var ready = await Results(new FakeCollectionsApi());                                // reconciled, fresh, but the customer needs review

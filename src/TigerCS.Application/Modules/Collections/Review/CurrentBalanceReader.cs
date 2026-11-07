@@ -23,6 +23,9 @@ public sealed class CurrentBalanceReader(PactReceivablesOptions sourceOptions, I
 {
     public sealed record Result(IReadOnlyDictionary<DateOnly, IReadOnlyDictionary<string, CollectionsReviewRecord>> ByAsOfDate, long ElapsedMs, int SourceRows);
 
+    /// <summary>Whether the financial source is reconciled right now (the one gate definition the refresh uses).</summary>
+    public bool SourceReconciled => refresh.SourceReconciled;
+
     public async Task<Result> ReadAsync(IReadOnlyCollection<int> companies, IReadOnlyCollection<DateOnly> asOfDates, CancellationToken ct)
     {
         var started = Stopwatch.GetTimestamp();

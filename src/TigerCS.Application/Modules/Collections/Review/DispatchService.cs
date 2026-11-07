@@ -85,6 +85,10 @@ public sealed class DispatchService(
         if (resolved.Error is not null) return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, resolved.Error);
         if (resolved.Records.Count == 0)
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, "No Ready records are selected.");
+        // The reconciliation gate: one decision about the SOURCE (sign-off, procedure, automated evidence), recorded on the run and checked here and again before the upload. A customer's own
+        // Ready status says the customer's data is sound; it never says the source is reconciled.
+        if (!resolved.Run!.SourceReconciled)
+            return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, NotReconciledMessage);
         var fingerprint = ReviewQueryService.Fingerprint(resolved.Records);
         if (resolved.Records.Count != request.ExpectedCount || !string.Equals(fingerprint, request.ExpectedFingerprint, StringComparison.OrdinalIgnoreCase))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
@@ -354,6 +358,10 @@ public sealed class DispatchService(
             await store.UpdateDispatchAsync(dispatch, ct);
             return false;
         }
+
+        // The reconciliation gate again, with the configuration as it is NOW: a sign-off withdrawn or evidence expired since the approval stops the upload.
+        if (!balances.SourceReconciled)
+            return await StopAsync(dispatch, DispatchStatus.ReviewRequired, NotReconciledMessage + " Nothing was sent.", ct);
 
         var companies = items.Select(i => i.CompanyId).Distinct().Order().ToList();
         await store.SetDispatchPhaseAsync(dispatch.CollectionsDispatchId, $"Checking current balances (company {string.Join(" and ", companies)}); this can take several minutes", ct);
@@ -692,6 +700,9 @@ public sealed class DispatchService(
         contactListId, item.Phone, item.CustomerName, item.Email, settings.LabelFor(item.ReminderType),
         MoneyNormalizer.Format(item.Amount), item.DueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         Callable: item.VoiceEligible && IsVoiceEligible(item.Phone));
+
+    /// <summary>Why nothing is approved or sent while the financial source is not reconciled.</summary>
+    public const string NotReconciledMessage = "The financial source is not reconciled (no valid sign-off and snapshot-consistency evidence for the PACT procedure in use), so nothing can be approved or sent. Reconcile it first.";
 
     /// <summary>A callable contact needs a valid international (E.164) number.</summary>
     public static bool IsVoiceEligible(string? phone) => !string.IsNullOrEmpty(phone) && System.Text.RegularExpressions.Regex.IsMatch(phone, @"^\+[1-9]\d{7,14}$");

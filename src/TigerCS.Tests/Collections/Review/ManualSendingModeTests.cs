@@ -113,7 +113,7 @@ public sealed class ManualSendingModeTests
         var noPhone = ReviewRecordBuilder.Build([ReviewHarness.Row(5, mobile: "123")], Context(Today)).Records.First(r => r.ReminderType == CampaignReminderType.CurrentMonth);
         Assert.False(ReviewRecordBuilder.IsManuallySendable(noPhone)); Assert.Contains(ReviewReasons.NoValidContact, ReviewRecordBuilder.Parse(noPhone.Reasons));
         var unreconciled = ReviewRecordBuilder.Build([ReviewHarness.Row(6)], Context(Today) with { SourceReconciled = false }).Records.First();
-        Assert.False(ReviewRecordBuilder.IsManuallySendable(unreconciled));
+        Assert.True(ReviewRecordBuilder.IsManuallySendable(unreconciled));                                 // the source gate is the send's, not the record's (ReconciliationGateTests)
         // 28 Oct: Follow Up is scheduled, so a manual Current Month for the same customer would call twice.
         var overlap = ReviewRecordBuilder.Build([ReviewHarness.Row(7)], Context(new DateOnly(2026, 10, 28))).Records.Single(r => r.ReminderType == CampaignReminderType.CurrentMonth);
         Assert.Contains(ReviewReasons.ManualReminderTypeOverlap, ReviewRecordBuilder.Parse(overlap.Reasons)); Assert.False(ReviewRecordBuilder.IsManuallySendable(overlap));
@@ -219,9 +219,15 @@ public sealed class ManualSendingModeTests
     public async Task Manual_DoesNotBypassReconciliation_Permissions_Contacts_OrSharedPhones()
     {
         using var unreconciled = await SeededAsync(h => h.Campaign.FinancialSourceValidated = false);
-        Assert.Equal(0, (await SummaryAsync(unreconciled, All(Manual()))).Value!.Count);
-        var held = await ListAsync(unreconciled, Manual());
-        Assert.All(held.Items, i => Assert.Contains(i.Reasons, r => r.Code == ReviewReasons.SourceReconciliationRequired));
+        var summary = (await SummaryAsync(unreconciled, All(Manual()))).Value!;
+        Assert.False(summary.SourceReconciled);                                                            // the gate is the source's, said once
+        var listed = await ListAsync(unreconciled, Manual());
+        Assert.All(listed.Items, i => Assert.DoesNotContain(i.Reasons, r => r.Code == ReviewReasons.SourceReconciliationRequired));   // customers keep their own status
+        using (var scope = unreconciled.NewScope())
+        {
+            var refused = await scope.Dispatch.ConfirmAsync(unreconciled.Manager, new ConfirmDispatchRequest(All(Manual()), summary.Count, summary.Fingerprint, "unreconciled", true), CancellationToken.None);
+            Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("not reconciled", refused.Detail); Assert.Empty(unreconciled.Scheduler.Dispatches);
+        }
 
         using var noPhone = await SeededAsync(null, true, ReviewHarness.Row(1, mobile: "123"), ReviewHarness.Row(2, mobile: "123"));
         Assert.Equal(0, (await SummaryAsync(noPhone, All(Manual()))).Value!.Count);

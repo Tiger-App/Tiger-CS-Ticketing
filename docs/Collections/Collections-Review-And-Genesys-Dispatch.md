@@ -66,7 +66,12 @@ date. Due / Overdue stay a classification of the instalment's due date against t
 
 ## Validation rules (stored reasons)
 
-Needs review: `SourceReconciliationRequired`, `AmountPrecisionNeedsReview`, `NoValidContact`, `PaymentStatusUnknown`, `StaleSource`,
+Financial reconciliation is a **separate gate of the source**, not a customer reason: `SourceGate` decides it once (sign-off `FinancialSourceValidated`, the procedure, the
+snapshot-consistency evidence), the run records it (`CollectionsReviewRun.SourceReconciled`), and the send refuses on it at approval (`DispatchService`), again right before the upload
+(revalidation) and in the Auto dispatcher (`NotReconciled`). A customer whose own data is sound is **Ready** on the page while the gate is closed; the page and the summary say the source is
+not reconciled, once. `SourceReconciliationRequired` is kept as the code of that gate (the Genesys export's unverified-data label); it is no longer stored on records.
+
+Needs review: `AmountPrecisionNeedsReview`, `NoValidContact`, `PaymentStatusUnknown`, `StaleSource`,
 `MissingUnitIdentity`, `MissingCustomerIdentity`, `UnitAllocationNeedsReview`, `AmbiguousInstalments`, `DuplicateSourceRecord`,
 `ConflictingContactDetails`, `ContradictoryPaymentStatus`, `CurrencyNeedsReview`. Excluded: `OutsideSchedule`, `LegalNoticeReleaseRequired`,
 `LegalCaseNotApproved`. Warning (does not block): `SharedPhoneMultipleUnits`. *Already Sent* comes from the dispatch table (a live record in a

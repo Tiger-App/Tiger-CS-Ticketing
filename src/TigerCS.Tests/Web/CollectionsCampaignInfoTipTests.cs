@@ -249,8 +249,7 @@ public sealed partial class CollectionsCampaignInfoTipTests
         var reasons = Regex.Matches(blockers, "data-not-ready-reason>(.*?)</li>", RegexOptions.Singleline).Select(m => WebUtility.HtmlDecode(m.Groups[1].Value)).ToList();
         Assert.Contains(reasons, r => r.StartsWith("Financial data:", StringComparison.Ordinal));
         Assert.Contains(reasons, r => r.Contains("has not been reconciled against PACT", StringComparison.Ordinal));
-        Assert.Contains(reasons, r => r.Contains("Financial source not reconciled (1 on this page)", StringComparison.Ordinal));
-        Assert.Contains("No customer is", blockers);                                                           // the concise summary line
+        Assert.Contains("No customer can be sent while a gate is closed", blockers);                            // the concise summary line: the gate, not the customers
         Assert.DoesNotContain("data-not-ready-more", html);                                                    // a short list has nothing to fold
     }
 
