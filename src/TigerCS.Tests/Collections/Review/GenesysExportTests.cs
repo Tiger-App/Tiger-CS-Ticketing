@@ -151,26 +151,23 @@ public sealed class GenesysExportTests
     // ------------------------------------------------------------ selection: ticks narrow, nothing ticked means everyone matching
 
     [Fact]
-    public async Task TicksNarrowTheFile_NothingTickedMeansEveryMatchingCustomer_AndANumberSharedByDifferentCustomersIsCountedOut()
+    public async Task TicksNarrowTheFile_NothingTickedMeansEveryMatchingCustomer_AndANumberSharedByDifferentCustomersIsOneRowEach()
     {
-        // Customers 3 and 4 are different people on one number: never merged, never both dialled; they are left out and counted, in the answer and in the audit trail.
+        // Customers 3 and 4 are different people on one number: one row each, never merged and never dropped (a phone number is not a key of the file).
         var rows = new[] { ReviewHarness.Row(1), ReviewHarness.Row(2), ReviewHarness.Row(3, mobile: "971500000009"), ReviewHarness.Row(4, mobile: "971500000009") };
         using var h = await SeededAsync(null, rows);
         var all = (await ExportAsync(h, All(Manual()))).Value!;
-        Assert.Equal(2, all.RowCount); Assert.Equal(2, all.UnitCount); Assert.Equal(2, all.ExcludedUnits);
-        var exclusion = Assert.Single(all.Exclusions!);
-        Assert.Equal((GenesysExportRows.SharedPhoneDifferentCustomers, 2), (exclusion.Code, exclusion.Units));
-        Assert.DoesNotContain("Customer 3", all.Csv); Assert.DoesNotContain("Customer 4", all.Csv);
-        Assert.Contains(all.Notices, n => n.Contains("2 of the 4 matching customer unit(s) are not in the file") && n.Contains("SharedPhoneDifferentCustomers"));
+        Assert.Equal(4, all.RowCount); Assert.Equal(4, all.UnitCount); Assert.Equal(0, all.ExcludedUnits);
+        Assert.Contains("Customer 3", all.Csv); Assert.Contains("Customer 4", all.Csv);
+        Assert.DoesNotContain(all.Notices, n => n.Contains("not in the file"));
 
         var one = new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedUnits, null, null, 1, 50, [ReviewQueryService.UnitKey(4, "T0001", "TP140-1")]);
         var ticked = (await ExportAsync(h, one)).Value!;                                               // only the ticked one
         Assert.Equal(1, ticked.RowCount); Assert.Equal("Customer 1", Parse(ticked)[1][1]); Assert.Equal(0, ticked.ExcludedUnits);
         var shared = new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedUnits, null, null, 1, 50, [ReviewQueryService.UnitKey(4, "T0003", "TP140-3"), ReviewQueryService.UnitKey(4, "T0004", "TP140-4")]);
-        var none = await ExportAsync(h, shared);                                                       // nothing exportable among them: the exact reason, no file
-        Assert.False(none.IsSuccess); Assert.Contains("None of the 2 matching customer(s) could be exported", none.Detail); Assert.Contains("SharedPhoneDifferentCustomers", none.Detail);
+        Assert.Equal(2, (await ExportAsync(h, shared)).Value!.RowCount);                                // both ticked customers, one row each
         var excluding = (await ExportAsync(h, All(Manual()) with { ExcludedKeys = [await KeyOf(h, "TP140-2")] })).Value!;
-        Assert.Equal(1, excluding.RowCount);
+        Assert.Equal(3, excluding.RowCount);                                                            // four matching units, one key excluded by the person
         Assert.Equal(CollectionsOutcome.InvalidRequest, (await ExportAsync(h, new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedKeys, ["x"]))).Outcome);   // record keys carry no filter
     }
 
@@ -359,7 +356,7 @@ public sealed class GenesysExportTests
         Assert.Equal((GenesysExportService.AuditAction, GenesysExportService.AuditEntityType, (Guid?)h.Manager.EmployeeId), (entry.Action, entry.EntityType, entry.ActorEmployeeId));
         Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(dto.Csv)))[..16], entry.EntityId);
         var after = entry.AfterValue!;
-        Assert.Contains("Campaign=CurrentMonth", after); Assert.Contains($"ContactList=FollowUp ({FollowUpList})", after); Assert.Contains("Rows=2;Units=2;CombinedRows=0;CombinedUnits=0;Excluded=0;Exclusions=", after);
+        Assert.Contains("Campaign=CurrentMonth", after); Assert.Contains($"ContactList=FollowUp ({FollowUpList})", after); Assert.Contains("Rows=2;Units=2;Excluded=0;Exclusions=", after);
         Assert.Contains("Total=AED 5500.00", after); Assert.Contains("IncludedByStatus=Ready:2", after); Assert.Contains("DataVerified=True;Unverified=;", after);
         Assert.Contains("SchemaVerified=True", after); Assert.Contains("Mode=Manual", after); Assert.Contains("\"DueStatus\":\"Due\"", after); Assert.Contains("Repeated=0;RepeatCheck=Checked", after); Assert.Contains(dto.Sha256, after);
         Assert.Equal(dto.TotalAmount, Parse(dto).Skip(1).Sum(r => decimal.Parse(r[4], System.Globalization.CultureInfo.InvariantCulture)));   // the audit total is the total of the rows

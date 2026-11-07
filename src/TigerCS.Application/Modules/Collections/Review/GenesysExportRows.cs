@@ -2,15 +2,15 @@ using TigerCS.Domain.Modules.Collections.Review;
 
 namespace TigerCS.Application.Modules.Collections.Review;
 
-/// <summary>One row of an Export for Genesys file: one phone number, with the units behind it (one, or several units of the same customer) and the amount they add up to.</summary>
+/// <summary>One row of an Export for Genesys file: ONE customer unit (one record of the Preview), with its own phone, amount, due date and campaign type.</summary>
 /// <param name="Phone">The E.164 number the row is dialled on.</param>
-/// <param name="CustomerName">The customer's name (of the first unit, by unit code, when several are combined).</param>
-/// <param name="Email">The first e-mail among the units (empty when none).</param>
+/// <param name="CustomerName">The customer's name.</param>
+/// <param name="Email">The unit's e-mail (empty when none).</param>
 /// <param name="ReminderType">The campaign type.</param>
-/// <param name="Amount">The sum of the units' filtered amounts: each unit's own stored instalments, so nothing is counted twice.</param>
-/// <param name="Currency">The currency of the amounts.</param>
-/// <param name="DueDate">The earliest qualifying due date among the units.</param>
-/// <param name="Units">The units in the row, in unit-code order, each with its status and reasons as the Manual page shows them; the first is the row's identity for the payload.</param>
+/// <param name="Amount">The unit's own filtered amount (the one Preview shows).</param>
+/// <param name="Currency">The currency of the amount.</param>
+/// <param name="DueDate">The unit's own earliest qualifying due date.</param>
+/// <param name="Units">The one unit in the row, with its status and reasons as the Manual page shows them (a list for the callers that count units).</param>
 public sealed record GenesysExportRow(string Phone, string CustomerName, string Email, CampaignReminderType ReminderType, decimal Amount, string Currency, DateOnly DueDate,
     IReadOnlyList<ReviewQueryService.ExportCandidate> Units)
 {
@@ -20,84 +20,61 @@ public sealed record GenesysExportRow(string Phone, string CustomerName, string 
 /// <summary>Why some matching customer units are not in the file, by reason, with how many units each reason kept out. Never silent: the counts travel to the page and the audit trail.</summary>
 public sealed record GenesysExportExclusion(string Code, int Units, string Explanation);
 
-/// <param name="Rows">The rows of the file, in company / tenant / unit order.</param>
+/// <summary>One unit that is not in the file, named: the person sees exactly which record and why, and can fix the data instead of guessing.</summary>
+public sealed record GenesysExportExcludedRecord(int CompanyId, string TenantId, string UnitCode, string CustomerName, string ReminderType, string Code);
+
+/// <param name="Rows">The rows of the file, one per unit, in company / tenant / unit order.</param>
 /// <param name="Exclusions">Units left out, by reason (empty when every matching unit is in the file).</param>
-/// <param name="CombinedRows">Rows that hold several units of one customer.</param>
-/// <param name="CombinedUnits">Units that were folded into those rows.</param>
-public sealed record GenesysExportRowSet(IReadOnlyList<GenesysExportRow> Rows, IReadOnlyList<GenesysExportExclusion> Exclusions, int CombinedRows, int CombinedUnits)
+/// <param name="ExcludedRecords">The same units one by one, in the same order as the rows.</param>
+public sealed record GenesysExportRowSet(IReadOnlyList<GenesysExportRow> Rows, IReadOnlyList<GenesysExportExclusion> Exclusions, IReadOnlyList<GenesysExportExcludedRecord> ExcludedRecords)
 {
     public int ExcludedUnits => Exclusions.Sum(e => e.Units);
 }
 
 /// <summary>
-/// Turns the customer units of an export (<see cref="ReviewQueryService.ResolveForExportAsync"/>) into contact rows, deterministically and without guessing:
+/// Turns the customer units of an export (<see cref="ReviewQueryService.ResolveForExportAsync"/>) into contact rows: <b>one row per unit, exactly as Preview lists them</b>. A phone number
+/// is a value in the row, never a key: nothing is merged, added up, de-duplicated or left out because of it. The same customer on several units gives one row per unit (each with its own
+/// amount, due date and type); different customers on one number give one row each; the same customer on the same number with several units gives one row per unit. A unit is left out only
+/// when a mandatory field of the six-column file is genuinely missing, and then it is named with its reason:
 /// <list type="bullet">
-/// <item>A unit without a calculated amount or due date (ambiguous or unreadable instalments), or whose source amount has unresolved decimals (<c>AmountPrecisionNeedsReview</c>: the stored
-/// value is the raw one, and a two-decimal AmountDue would be a rounded guess), is left out and counted: no financial value is ever invented.</item>
-/// <item>A unit without a callable E.164 number is left out and counted: Genesys could not dial it, and no other number is substituted.</item>
-/// <item>Several units of the SAME customer (same company and tenant) on one number become ONE row: the amounts are added (each unit has its own stored instalments, so nothing is counted twice)
-/// and the earliest due date is kept. When the source allocates instalments ambiguously between those units (<c>UnitAllocationNeedsReview</c>, <c>DuplicateSourceRecord</c>,
-/// <c>AmbiguousInstalments</c>) the sum could double count, so the units are left out and counted instead.</item>
-/// <item>DIFFERENT customers on one number are never merged and never both dialled: the number cannot be tied to one person, so those units are left out and counted.</item>
+/// <item><c>AmountUnavailable</c>: no calculated amount or due date (ambiguous or unreadable instalments). No financial value is ever invented.</item>
+/// <item><c>AmountPrecisionUnresolved</c>: the source amount has unresolved decimals (<c>AmountPrecisionNeedsReview</c>); a two-decimal AmountDue would be a rounded guess.</item>
+/// <item><c>NoCallablePhone</c>: no E.164 number Genesys could dial; no other number is substituted.</item>
 /// </list>
+/// A unit's status (Needs review, held back, already sent) and the reconciliation state never keep it out of a file: a file is not a send, and the send rules stay in <see cref="DispatchService"/>.
 /// Pure: the same input always gives the same rows, and the totals of the rows are the totals of the file.
 /// </summary>
 public static class GenesysExportRows
 {
-    public const string AmountUnavailable = "AmountUnavailable", AmountPrecisionUnresolved = "AmountPrecisionUnresolved", NoCallablePhone = "NoCallablePhone",
-        UnitAllocationAmbiguous = "UnitAllocationAmbiguous", SharedPhoneDifferentCustomers = "SharedPhoneDifferentCustomers";
-
-    private static readonly string[] AmbiguousAllocation = [ReviewReasons.UnitAllocationNeedsReview, ReviewReasons.DuplicateSourceRecord, ReviewReasons.AmbiguousInstalments];
+    public const string AmountUnavailable = "AmountUnavailable", AmountPrecisionUnresolved = "AmountPrecisionUnresolved", NoCallablePhone = "NoCallablePhone";
 
     public static string Explain(string code) => code switch
     {
-        AmountUnavailable => "The amount could not be calculated from the stored instalments (ambiguous or unreadable), so no value was invented and the customer was left out.",
-        AmountPrecisionUnresolved => "A source amount of this customer has more than two decimals that are not rounding noise. The real balance must be confirmed in PACT; it was not rounded into the file.",
-        NoCallablePhone => "No valid international (E.164) phone number, so Genesys could not dial the customer; nothing was substituted.",
-        UnitAllocationAmbiguous => "Several units of the same customer share the number, but the source allocates instalments between those units ambiguously, so their amounts were not added up and the units were left out.",
-        SharedPhoneDifferentCustomers => "The same phone number belongs to different customers. They were not merged and not exported, so the number is not dialled for the wrong person.",
+        AmountUnavailable => "The amount could not be calculated from the stored instalments (ambiguous or unreadable), so no value was invented and the unit was left out.",
+        AmountPrecisionUnresolved => "A source amount of this unit has more than two decimals that are not rounding noise. The real balance must be confirmed in PACT; it was not rounded into the file.",
+        NoCallablePhone => "No valid international (E.164) phone number, so Genesys could not dial the unit's customer; nothing was substituted.",
         _ => code
     };
 
     public static GenesysExportRowSet Build(IReadOnlyList<ReviewQueryService.ExportCandidate> candidates)
     {
-        var excluded = new Dictionary<string, int>(StringComparer.Ordinal);
-        void Exclude(string code, int units) => excluded[code] = excluded.GetValueOrDefault(code) + units;
-
-        var callable = new List<ReviewQueryService.ExportCandidate>();
-        foreach (var candidate in candidates)
+        var ordered = candidates.OrderBy(c => c.Record.CompanyId).ThenBy(c => c.Record.TenantId, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.Record.UnitCode, StringComparer.OrdinalIgnoreCase).ThenBy(c => c.Record.RecordKey, StringComparer.Ordinal).ToList();
+        var rows = new List<GenesysExportRow>();
+        var excludedRecords = new List<GenesysExportExcludedRecord>();
+        foreach (var candidate in ordered)
         {
             var r = candidate.Record;
-            if (r.RemainingAmount is not > 0 || r.DueDate is null) { Exclude(AmountUnavailable, 1); continue; }
-            // A balance that cannot be stated in fils is stored as read (never rounded); an AmountDue with two decimals would be a rounded, invented figure, so the unit stays out.
-            if (candidate.Reasons.Contains(ReviewReasons.AmountPrecisionNeedsReview, StringComparer.Ordinal)) { Exclude(AmountPrecisionUnresolved, 1); continue; }
-            if (!DispatchService.IsVoiceEligible(r.Phone)) { Exclude(NoCallablePhone, 1); continue; }
-            callable.Add(candidate);
+            var code = r.RemainingAmount is not > 0 || r.DueDate is null ? AmountUnavailable
+                // A balance that cannot be stated in fils is stored as read (never rounded); an AmountDue with two decimals would be a rounded, invented figure, so the unit stays out.
+                : candidate.Reasons.Contains(ReviewReasons.AmountPrecisionNeedsReview, StringComparer.Ordinal) ? AmountPrecisionUnresolved
+                : !DispatchService.IsVoiceEligible(r.Phone) ? NoCallablePhone
+                : null;
+            if (code is not null) { excludedRecords.Add(new(r.CompanyId, r.TenantId, r.UnitCode, r.CustomerName, r.ReminderType.ToString(), code)); continue; }
+            rows.Add(new(r.Phone, r.CustomerName, r.Email, r.ReminderType, r.RemainingAmount!.Value, r.Currency, r.DueDate!.Value, [candidate]));
         }
-
-        var rows = new List<GenesysExportRow>();
-        int combinedRows = 0, combinedUnits = 0;
-        foreach (var number in callable.GroupBy(c => c.Record.Phone, StringComparer.Ordinal))
-        {
-            var units = number.OrderBy(c => c.Record.CompanyId).ThenBy(c => c.Record.TenantId, StringComparer.OrdinalIgnoreCase)
-                .ThenBy(c => c.Record.UnitCode, StringComparer.OrdinalIgnoreCase).ThenBy(c => c.Record.RecordKey, StringComparer.Ordinal).ToList();
-            if (units.Count == 1) { rows.Add(Row(units)); continue; }
-            if (units.Select(c => (c.Record.CompanyId, Tenant: c.Record.TenantId.Trim())).Distinct().Count() > 1) { Exclude(SharedPhoneDifferentCustomers, units.Count); continue; }
-            if (units.Any(c => c.Reasons.Any(reason => AmbiguousAllocation.Contains(reason, StringComparer.Ordinal)))) { Exclude(UnitAllocationAmbiguous, units.Count); continue; }
-            rows.Add(Row(units));
-            combinedRows++; combinedUnits += units.Count;
-        }
-
-        var ordered = rows.OrderBy(r => r.First.CompanyId).ThenBy(r => r.First.TenantId, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(r => r.First.UnitCode, StringComparer.OrdinalIgnoreCase).ThenBy(r => r.First.RecordKey, StringComparer.Ordinal).ToList();
-        var exclusions = excluded.OrderBy(e => e.Key, StringComparer.Ordinal).Select(e => new GenesysExportExclusion(e.Key, e.Value, Explain(e.Key))).ToList();
-        return new(ordered, exclusions, combinedRows, combinedUnits);
-    }
-
-    private static GenesysExportRow Row(IReadOnlyList<ReviewQueryService.ExportCandidate> units)
-    {
-        var first = units[0].Record;
-        return new(first.Phone, first.CustomerName, units.Select(u => u.Record.Email).FirstOrDefault(e => e.Length > 0) ?? "", first.ReminderType,
-            units.Sum(u => u.Record.RemainingAmount!.Value), first.Currency, units.Min(u => u.Record.DueDate!.Value), units);
+        var exclusions = excludedRecords.GroupBy(e => e.Code, StringComparer.Ordinal).OrderBy(g => g.Key, StringComparer.Ordinal)
+            .Select(g => new GenesysExportExclusion(g.Key, g.Count(), Explain(g.Key))).ToList();
+        return new(rows, exclusions, excludedRecords);
     }
 }

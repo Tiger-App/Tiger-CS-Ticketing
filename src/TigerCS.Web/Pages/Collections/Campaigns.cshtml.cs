@@ -321,7 +321,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         text.Append(CultureInfo.InvariantCulture, $"Exported {file.RowCount:N0} row(s)");
         if (file.UnitCount > file.RowCount) text.Append(CultureInfo.InvariantCulture, $" ({file.UnitCount:N0} customer units)");
         text.Append(CultureInfo.InvariantCulture, $" for the {file.ContactList} list to {file.FileName} ({file.Currency} {file.TotalAmount:N2}).");
-        if (file.ExcludedUnits > 0) text.Append(CultureInfo.InvariantCulture, $" Left out: {file.ExcludedUnits:N0} unit(s).");
+        if (file.ExcludedUnits > 0)
+            text.Append(CultureInfo.InvariantCulture, $" Left out: {file.ExcludedUnits:N0} unit(s)")
+                .Append(file.ExcludedRecords is { Count: > 0 } named ? $" ({string.Join(", ", named.Take(20).Select(r => $"{r.UnitCode}: {r.Code}"))}{(named.Count > 20 ? ", ..." : "")})." : ".");
         if (!file.DataVerified) text.Append(CultureInfo.InvariantCulture, $" {GenesysExportService.UnverifiedDataLabel}.");
         foreach (var note in file.Notices.Where(n => n.Length > 0)) text.Append(' ').Append(note);
         return text.ToString();
