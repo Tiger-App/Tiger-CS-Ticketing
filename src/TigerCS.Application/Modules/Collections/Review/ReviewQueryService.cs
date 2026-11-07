@@ -423,7 +423,7 @@ public sealed class ReviewQueryService(
             r.DueDate ?? default, sharedNumbers.Contains(r.Phone))).ToList();
         var notices = new List<string>();
         if (resolved.Skipped > 0) notices.Add($"{resolved.Skipped} record(s) were left out because they are not Ready now.");
-        if (shared.Records > 0) notices.Add($"{shared.Numbers} phone number(s) appear on {shared.Records} records; approving all of them means repeated calls to the same number. This must be acknowledged.");
+        if (shared.Records > 0) notices.Add($"{shared.Numbers} phone number(s) appear on {shared.Records} records (several units of one customer, or different customers on one number). Each unit is its own contact and receives its own call; nothing is merged.");
         if (records.Count > 0 && IsStale(resolved.Run!)) notices.Add("The review data is stale; refresh it before approving.");
         return new(resolved.Run!.CollectionsReviewRunId, records.Count, Fingerprint(records), TotalsByCurrency(records),
             records.GroupBy(r => r.ReminderType.ToString()).OrderBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count()),

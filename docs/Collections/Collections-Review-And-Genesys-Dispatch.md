@@ -115,9 +115,21 @@ pending, uploaded or unconfirmed dispatch).
 ## Multiple units / instalments per customer
 
 One record per **unit × reminder type**; instalments inside a unit are summed only when no date is ambiguous; balances of different units are never
-merged. If the same phone appears on several records that can be sent today, each is flagged and they are held back (Excluded) and cannot be approved.
-**Missing business decision:** one call per unit (what is implemented), one consolidated call, or a priority (e.g. Legal Notice over Current Month, which
-are both scheduled on day 14). Until decided, such records are blocked; no acknowledgement releases them.
+merged. **Confirmed business decision: every property unit is its own Genesys contact record and receives its own call, even when several units share a
+phone number** (one customer with three units on one number = three records and three calls; two customers on one number = both records kept). A phone
+number is never an identifier: records are never merged, consolidated, prioritised or held back because numbers match. The unit-level protections are what
+prevent genuine duplicates: the record key (company, tenant, unit id, unit code, campaign cycle), the filtered unique index over live dispatch items, the
+contact-frequency limit per unit and business day, and the idempotency key of a dispatch. The only repeated-call hold left is per **unit**: a unit that
+qualifies for two reminder types scheduled on the same day (`ReminderTypeOverlap`, e.g. Legal Notice and Current Month on day 14) stays held until the
+business decides the priority. `SharedPhoneMultipleUnits` / `ManualSharedPhone` are no longer produced; review data stored before the decision still shows
+them until it is refreshed.
+
+**Genesys side (UAT):** the upload sends one contact per unit with the same `Phone` value; the six-column list template has no unit column, so the rows
+differ only by name, amount and date. Genesys Cloud assigns each uploaded contact its own contact id, and the Collections lists were created without a
+contact-id column, so repeated numbers are not rejected by the upload. Whether the campaign then *dials* each of them is decided in Genesys, not here:
+check the campaign's contact-list filters, contact sort, callable-time set, and any "do not contact" or duplicate-suppression rules on the list, and the
+outbound "maximum attempts per contact / per number" settings. UAT step: upload three rows for one number to the test list and confirm three contacts
+(three ids) and three attempts in the campaign's contact history before enabling live dispatch.
 
 ## Genesys
 
