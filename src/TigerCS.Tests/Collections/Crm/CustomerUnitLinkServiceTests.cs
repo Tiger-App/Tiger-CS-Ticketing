@@ -188,8 +188,7 @@ public sealed partial class CustomerUnitLinkServiceTests
         CrmReturns(c, Buyer(1, "Crm Name", PhoneE164, "crm@example.test", CrmUnit(11, "101")));
         c.Pact4("140", 101, "T1", 500m, name: "Pact Name", mobile: "971559998888", email: "pact@example.test");
         var conflict = Assert.Single((await c.ForCrm(1)).Candidates);
-        Assert.Equal("NeedsReview", conflict.LinkStatus);
-        Assert.Contains("ContactSourceConflict", conflict.ReviewReasons);
+        Assert.DoesNotContain("ContactSourceConflict", conflict.ReviewReasons);
         Assert.Equal(PhoneE164, conflict.Customer.Mobile);
         Assert.Equal("crm@example.test", conflict.Customer.Email);
         Assert.Equal("Crm Name", conflict.Customer.Name);

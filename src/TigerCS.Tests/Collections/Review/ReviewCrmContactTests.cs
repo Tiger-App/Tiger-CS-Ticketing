@@ -64,12 +64,12 @@ public sealed class ReviewCrmContactTests
     }
 
     [Fact]
-    public void ADifferentPersonInCrm_NeedsReview_CrmAloneIsUsed()
+    public void ADifferentPhoneInCrm_CrmWins_AndIsNotHeldForReview()
     {
         var record = Record(ReviewHarness.Row(1), Crm(Ready, ((4, "TP140-1"), Single("+966508650505"))));
         Assert.Equal("+966508650505", record.Phone);
-        Assert.Equal(ReviewValidationStatus.NeedsReview, record.ValidationStatus);
-        Assert.Contains(ReviewReasons.ContactSourceConflict, Reasons(record));
+        Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
+        Assert.DoesNotContain(ReviewReasons.ContactSourceConflict, Reasons(record));
     }
 
     [Fact]
