@@ -19,6 +19,7 @@ public sealed class CollectionsCampaignManualRenderTests
 {
     private static readonly DateTime Read = new(2026, 10, 14, 8, 0, 0, DateTimeKind.Utc);
     private static readonly DateOnly DubaiToday = DateOnly.FromDateTime(DateTime.UtcNow.AddHours(4));
+    private const string ManualList = "11111111-2222-4333-8444-555555555555";
     private const string CurrentMonthList = "79e5ae74-ea6e-4941-b76d-45ddf487d8d1", FollowUpList = "3a91c06e-47ab-4a5e-a720-004bd5cf5bba";
     private const string Url = "/Collections/Campaigns?render=full&stage=CurrentMonthReminder&sendingMode=Manual";
     private static readonly Guid DispatchId = Guid.Parse("11111111-2222-3333-4444-555555555555");
@@ -99,8 +100,8 @@ public sealed class CollectionsCampaignManualRenderTests
             if (path.EndsWith("/selection/summary"))
             {
                 LastSummaryBody = await request.Content!.ReadAsStringAsync(cancellationToken);
-                var chosen = JsonDocument.Parse(LastSummaryBody).RootElement.GetProperty("filter").TryGetProperty("contactList", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString()! : "CurrentMonth";
-                var list = chosen == "FollowUp" ? FollowUpList : CurrentMonthList;
+                var chosen = JsonDocument.Parse(LastSummaryBody).RootElement.GetProperty("filter").TryGetProperty("contactList", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString()! : "Manual";
+                var list = ManualList;
                 return Json(new SelectionSummaryDto(7, 2, "FP", new Dictionary<string, decimal> { ["AED"] = 1500m }, new Dictionary<string, int> { ["CurrentMonth"] = 2 }, 0, 0, 1, 50,
                     [new SelectionContactDto("RK1", "CurrentMonth", "Manual Customer 1", "+971500000001", "m1@example.test", "TP140-1", 500m, "AED", new DateOnly(2026, 9, 20), false),
                      new SelectionContactDto("RK2", "CurrentMonth", "Manual Customer 2", "+971500000002", "m2@example.test", "TP140-2", 1000m, "AED", new DateOnly(2026, 9, 20), false)], [],
@@ -192,27 +193,22 @@ public sealed class CollectionsCampaignManualRenderTests
     // ------------------------------------------------------------------ the contact list
 
     [Theory]
-    [InlineData("CurrentMonthReminder", new[] { "CurrentMonth", "FollowUp", "Overdue" })]
-    [InlineData("FollowUpReminder", new[] { "FollowUp", "CurrentMonth", "Overdue" })]
-    [InlineData("OverdueReminder", new[] { "Overdue", "CurrentMonth", "FollowUp" })]
-    [InlineData("LegalNotice", new[] { "LegalNotice" })]
-    public async Task TheContactListDropdown_OffersTheExistingListsThatSuitTheCampaign_WithItsOwnListAsTheDefault(string stage, string[] expected)
+    [InlineData("CurrentMonthReminder")]
+    [InlineData("FollowUpReminder")]
+    [InlineData("OverdueReminder")]
+    [InlineData("LegalNotice")]
+    public async Task Manual_HasNoContactListChooser_TheDestinationIsTheDedicatedManualList(string stage)
     {
         var (html, _) = await LoadAsync(url: $"/Collections/Campaigns?render=full&stage={stage}&sendingMode=Manual");
-        var select = Regex.Match(html, "<select[^>]*data-contact-list[^>]*>.*?</select>", RegexOptions.Singleline).Value;
-        Assert.NotEmpty(select); Assert.Contains("name=\"contactList\"", select);
-        Assert.Equal(expected, Regex.Matches(select, "<option value=\"(\\w+)\"").Select(m => m.Groups[1].Value));
-        Assert.Matches($"<option value=\"{expected[0]}\"[^>]*selected", select);                                // the campaign's own list is selected
-        Assert.Contains("this campaign's list", Decode(select));
+        Assert.DoesNotContain("data-contact-list", html); Assert.DoesNotContain("<select name=\"contactList\"", html);
+        Assert.Contains("TigerCS Manual Collections", Decode(html));
     }
 
     [Fact]
-    public async Task TheChosenContactList_IsKeptWhenItSuitsTheCampaign_OtherwiseTheOwnListApplies()
+    public async Task AnotherListInTheUrl_IsIgnored_TheManualListStillApplies()
     {
-        var (chosen, _) = await LoadAsync(url: Url + "&contactList=FollowUp");
-        Assert.Matches("<option value=\"FollowUp\"[^>]*selected", chosen); Assert.Contains("Follow Up list", chosen);
-        var (invalid, _) = await LoadAsync(url: "/Collections/Campaigns?render=full&stage=LegalNotice&sendingMode=Manual&contactList=CurrentMonth");
-        Assert.Matches("<option value=\"LegalNotice\"[^>]*selected", invalid);                                  // a reminder list never receives legal wording
+        var (html, _) = await LoadAsync(url: Url + "&contactList=FollowUp");
+        Assert.Contains("TigerCS Manual Collections", Decode(html)); Assert.DoesNotContain("Follow Up list", html);
     }
 
     [Fact]
@@ -310,14 +306,14 @@ public sealed class CollectionsCampaignManualRenderTests
     }
 
     [Theory]
-    [InlineData("CurrentMonth", "Current Month", CurrentMonthList)]
-    [InlineData("FollowUp", "Follow Up", FollowUpList)]
-    public async Task SendToGenesys_ShowsTheConfirmationDialog_WithCountDestinationAndAmount_BeforeAnythingIsSent(string chosen, string label, string listId)
+    [InlineData("Manual", "TigerCS Manual Collections", ManualList)]
+    [InlineData("FollowUp", "TigerCS Manual Collections", ManualList)]   // a stale or tampered value is replaced by the Manual list
+    public async Task SendToGenesys_ShowsTheConfirmationDialog_WithCountDestinationAndAmount_BeforeAnythingIsSent(string posted, string label, string listId)
     {
         var api = NewApi();
         using var factory = CollectionsWebHost.Factory(api); using var client = factory.CreateClient();
         var html = await (await client.PostAsync("/Collections/Campaigns?handler=Approve", new FormUrlEncodedContent(Form(await TokenAsync(client),
-            ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1,4|3002|TP140-2"), ("contactList", chosen))))).Content.ReadAsStringAsync();
+            ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1,4|3002|TP140-2"), ("contactList", posted))))).Content.ReadAsStringAsync();
         var dialog = Regex.Match(html, "<dialog[^>]*data-manual-confirm[^>]*>.*?</dialog>", RegexOptions.Singleline).Value;
         Assert.NotEmpty(dialog);
         Assert.Contains($"Send 2 customer(s) to the {label} contact list?", Decode(dialog));                    // the selected count and the destination, before confirming
@@ -326,10 +322,10 @@ public sealed class CollectionsCampaignManualRenderTests
         Assert.Contains("Manual (any time; no send date or schedule)", Decode(dialog));
         Assert.Contains("data-snapshot-stage>Current month reminder - day 14<", dialog);                        // the campaign purpose
         Assert.Contains($"{label} contact list", dialog); Assert.Contains(listId, dialog);                      // destination name and id
-        Assert.Contains($"name=\"contactList\" value=\"{chosen}\"", dialog);
+        Assert.Contains("name=\"contactList\" value=\"Manual\"", dialog);
         Assert.Contains("data-confirm-button", dialog); Assert.Contains("required", Regex.Match(dialog, "<input[^>]*name=\"ackCampaign\"[^>]*>").Value);
         Assert.Null(api.LastConfirmBody);                                                                       // approving never sends
-        Assert.Contains("\"reminderType\":\"CurrentMonth\"", api.LastSummaryBody); Assert.Contains("\"sendingMode\":\"Manual\"", api.LastSummaryBody); Assert.Contains($"\"contactList\":\"{chosen}\"", api.LastSummaryBody);
+        Assert.Contains("\"reminderType\":\"CurrentMonth\"", api.LastSummaryBody); Assert.Contains("\"sendingMode\":\"Manual\"", api.LastSummaryBody); Assert.Contains("\"contactList\":\"Manual\"", api.LastSummaryBody);
         Assert.Contains("SelectedUnits", api.LastSummaryBody); Assert.Contains("4|3001|TP140-1", api.LastSummaryBody);
         Assert.Contains("\"towerId\":7", api.LastSummaryBody); Assert.Contains("\"dueStatus\":\"Overdue\"", api.LastSummaryBody); Assert.Contains("\"minRemaining\":250", api.LastSummaryBody);
         Assert.Contains("\"dueFrom\":\"2026-08-01\"", api.LastSummaryBody); Assert.DoesNotContain("sendDate", api.LastSummaryBody!);
@@ -346,7 +342,7 @@ public sealed class CollectionsCampaignManualRenderTests
         Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
         Assert.Equal($"/Collections/Campaigns?dispatch={DispatchId:D}", response.Headers.Location!.OriginalString);
         Assert.Contains("\"idempotencyKey\":\"manual-key-1\"", api.LastConfirmBody); Assert.Contains("\"expectedCount\":2", api.LastConfirmBody);
-        Assert.Contains("\"reminderType\":\"CurrentMonth\"", api.LastConfirmBody); Assert.Contains("AllMatching", api.LastConfirmBody); Assert.Contains("\"contactList\":\"FollowUp\"", api.LastConfirmBody);
+        Assert.Contains("\"reminderType\":\"CurrentMonth\"", api.LastConfirmBody); Assert.Contains("AllMatching", api.LastConfirmBody); Assert.Contains("\"contactList\":\"Manual\"", api.LastConfirmBody);
     }
 
     [Fact]
@@ -425,7 +421,7 @@ public sealed class CollectionsCampaignManualRenderTests
         var (none, _) = await LoadAsync(a => a.Records = [Row(3, "Excluded", ReviewReasons.ManualSharedPhone), Row(5, "NeedsReview", ReviewReasons.PaymentStatusUnknown)]);
         Assert.Contains("disabled", Button(none)); Assert.DoesNotContain("disabled", ExportButton(none));
         Assert.Contains("Nothing to send; export available", none); Assert.DoesNotContain("No eligible customers", none);     // no misleading "nothing" for a download-only file
-        Assert.Contains("held-back ones included", ExportTip(none)); Assert.Contains("Current Month Genesys contact list", ExportTip(none));
+        Assert.Contains("held-back ones included", ExportTip(none)); Assert.Contains("TigerCS Manual Collections Genesys contact list", ExportTip(none));
 
         var (reader, _) = await LoadAsync(a => a.CanSend = false);
         Assert.Contains("disabled", ExportButton(reader)); Assert.Contains("disabled", Button(reader));
@@ -439,10 +435,10 @@ public sealed class CollectionsCampaignManualRenderTests
     }
 
     [Fact]
-    public async Task TheExportTip_NamesTheChosenDestinationList()
+    public async Task TheExportTip_NamesTheManualDestinationList()
     {
-        var (html, _) = await LoadAsync(url: Url + "&contactList=FollowUp");
-        Assert.Contains("Follow Up Genesys contact list", ExportTip(html));
+        var (html, _) = await LoadAsync(url: Url);
+        Assert.Contains("TigerCS Manual Collections Genesys contact list", ExportTip(html));
     }
 
     [Fact]
@@ -462,7 +458,7 @@ public sealed class CollectionsCampaignManualRenderTests
         // The API got the selection and the filters, exactly as the preview and the send use them.
         var body = api.LastExportBody!;
         Assert.Equal(1, api.Exports);
-        Assert.Contains("\"reminderType\":\"CurrentMonth\"", body); Assert.Contains("\"sendingMode\":\"Manual\"", body); Assert.Contains("\"contactList\":\"FollowUp\"", body);
+        Assert.Contains("\"reminderType\":\"CurrentMonth\"", body); Assert.Contains("\"sendingMode\":\"Manual\"", body); Assert.Contains("\"contactList\":\"Manual\"", body);
         Assert.Contains("SelectedUnits", body); Assert.Contains("4|3001|TP140-1", body); Assert.Contains("\"towerId\":7", body); Assert.Contains("\"dueStatus\":\"Overdue\"", body);
         Assert.Contains("\"minRemaining\":250", body); Assert.Contains("\"dueFrom\":\"2026-08-01\"", body); Assert.DoesNotContain("sendDate", body);
         Assert.Null(api.LastConfirmBody); Assert.Null(api.LastSummaryBody);                                         // an export is not an approval
@@ -489,11 +485,11 @@ public sealed class CollectionsCampaignManualRenderTests
         Assert.Equal("text/html", response.Content.Headers.ContentType?.MediaType);
         // The refusal redirects back to the list that was on screen: Manual stays Manual, every filter and the chosen list travel in the URL.
         var landed = response.RequestMessage!.RequestUri!.PathAndQuery;
-        foreach (var kept in new[] { "sendingMode=Manual", "contactList=FollowUp", "stage=CurrentMonthReminder", "dateFrom=2026-08-01", "dateTo=2026-09-30", "towerId=7", "minTotal=250", "paymentStatus=Overdue", "render=full" })
+        foreach (var kept in new[] { "sendingMode=Manual", "stage=CurrentMonthReminder", "dateFrom=2026-08-01", "dateTo=2026-09-30", "towerId=7", "minTotal=250", "paymentStatus=Overdue", "render=full" })
             Assert.Contains(kept, landed);
         var html = Decode(await response.Content.ReadAsStringAsync());
         Assert.Contains("data-approval-error", html); Assert.Contains("missing column AmountDue", html);
-        Assert.Matches("name=\"sendingMode\" value=\"Manual\"[^>]*checked", Toggle(html)); Assert.Matches("<option value=\"FollowUp\"[^>]*selected", html);
+        Assert.Matches("name=\"sendingMode\" value=\"Manual\"[^>]*checked", Toggle(html)); Assert.Contains("TigerCS Manual Collections", Decode(html));
         Assert.Contains("data-manual-send", html); Assert.Contains("Manual Customer 1", html);                   // the Manual list is on screen again
     }
 
