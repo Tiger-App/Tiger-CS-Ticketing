@@ -85,13 +85,8 @@
                         "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
                 }
                 <input type="hidden" name="unitKeys" value="" data-selected-units />
-                @* The destination: an existing Genesys contact list that suits the campaign type (its own list first, which is the default). Kept with the approval for the audit trail. *@
-                <label class="campaign-approve__list">Contact list
-                    <select class="field-select" name="contactList" data-contact-list aria-describedby="tip-contact-list">
-                        @foreach (var choice in Model.ContactListChoices) { <option value="@choice" selected="@(Model.SelectedContactList == choice)">@CampaignsModel.ContactListLabel(choice)@(choice == Model.ContactListChoices[0] ? " (this campaign's list)" : "")</option> }
-                    </select>
-                    <partial name="_InfoTip" model="@(new InfoTipModel("tip-contact-list", "Contact list", "The existing Genesys list these customers are added to: this campaign's own list, or another reminder list that suits it. It is checked in Genesys before anything is uploaded: it must have the required columns and no other active campaign may dial it."))" />
-                </label>
+                @* The destination is fixed: every Manual send and export goes to the dedicated Manual contact list. Each record keeps its own ReminderType. *@
+                <input type="hidden" name="contactList" value="@Model.SelectedContactList" />
                 @if (counts.Ready > 0)
                 {
                     <div class="campaign-approve__modes">
