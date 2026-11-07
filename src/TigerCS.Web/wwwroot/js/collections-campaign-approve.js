@@ -80,15 +80,18 @@
     if (filter) filter.addEventListener('submit', () => { selected.clear(); save(selected); writeList(''); });
     // Changed filters clear the customers (filters script); the ticks go with them.
     window.addEventListener('campaign-preview-invalidated', () => { selected.clear(); save(selected); writeList(''); sync(); });
-    // A double click cannot submit twice (the idempotency key would replay it anyway).
+    // The confirmation is sent by collections-campaign-confirm.js (loading state, result, one submission). This is only the plain form post, when that script did not take the submit over:
+    // a double click still cannot submit twice (the idempotency key would replay it anyway), and the ticks go once the approval is posted.
     document.addEventListener('submit', event => {
         const form = event.target;
-        if (form.matches && form.matches('[data-confirm-form]')) {
+        if (form.matches && form.matches('[data-confirm-form]') && !event.defaultPrevented) {
             const button = form.querySelector('[data-confirm-button]');
             if (button && button.disabled) { event.preventDefault(); return; }
             if (button && event.submitter === button) { button.disabled = true; button.textContent = 'Sending…'; selected.clear(); save(selected); }
         }
     });
+    // The approval was accepted by the server (the dialog's own request): the ticked customers are spent. A failed or refused confirmation keeps them, so the list can be reviewed again.
+    window.addEventListener('collections-send-accepted', () => { selected.clear(); save(selected); sync(); });
     // An export button is held for a few seconds once pressed: a double click sends one request, not two. (The download does not reload the page, so the button is released on a timer, and
     // sync() then restores its real state.) The server would refuse a second simultaneous export anyway.
     document.addEventListener('submit', event => {

@@ -98,8 +98,19 @@
 @if (Model.Summary is { } s)
 {
     @* The confirmation. Manual shows it as a dialog (upgraded to a modal by collections-campaign-approve.js; without JavaScript it is simply open on the page). *@
-    Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> confirmForm = @<form method="post" class="panel review-confirm" data-confirm-form asp-page-handler="Confirm">
+    Func<object?, Microsoft.AspNetCore.Html.IHtmlContent> confirmForm = @<form method="post" class="panel review-confirm" data-confirm-form asp-page-handler="Confirm"
+        data-return-url="@Model.ReturnUrl()" data-history-url="/Collections/Campaigns" data-send-status-url="/Collections/Campaigns?handler=Send&amp;dispatch=" data-send-details-url="/Collections/Campaigns?dispatch=">
         <h2 id="manualConfirmTitle">@(Model.IsManual ? $"Send {s.Count:N0} customer(s) to the {CampaignsModel.ContactListLabel(s.ContactListName ?? "")} contact list?" : "Confirm Approve & Send")<partial name="_InfoTip" model="@(new InfoTipModel("tip-confirm-checks", "What is checked before uploading", "Before uploading, the current balance of every customer is checked again against the financial snapshot. Paid customers are dropped; any other change, or a duplicate of an earlier send, stops the send for review. A copy of the approved list and the Genesys result is emailed to the Collections administrator."))" /></h2>
+        @* Sending / result. Filled by collections-campaign-confirm.js, always at the top of the dialog (never below the contact table), so the person sees the state whatever the list length. *@
+        <div class="review-confirm__status" data-confirm-status data-confirm-state="idle" hidden tabindex="-1">
+            <span class="confirm-spinner" data-confirm-spinner aria-hidden="true" hidden></span>
+            <div class="review-confirm__status-text">
+                <p class="review-confirm__status-title" data-confirm-title></p>
+                <p class="review-confirm__status-detail" data-confirm-detail></p>
+                <p class="review-confirm__status-actions" data-confirm-actions></p>
+            </div>
+        </div>
+        <div class="review-confirm__body" data-confirm-body>
         <dl class="review-snapshot" data-selection-snapshot>
             <dt>Customers</dt><dd data-snapshot-count>@s.Count</dd>
             <dt>Total amount</dt><dd data-snapshot-total>@string.Join(" · ", s.TotalsByCurrency.Select(t => $"{t.Key} {CampaignsModel.Money(t.Value)}"))</dd>
@@ -127,6 +138,8 @@
                 @if (s.Page * s.PageSize < s.Count) { <button class="btn btn-sm" type="submit" asp-page-handler="Approve" name="contactPage" value="@(s.Page + 1)" formnovalidate>More contacts</button> }
             </p>
         }
+        </div>
+        <div class="review-confirm__footer" data-confirm-footer>
         @foreach (var name in CampaignsModel.FilterFieldNames)
         {
             if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
@@ -140,7 +153,8 @@
         <input type="hidden" name="idempotencyKey" value="@Model.ConfirmKey" />
         <label><input type="checkbox" name="ackCampaign" value="true" required /> I understand that an active Genesys campaign using these lists may start calling the uploaded contacts immediately, and that "uploaded" does not mean "contacted".</label><br />
         <button class="btn btn-primary" type="submit" data-confirm-button>Confirm: send @s.Count customer(s) to Genesys</button>
-        <a class="btn" href="@Model.ReturnUrl()">Cancel</a>
+        <a class="btn" href="@Model.ReturnUrl()" data-confirm-cancel>Cancel</a>
+        </div>
     </form>;
     if (Model.IsManual)
     {

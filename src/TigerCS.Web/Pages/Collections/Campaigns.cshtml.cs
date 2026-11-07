@@ -518,9 +518,35 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public async Task<IActionResult> OnGetSendAsync(Guid dispatch, CancellationToken ct)
     {
         var result = await api.GetDispatchAsync(dispatch, ct);
+        // The counts are what the confirmation dialog reports once the send ends: only what Genesys accepted is "uploaded".
         return new JsonResult(result.IsSuccess && result.Value is { } d
-            ? new { d.Status, d.Phase, active = d.Status is "Queued" or "Revalidating" or "Sending" }
-            : new { Status = "Unknown", Phase = (string?)null, active = false });
+            ? new SendState(d.Status, d.Phase, d.Status is "Queued" or "Revalidating" or "Sending", d.ApprovedCount, d.UploadedCount, d.ExcludedCount, d.FailedCount, d.UnknownCount, d.StatusReason)
+            : new SendState("Unknown", null, false, 0, 0, 0, 0, 0, null));
+    }
+
+    /// <summary>The state of a send as the confirmation dialog polls it (camelCase in JSON).</summary>
+    public sealed record SendState(string Status, string? Phase, bool Active, int ApprovedCount, int UploadedCount, int ExcludedCount, int FailedCount, int UnknownCount, string? StatusReason);
+
+    /// <summary>The header the confirmation dialog sends so the answer is JSON for the dialog instead of a redirect or a re-rendered page. Without JavaScript the form posts normally.</summary>
+    public const string ConfirmAjaxHeader = "X-Requested-With", ConfirmAjaxValue = "tigercs-confirm";
+    private bool IsConfirmAjax => string.Equals(Request.Headers[ConfirmAjaxHeader].ToString(), ConfirmAjaxValue, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The answer to a confirmation the dialog sent. <c>ok</c> only means the approval was ACCEPTED and queued: the upload happens afterwards and the dialog reports it from the send's own status.
+    /// A failure carries the backend's own message. <c>unknown</c> is an answer that does not say whether the approval was created (the API did not answer in time, was unreachable or sent
+    /// an unusable reply): the dialog then never retries and tells the person to check the recent sends first. <c>retry</c> is set only for a definite refusal that created nothing
+    /// (service unavailable / busy); the retry re-sends the same idempotency key, so even then it can never approve twice.
+    /// </summary>
+    public sealed record ConfirmAnswer(bool Ok, string? DispatchId, string? Status, int ApprovedCount, string? Message, bool Unknown, bool Retry, string Outcome);
+
+    public static ConfirmAnswer ConfirmAnswerOf(ApiResult<DispatchDto> result)
+    {
+        if (result.IsSuccess && result.Value is { } d) return new(true, d.DispatchId.ToString("D"), d.Status, d.ApprovedCount, null, false, false, "Accepted");
+        var unknown = result.Outcome is ApiOutcome.Unreachable or ApiOutcome.BadGateway or ApiOutcome.Unknown;
+        var message = unknown
+            ? "The Tiger CS API did not confirm the outcome (it did not answer in time, could not be reached or sent an unusable reply), so it is not known whether this send was approved."
+            : result.Outcome == ApiOutcome.Conflict ? result.Detail ?? "The list changed. Review the current list and confirm again." : Describe(result.Outcome, result.Detail);
+        return new(false, null, null, 0, message, unknown, result.Outcome is ApiOutcome.ServiceUnavailable or ApiOutcome.Locked, result.Outcome.ToString());
     }
 
     public async Task<IActionResult> OnPostRefreshApprovalAsync(string? returnUrl, CancellationToken ct)
@@ -638,11 +664,15 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     {
         SetFiltersFromForm();
         await EnsureTowersAsync(ct);
-        if (!IsManual) return await AutoModeRefusedAsync(ct);
+        if (!IsManual)
+            return IsConfirmAjax
+                ? new JsonResult(new ConfirmAnswer(false, null, null, 0, "Sending to Genesys by a person is Manual only. Choose Manual to send.", false, false, "InvalidRequest"))
+                : await AutoModeRefusedAsync(ct);
         SelectionMode = string.Equals(selectionMode, ReviewQueryService.ModeAllMatching, StringComparison.OrdinalIgnoreCase) ? ReviewQueryService.ModeAllMatching : ReviewQueryService.ModeSelectedUnits;
         UnitKeys = unitKeys ?? "";
         var request = new ConfirmDispatchRequest(BuildSelection(), expectedCount, expectedFingerprint ?? "", idempotencyKey ?? "", ackCampaign);
         var result = await api.ConfirmDispatchAsync(request, ct);
+        if (IsConfirmAjax) return new JsonResult(ConfirmAnswerOf(result));
         if (result.IsSuccess) return Redirect($"/Collections/Campaigns?dispatch={result.Value!.DispatchId:D}");
         await LoadApprovalStateAsync(ct);
         ApprovalError = result.Outcome == ApiOutcome.Conflict ? (result.Detail ?? "The list changed. Review the current list and confirm again.") : Describe(result.Outcome, result.Detail);
