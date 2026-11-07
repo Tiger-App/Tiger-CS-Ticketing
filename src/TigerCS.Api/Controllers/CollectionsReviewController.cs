@@ -22,7 +22,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/collections/review")]
 [Tags(OpenApiTags.Collections)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-public sealed class CollectionsReviewController(ReviewQueryService query, ReviewRefreshService refresh, DispatchService dispatch, DispatchAdminReportService adminReport, GenesysExportService genesysExport, ManualReviewExportService reviewExport) : ControllerBase
+public sealed class CollectionsReviewController(ReviewQueryService query, ReviewRefreshService refresh, DispatchService dispatch, DispatchAdminReportService adminReport, GenesysExportService genesysExport, ManualReviewExportService reviewExport, GenesysConnectionCheckService genesysCheck) : ControllerBase
 {
     public sealed record StartRefreshRequest(int? CompanyId);
 
@@ -114,6 +114,16 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
     [ProducesResponseType<DispatchReadinessDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> DispatchReadiness(CancellationToken ct) =>
         Caller() is { } caller ? Result(await dispatch.ReadinessAsync(caller, ct)) : Unauthorized();
+
+    /// <summary>
+    /// READ-ONLY check of the Genesys integration as configured here (region consistency, OAuth client and organization, every configured contact list). Uploads and changes nothing, never
+    /// contacts a customer, needs the send permission. A POST (it calls Genesys), never triggered by a page view.
+    /// </summary>
+    [HttpPost("dispatches/genesys-check")]
+    [RequirePermission(Permissions.CollectionsSend)]
+    [ProducesResponseType<GenesysConnectionCheckDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> CheckGenesys(CancellationToken ct) =>
+        Caller() is { } caller ? Result(await genesysCheck.CheckAsync(caller, ct)) : Unauthorized();
 
     /// <summary>The latest approved sends with their batch results.</summary>
     [HttpGet("dispatches")]

@@ -174,7 +174,7 @@ public sealed class DispatchService(
             return $"The {label} contact list could not be checked in Genesys. Nothing was uploaded.";
         }
         if (list.Outcome != GenesysUploadOutcome.Accepted)
-            return $"The {label} contact list could not be checked in Genesys ({list.Error}). Nothing was uploaded.";
+            return $"The {label} contact list could not be checked in Genesys ({list.Error}){ListConfigurationHint(owner, listId, list.HttpStatus)} Nothing was uploaded.";
         var missing = GenesysContactTemplate.Columns.Where(c => !list.Columns.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
         if (missing.Count > 0)
             return $"The {label} contact list does not have the required column(s): {string.Join(", ", missing)}. Nothing was uploaded.";
@@ -195,6 +195,17 @@ public sealed class DispatchService(
             return $"The Genesys campaign \"{string.Join("\", \"", active.Select(c => c.Name))}\" is active and dials the {label} contact list, so these customers would be dialled at once. Switch it off in Genesys, or choose the other list. Nothing was uploaded.";
         return null;
     }
+
+    /// <summary>
+    /// What to correct when Genesys answers a contact list read with 404 or 403: the exact configuration key and id (identifiers, not secrets), so nobody has to guess which of the five lists or which
+    /// setting is wrong. The send is never redirected to another list: it stops, and the list stays whatever is configured.
+    /// </summary>
+    internal static string ListConfigurationHint(CampaignReminderType owner, string listId, int? httpStatus) => httpStatus switch
+    {
+        404 => $" Check Collections:GenesysOutbound:ContactListIds:{owner} (list id {listId}): that list must exist in the organization of the OAuth client, in the region of Collections:GenesysOutbound:ApiBaseUrl / LoginBaseUrl.",
+        403 => " The OAuth client needs permission to view outbound contact lists (outbound:contactList:view).",
+        _ => ""
+    };
 
     /// <summary>
     /// The filter kept with the approval. A Manual approval stores its EFFECTIVE minimum (the review default when none was given) so that the revalidation before the upload and the paid-after-upload
