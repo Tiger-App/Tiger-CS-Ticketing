@@ -299,3 +299,37 @@ configured integration accounts, System Administrator override). Authorization r
 `dotnet build src/TigerCS.slnx -c Release` → 0 warnings, 0 errors. `dotnet test` → 3,931 passed, 0 failed (152 new: domain rules, validation, filters/paging,
 dispatch/authorization/duplicates/concurrency on a real SQLite database, Genesys HTTP/token behaviour against a mocked handler, page rendering, endpoint authorization).
 Not exercised: real PACT, real Genesys, SQL Server (the migration and filtered indexes were generated for SQL Server; tests run on SQLite).
+
+## UAT: PACT synchronization, reconciliation recovery and the per-company gate
+
+Environment: UAT with `BackgroundJobs:Enabled=true`, the linked server and the direct `PACTRPT` connection configured, `Collections:GenesysOutbound:LiveCustomerDispatchEnabled=false`
+(nothing is sent to a customer at any step), `AutoSendingEnabled=false`, `FinancialSourceValidated` as committed (false) for steps 1-6 and set to true (UAT only, with
+`ValidatedProcedureSuffix=""` and a `ReconciliationReference`) for steps 7-10. The checks read PACT; they never write to it.
+
+1. **The check follows the refresh.** Start the API; both companies load (`RefreshOnStartup`). Open `/Collections/Reconciliation`: within a few minutes of each company's refresh a run
+   "run by itself after the snapshot refresh" appears for that company, Passed, with "snapshot published" equal to the company's last refresh time on `/Collections/Receivables`.
+2. **Changed amount / paid instalment / new unit.** In UAT PACT (or by waiting for real payments) change the remaining amount of one instalment, settle another, and add one. Press *Dubai
+   only*. Expected: the latest run shows the company **Passed** with the recovery line "The first comparison found N differing unit(s); the company's snapshot was refreshed from PACT once
+   (Succeeded) and the second comparison agrees". Receivables shows the new amounts, the settled instalment is gone, the new unit is listed. Only one refresh attempt of that company is recorded
+   in `dbo.CollectionsRcvRun` with `TriggerSource = 'Reconciliation'`.
+3. **Persistent difference (mapping defect).** In the UAT database only, edit one published line in `dbo.CollectionsRcvLine` (change its Amount) AND make the UAT refresh procedure
+   reproduce it (or run the check while a known linked-server/direct discrepancy exists). Press *Dubai only*. Expected: the company is **Failed**, the recovery line says "the differences
+   persist: a synchronization or mapping defect to investigate", the unit is listed, and the gate panel shows Dubai as "Reconciled; some units held back" with that unit under *Held back*.
+   `dbo.CollectionsRcvRun` shows exactly one `Reconciliation` attempt for the run (no retry loop).
+4. **Partial refresh failure.** Make the UAT linked server unavailable for one company (or lower `RefreshCommandTimeoutSeconds` to 5 for the test) and press *Run (both companies)*.
+   Expected: the affected company shows "could not be refreshed ... the previous snapshot is still in use", its previous snapshot is still served on Receivables (same last-success time,
+   same rows), the other company's result is unaffected.
+5. **Stale snapshot.** Stop the API for longer than `ReconciliationMaxSnapshotAgeMinutes`, start it with `RefreshOnStartup=false`, press *Dubai only*. Expected: no "minutes old" error; the
+   recovery line says the snapshot was too old and was refreshed first, then Passed.
+6. **Gate without sign-off.** With `FinancialSourceValidated=false`, Campaigns Manual mode shows every clean customer **Ready** and the status strip says the source is not reconciled
+   (SignOffMissing); *Approve & Send* is blocked by that gate alone. Export for Genesys still downloads, labelled "Financial data not verified".
+7. **Per-company gate.** Set `FinancialSourceValidated=true` (UAT only). With both companies Passed, Manual mode's summary says the source is reconciled. Make Sharjah's direct read fail
+   (wrong `PACTRPT` password for one run) and run *Sharjah only*: the gate shows Sharjah "Not reconciled" and Dubai "Reconciled". A Manual list filtered to Dubai is accepted at approval
+   (no upload happens: live dispatch is off); a list containing Sharjah is refused with "not reconciled for Tiger Group Sharjah" and names Dubai as still sendable.
+8. **Held unit.** With step 3's persistent difference in place and the sign-off set, refresh the approval data. Expected: that unit is **Needs review** with reason "Snapshot differs from PACT
+   after a refresh (investigate)"; every other unit of the company is Ready; `Counts.Ready` excludes only that unit.
+9. **Refresh between approval and send.** Approve a Manual list (dispatch stays queued because live dispatch is off; or, with the Genesys sandbox, allow it to execute). Press *Retry* on the
+   company on Receivables so a new publish happens before the dispatch executes, and stop the after-refresh check from passing (step 7's failure). Expected: the dispatch ends
+   **ReviewRequired** with "not reconciled for ... republished ... has not been checked yet"; nothing was uploaded.
+10. **Nothing auto-enabled.** After every step above, `Collections:Campaigns:FinancialSourceValidated` and `AutoSendingEnabled` are exactly what was configured; no run changed them
+    (they are configuration only). The six Genesys CSV columns are unchanged (`GenesysContactTemplate`).
