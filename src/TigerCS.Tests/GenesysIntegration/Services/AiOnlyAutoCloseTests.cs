@@ -1,3 +1,5 @@
+using TigerCS.Application.Modules.Notifications.Dto;
+using TigerCS.Application.Modules.Notifications;
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
 using TigerCS.Application.Modules.GenesysIntegration.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -94,17 +96,23 @@ public class AiOnlyAutoCloseTests
     }
 
     [Fact]
-    public async Task Closure_SendsNoCustomerNotification()
+    public async Task Closure_QueuesTheSingleClosedCustomerNotification()
     {
-        var (f, _, _) = await IngestAsync();
+        var (f, ticketId, _) = await IngestAsync();
         var before = f.Outbox.Committed.Count;
         f.Clock.Advance(Threshold + TimeSpan.FromMinutes(1));
 
         await RunJobAsync(f);
 
         Assert.Equal(TicketStatus.Closed, f.Tickets.All.Single().TicketStatus);
-        Assert.Equal(before, f.Outbox.Committed.Count);
-        Assert.DoesNotContain(f.Outbox.Committed, m => m.EventType is "TicketClosed" or "TicketResolved");
+        Assert.Equal(before + 1, f.Outbox.Committed.Count);
+        // One Closed event (never a Resolved one), marked as the AI-only time-limit closure so the email can explain it.
+        var closed = Assert.Single(f.Outbox.Committed, m => m.EventType is "TicketClosed" or "TicketResolved");
+        Assert.Equal("TicketClosed", closed.EventType);
+        Assert.Equal(ClosureKinds.AiOnlyTimeout, TicketLifecycleEventPayload.FromJson(closed.Payload)!.ClosureKind);
+        Assert.Contains(f.Audit.Entries, e =>
+            e.Action == NotificationAuditActions.NotificationQueued && e.EntityId == ticketId.ToString()
+            && e.AfterValue!.Contains("ClosureKind=AiOnlyTimeout", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
+using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
@@ -37,8 +38,12 @@ public sealed class TicketAssignmentAppService(
     CollectionsTicketRoutingService? collectionsRouting = null,
     CollectionsTicketTowerResolver? collectionsTowerResolver = null,
     ITicketAssignmentHistoryRepository? assignmentHistory = null,
-    CollectionsTransferGuard? collectionsGuard = null)
+    CollectionsTransferGuard? collectionsGuard = null,
+    IOutboxWriter? outboxWriter = null)
 {
+    /// <summary>Customer "assigned" and colleague "assigned to you" notification events, written in the operation's own transaction.</summary>
+    private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
+
     /// <summary>
     /// Safe retry of a failed automatic CS Agent assignment. Authority is cross-department assignment (CS Manager; the administrator
     /// override applies as for Assign). Idempotent: an already-assigned ticket is returned untouched. A second concurrent retry loses at
@@ -209,6 +214,12 @@ public sealed class TicketAssignmentAppService(
             callerEmployeeId, "Assign", "Ticket", ticketId.ToString(),
             beforeValue: previousOwnerEmployeeId?.ToString(), afterValue: request.AssignedEmployeeId.ToString(),
             correlationId, cancellationToken);
+
+        if (_notificationEvents is not null)
+        {
+            await _notificationEvents.QueueAssignedAsync(
+                ticket, previousOwnerEmployeeId, request.AssignedEmployeeId, callerEmployeeId, correlationId, now, cancellationToken);
+        }
 
         if (isCollectionsTicket && previousOwnerEmployeeId != request.AssignedEmployeeId)
         {
@@ -422,6 +433,12 @@ public sealed class TicketAssignmentAppService(
                 beforeValue: previousOwnerEmployeeId?.ToString() ?? "DepartmentQueue",
                 afterValue: $"{explicitAssignee};DepartmentId={request.TargetDepartmentId};ViaTransfer=true",
                 correlationId, cancellationToken);
+
+            if (_notificationEvents is not null)
+            {
+                await _notificationEvents.QueueAssignedAsync(
+                    ticket, previousOwnerEmployeeId, explicitAssignee, callerEmployeeId, correlationId, now, cancellationToken);
+            }
 
             // An explicit choice into Collections is a manual assignment: recorded as such, and never overwritten by tower routing.
             if (collectionsTeam is not null && await collectionsTeam.IsCollectionsDepartmentAsync(request.TargetDepartmentId, cancellationToken))

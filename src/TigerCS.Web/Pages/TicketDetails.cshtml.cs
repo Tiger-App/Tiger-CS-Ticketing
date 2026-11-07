@@ -1605,6 +1605,7 @@ public sealed class TicketDetailsModel(
                 { Category: "Handoff" or "Routing" } => "handoff",
                 { Category: "Conversation" } => "conversation",
                 { Category: "Sla" } => "sla",
+                { Category: "Notification" } => "notification",
                 _ => "status"
             };
 

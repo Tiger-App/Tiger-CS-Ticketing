@@ -3,6 +3,7 @@ using System.Net.Http.Json;
 using System.Text.RegularExpressions;
 using TigerCS.Application.Modules.CustomerReviews.Dto;
 using TigerCS.Application.Modules.Ticketing.Dto;
+using TigerCS.Application.Modules.Notifications.Abstractions;
 using TigerCS.Domain.Modules.Notifications;
 using TigerCS.Tests.IdentityAndAccess.Integration;
 
@@ -54,12 +55,19 @@ public sealed class CustomerNotificationTestModeIntegrationTests : LifecycleInte
         await _factory.RunOutboxDispatchAsync();
 
         Assert.Equal(0, first.DeadLettered);
-        var mine = _factory.EmailSender.Recorded.Where(e => e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal)).ToList();
+        var mine = _factory.EmailSender.Recorded
+            .Where(e => e.Audience == EmailAudience.Customer && e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal)).ToList();
         Assert.Equal(4, mine.Count);
         Assert.All(mine, e => Assert.Equal(TestInbox, e.ToAddress));
         Assert.All(mine, e => Assert.StartsWith("[TEST] ", e.Subject, StringComparison.Ordinal));
         Assert.DoesNotContain(_factory.EmailSender.Recorded, e => e.ToAddress == Customer);
-        Assert.All(await _factory.GetNotificationsAsync(ticket.TicketId), n => Assert.Equal(NotificationDeliveryStatus.Sent, n.DeliveryStatus));
+        // Staff mail is never redirected by the customer test mode.
+        Assert.DoesNotContain(_factory.EmailSender.Recorded, e => e.Audience == EmailAudience.Internal && e.ToAddress == TestInbox);
+        var notifications = await _factory.GetNotificationsAsync(ticket.TicketId);
+        Assert.All(
+            notifications.Where(n => n.RecipientEmployeeId is null && n.NotificationType is not (NotificationType.Assigned or NotificationType.InProgress)),
+            n => Assert.Equal(NotificationDeliveryStatus.Sent, n.DeliveryStatus));
+        Assert.DoesNotContain(notifications, n => n.DeliveryStatus is NotificationDeliveryStatus.Failed or NotificationDeliveryStatus.DeadLettered);
     }
 
     [Fact]

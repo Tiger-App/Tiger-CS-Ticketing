@@ -2,6 +2,7 @@ using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
+using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Domain.Modules.Ticketing;
@@ -67,8 +68,12 @@ public sealed class GenesysConversationEndAppService(
     FirstHumanResponseRecorder firstHumanResponseRecorder,
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    IOutboxWriter? outboxWriter = null)
 {
+    /// <summary>The internal "customer replied" notification; null when the host wired no Outbox writer (older fixtures).</summary>
+    private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
+
     public async Task<GenesysConversationEndResult> EndAsync(
         Guid callerEmployeeId, GenesysConversationEndDto request, CancellationToken cancellationToken = default)
     {
@@ -223,6 +228,15 @@ public sealed class GenesysConversationEndAppService(
         var all = stored.Concat(pending).ToList();
         var firstHumanAt = await TryRecordFirstHumanResponseAsync(callerEmployeeId, ticket, all, cancellationToken);
         await ApplyHumanActivityAsync(callerEmployeeId, ticket, interaction, pending, cancellationToken);
+
+        if (ticket is not null && _notificationEvents is not null)
+        {
+            // Customer lines appended by this delivery, in transcript order. The writer decides whether anybody needs telling (a person
+            // must be handling the ticket) and keys the event on the transcript position, so a redelivery of the same lines is silent.
+            await _notificationEvents.QueueCustomerReplyAsync(
+                ticket, interaction, [.. pending.Where(m => m.Sender == InteractionMessageSender.Customer).OrderBy(m => m.Sequence)],
+                callerEmployeeId, Guid.NewGuid(), timeProvider.GetUtcNow().UtcDateTime, cancellationToken);
+        }
 
         await auditWriter.WriteAsync(
             callerEmployeeId,

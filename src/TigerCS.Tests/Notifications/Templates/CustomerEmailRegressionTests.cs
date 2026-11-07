@@ -16,7 +16,11 @@ public class CustomerEmailRegressionTests
         ("created", CustomerEmailTemplates.TicketCreated),
         ("resolved", CustomerEmailTemplates.TicketResolved),
         ("closed", CustomerEmailTemplates.TicketClosed),
-        ("reopened", CustomerEmailTemplates.TicketReopened)
+        ("reopened", CustomerEmailTemplates.TicketReopened),
+        ("assigned", CustomerEmailTemplates.TicketAssigned),
+        ("in-progress", CustomerEmailTemplates.TicketInProgress),
+        ("waiting", CustomerEmailTemplates.TicketWaitingForCustomer),
+        ("cancelled", CustomerEmailTemplates.TicketCancelled)
     ];
 
     public static TheoryData<string?> InvalidNames => new()

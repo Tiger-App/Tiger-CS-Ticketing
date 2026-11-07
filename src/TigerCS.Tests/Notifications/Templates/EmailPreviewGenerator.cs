@@ -37,11 +37,21 @@ public class EmailPreviewGenerator
 
             foreach (var (name, content) in new[]
             {
+                ("created", CustomerEmailTemplates.TicketCreated(model with { RequestTypeName = model.TicketSubject, TicketSubject = null })),
+                ("assigned", CustomerEmailTemplates.TicketAssigned(model with { TicketStatus = "Open" })),
+                ("in-progress", CustomerEmailTemplates.TicketInProgress(model)),
+                ("waiting", CustomerEmailTemplates.TicketWaitingForCustomer(model)),
                 ("resolved", CustomerEmailTemplates.TicketResolved(model)),
-                ("closed", CustomerEmailTemplates.TicketClosed(model))
+                ("cancelled", CustomerEmailTemplates.TicketCancelled(model with { ResolutionStatus = "Cancelled", ResolutionMessage = null })),
+                ("closed", CustomerEmailTemplates.TicketClosed(model)),
+                ("reopened", CustomerEmailTemplates.TicketReopened(model))
             })
             {
-                Assert.Contains("&#9733;", content.HtmlBody, StringComparison.Ordinal);
+                if (name is "resolved" or "closed")
+                {
+                    Assert.Contains("&#9733;", content.HtmlBody, StringComparison.Ordinal);
+                }
+
                 if (outputDir is null)
                 {
                     continue;

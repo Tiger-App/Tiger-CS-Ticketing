@@ -516,6 +516,12 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IOutboxEventHandler, TicketResolvedNotificationHandler>();
         services.AddScoped<IOutboxEventHandler, TicketClosedNotificationHandler>();
         services.AddScoped<IOutboxEventHandler, TicketReopenedNotificationHandler>();
+        services.AddScoped<IOutboxEventHandler, TicketAssignedNotificationHandler>();
+        services.AddScoped<IOutboxEventHandler, TicketInProgressNotificationHandler>();
+        services.AddScoped<IOutboxEventHandler, TicketPendingCustomerNotificationHandler>();
+        // Staff-facing: "assigned to you" and "the customer replied", delivered through the same Outbox and SMTP account.
+        services.AddScoped<IOutboxEventHandler, AgentAssignedNotificationHandler>();
+        services.AddScoped<IOutboxEventHandler, CustomerReplyNotificationHandler>();
 
         services.AddScoped(sp => sp
             .GetRequiredService<IOptions<OutboxDispatchOptions>>().Value.ToPolicy());

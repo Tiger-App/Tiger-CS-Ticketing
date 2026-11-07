@@ -54,12 +54,28 @@ public abstract class CustomerTicketEmailHandler(
 
     protected abstract NotificationType NotificationType { get; }
 
+    /// <summary>
+    /// The notification type this specific occurrence records — normally <see cref="NotificationType"/>; a handler whose wording depends
+    /// on the ticket (a Cancelled resolution under the <c>TicketResolved</c> event) overrides it so the delivery row and the audit trail
+    /// name what was actually sent.
+    /// </summary>
+    protected virtual Task<NotificationType> ResolveNotificationTypeAsync(Ticket ticket, CancellationToken cancellationToken) =>
+        Task.FromResult(NotificationType);
+
+    /// <summary>
+    /// Dispatch-time coalescing. Several transitions can happen within one dispatch window (Resolved then Closed; assigned then started;
+    /// waiting then resumed). The customer should receive the email that describes where the ticket is now, not one per intermediate
+    /// step. A handler returns a <see cref="CustomerEmailSkipReasons"/> code when the ticket has already moved past the state its event
+    /// announces and a later event carries that state; the notification is then recorded as Skipped with that reason. Default: never.
+    /// </summary>
+    protected virtual string? SupersededReason(Ticket ticket, OutboxMessage message) => null;
+
     /// <summary>Extracts the ticket identifier from the message payload; <c>null</c> when the payload cannot be parsed.</summary>
     protected abstract long? ParseTicketId(string payload);
 
-    /// <summary>Renders the email for this ticket and contact. Runs only once a deliverable recipient is known.</summary>
+    /// <summary>Renders the email for this ticket and contact. Runs only once a deliverable recipient is known. The message carries the event's time and payload.</summary>
     protected abstract Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken);
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken);
 
     /// <summary>A domain-level "already done" guard evaluated before anything else is touched. Default: none.</summary>
     protected virtual bool IsAlreadyDelivered(Ticket ticket) => false;
@@ -96,8 +112,9 @@ public abstract class CustomerTicketEmailHandler(
             return OutboxHandlingResult.Succeeded();
         }
 
+        var notificationType = await ResolveNotificationTypeAsync(ticket, cancellationToken);
         var notification = await notificationRepository.GetByOutboxMessageAsync(
-            message.OutboxMessageId, NotificationType, cancellationToken);
+            message.OutboxMessageId, notificationType, cancellationToken);
 
         if (notification is { IsTerminal: true })
         {
@@ -117,7 +134,7 @@ public abstract class CustomerTicketEmailHandler(
         {
             notification = new Notification(
                 ticket.TicketId,
-                NotificationType,
+                notificationType,
                 // Always null: customer notifications go to the external
                 // requester, never to a staff mailbox.
                 recipientEmployeeId: null,
@@ -128,6 +145,13 @@ public abstract class CustomerTicketEmailHandler(
                 nowUtc);
 
             await notificationRepository.AddAsync(notification, cancellationToken);
+        }
+
+        if (SupersededReason(ticket, message) is { } superseded)
+        {
+            // Checked before anything provider-related: a superseded event is skipped whatever the configuration, so the reason is the
+            // informative one ("the ticket had moved on"), not "notifications disabled".
+            return await SkipAsync(ticket, notification, message, superseded, cancellationToken);
         }
 
         if (!policy.Enabled)
@@ -154,11 +178,11 @@ public abstract class CustomerTicketEmailHandler(
                 ticket, notification, message, contact.SkipReason ?? CustomerEmailSkipReasons.NoCustomerEmail, cancellationToken);
         }
 
-        var content = await BuildContentAsync(ticket, contact, message.OccurredAtUtc, cancellationToken);
+        var content = await BuildContentAsync(ticket, contact, message, cancellationToken);
 
         var result = await emailSender.SendAsync(
             new CustomerEmailRequest(
-                NotificationType, ticket.TicketId, ticket.TicketNumber, decision.Recipient ?? contact.EmailAddress, content, message.CorrelationId),
+                notificationType, ticket.TicketId, ticket.TicketNumber, decision.Recipient ?? contact.EmailAddress, content, message.CorrelationId),
             cancellationToken);
 
         return result.Outcome switch
@@ -182,7 +206,7 @@ public abstract class CustomerTicketEmailHandler(
             ticket,
             NotificationAuditActions.NotificationDeliverySucceeded,
             beforeValue: "DeliveryStatus=Pending",
-            afterValue: $"DeliveryStatus=Sent;NotificationType={NotificationType};Channel=Email;OutboxMessageId={message.OutboxMessageId}",
+            afterValue: $"DeliveryStatus=Sent;NotificationType={notification.NotificationType};Channel=Email;OutboxMessageId={message.OutboxMessageId}",
             message,
             cancellationToken);
 
@@ -198,7 +222,7 @@ public abstract class CustomerTicketEmailHandler(
             ticket,
             NotificationAuditActions.NotificationSkipped,
             beforeValue: "DeliveryStatus=Pending",
-            afterValue: $"DeliveryStatus=Skipped;NotificationType={NotificationType};Reason={reason};OutboxMessageId={message.OutboxMessageId}",
+            afterValue: $"DeliveryStatus=Skipped;NotificationType={notification.NotificationType};Reason={reason};OutboxMessageId={message.OutboxMessageId}",
             message,
             cancellationToken);
 
@@ -215,7 +239,7 @@ public abstract class CustomerTicketEmailHandler(
             ticket,
             NotificationAuditActions.NotificationDeliveryFailed,
             beforeValue: null,
-            afterValue: $"DeliveryStatus=Failed;NotificationType={NotificationType};RetryCount={notification.RetryCount};OutboxMessageId={message.OutboxMessageId}",
+            afterValue: $"DeliveryStatus=Failed;NotificationType={notification.NotificationType};RetryCount={notification.RetryCount};OutboxMessageId={message.OutboxMessageId}",
             message,
             cancellationToken);
 
@@ -232,7 +256,7 @@ public abstract class CustomerTicketEmailHandler(
             ticket,
             NotificationAuditActions.NotificationDeadLettered,
             beforeValue: "DeliveryStatus=Failed",
-            afterValue: $"DeliveryStatus=DeadLettered;NotificationType={NotificationType};Reason=PermanentProviderFailure;OutboxMessageId={message.OutboxMessageId}",
+            afterValue: $"DeliveryStatus=DeadLettered;NotificationType={notification.NotificationType};Reason=PermanentProviderFailure;OutboxMessageId={message.OutboxMessageId}",
             message,
             cancellationToken);
 

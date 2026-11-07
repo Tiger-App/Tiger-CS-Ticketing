@@ -110,7 +110,10 @@ public class TicketCreationOutboxAtomicityTests
         // business transaction.
         var queued = Assert.Single(f.Audit.Entries, e => e.Action == NotificationAuditActions.NotificationQueued);
         Assert.Equal(message.CorrelationId, queued.CorrelationId);
-        Assert.Equal(message.OutboxMessageId.ToString(), queued.EntityId);
+        // Keyed by the ticket (so Ticket Details can list it) and naming the Outbox message it describes.
+        Assert.Equal(NotificationAuditActions.NotificationEntityType, queued.EntityType);
+        Assert.Equal(ticket.TicketId.ToString(), queued.EntityId);
+        Assert.Contains($"OutboxMessageId={message.OutboxMessageId}", queued.AfterValue, StringComparison.Ordinal);
     }
 
     /// <summary>

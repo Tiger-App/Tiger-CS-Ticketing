@@ -876,7 +876,7 @@ else
                                 <ol class="timeline" data-activity-timeline>
                                     @foreach (var entry in Model.ActivityFeed)
                                     {
-                                        var iconCss = entry.Kind switch { "escalation" => "icon-critical", "anomaly" => "icon-critical", "closure" => "icon-warning", "note" => "icon-info", "reopen" => "icon-warning", "approval" => "icon-info", "handoff" => "icon-info", _ => "icon-quiet" };
+                                        var iconCss = entry.Kind switch { "escalation" => "icon-critical", "anomaly" => "icon-critical", "closure" => "icon-warning", "note" => "icon-info", "reopen" => "icon-warning", "approval" => "icon-info", "handoff" => "icon-info", "notification" => "icon-info", _ => "icon-quiet" };
                                         var evt = entry.Event;
                                         <li class="timeline-item" data-activity-kind="@entry.Kind">
                                             <span class="timeline-icon @iconCss"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4" fill="currentColor" /></svg></span>

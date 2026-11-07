@@ -190,20 +190,19 @@ public class CustomerNotificationModeTests
     [Fact]
     public async Task TestMode_AutomaticClosure_FollowsTheSamePolicy()
     {
-        // Auto-closure (inactivity, completed document delivery, AI) enqueues the same Resolved/Closed events and runs through
-        // the same dispatcher and handlers.
+        // Auto-closure (inactivity, completed document delivery, AI) goes straight to Closed and enqueues the single Closed event,
+        // which runs through the same dispatcher and handlers.
         var f = TestModeFixture();
         var ticket = await f.SeedGenesysTicketAsync(CustomerEmail);
         await f.ResolveAsync(ticket);
-        f.EnqueueLifecycleEvent(OutboxEventTypes.TicketResolved, ticket.TicketId);
         ticket.Close();
         f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId);
 
         var result = await f.CreateDispatcher(
             f.CreateHandler(), f.CreateResolvedHandler(), f.CreateClosedHandler(), f.CreateReopenedHandler()).DispatchPendingAsync();
 
-        Assert.Equal(2, result.Processed);
-        Assert.Equal(2, f.Email.Sent.Count);
+        Assert.Equal(1, result.Processed);
+        Assert.Single(f.Email.Sent);
         Assert.All(f.Email.Sent, e => Assert.Equal(TestInbox, e.ToAddress));
     }
 

@@ -228,9 +228,9 @@ public sealed class GenesysServiceFixture
             ? new TicketAutoAssignmentService(
                 AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, Rotation, Departments,
                 roleReader: Accounts, accountManager: Accounts, serviceIdentities: ServiceIdentities, workflowEventRepository: WorkflowEvents,
-                ticketNoteRepository: TicketNotes)
+                ticketNoteRepository: TicketNotes, outboxWriter: outbox)
             : new TicketAutoAssignmentService(
-                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit);
+                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, outboxWriter: outbox);
         AutoAssignment = autoAssignment;
 
         DefaultClassification = new DefaultClassificationService(
@@ -306,7 +306,7 @@ public sealed class GenesysServiceFixture
 
         ConversationEnd = new GenesysConversationEndAppService(
             Options, Conversations, Tickets, Handoffs, WorkflowEvents, sla.FirstHumanResponse,
-            UnitOfWork, Audit, TimeProvider.System);
+            UnitOfWork, Audit, TimeProvider.System, outboxWriter: outbox);
 
         var ticketQuery = new TicketQueryAppService(
             Tickets, DepartmentAssignments, new FakeTicketResolutionRepository(),
@@ -317,7 +317,7 @@ public sealed class GenesysServiceFixture
 
         PendingWork = new AgentHandoffAppService(
             Handoffs, ticketQuery, Tickets, TicketAssignments, StatusHistory, WorkflowEvents,
-            DepartmentAssignments, UnitOfWork, Audit, TimeProvider.System);
+            DepartmentAssignments, UnitOfWork, Audit, TimeProvider.System, outboxWriter: outbox);
 
         StrictPendingWork = new AgentHandoffAppService(
             Handoffs, StrictTicketQuery, Tickets, TicketAssignments, StatusHistory, WorkflowEvents,

@@ -69,6 +69,14 @@ public static class CustomerEmailTemplates
             details.Insert(1, (t.RequestType, model.RequestTypeName));
         }
 
+        if (!string.IsNullOrWhiteSpace(model.TicketSubject)
+            && !string.Equals(model.TicketSubject.Trim(), model.RequestTypeName?.Trim(), StringComparison.Ordinal))
+        {
+            details.Insert(1, (t.Subject, model.TicketSubject.Trim()));
+        }
+
+        details.Add((t.Status, t.StatusOpen));
+
         return Render(
             model,
             subject: t.CreatedSubject(model.TicketNumber),
@@ -110,6 +118,14 @@ public static class CustomerEmailTemplates
         var details = new List<(string Label, string Value)> { (t.TicketNumber, model.TicketNumber) };
         AddSubject(details, t, model);
         details.Add((t.Status, t.Closed));
+
+        // The outcome the closure carries. A system closure (the AI, document delivery, inactivity) goes straight to Closed and this is
+        // the only email the customer receives for it, so the outcome must be here and not only in a "resolved" email that never comes.
+        if (!string.IsNullOrWhiteSpace(model.ResolutionStatus))
+        {
+            details.Add((t.Outcome, t.TranslateStatus(model.ResolutionStatus)));
+        }
+
         details.Add((t.ClosedOn, FormatDate(model.OccurredAtUtc)));
 
         if (!string.IsNullOrWhiteSpace(model.ResolutionMessage))
@@ -117,11 +133,19 @@ public static class CustomerEmailTemplates
             details.Add((t.Resolution, model.ResolutionMessage));
         }
 
+        // Automatic closures say why in plain words: the customer never saw an agent act, so "closed" alone would be unexplained.
+        var (body, followUp) = model switch
+        {
+            { ClosedForCustomerInactivity: true } => (t.ClosedInactivityBody, t.ClosedInactivityFollowUp),
+            { ClosedForAiOnlyTimeout: true } => (t.ClosedAiOnlyTimeoutBody, t.ClosedInactivityFollowUp),
+            _ => (t.ClosedBody, t.ClosedFollowUp)
+        };
+
         return Render(
             model,
             subject: t.ClosedSubject(model.TicketNumber),
             headline: t.ClosedHeadline,
-            paragraphs: [t.ClosedBody, t.ClosedFollowUp],
+            paragraphs: [body, followUp],
             details: details,
             review: model.Review);
     }
@@ -131,16 +155,107 @@ public static class CustomerEmailTemplates
         ArgumentNullException.ThrowIfNull(model);
         var t = Text.For(model.Language);
 
+        var details = new List<(string Label, string Value)> { (t.TicketNumber, model.TicketNumber) };
+        AddSubject(details, t, model);
+        details.Add((t.Status, t.StatusInProgress));
+        details.Add((t.ReopenedOn, FormatDate(model.OccurredAtUtc)));
+
         return Render(
             model,
             subject: t.ReopenedSubject(model.TicketNumber),
             headline: t.ReopenedHeadline,
             paragraphs: [t.ReopenedBody1, t.ReopenedBody2],
-            details:
-            [
-                (t.TicketNumber, model.TicketNumber),
-                (t.ReopenedOn, FormatDate(model.OccurredAtUtc))
-            ],
+            details: details,
+            review: null);
+    }
+
+    /// <summary>"Your request has been assigned" — the ticket gained an owner. The owner's name is deliberately not rendered.</summary>
+    public static CustomerEmailContent TicketAssigned(CustomerEmailTicketModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var t = Text.For(model.Language);
+
+        var details = new List<(string Label, string Value)> { (t.TicketNumber, model.TicketNumber) };
+        AddSubject(details, t, model);
+        details.Add((t.Status, t.TranslateTicketStatus(model.TicketStatus ?? "Open")));
+        details.Add((t.AssignedOn, FormatDate(model.OccurredAtUtc)));
+
+        return Render(
+            model,
+            subject: t.AssignedSubject(model.TicketNumber),
+            headline: t.AssignedHeadline,
+            paragraphs: [t.AssignedBody1, t.AssignedBody2],
+            details: details,
+            review: null);
+    }
+
+    /// <summary>"We are working on your request" — the ticket entered In Progress (for the first time, or again after waiting on the customer).</summary>
+    public static CustomerEmailContent TicketInProgress(CustomerEmailTicketModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var t = Text.For(model.Language);
+
+        var details = new List<(string Label, string Value)> { (t.TicketNumber, model.TicketNumber) };
+        AddSubject(details, t, model);
+        details.Add((t.Status, t.StatusInProgress));
+        details.Add((t.UpdatedOn, FormatDate(model.OccurredAtUtc)));
+
+        return Render(
+            model,
+            subject: t.InProgressSubject(model.TicketNumber),
+            headline: t.InProgressHeadline,
+            paragraphs: model.ResumedAfterWaiting ? [t.InProgressResumedBody, t.InProgressBody2] : [t.InProgressBody1, t.InProgressBody2],
+            details: details,
+            review: null);
+    }
+
+    /// <summary>"We need something from you" — the ticket is waiting for the customer. The agent's reason is quoted only when configuration allows it.</summary>
+    public static CustomerEmailContent TicketWaitingForCustomer(CustomerEmailTicketModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var t = Text.For(model.Language);
+
+        var details = new List<(string Label, string Value)> { (t.TicketNumber, model.TicketNumber) };
+        AddSubject(details, t, model);
+        details.Add((t.Status, t.StatusWaitingForCustomer));
+        details.Add((t.UpdatedOn, FormatDate(model.OccurredAtUtc)));
+
+        if (!string.IsNullOrWhiteSpace(model.PendingReason))
+        {
+            details.Add((t.WhatWeNeed, model.PendingReason.Trim()));
+        }
+
+        return Render(
+            model,
+            subject: t.WaitingSubject(model.TicketNumber),
+            headline: t.WaitingHeadline,
+            paragraphs: [t.WaitingBody1, t.WaitingBody2],
+            details: details,
+            review: null);
+    }
+
+    /// <summary>"Your request has been cancelled" — a resolution with the Cancelled outcome, before the ticket is closed.</summary>
+    public static CustomerEmailContent TicketCancelled(CustomerEmailTicketModel model)
+    {
+        ArgumentNullException.ThrowIfNull(model);
+        var t = Text.For(model.Language);
+
+        var details = new List<(string Label, string Value)> { (t.TicketNumber, model.TicketNumber) };
+        AddSubject(details, t, model);
+        details.Add((t.Status, t.TranslateStatus("Cancelled")));
+        details.Add((t.CancelledOn, FormatDate(model.OccurredAtUtc)));
+
+        if (!string.IsNullOrWhiteSpace(model.ResolutionMessage))
+        {
+            details.Add((t.Resolution, model.ResolutionMessage));
+        }
+
+        return Render(
+            model,
+            subject: t.CancelledSubject(model.TicketNumber),
+            headline: t.CancelledHeadline,
+            paragraphs: [t.CancelledBody, t.CancelledFollowUp],
+            details: details,
             review: null);
     }
 
@@ -433,6 +548,74 @@ public static class CustomerEmailTemplates
         public string ClosedOn => P("Closed on", "تاريخ الإغلاق");
         public string ReopenedOn => P("Reopened on", "تاريخ إعادة الفتح");
         public string Closed => P("Closed", "مغلقة");
+        public string Outcome => P("Outcome", "النتيجة");
+        public string AssignedOn => P("Assigned on", "تاريخ الإسناد");
+        public string UpdatedOn => P("Updated on", "تاريخ التحديث");
+        public string CancelledOn => P("Cancelled on", "تاريخ الإلغاء");
+        public string WhatWeNeed => P("What we need from you", "ما نحتاجه منك");
+        public string StatusOpen => P("Open", "مفتوحة");
+        public string StatusInProgress => P("In progress", "قيد المعالجة");
+        public string StatusWaitingForCustomer => P("Waiting for your reply", "بانتظار ردك");
+
+        /// <summary>Customer wording for a ticket status name (<c>Open</c>, <c>InProgress</c>, <c>PendingCustomer</c>, …); unknown text is left as is.</summary>
+        public string TranslateTicketStatus(string status) => status switch
+        {
+            "Open" => StatusOpen,
+            "InProgress" => StatusInProgress,
+            "PendingCustomer" => StatusWaitingForCustomer,
+            "Resolved" => TranslateStatus("Resolved"),
+            "Closed" => Closed,
+            _ => status
+        };
+
+        public string AssignedSubject(string n) => P($"Your request has been assigned – Ticket {n}", $"تم إسناد طلبك – تذكرة {n}");
+        public string AssignedHeadline => P("Your request has been assigned", "تم إسناد طلبك");
+        public string AssignedBody1 => P(
+            "Your request has been assigned to a member of our team, who will look into it and keep you informed.",
+            "تم إسناد طلبك إلى أحد أعضاء فريقنا، وسيقوم بمراجعته وإبقائك على اطلاع.");
+        public string AssignedBody2 => P(
+            "Please quote the ticket number in any further correspondence.",
+            "يرجى ذكر رقم التذكرة في أي مراسلات لاحقة.");
+
+        public string InProgressSubject(string n) => P($"We are working on your request – Ticket {n}", $"نعمل على طلبك – تذكرة {n}");
+        public string InProgressHeadline => P("We are working on your request", "نعمل على طلبك");
+        public string InProgressBody1 => P(
+            "Work on your request has started and our team is handling it now.",
+            "بدأ العمل على طلبك ويقوم فريقنا بمعالجته الآن.");
+        public string InProgressResumedBody => P(
+            "Thank you for your reply. Our team has resumed work on your request.",
+            "شكراً لردك. استأنف فريقنا العمل على طلبك.");
+        public string InProgressBody2 => P(
+            "We will let you know as soon as there is an update or as soon as it has been resolved.",
+            "سنخبرك فور وجود أي مستجدات أو فور حل الطلب.");
+
+        public string WaitingSubject(string n) => P($"We need your input – Ticket {n}", $"نحتاج إلى ردك – تذكرة {n}");
+        public string WaitingHeadline => P("Your request is waiting for your reply", "طلبك بانتظار ردك");
+        public string WaitingBody1 => P(
+            "To continue with your request, our team needs some information or an action from you.",
+            "لمتابعة طلبك، يحتاج فريقنا إلى بعض المعلومات أو إجراء من جانبك.");
+        public string WaitingBody2 => P(
+            "Please contact us and quote your ticket number, and we will carry on as soon as we hear from you.",
+            "يرجى التواصل معنا مع ذكر رقم التذكرة، وسنتابع طلبك فور تلقي ردك.");
+
+        public string CancelledSubject(string n) => P($"Your request has been cancelled – Ticket {n}", $"تم إلغاء طلبك – تذكرة {n}");
+        public string CancelledHeadline => P("Your request has been cancelled", "تم إلغاء طلبك");
+        public string CancelledBody => P(
+            "Your request has been cancelled and no further action will be taken on it.",
+            "تم إلغاء طلبك ولن يتم اتخاذ أي إجراء إضافي بشأنه.");
+        public string CancelledFollowUp => P(
+            "If this was not expected, or you still need our help, please contact us and quote your ticket number.",
+            "إذا لم يكن ذلك متوقعاً، أو كنت لا تزال بحاجة إلى مساعدتنا، يرجى التواصل معنا وذكر رقم التذكرة.");
+
+        public string ClosedInactivityBody => P(
+            "We did not receive a reply from you, so your request has now been closed.",
+            "لم نتلقَّ رداً منك، لذلك تم إغلاق طلبك الآن.");
+        public string ClosedAiOnlyTimeoutBody => P(
+            "Your request was handled by our virtual assistant. As there was no further activity on it, it has now been closed automatically.",
+            "تمت معالجة طلبك بواسطة المساعد الافتراضي. ونظراً لعدم وجود أي نشاط إضافي عليه، تم إغلاقه تلقائياً الآن.");
+        public string ClosedInactivityFollowUp => P(
+            "If you still need help with this matter, please contact us and quote your ticket number, and we will be glad to assist you.",
+            "إذا كنت لا تزال بحاجة إلى مساعدة بخصوص هذا الموضوع، يرجى التواصل معنا وذكر رقم التذكرة وسيسعدنا مساعدتك.");
 
         public string GreetingAnonymous => P("Dear Customer,", "عزيزنا العميل،");
         public string Greeting(string name) => P($"Dear {name},", $"عزيزي/عزيزتي {name}،");
@@ -522,6 +705,11 @@ public static class CustomerEmailTemplates
 /// <param name="Branding">Logo, website and contact details; <see cref="CustomerEmailBranding.Default"/> when omitted.</param>
 /// <param name="Review">The review links to offer, or <c>null</c> when no review should be requested.</param>
 /// <param name="IsTest">A Test-mode notification: marked in the subject and with a banner.</param>
+/// <param name="TicketStatus">The ticket's status name (<c>Open</c>, <c>InProgress</c>, …) for the "assigned" email's status line.</param>
+/// <param name="PendingReason">The agent's "waiting for customer" reason, only when configuration allows sharing agent-written notes.</param>
+/// <param name="ClosedForCustomerInactivity">The closure happened because the customer stopped replying; the "closed" email says so.</param>
+/// <param name="ResumedAfterWaiting">The "in progress" email follows a waiting-for-customer period (the customer replied).</param>
+/// <param name="ClosedForAiOnlyTimeout">The AI-only time-limit rule closed the ticket; the "closed" email explains the automatic closure.</param>
 public sealed record CustomerEmailTicketModel(
     string TicketNumber,
     string? CustomerName,
@@ -533,4 +721,9 @@ public sealed record CustomerEmailTicketModel(
     string Language = "en",
     CustomerEmailBranding? Branding = null,
     ReviewInvitationLinks? Review = null,
-    bool IsTest = false);
+    bool IsTest = false,
+    string? TicketStatus = null,
+    string? PendingReason = null,
+    bool ClosedForCustomerInactivity = false,
+    bool ResumedAfterWaiting = false,
+    bool ClosedForAiOnlyTimeout = false);

@@ -27,7 +27,7 @@ Tables `TicketReviewInvitations` (SHA-256 of a random 256-bit token, expiry, tic
 2. Set per environment: `CustomerNotifications__IsTestMode`, `__TestEmail` and `__TestPhone` (UAT), `__PublicBaseUrl`, optional `__Branding__ContactEmail`.
 3. Production customer delivery stays off until `CustomerNotifications__IsTestMode=false` **and** `EmailNotifications__Enabled=true` are set deliberately.
 
-## Email design (Created, Resolved, Closed, Reopened)
+## Email design (Created, Assigned, In progress, Waiting for customer, Resolved, Cancelled, Closed, Reopened)
 One shared layout: white page and white header/footer, thin gold (`#C1A562`) outer border, original logo over a thin light-grey divider, 13–14px typography, ticket number / subject / status / customer-safe resolution summary (the note appears only when `CustomerNotifications`' `IncludeResolutionNote` allows it), five gold stars on Resolved/Closed, footer with *Tiger Customer Service Team*, 800 300 300, www.tigergroup.ae and contact@tigergroup.com. No gradients, shadows, waves or coloured backgrounds. Table-based inline CSS with an Outlook (MSO) ghost table; mobile via `max-width`.
 
 ## Previews
