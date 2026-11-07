@@ -67,6 +67,7 @@ public sealed class CollectionsReviewEndpointsTests
         ["overlaps"] = (await client.GetAsync("/api/collections/review/overlaps")).StatusCode,
         ["contacts"] = (await client.GetAsync($"/api/collections/review/dispatches/{AnyDispatch}/contacts")).StatusCode,
         ["sweep"] = (await client.PostAsync("/api/collections/review/suppression/sweep", null)).StatusCode,
+        ["genesys-check"] = (await client.PostAsync("/api/collections/review/dispatches/genesys-check", null)).StatusCode,
         ["cancel"] = (await client.PostAsync($"/api/collections/review/dispatches/{AnyDispatch}/cancel", null)).StatusCode,
         ["retry-email"] = (await client.PostAsync($"/api/collections/review/dispatches/{AnyDispatch}/admin-email/retry", null)).StatusCode,
         ["reconcile"] = (await client.PostAsJsonAsync($"/api/collections/review/dispatches/{AnyDispatch}/batches/1/reconcile",
@@ -95,7 +96,7 @@ public sealed class CollectionsReviewEndpointsTests
         Assert.All(await CallEveryRouteAsync(anonymous), r => Assert.Equal(HttpStatusCode.Unauthorized, r.Value));
         using var reporter = await Client(factory, Roles.ReportingUser);
         var results = await CallEveryRouteAsync(reporter);
-        foreach (var route in new[] { "runs/current", "runs/{id}", "records", "dispatches", "readiness", "dispatches/{id}", "refresh", "summary", "confirm", "export", "export-review", "reconcile", "cancel", "retry-email", "overlaps", "sweep", "contacts" })
+        foreach (var route in new[] { "runs/current", "runs/{id}", "records", "dispatches", "readiness", "dispatches/{id}", "refresh", "summary", "confirm", "export", "export-review", "reconcile", "cancel", "retry-email", "overlaps", "sweep", "contacts", "genesys-check" })
             Assert.Equal(HttpStatusCode.Forbidden, results[route]);
         Assert.Equal(0, source.Reads);
     }
@@ -114,6 +115,7 @@ public sealed class CollectionsReviewEndpointsTests
         Assert.Equal(HttpStatusCode.Forbidden, results["export"]);
         Assert.Equal(HttpStatusCode.Forbidden, results["export-review"]);
         Assert.Equal(HttpStatusCode.Forbidden, results["reconcile"]);
+        Assert.Equal(HttpStatusCode.Forbidden, results["genesys-check"]);                         // calls Genesys (read only): needs the send permission
         Assert.Equal(HttpStatusCode.Forbidden, results["cancel"]);
         Assert.Equal(HttpStatusCode.Forbidden, results["retry-email"]);
         Assert.Equal(HttpStatusCode.Forbidden, results["sweep"]);

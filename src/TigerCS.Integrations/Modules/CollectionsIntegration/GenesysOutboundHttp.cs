@@ -189,6 +189,19 @@ public sealed class GenesysOutboundHttpClient(HttpClient http, IGenesysTokenProv
         catch (JsonException) { return new(GenesysUploadOutcome.Unknown, raw.Status, [], "Genesys returned an unreadable contact list."); }
     }
 
+    public async Task<GenesysOrganizationInfo> GetOrganizationAsync(CancellationToken ct)
+    {
+        var raw = await SendAsync(HttpMethod.Get, "api/v2/organizations/me", null, "organization lookup", ct);
+        if (raw.Outcome != GenesysUploadOutcome.Accepted) return new(raw.Outcome, raw.Status, null, null, raw.Error);
+        try
+        {
+            using var doc = JsonDocument.Parse(raw.Body ?? "");
+            string? Read(string name) => doc.RootElement.ValueKind == JsonValueKind.Object && doc.RootElement.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+            return new(GenesysUploadOutcome.Accepted, raw.Status, Read("id"), Read("name"), null);
+        }
+        catch (JsonException) { return new(GenesysUploadOutcome.Unknown, raw.Status, null, null, "Genesys returned an unreadable organization."); }
+    }
+
     public async Task<GenesysCampaignLookupResult> FindCampaignsByContactListAsync(string contactListId, CancellationToken ct)
     {
         if (!Guid.TryParse(contactListId, out var id)) throw new ArgumentException("A contact list id is required.", nameof(contactListId));
@@ -287,12 +300,70 @@ public sealed class GenesysOutboundHttpClient(HttpClient http, IGenesysTokenProv
                 var status = (int)response.StatusCode;
                 if (response.StatusCode == HttpStatusCode.Unauthorized && attempt == 0) { tokens.Invalidate(token); continue; }
                 if (response.IsSuccessStatusCode) return new(GenesysUploadOutcome.Accepted, status, await response.Content.ReadAsStringAsync(ct), null);
-                if (status >= 500) return new(GenesysUploadOutcome.Unknown, status, null, $"Genesys answered HTTP {status}; the change may or may not have been applied.");
-                var detail = status == 429 ? "Genesys rate limit reached; nothing was changed." : $"Genesys rejected the request (HTTP {status}); nothing was changed.";
+                var (code, contextId) = await ReadErrorAsync(response, ct);
+                var where = $"{method.Method} {PathTemplate(path)} at {HostOf(options.ApiBaseUrl)}";
+                // The failed operation, the endpoint (ids replaced by placeholders), the API host, the status and Genesys' own error code: enough to tell a wrong id, a wrong region or organization, a missing
+                // permission and a wrong endpoint apart, without a credential, a token, a body or a customer value anywhere in it.
+                logger.LogWarning("Genesys {What} answered HTTP {Status} ({Method} {Path} at {Host}, code {Code}, correlation id {ContextId}).", what, status, method.Method, PathTemplate(path), HostOf(options.ApiBaseUrl), code ?? "none", contextId ?? "none");
+                if (status >= 500) return new(GenesysUploadOutcome.Unknown, status, null, $"Genesys answered HTTP {status} to the {what} ({where}); the change may or may not have been applied.");
+                if (status == 429) return new(GenesysUploadOutcome.Rejected, status, null, "Genesys rate limit reached; nothing was changed.");
+                var detail = $"Genesys rejected the {what} ({where}): HTTP {status} {ReasonOf(status)}{(code is null ? "" : $", code {code}")}{(contextId is null ? "" : $", correlation id {contextId}")}.{HintOf(status, what)} Nothing was changed.";
                 return new(GenesysUploadOutcome.Rejected, status, null, detail);
             }
         }
         return new(GenesysUploadOutcome.Rejected, 401, null, "Genesys rejected the access token twice; nothing was changed.");
+    }
+
+    /// <summary>The endpoint of a request with its ids replaced by placeholders and no query string (a campaign name or a contact id is never part of a message).</summary>
+    internal static string PathTemplate(string path)
+    {
+        var q = path.IndexOf('?', StringComparison.Ordinal);
+        var p = "/" + (q >= 0 ? path[..q] : path).TrimStart('/');
+        p = System.Text.RegularExpressions.Regex.Replace(p, @"(?<=/contactlists/)[^/]+", "{contactListId}");
+        return System.Text.RegularExpressions.Regex.Replace(p, @"(?<=/contacts/)[^/]+$", "{contactId}");
+    }
+
+    private static string HostOf(string baseUrl) => Uri.TryCreate(baseUrl, UriKind.Absolute, out var uri) ? uri.Host : "(ApiBaseUrl is not a valid URL)";
+
+    private static string ReasonOf(int status) => status switch
+    {
+        400 => "Bad Request", 401 => "Unauthorized", 403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed", 409 => "Conflict", 413 => "Payload Too Large",
+        415 => "Unsupported Media Type", 422 => "Unprocessable Entity", _ => "error"
+    };
+
+    /// <summary>What the status most likely means for this operation, and what to check. 404 and 403 are the two a configuration change fixes.</summary>
+    private static string HintOf(int status, string what) => status switch
+    {
+        404 => " Not found for the organization this OAuth client belongs to: the configured id is wrong, belongs to another organization or region, or was deleted; check the id and that Collections:GenesysOutbound:ApiBaseUrl and LoginBaseUrl are that organization's region.",
+        403 => $" The OAuth client lacks permission for this operation ({PermissionOf(what)}); check its role in Genesys Admin.",
+        _ => ""
+    };
+
+    private static string PermissionOf(string what) => what switch
+    {
+        "contact list lookup" => "outbound:contactList:view",
+        "upload" => "outbound:contact:add",
+        "suppression" => "outbound:contact:edit",
+        "campaign creation" => "outbound:campaign:add",
+        "organization lookup" => "none expected; check the client's role",
+        _ => "outbound:campaign:view"
+    };
+
+    /// <summary>Genesys' own error code (for example <c>bridge.entity.not.found</c>) and correlation id (support can find the request by it), both strictly validated: nothing else of the body is kept.</summary>
+    private static async Task<(string? Code, string? ContextId)> ReadErrorAsync(HttpResponseMessage response, CancellationToken ct)
+    {
+        try
+        {
+            var body = await response.Content.ReadAsStringAsync(ct);
+            if (string.IsNullOrWhiteSpace(body) || body.Length > 64 * 1024) return (null, null);
+            using var json = JsonDocument.Parse(body);
+            if (json.RootElement.ValueKind != JsonValueKind.Object) return (null, null);
+            var code = json.RootElement.TryGetProperty("code", out var c) && c.ValueKind == JsonValueKind.String ? c.GetString() : null;
+            if (code is not { Length: > 0 and <= 80 } || !code.All(ch => char.IsAsciiLetterOrDigit(ch) || ch is '.' or '_' or '-')) code = null;
+            var context = json.RootElement.TryGetProperty("contextId", out var x) && x.ValueKind == JsonValueKind.String && Guid.TryParse(x.GetString(), out var g) ? g.ToString("D") : null;
+            return (code, context);
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or HttpRequestException or InvalidOperationException) { return (null, null); }
     }
 
     private static IReadOnlyList<string> ReadIds(string? json)

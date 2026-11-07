@@ -38,6 +38,9 @@ public sealed class CollectionsCampaignApprovalRenderTests
         public int EmailRetries { get; private set; }
         public string? LastSummaryBody { get; private set; }
         public string? LastConfirmBody { get; private set; }
+        /// <summary>What the read-only Genesys connection check answers (null = the API refuses it); <see cref="Checks"/> counts the calls.</summary>
+        public GenesysConnectionCheckDto? Check { get; set; }
+        public int Checks { get; private set; }
         /// <summary>When set, the confirmation is refused with this status and problem detail (as the API does); <see cref="ConfirmUnreachable"/> makes the API unreachable instead.</summary>
         public HttpStatusCode? ConfirmFailure { get; set; }
         public string? ConfirmDetail { get; set; }
@@ -53,6 +56,11 @@ public sealed class CollectionsCampaignApprovalRenderTests
             if (path.EndsWith("/overlaps")) return Json(new OverlapPageDto(0, 1, 25, []));
             if (path.EndsWith("/admin-email/retry")) { EmailRetries++; Sent = Dispatch(email: "Sent"); return Json(Sent); }
             if (path.EndsWith("/dispatches/readiness")) return Json(new DispatchReadinessDto(true, []));
+            if (path.EndsWith("/dispatches/genesys-check"))
+            {
+                Checks++;
+                return Check is { } check ? Json(check) : new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = new StringContent("{\"title\":\"Forbidden\",\"detail\":\"no\",\"status\":403}", System.Text.Encoding.UTF8, "application/problem+json") };
+            }
             if (path.EndsWith("/dispatches") && request.Method == HttpMethod.Post)
             {
                 LastConfirmBody = await request.Content!.ReadAsStringAsync(cancellationToken);
@@ -340,6 +348,67 @@ public sealed class CollectionsCampaignApprovalRenderTests
         Assert.Contains("name=\"idempotencyKey\"", form); Assert.Contains("name=\"ackCampaign\"", form);
         Assert.Contains("/js/collections-campaign-confirm.js", html);
         Assert.Null(api.LastConfirmBody);
+    }
+
+    // ------------------------------------------------------------------ the read-only Genesys connection check
+
+    private static GenesysConnectionCheckDto CheckResult() => new(Read, false, "login.mypurecloud.de", "api.mypurecloud.de",
+    [
+        new("Region", "Ok", "Both name the region mypurecloud.de."),
+        new("OAuth client and organization", "Ok", "Authenticated; the client acts in organization \"Tiger Test Org\" (id org-1)."),
+        new("ContactListIds:FollowUp", "Failed", "HTTP 404: list 3a91c06e-47ab-4a5e-a720-004bd5cf5bba does not exist in organization \"Tiger Test Org\". Correct Collections:GenesysOutbound:ContactListIds:FollowUp.")
+    ]);
+
+    private static async Task<string> RefusedConfirmationAsync(Api api, string detail, HttpStatusCode status)
+    {
+        api.ConfirmFailure = status; api.ConfirmDetail = detail;
+        using var factory = Factory(api); using var client = factory.CreateClient();
+        var response = await client.PostAsync("/Collections/Campaigns?handler=Confirm", new FormUrlEncodedContent(Form(await TokenAsync(client),
+            ("selectionMode", "AllMatching"), ("expectedCount", "2"), ("expectedFingerprint", "FP"), ("idempotencyKey", "key-1"), ("ackCampaign", "true"))));
+        return await response.Content.ReadAsStringAsync();
+    }
+
+    [Fact]
+    public async Task TheCheckIsOfferedOnlyWhereASendStoppedBecauseOfGenesys_AndSendsNothing()
+    {
+        var genesys = await RefusedConfirmationAsync(NewApi(), "The Follow Up contact list could not be checked in Genesys (HTTP 404). Nothing was uploaded.", HttpStatusCode.BadRequest);
+        Assert.Contains("data-check-genesys", genesys); Assert.Contains("Read-only: nothing is uploaded or changed.", genesys);
+        var returnUrl = WebUtility.HtmlDecode(Regex.Match(genesys, "<form[^>]*>\\s*<input type=\"hidden\" name=\"returnUrl\" value=\"([^\"]+)\"", RegexOptions.Singleline).Groups[1].Value);
+        Assert.Contains("sendingMode=Manual", returnUrl); Assert.Contains("stage=LegalNotice", returnUrl);          // the same preview: campaign, filters and Manual mode
+        var other = await RefusedConfirmationAsync(NewApi(), "No Ready records are selected.", HttpStatusCode.BadRequest);
+        Assert.DoesNotContain("data-check-genesys", other);                                                          // not offered for an unrelated refusal
+    }
+
+    [Fact]
+    public async Task PressingTheCheck_CallsTheReadOnlyEndpoint_ReturnsToTheSamePreview_AndShowsEachLineOnce()
+    {
+        var api = Set(NewApi(), a => a.Check = CheckResult());
+        using var factory = Factory(api); using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        const string back = "/Collections/Campaigns?stage=LegalNotice&sendingMode=Manual&minTotal=250";
+        var response = await client.PostAsync("/Collections/Campaigns?handler=CheckGenesys", new FormUrlEncodedContent(new Dictionary<string, string> { ["__RequestVerificationToken"] = await TokenAsync(client), ["returnUrl"] = back }));
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal(back, response.Headers.Location!.OriginalString);
+        Assert.Equal(1, api.Checks); Assert.Null(api.LastConfirmBody);                                                  // one read-only call, nothing approved or sent
+        var html = await (await client.GetAsync(back)).Content.ReadAsStringAsync();
+        Assert.Contains("data-genesys-check", html); Assert.Contains("data-genesys-check-ok=\"false\"", html); Assert.Contains("a problem was found", html);
+        Assert.Contains("login.mypurecloud.de", html); Assert.Contains("api.mypurecloud.de", html);
+        Assert.Equal(3, Regex.Matches(html, "data-check-line").Count);
+        Assert.Contains("data-check-status=\"Failed\"", html); Assert.Contains("ContactListIds:FollowUp", html);
+        Assert.Contains("HTTP 404: list 3a91c06e-47ab-4a5e-a720-004bd5cf5bba does not exist", html);
+        Assert.Contains("nothing was uploaded or changed, and no customer was contacted", html);
+        var again = await (await client.GetAsync(back)).Content.ReadAsStringAsync();
+        Assert.DoesNotContain("data-genesys-check", again);                                                          // shown once
+    }
+
+    [Fact]
+    public async Task ARefusedCheck_ShowsTheRealReason_AndAnUnsafeReturnAddressIsIgnored()
+    {
+        var api = NewApi();                                                                                            // no result: the API refuses (403)
+        using var factory = Factory(api); using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var response = await client.PostAsync("/Collections/Campaigns?handler=CheckGenesys", new FormUrlEncodedContent(new Dictionary<string, string> { ["__RequestVerificationToken"] = await TokenAsync(client), ["returnUrl"] = "https://evil.test/" }));
+        Assert.Equal("/Collections/Campaigns", response.Headers.Location!.OriginalString);
+        var html = await (await client.GetAsync("/Collections/Campaigns")).Content.ReadAsStringAsync();
+        Assert.Contains("data-approval-error", html); Assert.DoesNotContain("data-genesys-check=", html);
     }
 
     [Fact]
