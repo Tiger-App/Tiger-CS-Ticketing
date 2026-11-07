@@ -38,6 +38,10 @@ public sealed class CollectionsCampaignApprovalRenderTests
         public int EmailRetries { get; private set; }
         public string? LastSummaryBody { get; private set; }
         public string? LastConfirmBody { get; private set; }
+        /// <summary>When set, the confirmation is refused with this status and problem detail (as the API does); <see cref="ConfirmUnreachable"/> makes the API unreachable instead.</summary>
+        public HttpStatusCode? ConfirmFailure { get; set; }
+        public string? ConfirmDetail { get; set; }
+        public bool ConfirmUnreachable { get; set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -49,7 +53,14 @@ public sealed class CollectionsCampaignApprovalRenderTests
             if (path.EndsWith("/overlaps")) return Json(new OverlapPageDto(0, 1, 25, []));
             if (path.EndsWith("/admin-email/retry")) { EmailRetries++; Sent = Dispatch(email: "Sent"); return Json(Sent); }
             if (path.EndsWith("/dispatches/readiness")) return Json(new DispatchReadinessDto(true, []));
-            if (path.EndsWith("/dispatches") && request.Method == HttpMethod.Post) { LastConfirmBody = await request.Content!.ReadAsStringAsync(cancellationToken); return Json(Dispatch("Queued", 0), HttpStatusCode.Accepted); }
+            if (path.EndsWith("/dispatches") && request.Method == HttpMethod.Post)
+            {
+                LastConfirmBody = await request.Content!.ReadAsStringAsync(cancellationToken);
+                if (ConfirmUnreachable) throw new HttpRequestException("connection reset");
+                if (ConfirmFailure is { } failure)
+                    return new HttpResponseMessage(failure) { Content = new StringContent(System.Text.Json.JsonSerializer.Serialize(new { title = "Refused", detail = ConfirmDetail, status = (int)failure }), System.Text.Encoding.UTF8, "application/problem+json") };
+                return Json(Dispatch("Queued", 0), HttpStatusCode.Accepted);
+            }
             if (path.EndsWith("/dispatches")) return Json(Sent is null ? new List<DispatchDto>() : new List<DispatchDto> { Sent });
             if (path.Contains("/dispatches/")) return Sent is null ? new HttpResponseMessage(HttpStatusCode.NotFound) : Json(Sent);
             return await base.SendAsync(request, cancellationToken);
@@ -200,6 +211,135 @@ public sealed class CollectionsCampaignApprovalRenderTests
         Assert.Equal($"/Collections/Campaigns?dispatch={DispatchId:D}", response.Headers.Location!.OriginalString);
         Assert.Contains("\"idempotencyKey\":\"key-1\"", api.LastConfirmBody); Assert.Contains("\"expectedCount\":2", api.LastConfirmBody);
         Assert.Contains("\"expectedFingerprint\":\"FP\"", api.LastConfirmBody); Assert.Contains("AllMatching", api.LastConfirmBody);
+    }
+
+    // ------------------------------------------------------------------ the confirmation dialog: loading state, JSON answers, status counts
+
+    private static async Task<(HttpResponseMessage Response, System.Text.Json.JsonElement Body)> ConfirmAjaxAsync(Api api, string mode = "Manual")
+    {
+        using var factory = Factory(api);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/Collections/Campaigns?handler=Confirm")
+        {
+            Content = new FormUrlEncodedContent(Form(await TokenAsync(client), ("sendingMode", mode), ("selectionMode", "AllMatching"), ("expectedCount", "2"), ("expectedFingerprint", "FP"), ("idempotencyKey", "key-1"), ("ackCampaign", "true")))
+        };
+        request.Headers.Add("X-Requested-With", "tigercs-confirm"); request.Headers.Add("Accept", "application/json");
+        var response = await client.SendAsync(request);
+        var text = await response.Content.ReadAsStringAsync();
+        return (response, System.Text.Json.JsonDocument.Parse(text).RootElement.Clone());
+    }
+
+    [Fact]
+    public async Task TheDialogsConfirmation_IsAnsweredWithJson_AcceptedIsNotSuccess_AndTheSameChecksRun()
+    {
+        var api = NewApi();
+        var (response, body) = await ConfirmAjaxAsync(api);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);                                // no redirect: the dialog follows the send itself
+        Assert.Equal("application/json", response.Content.Headers.ContentType!.MediaType);
+        Assert.True(body.GetProperty("ok").GetBoolean());
+        Assert.Equal(DispatchId.ToString("D"), body.GetProperty("dispatchId").GetString());
+        Assert.Equal("Queued", body.GetProperty("status").GetString());                      // queued, not uploaded: the upload result comes from the send's status
+        Assert.Contains("\"idempotencyKey\":\"key-1\"", api.LastConfirmBody); Assert.Contains("\"expectedFingerprint\":\"FP\"", api.LastConfirmBody);
+        Assert.Contains("\"acknowledgeActiveCampaignRisk\":true", api.LastConfirmBody);   // the same request the plain post sends
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.Conflict, "The records, amounts or contacts changed since this list was shown. Review the current list and confirm again.", "Conflict", false)]
+    [InlineData(HttpStatusCode.BadRequest, "The financial source is not reconciled (no valid sign-off and snapshot-consistency evidence for the PACT procedure in use), so nothing can be approved or sent. Reconcile it first.", "ValidationError", false)]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "Customer dispatch to Genesys is switched off in this environment.", "ServiceUnavailable", true)]
+    [InlineData(HttpStatusCode.Locked, "Another send of this list is being prepared.", "Locked", true)]
+    public async Task ARefusal_CarriesTheBackendsOwnMessage_AndRetryIsOfferedOnlyForADefiniteRefusalThatCreatedNothing(HttpStatusCode status, string detail, string outcome, bool retry)
+    {
+        var api = Set(NewApi(), a => { a.ConfirmFailure = status; a.ConfirmDetail = detail; });
+        var (response, body) = await ConfirmAjaxAsync(api);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.False(body.GetProperty("ok").GetBoolean());
+        Assert.Equal(detail, body.GetProperty("message").GetString());                       // verbatim, never replaced by a generic text
+        Assert.Equal(outcome, body.GetProperty("outcome").GetString());
+        Assert.Equal(retry, body.GetProperty("retry").GetBoolean()); Assert.False(body.GetProperty("unknown").GetBoolean());
+    }
+
+    [Fact]
+    public async Task APermissionRefusal_NeverOffersARetry()
+    {
+        var (_, body) = await ConfirmAjaxAsync(Set(NewApi(), a => { a.ConfirmFailure = HttpStatusCode.Forbidden; a.ConfirmDetail = "no"; }));
+        Assert.False(body.GetProperty("ok").GetBoolean()); Assert.False(body.GetProperty("retry").GetBoolean());
+        Assert.Contains("does not have permission", body.GetProperty("message").GetString());
+    }
+
+    [Theory]
+    [InlineData(true, HttpStatusCode.OK)]
+    [InlineData(false, HttpStatusCode.InternalServerError)]
+    [InlineData(false, HttpStatusCode.BadGateway)]
+    public async Task AnAnswerThatDoesNotSayWhetherTheApprovalWasCreated_IsUnknown_NeverRetryable(bool unreachable, HttpStatusCode status)
+    {
+        var api = Set(NewApi(), a => { a.ConfirmUnreachable = unreachable; if (!unreachable) { a.ConfirmFailure = status; a.ConfirmDetail = "boom"; } });
+        var (_, body) = await ConfirmAjaxAsync(api);
+        Assert.False(body.GetProperty("ok").GetBoolean());
+        Assert.True(body.GetProperty("unknown").GetBoolean()); Assert.False(body.GetProperty("retry").GetBoolean());
+        Assert.Contains("not known whether this send was approved", body.GetProperty("message").GetString());
+    }
+
+    [Fact]
+    public async Task TheDialogsConfirmation_IsRefusedInAutoMode_WithoutCallingTheApi()
+    {
+        var api = NewApi();
+        var (_, body) = await ConfirmAjaxAsync(api, mode: "Auto");
+        Assert.False(body.GetProperty("ok").GetBoolean()); Assert.Contains("Manual only", body.GetProperty("message").GetString());
+        Assert.Null(api.LastConfirmBody);
+    }
+
+    [Fact]
+    public async Task WithoutTheDialogHeader_ConfirmingStillRedirects_AndARefusalStillReRendersThePage()
+    {
+        var failing = Set(NewApi(), a => { a.ConfirmFailure = HttpStatusCode.ServiceUnavailable; a.ConfirmDetail = "Customer dispatch to Genesys is switched off in this environment."; });
+        using var factory = Factory(failing); using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var response = await client.PostAsync("/Collections/Campaigns?handler=Confirm", new FormUrlEncodedContent(Form(await TokenAsync(client),
+            ("selectionMode", "AllMatching"), ("expectedCount", "2"), ("expectedFingerprint", "FP"), ("idempotencyKey", "key-1"), ("ackCampaign", "true"))));
+        var html = await response.Content.ReadAsStringAsync();
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains("data-approval-error", html); Assert.Contains("Customer dispatch to Genesys is switched off in this environment.", html);
+    }
+
+    [Fact]
+    public async Task TheSendStatus_CarriesTheCountsTheDialogReports_AndIsActiveOnlyWhileTheSendRuns()
+    {
+        var api = Set(NewApi(), a => a.Sent = Dispatch("CompletedWithErrors", uploaded: 3, failed: 1));
+        using var factory = Factory(api); using var client = factory.CreateClient();
+        var done = System.Text.Json.JsonDocument.Parse(await client.GetStringAsync($"/Collections/Campaigns?handler=Send&dispatch={DispatchId:D}")).RootElement;
+        Assert.Equal("CompletedWithErrors", done.GetProperty("status").GetString()); Assert.False(done.GetProperty("active").GetBoolean());
+        Assert.Equal((4, 3, 1, 0, 0), (done.GetProperty("approvedCount").GetInt32(), done.GetProperty("uploadedCount").GetInt32(), done.GetProperty("failedCount").GetInt32(),
+            done.GetProperty("unknownCount").GetInt32(), done.GetProperty("excludedCount").GetInt32()));
+        api.Sent = Dispatch("Sending", uploaded: 0);
+        var running = System.Text.Json.JsonDocument.Parse(await client.GetStringAsync($"/Collections/Campaigns?handler=Send&dispatch={DispatchId:D}")).RootElement;
+        Assert.True(running.GetProperty("active").GetBoolean()); Assert.Equal(0, running.GetProperty("uploadedCount").GetInt32());
+        api.Sent = null;                                                                     // the API cannot answer: never active, never success
+        var gone = System.Text.Json.JsonDocument.Parse(await client.GetStringAsync($"/Collections/Campaigns?handler=Send&dispatch={DispatchId:D}")).RootElement;
+        Assert.Equal("Unknown", gone.GetProperty("status").GetString()); Assert.False(gone.GetProperty("active").GetBoolean());
+    }
+
+    [Fact]
+    public async Task TheConfirmationDialog_KeepsItsStateAtTheTop_ItsListScrolling_AndItsButtonsInView()
+    {
+        var api = NewApi();
+        using var factory = Factory(api); using var client = factory.CreateClient();
+        var response = await client.PostAsync("/Collections/Campaigns?handler=Approve", new FormUrlEncodedContent(Form(await TokenAsync(client), ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1"))));
+        var html = await response.Content.ReadAsStringAsync();
+        var form = Regex.Match(html, "<form[^>]*data-confirm-form.*?</form>", RegexOptions.Singleline).Value;
+        // Order inside the dialog: title, then the sending / result state, then the scrolling list, then the footer with Confirm and Cancel.
+        var order = new[] { "manualConfirmTitle", "data-confirm-status", "data-confirm-body", "data-confirm-footer", "data-confirm-button", "data-confirm-cancel" }.Select(m => form.IndexOf(m, StringComparison.Ordinal)).ToList();
+        Assert.All(order, i => Assert.True(i >= 0));
+        Assert.Equal(order.OrderBy(i => i), order);
+        var status = Regex.Match(form, "<div[^>]*data-confirm-status[^>]*>").Value;
+        Assert.Contains("hidden", status);                                                   // nothing is shown until the person confirms
+        Assert.Contains("data-confirm-spinner", form); Assert.Contains("data-confirm-title", form); Assert.Contains("data-confirm-detail", form); Assert.Contains("data-confirm-actions", form);
+        // What the script needs to keep the page state: where "Back to the list" returns (campaign, filters, Manual mode) and the status / details endpoints.
+        var back = WebUtility.HtmlDecode(Regex.Match(form, "data-return-url=\"([^\"]+)\"").Groups[1].Value);
+        Assert.Contains("sendingMode=Manual", back); Assert.Contains("stage=LegalNotice", back); Assert.Contains("minTotal=250", back);
+        Assert.Contains("data-send-status-url=\"/Collections/Campaigns?handler=Send&amp;dispatch=\"", form); Assert.Contains("data-send-details-url=\"/Collections/Campaigns?dispatch=\"", form);
+        Assert.Contains("name=\"idempotencyKey\"", form); Assert.Contains("name=\"ackCampaign\"", form);
+        Assert.Contains("/js/collections-campaign-confirm.js", html);
+        Assert.Null(api.LastConfirmBody);
     }
 
     [Fact]
