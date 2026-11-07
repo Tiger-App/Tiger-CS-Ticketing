@@ -495,10 +495,10 @@
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.Summary(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)">
             <summary>The exact count, totals by currency and contact list of a selection, with the fingerprint to confirm.</summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.ExportForGenesys(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Boolean,System.Nullable{System.Int32},System.Threading.CancellationToken)">
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.ExportForGenesys(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)">
             <summary>
-            "Export for Genesys": the customers of a Manual selection as a CSV in the format of the chosen Genesys contact list (six columns, exactly the values an upload would send). Read only: it uploads
-            nothing, queues nothing and marks nobody as sent; it is written to the audit trail. Needs the send right, like the send itself.
+            "Export for Genesys": every customer matching the filters (Manual or Auto, any status, any day) as a CSV in the format of the chosen Genesys contact list (six columns, exactly the values an
+            upload would send). Download only: it uploads nothing, queues nothing and marks nobody as sent; it is written to the audit trail, and a repeat is noted, never blocked. Needs the send right.
             </summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.ExportReview(TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Threading.CancellationToken)">

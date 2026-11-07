@@ -2849,43 +2849,142 @@
             It is an internal staff file, not the contact-list template: names differ and Stage values are not ReminderType labels.
             </summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportRow">
+            <summary>One row of an Export for Genesys file: one phone number, with the units behind it (one, or several units of the same customer) and the amount they add up to.</summary>
+            <param name="Phone">The E.164 number the row is dialled on.</param>
+            <param name="CustomerName">The customer's name (of the first unit, by unit code, when several are combined).</param>
+            <param name="Email">The first e-mail among the units (empty when none).</param>
+            <param name="ReminderType">The campaign type.</param>
+            <param name="Amount">The sum of the units' filtered amounts: each unit's own stored instalments, so nothing is counted twice.</param>
+            <param name="Currency">The currency of the amounts.</param>
+            <param name="DueDate">The earliest qualifying due date among the units.</param>
+            <param name="Units">The units in the row, in unit-code order, each with its status and reasons as the Manual page shows them; the first is the row's identity for the payload.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.#ctor(System.String,System.String,System.String,TigerCS.Domain.Modules.Collections.Review.CampaignReminderType,System.Decimal,System.String,System.DateOnly,System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportCandidate})">
+            <summary>One row of an Export for Genesys file: one phone number, with the units behind it (one, or several units of the same customer) and the amount they add up to.</summary>
+            <param name="Phone">The E.164 number the row is dialled on.</param>
+            <param name="CustomerName">The customer's name (of the first unit, by unit code, when several are combined).</param>
+            <param name="Email">The first e-mail among the units (empty when none).</param>
+            <param name="ReminderType">The campaign type.</param>
+            <param name="Amount">The sum of the units' filtered amounts: each unit's own stored instalments, so nothing is counted twice.</param>
+            <param name="Currency">The currency of the amounts.</param>
+            <param name="DueDate">The earliest qualifying due date among the units.</param>
+            <param name="Units">The units in the row, in unit-code order, each with its status and reasons as the Manual page shows them; the first is the row's identity for the payload.</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.Phone">
+            <summary>The E.164 number the row is dialled on.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.CustomerName">
+            <summary>The customer's name (of the first unit, by unit code, when several are combined).</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.Email">
+            <summary>The first e-mail among the units (empty when none).</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.ReminderType">
+            <summary>The campaign type.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.Amount">
+            <summary>The sum of the units' filtered amounts: each unit's own stored instalments, so nothing is counted twice.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.Currency">
+            <summary>The currency of the amounts.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.DueDate">
+            <summary>The earliest qualifying due date among the units.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRow.Units">
+            <summary>The units in the row, in unit-code order, each with its status and reasons as the Manual page shows them; the first is the row's identity for the payload.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportExclusion">
+            <summary>Why some matching customer units are not in the file, by reason, with how many units each reason kept out. Never silent: the counts travel to the page and the audit trail.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportExclusion.#ctor(System.String,System.Int32,System.String)">
+            <summary>Why some matching customer units are not in the file, by reason, with how many units each reason kept out. Never silent: the counts travel to the page and the audit trail.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportRowSet">
+            <param name="Rows">The rows of the file, in company / tenant / unit order.</param>
+            <param name="Exclusions">Units left out, by reason (empty when every matching unit is in the file).</param>
+            <param name="CombinedRows">Rows that hold several units of one customer.</param>
+            <param name="CombinedUnits">Units that were folded into those rows.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportRowSet.#ctor(System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.GenesysExportRow},System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.GenesysExportExclusion},System.Int32,System.Int32)">
+            <param name="Rows">The rows of the file, in company / tenant / unit order.</param>
+            <param name="Exclusions">Units left out, by reason (empty when every matching unit is in the file).</param>
+            <param name="CombinedRows">Rows that hold several units of one customer.</param>
+            <param name="CombinedUnits">Units that were folded into those rows.</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRowSet.Rows">
+            <summary>The rows of the file, in company / tenant / unit order.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRowSet.Exclusions">
+            <summary>Units left out, by reason (empty when every matching unit is in the file).</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRowSet.CombinedRows">
+            <summary>Rows that hold several units of one customer.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportRowSet.CombinedUnits">
+            <summary>Units that were folded into those rows.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportRows">
+            <summary>
+            Turns the customer units of an export (<see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveForExportAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)"/>) into contact rows, deterministically and without guessing:
+            <list type="bullet">
+            <item>A unit without a calculated amount or due date (ambiguous or unreadable instalments), or whose source amount has unresolved decimals (<c>AmountPrecisionNeedsReview</c>: the stored
+            value is the raw one, and a two-decimal AmountDue would be a rounded guess), is left out and counted: no financial value is ever invented.</item>
+            <item>A unit without a callable E.164 number is left out and counted: Genesys could not dial it, and no other number is substituted.</item>
+            <item>Several units of the SAME customer (same company and tenant) on one number become ONE row: the amounts are added (each unit has its own stored instalments, so nothing is counted twice)
+            and the earliest due date is kept. When the source allocates instalments ambiguously between those units (<c>UnitAllocationNeedsReview</c>, <c>DuplicateSourceRecord</c>,
+            <c>AmbiguousInstalments</c>) the sum could double count, so the units are left out and counted instead.</item>
+            <item>DIFFERENT customers on one number are never merged and never both dialled: the number cannot be tied to one person, so those units are left out and counted.</item>
+            </list>
+            Pure: the same input always gives the same rows, and the totals of the rows are the totals of the file.
+            </summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportService">
             <summary>
-            "Export for Genesys": a file a person can import into a Genesys outbound contact list by hand, for the customers of a Manual selection. It is the same list the page showed:
+            "Export for Genesys": a download-only file a person can import into a Genesys outbound contact list by hand. It is NOT a send, and nothing that only a send needs is a condition of it.
             <list type="bullet">
-            <item>The customers and their amounts come from <see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)"/>, the code behind Preview and the approval: campaign, Tower, Payment status, Date range, Minimum Total and
-            the ticked customers (or all eligible) give exactly the customers and the filtered amounts that were shown. Held-back customers (reconciliation, contact, shared phone, legal, already sent, contacted
-            today) are never exported.</item>
-            <item>Each row is built by <see cref="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ToPayload(TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem,System.String,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions)"/>, the code that builds the upload, and written with <see cref="T:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate"/>: the six columns Phone, CustomerName,
-            Email Address, ReminderType, AmountDue, DueDate, with an E.164 phone, an amount with two decimals and a yyyy-MM-dd date. Nothing else about a customer is in the file.</item>
-            <item>The columns come from the chosen list as it really is: when the Genesys integration is configured its columns are read (read only) and the export is refused if one of the six is missing or
-            misnamed; extra columns of the list are kept, empty. Without the integration the documented template is used and the result says it was not verified.</item>
-            <item>It is read only. It uploads nothing, queues nothing and does not mark anyone as sent: a file is no proof that Genesys received anything, so the send protections (already sent, contacted today,
-            idempotency) are neither used nor weakened here. Each export is written to the audit trail (who, when, campaign, list, count, total, the filter, a hash of the file and a one-way fingerprint of
-            each customer's unit, never a customer's data) before the file is released.</item>
-            <item>Because an export is not recorded as a send, the audit fingerprints are how a repeat is noticed: when any customer was exported within <c>ExportRepeatLookbackDays</c> the file is held
-            (<see cref="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.RepeatExport"/>) until the person confirms the repeat, and the confirmed repeat is audited as such.</item>
-            <item>When the list's columns could not be checked in Genesys the file is labelled "Template not verified against Genesys" (name and notices), never presented as verified.</item>
+            <item><b>Who is in it.</b> Every customer unit of the chosen campaign type that matches Tower, Payment status, From / To and Minimum Total (<see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveForExportAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)"/>),
+            in both modes, on any day, whatever its validation status: Ready, Needs review, held back (reconciliation, PaymentStatusUnknown, legal, shared phone) and already sent alike. The amounts are the
+            ones Preview shows: the one Manual calculation over each unit's stored instalments. Only the person's ticks narrow it (Manual); nothing has to be selected.</item>
+            <item><b>Rows.</b> <see cref="T:TigerCS.Application.Modules.Collections.Review.GenesysExportRows"/>: one row per phone number; several units of the same customer on one number are added up (earliest due date kept); units without a calculable
+            amount, without a callable number, with an ambiguous allocation between units, or sharing a number with a different customer are left out and COUNTED, never silently dropped and never guessed.
+            Each row is built by <see cref="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ToPayload(TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem,System.String,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions)"/>, the code that builds a real upload, and written with <see cref="M:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate.WriteCsv(System.Collections.Generic.IEnumerable{TigerCS.Application.Modules.Collections.Review.GenesysContactPayload},System.Collections.Generic.IReadOnlyList{System.String})"/>:
+            the six columns Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate, in that order and format. Nothing else about a customer is in the file.</item>
+            <item><b>Columns.</b> When the Genesys integration can read the chosen list, its real columns are used and a list that lacks or misnames a template column refuses the export (an incompatibility
+            is reported, never guessed around). When the list cannot be read (integration not configured, login refused, Genesys unreachable) the documented six-column template is used and the file, the
+            notices and the audit entry say "Template not verified against Genesys".</item>
+            <item><b>Unverified data.</b> An unreconciled source, stale approval data, data built for another day, or included units whose data needs review (PaymentStatusUnknown included) never stop the
+            file; they label it "Financial data not verified" (file name, notices, audit) and say exactly why. The source values are written as they are; an Unknown payment status is never written as unpaid.</item>
+            <item><b>Read only.</b> It uploads nothing, queues nothing and marks no one as sent. The send protections (Ready status, reconciliation, freshness, shared phone, already sent, contacted today,
+            idempotency) belong to <see cref="T:TigerCS.Application.Modules.Collections.Review.DispatchService"/> and are untouched: a customer in a file can still be sent, once, under every rule.</item>
+            <item><b>Audited.</b> Each export is written to the audit trail before the file is released (who, when, campaign, list, rows, units, exclusions, total, statuses, verification, the filter, a hash of
+            the file and a one-way fingerprint of each customer's unit and number; never a customer's data). If the audit entry cannot be written, no file is released. Customers exported within
+            <c>ExportRepeatLookbackDays</c> are counted and noted (<c>Repeated=n</c>) so repeated downloads are visible; a repeat never blocks a download and needs no confirmation.</item>
             </list>
             </summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.#ctor(TigerCS.Application.Modules.Collections.CollectionsOptions,TigerCS.Application.Modules.Collections.PactReceivablesOptions,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions,TigerCS.Application.Modules.Collections.Services.CollectionsAuthorizationService,TigerCS.Application.Modules.Collections.Services.CollectionsClock,TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.IGenesysOutboundClient,TigerCS.Application.Abstractions.IAuditEntryWriter,TigerCS.Application.Modules.Collections.Abstractions.ICollectionsUnitOfWork,TigerCS.Application.Modules.Collections.Review.CollectionsReviewOptions,TigerCS.Application.Modules.Collections.Review.IGenesysExportHistory,TigerCS.Application.Modules.Collections.Review.IGenesysExportLock,Microsoft.Extensions.Logging.ILogger{TigerCS.Application.Modules.Collections.Review.GenesysExportService})">
             <summary>
-            "Export for Genesys": a file a person can import into a Genesys outbound contact list by hand, for the customers of a Manual selection. It is the same list the page showed:
+            "Export for Genesys": a download-only file a person can import into a Genesys outbound contact list by hand. It is NOT a send, and nothing that only a send needs is a condition of it.
             <list type="bullet">
-            <item>The customers and their amounts come from <see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)"/>, the code behind Preview and the approval: campaign, Tower, Payment status, Date range, Minimum Total and
-            the ticked customers (or all eligible) give exactly the customers and the filtered amounts that were shown. Held-back customers (reconciliation, contact, shared phone, legal, already sent, contacted
-            today) are never exported.</item>
-            <item>Each row is built by <see cref="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ToPayload(TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem,System.String,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions)"/>, the code that builds the upload, and written with <see cref="T:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate"/>: the six columns Phone, CustomerName,
-            Email Address, ReminderType, AmountDue, DueDate, with an E.164 phone, an amount with two decimals and a yyyy-MM-dd date. Nothing else about a customer is in the file.</item>
-            <item>The columns come from the chosen list as it really is: when the Genesys integration is configured its columns are read (read only) and the export is refused if one of the six is missing or
-            misnamed; extra columns of the list are kept, empty. Without the integration the documented template is used and the result says it was not verified.</item>
-            <item>It is read only. It uploads nothing, queues nothing and does not mark anyone as sent: a file is no proof that Genesys received anything, so the send protections (already sent, contacted today,
-            idempotency) are neither used nor weakened here. Each export is written to the audit trail (who, when, campaign, list, count, total, the filter, a hash of the file and a one-way fingerprint of
-            each customer's unit, never a customer's data) before the file is released.</item>
-            <item>Because an export is not recorded as a send, the audit fingerprints are how a repeat is noticed: when any customer was exported within <c>ExportRepeatLookbackDays</c> the file is held
-            (<see cref="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.RepeatExport"/>) until the person confirms the repeat, and the confirmed repeat is audited as such.</item>
-            <item>When the list's columns could not be checked in Genesys the file is labelled "Template not verified against Genesys" (name and notices), never presented as verified.</item>
+            <item><b>Who is in it.</b> Every customer unit of the chosen campaign type that matches Tower, Payment status, From / To and Minimum Total (<see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveForExportAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)"/>),
+            in both modes, on any day, whatever its validation status: Ready, Needs review, held back (reconciliation, PaymentStatusUnknown, legal, shared phone) and already sent alike. The amounts are the
+            ones Preview shows: the one Manual calculation over each unit's stored instalments. Only the person's ticks narrow it (Manual); nothing has to be selected.</item>
+            <item><b>Rows.</b> <see cref="T:TigerCS.Application.Modules.Collections.Review.GenesysExportRows"/>: one row per phone number; several units of the same customer on one number are added up (earliest due date kept); units without a calculable
+            amount, without a callable number, with an ambiguous allocation between units, or sharing a number with a different customer are left out and COUNTED, never silently dropped and never guessed.
+            Each row is built by <see cref="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ToPayload(TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem,System.String,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions)"/>, the code that builds a real upload, and written with <see cref="M:TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate.WriteCsv(System.Collections.Generic.IEnumerable{TigerCS.Application.Modules.Collections.Review.GenesysContactPayload},System.Collections.Generic.IReadOnlyList{System.String})"/>:
+            the six columns Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate, in that order and format. Nothing else about a customer is in the file.</item>
+            <item><b>Columns.</b> When the Genesys integration can read the chosen list, its real columns are used and a list that lacks or misnames a template column refuses the export (an incompatibility
+            is reported, never guessed around). When the list cannot be read (integration not configured, login refused, Genesys unreachable) the documented six-column template is used and the file, the
+            notices and the audit entry say "Template not verified against Genesys".</item>
+            <item><b>Unverified data.</b> An unreconciled source, stale approval data, data built for another day, or included units whose data needs review (PaymentStatusUnknown included) never stop the
+            file; they label it "Financial data not verified" (file name, notices, audit) and say exactly why. The source values are written as they are; an Unknown payment status is never written as unpaid.</item>
+            <item><b>Read only.</b> It uploads nothing, queues nothing and marks no one as sent. The send protections (Ready status, reconciliation, freshness, shared phone, already sent, contacted today,
+            idempotency) belong to <see cref="T:TigerCS.Application.Modules.Collections.Review.DispatchService"/> and are untouched: a customer in a file can still be sent, once, under every rule.</item>
+            <item><b>Audited.</b> Each export is written to the audit trail before the file is released (who, when, campaign, list, rows, units, exclusions, total, statuses, verification, the filter, a hash of
+            the file and a one-way fingerprint of each customer's unit and number; never a customer's data). If the audit entry cannot be written, no file is released. Customers exported within
+            <c>ExportRepeatLookbackDays</c> are counted and noted (<c>Repeated=n</c>) so repeated downloads are visible; a repeat never blocks a download and needs no confirmation.</item>
             </list>
             </summary>
         </member>
@@ -2895,39 +2994,121 @@
         <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysExportService.NotVerifiedLabel">
             <summary>The label of a file whose contact-list columns were not read from Genesys.</summary>
         </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysExportService.UnverifiedDataLabel">
+            <summary>The label of a file whose amounts rest on unverified financial data.</summary>
+        </member>
+        <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysExportService.BuiltForAnotherDay">
+            <summary>The reason code recorded when the approval data was built for another day than the export.</summary>
+        </member>
         <member name="F:TigerCS.Application.Modules.Collections.Review.GenesysExportService.MaxHistoryEntries">
-            <summary>
-            The most earlier exports read for the repeat check. A window that holds this many cannot be checked in full, so the export stops rather than guessing that a customer is new.
-            </summary>
+            <summary>The most earlier exports read for the repeat count. A window that holds this many cannot be counted in full; the file is still made and says so.</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Fingerprint(System.String)">
-            <summary>
-            A one-way fingerprint of a customer's unit (company, tenant, unit): the same customer is recognised in every campaign type and month, and no customer data is kept.
-            </summary>
+            <summary>A one-way fingerprint of a customer's unit (company, tenant, unit): the same customer is recognised in every campaign type and month, and no customer data is kept.</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.PhoneFingerprint(System.String)">
             <summary>The same one-way fingerprint for a phone number: the number that is dialled, whichever unit it was written against.</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken,System.Boolean,System.Nullable{System.Int32})">
-            <param name="caller">Who exports; needs the send right.</param>
-            <param name="request">The Manual selection: campaign, filters, contact list and the ticked customers (or all eligible).</param>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportAsync(TigerCS.Application.Modules.Collections.Services.CollectionsCaller,TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)">
+            <param name="caller">Who exports; needs the send right (the file is customer contact data).</param>
+            <param name="request">The campaign type, filters, contact list and mode; with the ticked customers (Manual) or every matching customer.</param>
             <param name="ct">Cancellation.</param>
-            <param name="confirmRepeat">The person has seen that some customers were already exported and wants the file anyway.</param>
-            <param name="expectedRepeats">How many repeated customers the person was shown with that confirmation. If the count is different now (a repeat appeared after the warning), the file is not made.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Item(TigerCS.Application.Modules.Collections.Review.GenesysExportRow)">
+            <summary>The dispatch item a row would be uploaded as: the same fields a real send fills, so <see cref="M:TigerCS.Application.Modules.Collections.Review.DispatchService.ToPayload(TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem,System.String,TigerCS.Application.Modules.Collections.Review.GenesysOutboundOptions)"/> formats the row exactly as an upload.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportService.DataVerification">
+            <param name="Verified">Nothing about the data is in doubt.</param>
+            <param name="Reasons">Why not, as codes (<c>PaymentStatusUnknown:12</c> counts the units concerned).</param>
+            <param name="Notices">The same, for people.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.DataVerification.#ctor(System.Boolean,System.Collections.Generic.IReadOnlyList{System.String},System.Collections.Generic.IReadOnlyList{System.String})">
+            <param name="Verified">Nothing about the data is in doubt.</param>
+            <param name="Reasons">Why not, as codes (<c>PaymentStatusUnknown:12</c> counts the units concerned).</param>
+            <param name="Notices">The same, for people.</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.DataVerification.Verified">
+            <summary>Nothing about the data is in doubt.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.DataVerification.Reasons">
+            <summary>Why not, as codes (<c>PaymentStatusUnknown:12</c> counts the units concerned).</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.DataVerification.Notices">
+            <summary>The same, for people.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.AssessData(TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportResolution,TigerCS.Application.Modules.Collections.Review.GenesysExportRowSet)">
+            <summary>
+            What is unverified about the data the amounts come from. Nothing here stops the file: each doubt is named, labelled and audited, so a person imports it knowing exactly what it rests on.
+            A unit held back from SENDING by a policy rule (schedule, legal release, repeated calls, already sent) is not unverified data; it is counted separately so the file says it holds such units.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Age(System.TimeSpan)">
+            <summary>An age for people: days, hours or minutes.</summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Repeat">
+            <param name="Customers">How many of the file's units were exported before within the look-back.</param>
+            <param name="Exports">How many earlier exports held any of them.</param>
+            <param name="LastUtc">The latest of those exports.</param>
+            <param name="Check"><c>Checked</c>, <c>Off</c> (look-back 0), <c>Unavailable</c> (the history could not be read) or <c>Incomplete</c> (the window holds more entries than are read).</param>
+            <param name="Notice">What to tell the person, if anything.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Repeat.#ctor(System.Int32,System.Int32,System.DateTime,System.String,System.String)">
+            <param name="Customers">How many of the file's units were exported before within the look-back.</param>
+            <param name="Exports">How many earlier exports held any of them.</param>
+            <param name="LastUtc">The latest of those exports.</param>
+            <param name="Check"><c>Checked</c>, <c>Off</c> (look-back 0), <c>Unavailable</c> (the history could not be read) or <c>Incomplete</c> (the window holds more entries than are read).</param>
+            <param name="Notice">What to tell the person, if anything.</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Repeat.Customers">
+            <summary>How many of the file's units were exported before within the look-back.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Repeat.Exports">
+            <summary>How many earlier exports held any of them.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Repeat.LastUtc">
+            <summary>The latest of those exports.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Repeat.Check">
+            <summary><c>Checked</c>, <c>Off</c> (look-back 0), <c>Unavailable</c> (the history could not be read) or <c>Incomplete</c> (the window holds more entries than are read).</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Repeat.Notice">
+            <summary>What to tell the person, if anything.</summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportedCustomer">
-            <summary>One record of the selection as the repeat check sees it: the fingerprint of its unit and of its number (when it has one).</summary>
+            <summary>One unit of the file as the repeat count sees it: the fingerprint of its unit and of its number.</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportedCustomer.#ctor(System.String,System.String)">
-            <summary>One record of the selection as the repeat check sees it: the fingerprint of its unit and of its number (when it has one).</summary>
+            <summary>One unit of the file as the repeat count sees it: the fingerprint of its unit and of its number.</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.FindRepeatAsync(System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.GenesysExportService.ExportedCustomer},System.Threading.CancellationToken)">
-            <summary>How many of these customers appear in an earlier export within the look-back, how many earlier exports that is, and the latest of them.</summary>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Schema">
+            <param name="Columns">The columns the file is written with.</param>
+            <param name="Verified">They are the list's real columns, read from Genesys.</param>
+            <param name="Notice">When not verified: why, for the person.</param>
+            <param name="Problem">When the list was read and does not fit the template: the exact incompatibility; the export is refused.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Schema.#ctor(System.Collections.Generic.IReadOnlyList{System.String},System.Boolean,System.String,System.String)">
+            <param name="Columns">The columns the file is written with.</param>
+            <param name="Verified">They are the list's real columns, read from Genesys.</param>
+            <param name="Notice">When not verified: why, for the person.</param>
+            <param name="Problem">When the list was read and does not fit the template: the exact incompatibility; the export is refused.</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Schema.Columns">
+            <summary>The columns the file is written with.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Schema.Verified">
+            <summary>They are the list's real columns, read from Genesys.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Schema.Notice">
+            <summary>When not verified: why, for the person.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.GenesysExportService.Schema.Problem">
+            <summary>When the list was read and does not fit the template: the exact incompatibility; the export is refused.</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportService.ReadSchemaAsync(System.String,System.String,System.Threading.CancellationToken)">
             <summary>
-            The columns of the chosen list. With the Genesys integration configured they are read from Genesys (read only) and must fit the template; a list that cannot be read or does not fit refuses the
-            export. Without the integration the documented template is used and the result says it was not verified.
+            The columns of the chosen list. With the Genesys integration configured they are read from Genesys (read only). A list that was read and lacks or misnames a template column refuses the
+            export: a real incompatibility is reported, never guessed around. A list that could NOT be read (integration not configured, login refused, Genesys unreachable or answering with an error)
+            does not stop a download-only file: the documented six-column template is used and the file is labelled "Template not verified against Genesys", with the reason.
             </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewRecordView">
@@ -3203,20 +3384,32 @@
             A configuration problem here is a hard stop: it is shown before the person approves anything, and confirmation refuses again.
             </summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportExclusionDto">
+            <summary>Units left out of an Export for Genesys file, by reason: the code, how many units, and the plain-language explanation.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportExclusionDto.#ctor(System.String,System.Int32,System.String)">
+            <summary>Units left out of an Export for Genesys file, by reason: the code, how many units, and the plain-language explanation.</summary>
+        </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.GenesysExportDto">
             <summary>
-            The "Export for Genesys" file: customers of a Manual selection in the format of the Genesys contact list they would be imported into. <c>Columns</c> is the file's header exactly. <c>SchemaVerified</c> is
-            true when that list's real columns were read from Genesys and fit; false when the Genesys integration is not configured, so the documented six-column template was used: the file is then labelled
-            "Template not verified against Genesys" (in <c>Notices</c> and in the file name). <c>RepeatedCustomers</c> is how many of the customers had already been exported (0 = none), confirmed by the person;
-            <c>LastExportedAtUtc</c> is the latest earlier export of any of them.
+            The "Export for Genesys" file: every customer matching the filters, in the format of the Genesys contact list the file is for. <c>Columns</c> is the file's header exactly. <c>RowCount</c> rows hold
+            <c>UnitCount</c> customer units (<c>CombinedUnits</c> of them folded into <c>CombinedRows</c> rows of one customer on one number); <c>Exclusions</c> says which matching units are NOT in the file and why.
+            <c>IncludedByStatus</c> counts the units by the status the Manual page shows (Ready, NeedsReview, Excluded, AlreadySent): a file is not a send, so held-back customers are in it.
+            <c>DataVerified</c> is false when the financial data behind the amounts is not verified (unreconciled source, stale or not built today, or units whose data needs review, PaymentStatusUnknown
+            included); <c>UnverifiedReasons</c> names why, and the file is labelled "Financial data not verified". <c>SchemaVerified</c> is true when the list's real columns were read from Genesys and fit;
+            false when they could not be read (integration not configured, login refused, Genesys unreachable), so the documented six-column template was used and the file is labelled "Template not
+            verified against Genesys". <c>RepeatedCustomers</c> is how many of the customers were exported before within the look-back (informational; a repeat is audited, never a block).
             </summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportDto.#ctor(System.String,System.String,System.Int32,System.String,System.String,System.String,System.Decimal,System.String,System.Collections.Generic.IReadOnlyList{System.String},System.Boolean,System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Int32,System.Nullable{System.DateTime})">
+        <member name="M:TigerCS.Application.Modules.Collections.Review.GenesysExportDto.#ctor(System.String,System.String,System.Int32,System.String,System.String,System.String,System.Decimal,System.String,System.Collections.Generic.IReadOnlyList{System.String},System.Boolean,System.Collections.Generic.IReadOnlyList{System.String},System.String,System.Int32,System.Nullable{System.DateTime},System.Int32,System.Int32,System.Int32,System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.GenesysExportExclusionDto},System.Collections.Generic.IReadOnlyDictionary{System.String,System.Int32},System.Boolean,System.Collections.Generic.IReadOnlyList{System.String},System.Int32)">
             <summary>
-            The "Export for Genesys" file: customers of a Manual selection in the format of the Genesys contact list they would be imported into. <c>Columns</c> is the file's header exactly. <c>SchemaVerified</c> is
-            true when that list's real columns were read from Genesys and fit; false when the Genesys integration is not configured, so the documented six-column template was used: the file is then labelled
-            "Template not verified against Genesys" (in <c>Notices</c> and in the file name). <c>RepeatedCustomers</c> is how many of the customers had already been exported (0 = none), confirmed by the person;
-            <c>LastExportedAtUtc</c> is the latest earlier export of any of them.
+            The "Export for Genesys" file: every customer matching the filters, in the format of the Genesys contact list the file is for. <c>Columns</c> is the file's header exactly. <c>RowCount</c> rows hold
+            <c>UnitCount</c> customer units (<c>CombinedUnits</c> of them folded into <c>CombinedRows</c> rows of one customer on one number); <c>Exclusions</c> says which matching units are NOT in the file and why.
+            <c>IncludedByStatus</c> counts the units by the status the Manual page shows (Ready, NeedsReview, Excluded, AlreadySent): a file is not a send, so held-back customers are in it.
+            <c>DataVerified</c> is false when the financial data behind the amounts is not verified (unreconciled source, stale or not built today, or units whose data needs review, PaymentStatusUnknown
+            included); <c>UnverifiedReasons</c> names why, and the file is labelled "Financial data not verified". <c>SchemaVerified</c> is true when the list's real columns were read from Genesys and fit;
+            false when they could not be read (integration not configured, login refused, Genesys unreachable), so the documented six-column template was used and the file is labelled "Template not
+            verified against Genesys". <c>RepeatedCustomers</c> is how many of the customers were exported before within the look-back (informational; a repeat is audited, never a block).
             </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewExportDto">
@@ -3422,6 +3615,56 @@
             run once per page.
             </summary>
         </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportCandidate">
+            <summary>
+            One unit of an export: the stored record as a detached copy carrying the amount and earliest due date calculated from the filters (null when the instalments are ambiguous or
+            unreadable: no value is ever invented), the status the Manual page shows for it, and its exact reasons.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportCandidate.#ctor(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord,TigerCS.Domain.Modules.Collections.Review.ReviewValidationStatus,System.Collections.Generic.IReadOnlyList{System.String})">
+            <summary>
+            One unit of an export: the stored record as a detached copy carrying the amount and earliest due date calculated from the filters (null when the instalments are ambiguous or
+            unreadable: no value is ever invented), the status the Manual page shows for it, and its exact reasons.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportResolution">
+            <param name="Run">The approval data the candidates come from (null only with <paramref name="Error"/>).</param>
+            <param name="Candidates">Every customer unit that matches the filters, whatever its status.</param>
+            <param name="Skipped">Ticked customers that match no record of the filters any more (paid, changed); never silently kept.</param>
+            <param name="Stale">The approval data is older than the freshness window.</param>
+            <param name="Error">Why the selection cannot be resolved at all (the filter is invalid, or the data cannot answer it).</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportResolution.#ctor(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun,System.Collections.Generic.IReadOnlyList{TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportCandidate},System.Int32,System.Boolean,System.String)">
+            <param name="Run">The approval data the candidates come from (null only with <paramref name="Error"/>).</param>
+            <param name="Candidates">Every customer unit that matches the filters, whatever its status.</param>
+            <param name="Skipped">Ticked customers that match no record of the filters any more (paid, changed); never silently kept.</param>
+            <param name="Stale">The approval data is older than the freshness window.</param>
+            <param name="Error">Why the selection cannot be resolved at all (the filter is invalid, or the data cannot answer it).</param>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportResolution.Run">
+            <summary>The approval data the candidates come from (null only with <paramref name="Error"/>).</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportResolution.Candidates">
+            <summary>Every customer unit that matches the filters, whatever its status.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportResolution.Skipped">
+            <summary>Ticked customers that match no record of the filters any more (paid, changed); never silently kept.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportResolution.Stale">
+            <summary>The approval data is older than the freshness window.</summary>
+        </member>
+        <member name="P:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ExportResolution.Error">
+            <summary>Why the selection cannot be resolved at all (the filter is invalid, or the data cannot answer it).</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveForExportAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)">
+            <summary>
+            The customers of "Export for Genesys": EVERY customer unit of the chosen campaign type that matches Tower, Payment status, From / To and Minimum Total, with the amount Preview shows
+            (<see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualCalculatedAsync(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun,TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Collections.Generic.IReadOnlyCollection{System.String},System.Boolean,System.Threading.CancellationToken)"/>, the one Manual calculation), whatever its validation status. A file is not a send, so nothing that only a send needs is a condition here: no Ready
+            status, no reconciliation, no freshness, no build date, no schedule. Only what makes the amounts WRONG rather than unverified is refused: a From date the stored instalments do not cover,
+            a month filter, an unknown campaign type, a list that cannot be read in one pass, more customers than one file may hold. The send path (<see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveAsync(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)"/>) is untouched: it
+            still resolves Ready records only.
+            </summary>
+        </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ResolveReadyAsync(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun,TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Collections.Generic.IReadOnlyCollection{System.String},System.Boolean,System.Int32,System.Threading.CancellationToken)">
             <summary>Ready records of the selection. In Manual mode these are the customers the person may send now (see <see cref="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualCalculatedAsync(TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRun,TigerCS.Application.Modules.Collections.Review.ReviewQuerySpec,TigerCS.Application.Modules.Collections.Review.ReviewFilter,System.Collections.Generic.IReadOnlyCollection{System.String},System.Boolean,System.Threading.CancellationToken)"/>): schedule waived, amount from the filters.</summary>
         </member>
@@ -3435,6 +3678,12 @@
             <param name="v">The stored record with its sent / history facts.</param>
             <param name="stale">Whether the review run is older than the freshness window.</param>
             <param name="manual">A Manual list: the stage schedule is waived, so a record held back by it alone is shown as Ready and the schedule is not given as a reason.</param>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ReasonsOf(TigerCS.Application.Modules.Collections.Review.ReviewRecordView,System.Boolean,System.Boolean)">
+            <summary>The reasons a record is shown with: the stored ones, minus the schedule in Manual, plus staleness and the contact-frequency hold, which are facts of the moment, not of the record.</summary>
+        </member>
+        <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.ManualReasons(TigerCS.Application.Modules.Collections.Review.ReviewRecordView,System.Boolean)">
+            <summary>The reasons of a Manual row, exactly as the Manual page lists them.</summary>
         </member>
         <member name="M:TigerCS.Application.Modules.Collections.Review.ReviewQueryService.TowerSet(TigerCS.Application.Modules.Collections.Review.ReviewFilter)">
             <summary>The distinct tower ids of a filter (the single id and the list together); empty = All projects.</summary>
@@ -3682,9 +3931,6 @@
         </member>
         <member name="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.DuplicateDispatch">
             <summary>A record is already part of a pending or sent dispatch, or the same key was used for a different list (409).</summary>
-        </member>
-        <member name="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.RepeatExport">
-            <summary>The file contains customers who were already exported; it is made only when the person confirms the repeat (409).</summary>
         </member>
         <member name="F:TigerCS.Application.Modules.Collections.Services.CollectionsOutcome.Conflict">
             <summary>The request conflicts with the current state (for example a reconciliation is already running) - 409.</summary>
@@ -4608,12 +4854,10 @@
         <member name="M:TigerCS.Application.Modules.Collections.Services.PactReceivableCustomersAppService.WindowNotes(System.DateOnly,System.DateOnly,System.DateOnly,System.DateOnly)">
             <summary>How the window and the reporting month interact, shown to the user next to the list.</summary>
         </member>
-        <member name="M:TigerCS.Application.Modules.Collections.Services.PactReceivableCustomersAppService.PaymentStatus(System.String,System.Decimal,System.Collections.Generic.IReadOnlyDictionary{System.String,System.String})">
+        <member name="M:TigerCS.Application.Modules.Collections.Services.PactReceivableCustomersAppService.PaymentStatus(System.String,System.Nullable{System.Decimal},System.Collections.Generic.IReadOnlyDictionary{System.String,System.String})">
             <summary>
-            Verified meaning of the report's <c>Status</c>: the procedures emit <c>Paid</c> when the remaining Amount is zero
-            and <c>Installment</c> otherwise. <c>Installment</c> does not distinguish unpaid from partially paid, so it is never
-            mapped (not even by configuration) and stays Unknown. Paid with a positive remainder is contradictory: Unknown.
-            Payment status is never derived from the due date or the amount.
+            Payment status from the verified remaining amount: 0 = Paid, more = Unpaid, missing or negative = Unknown. The report's <c>Status</c> only ever contradicts it: <c>Paid</c> (or a value
+            mapped to Paid) with a remainder owed is Unknown. A mapping may refine a positive remainder to PartiallyPaid for display; it never decides paid or unpaid, and a due date never does.
             </summary>
         </member>
         <member name="T:TigerCS.Application.Modules.Collections.Services.ReceivablesSnapshotComposer">

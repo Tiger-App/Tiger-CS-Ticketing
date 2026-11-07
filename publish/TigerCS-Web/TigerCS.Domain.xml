@@ -273,6 +273,28 @@
             retried request for the same occurrence still collapses to one row.
             </summary>
         </member>
+        <member name="F:TigerCS.Domain.Infrastructure.OutboxEventTypes.TicketAssigned">
+            <summary>Customer email: the ticket gained an owner. One per occurrence (see <see cref="M:TigerCS.Domain.Infrastructure.OutboxEventTypes.OccurrenceIdempotencyKeyFor(System.String,System.Int64,System.Int32,System.Int32,System.String)"/>).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Infrastructure.OutboxEventTypes.TicketInProgress">
+            <summary>Customer email: the ticket entered <c>InProgress</c> through the Change Status operation.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Infrastructure.OutboxEventTypes.TicketPendingCustomer">
+            <summary>Customer email: the ticket entered <c>PendingCustomer</c>.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Infrastructure.OutboxEventTypes.TicketAssignedToAgent">
+            <summary>Internal email: a ticket was assigned or transferred to a staff member by somebody else (a person or automation).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Infrastructure.OutboxEventTypes.CustomerReplyReceived">
+            <summary>Internal email: the customer replied on a conversation of a ticket a person is handling.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Infrastructure.OutboxEventTypes.OccurrenceIdempotencyKeyFor(System.String,System.Int64,System.Int32,System.Int32,System.String)">
+            <summary>
+            Key for an event that can legitimately happen more than once per resolution cycle (an assignment, a status change back and
+            forth, a customer reply). <paramref name="occurrence"/> identifies the specific occurrence — the assignee and the previous owner,
+            the transition, the transcript position — so a genuine repeat is a new event while a retried request for the same occurrence is not.
+            </summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.ClassificationAndRouting.Category">
             <summary>
             MVP-Data-Dictionary.md §2.5 — Classification and Routing module
@@ -523,8 +545,12 @@
             (it would silently hide the very rows those views exist to show).
             </summary>
         </member>
-        <member name="M:TigerCS.Domain.Modules.Collections.CollectionsPaymentFilters.Classify(System.Decimal,System.Nullable{System.Decimal},System.Nullable{System.Decimal},System.String,System.Boolean)">
-            <summary>Payment status of one instalment. Mirrors the SQL publish step; "Unknown" means the source cannot tell and nothing is guessed.</summary>
+        <member name="M:TigerCS.Domain.Modules.Collections.CollectionsPaymentFilters.Classify(System.Nullable{System.Decimal},System.Nullable{System.Decimal},System.Nullable{System.Decimal},System.String,System.Boolean)">
+            <summary>
+            Payment status of one instalment, from the verified REMAINING amount: 0 = FullyPaid, more = Unpaid (refined to PartiallyPaid only when the source's original and paid amounts are
+            present and consistent), missing or negative = Unknown. "Unknown" also covers a source that contradicts itself (Status Paid with a remainder owed, or a breakdown that does not add up):
+            it needs review, and nothing is guessed.
+            </summary>
         </member>
         <member name="F:TigerCS.Domain.Modules.Collections.ReminderTrigger.Scheduled">
             <summary>The designated scheduler queued it when the window opened.</summary>
@@ -1263,20 +1289,26 @@
         <member name="M:TigerCS.Domain.Modules.Collections.Review.MoneyNormalizer.Format(System.Decimal)">
             <summary>Invariant, culture-independent, always two decimals, no thousands separator (the Genesys AmountDue format).</summary>
         </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewPaymentStatus.PartiallyPaid">
+            <summary>Kept for rows stored before the remaining-amount rule; the rule itself no longer separates partly paid from unpaid.</summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Collections.Review.PaymentStatusRules">
             <summary>
-            Payment status comes only from verified source fields. The deployed PACT report reports <c>Paid</c> or
-            <c>Installment</c> and nothing else, and <c>Installment</c> cannot separate unpaid from partially paid, so with
-            the deployed procedures every open balance is <see cref="F:TigerCS.Domain.Modules.Collections.Review.ReviewPaymentStatus.Unknown"/>. The reviewed V2 report
-            also returns the instalment's PlanAmount: a remainder equal to the plan is Unpaid, a smaller positive remainder is
-            PartiallyPaid. A due date never decides payment status.
+            Payment status comes from the verified REMAINING amount PACT returns for the instalment, the one figure every procedure reports:
+            <list type="bullet">
+            <item>remaining = 0: <see cref="F:TigerCS.Domain.Modules.Collections.Review.ReviewPaymentStatus.Paid"/>;</item>
+            <item>remaining &gt; 0: <see cref="F:TigerCS.Domain.Modules.Collections.Review.ReviewPaymentStatus.Unpaid"/> (partly paid or not; the campaigns collect what remains, so the two are not told apart);</item>
+            <item>remaining missing, negative, or contradicted by the source: <see cref="F:TigerCS.Domain.Modules.Collections.Review.ReviewPaymentStatus.Unknown"/>, which needs review. The source contradicts itself when it says <c>Paid</c> but a
+            remainder is owed, or when the V2 report's original and paid amounts do not add up to the remainder (or the remainder exceeds the original).</item>
+            </list>
+            A due date never decides payment status, and a configured text mapping never overrides the remaining amount.
             </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Collections.Review.PaymentStatusRules.AmountsAddUp(System.Decimal,System.Decimal,System.Decimal)">
             <summary>original = paid + remaining, to the source's four-decimal precision.</summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Collections.Review.PaymentStatusRules.Combine(System.Collections.Generic.IReadOnlyCollection{TigerCS.Domain.Modules.Collections.Review.ReviewPaymentStatus})">
-            <summary>One unit combines several instalments: all must be known, otherwise Unknown; mixed unpaid/partial is PartiallyPaid.</summary>
+            <summary>One unit combines several open instalments: all must be known and open, otherwise Unknown. (A Paid instalment is not a receivable and never reaches a record.)</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Collections.Review.PhoneResult">
             <summary>The outcome of normalizing one raw source phone value to international (E.164) format.</summary>
@@ -2350,6 +2382,24 @@
         </member>
         <member name="F:TigerCS.Domain.Modules.Notifications.NotificationType.Reopened">
             <summary>Customer Email Notifications increment — the customer-facing "your request has been reopened" email.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Notifications.NotificationType.Assigned">
+            <summary>Customer email: the ticket gained an owner (first assignment of the current cycle).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Notifications.NotificationType.InProgress">
+            <summary>Customer email: work on the ticket has started / resumed (status <c>InProgress</c>).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Notifications.NotificationType.PendingCustomer">
+            <summary>Customer email: the ticket is waiting for the customer (status <c>PendingCustomer</c>).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Notifications.NotificationType.Cancelled">
+            <summary>Customer email: the request was cancelled (a resolution with the <c>Cancelled</c> outcome).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Notifications.NotificationType.AgentAssigned">
+            <summary>Internal email to a staff member: a ticket was assigned or transferred to them.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Notifications.NotificationType.CustomerReplyReceived">
+            <summary>Internal email to the ticket's owner: the customer replied on the conversation.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Notifications.NotificationChannel">
             <summary>MVP-Data-Dictionary.md §2.21: "MVP: Email only". SMS/WhatsApp/push are Phase 2 (Solution-Analysis.md §2.7) and deliberately have no value here.</summary>
