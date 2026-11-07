@@ -171,9 +171,11 @@ public static class ReviewRecordBuilder
     }
 
     /// <summary>
-    /// Repeated calls are blocked, not merged and not silently prioritised, until the business decides the policy. Among records that could
-    /// be sent today (outside-schedule records are not candidates, so a unit's Follow Up on day 28 does not collide with its Current Month on day 14):
-    /// a unit with several reminder types gets <c>ReminderTypeOverlap</c>; a phone number used by several units gets <c>SharedPhoneMultipleUnits</c>.
+    /// Repeated calls to ONE UNIT are blocked, not merged and not silently prioritised, until the business decides the policy. Among records that could be sent today (outside-schedule
+    /// records are not candidates, so a unit's Follow Up on day 28 does not collide with its Current Month on day 14) a unit with several reminder types gets <c>ReminderTypeOverlap</c>.
+    /// A phone number is NOT a unit: by the confirmed business decision every property unit is its own contact record and receives its own call, even when several units (of one customer
+    /// or of different customers) share a number. A repeated number alone therefore never holds a record back (<c>SharedPhoneMultipleUnits</c> and <c>ManualSharedPhone</c> are no longer
+    /// produced; they remain defined for review data stored before the decision).
     /// </summary>
     private static void MarkRepeatedCalls(List<CollectionsReviewRecord> records)
     {
@@ -184,8 +186,6 @@ public static class ReviewRecordBuilder
 
         foreach (var group in candidates.GroupBy(Unit).Where(g => g.Count() > 1))
             foreach (var record in group) Flag(record, ReviewReasons.ReminderTypeOverlap);
-        foreach (var group in candidates.Where(r => r.Phone.Length > 0).GroupBy(r => r.Phone).Where(g => g.Select(Unit).Distinct().Count() > 1))
-            foreach (var record in group) Flag(record, ReviewReasons.SharedPhoneMultipleUnits);
 
         foreach (var (record, reasons) in flagged)
         {
@@ -197,9 +197,9 @@ public static class ReviewRecordBuilder
     }
 
     /// <summary>
-    /// For a record whose ONLY reason is <c>OutsideSchedule</c>, works out what the repeated-call rules would say if an authorized person sent that reminder type manually today, and
-    /// stores it as a marker (the record's status does not change: in Auto mode it is outside the schedule either way). The would-be send set is the records scheduled today plus the
-    /// outside-schedule records of the SAME reminder type, so manual sending never skips the duplicate-call protection that scheduled records get.
+    /// For a record whose ONLY reason is <c>OutsideSchedule</c>, works out what the repeated-call rule would say if an authorized person sent that reminder type manually today, and
+    /// stores it as a marker (the record's status does not change: in Auto mode it is outside the schedule either way): the unit is already scheduled today under another reminder type
+    /// (<c>ManualReminderTypeOverlap</c>), so manual sending never skips the one-call-per-unit protection that scheduled records get. A shared number is not a marker (see <see cref="MarkRepeatedCalls"/>).
     /// </summary>
     private static void MarkManualRepeatedCalls(List<CollectionsReviewRecord> records, List<CollectionsReviewRecord> candidates)
     {
@@ -208,21 +208,8 @@ public static class ReviewRecordBuilder
         var manual = records.Where(OnlyOutsideSchedule).ToList();
         if (manual.Count == 0) return;
         var candidateUnits = candidates.Select(Unit).ToHashSet();
-        var candidatePhoneUnits = candidates.Where(r => r.Phone.Length > 0).GroupBy(r => r.Phone).ToDictionary(g => g.Key, g => g.Select(Unit).ToHashSet());
-        var sameTypePhoneUnits = manual.Where(r => r.Phone.Length > 0).GroupBy(r => (r.ReminderType, r.Phone)).ToDictionary(g => g.Key, g => g.Select(Unit).ToHashSet());
         foreach (var record in manual)
-        {
-            var markers = new List<string>();
-            if (candidateUnits.Contains(Unit(record))) markers.Add(ReviewReasons.ManualReminderTypeOverlap);
-            if (record.Phone.Length > 0)
-            {
-                var others = new HashSet<(int, string, int?, string)>(sameTypePhoneUnits[(record.ReminderType, record.Phone)]);
-                if (candidatePhoneUnits.TryGetValue(record.Phone, out var scheduled)) others.UnionWith(scheduled);
-                others.Remove(Unit(record));
-                if (others.Count > 0) markers.Add(ReviewReasons.ManualSharedPhone);
-            }
-            if (markers.Count > 0) record.Reasons = Serialize(Parse(record.Reasons).Concat(markers));
-        }
+            if (candidateUnits.Contains(Unit(record))) record.Reasons = Serialize(Parse(record.Reasons).Append(ReviewReasons.ManualReminderTypeOverlap));
     }
 
     /// <summary>
