@@ -4,7 +4,7 @@ using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Notifications;
-using TigerCS.Application.Modules.Notifications.Dto;
+using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.Reporting.Services;
 using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Application.Modules.Ticketing.Dto;
@@ -608,41 +608,11 @@ public sealed class TicketCreationAppService(
     /// audit entry is written for it because nothing was queued.
     /// </para>
     /// </summary>
-    private async Task EnqueueTicketCreatedAsync(
-        Ticket ticket, Guid callerEmployeeId, Guid correlationId, DateTime nowUtc, CancellationToken cancellationToken)
-    {
-        var payload = new TicketCreatedEventPayload(ticket.TicketId, OutboxEventTypes.TicketCreatedVersion);
+    private Task EnqueueTicketCreatedAsync(
+        Ticket ticket, Guid callerEmployeeId, Guid correlationId, DateTime nowUtc, CancellationToken cancellationToken) =>
+        new TicketNotificationEvents(outboxWriter, auditWriter)
+            .QueueTicketCreatedAsync(ticket, callerEmployeeId, correlationId, nowUtc, cancellationToken);
 
-        var message = await outboxWriter.WriteAsync(
-            OutboxEventTypes.TicketCreated,
-            payload.ToJson(),
-            correlationId,
-            OutboxEventTypes.IdempotencyKeyFor(
-                OutboxEventTypes.TicketCreated, ticket.TicketId, OutboxEventTypes.TicketCreatedVersion),
-            nowUtc,
-            cancellationToken);
-
-        if (message is null)
-        {
-            return;
-        }
-
-        // "Notification queued" (ADR-0018) — the one notification audit event
-        // written synchronously, in the business transaction, so the audit
-        // trail records the intent at the moment it became durable rather
-        // than whenever a background job next runs.
-        await auditWriter.WriteAsync(
-            callerEmployeeId,
-            NotificationAuditActions.NotificationQueued,
-            NotificationAuditActions.OutboxMessageEntityType,
-            message.OutboxMessageId.ToString(),
-            beforeValue: null,
-            afterValue: $"EventType={OutboxEventTypes.TicketCreated};TicketId={ticket.TicketId};Status=Pending",
-            correlationId,
-            cancellationToken);
-    }
-
-    /// <summary>The default classification chosen for a new ticket, and why.</summary>
     private sealed record FallbackChoice(DefaultClassification Classification, string Reason);
 
     /// <summary>The fallback to apply, or - for a valid department without its own General - the configuration error to report.</summary>

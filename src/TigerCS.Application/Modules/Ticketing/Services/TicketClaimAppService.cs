@@ -1,5 +1,6 @@
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
+using TigerCS.Application.Modules.Notifications.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.Ticketing;
@@ -36,8 +37,11 @@ public sealed class TicketClaimAppService(
     TimeProvider timeProvider,
     TicketClaimPolicy claimPolicy,
     TicketAutoAssignmentService autoAssignmentService,
-    ITicketWorkflowEventRepository? workflowEventRepository = null)
+    ITicketWorkflowEventRepository? workflowEventRepository = null,
+    IOutboxWriter? outboxWriter = null)
 {
+    private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
+
     public async Task<TicketMutationResult> TakeOwnershipAsync(
         Guid callerEmployeeId,
         IReadOnlyCollection<string> callerRoles,
@@ -130,6 +134,12 @@ public sealed class TicketClaimAppService(
             afterValue: $"AssignedEmployeeId={callerEmployeeId};DepartmentId={callCenter.DepartmentId};Mode=SelfTake;"
                 + $"OriginatingDepartmentId={ticket.OriginatingDepartmentId};Status={ticket.TicketStatus}",
             correlationId, cancellationToken);
+
+        if (_notificationEvents is not null)
+        {
+            // A self-assignment: the customer learns the ticket has an owner; no colleague is told.
+            await _notificationEvents.QueueAssignedAsync(ticket, previousOwnerEmployeeId: null, callerEmployeeId, callerEmployeeId, correlationId, now, cancellationToken);
+        }
 
         try
         {

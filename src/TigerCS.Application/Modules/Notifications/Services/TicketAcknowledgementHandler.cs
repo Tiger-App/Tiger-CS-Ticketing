@@ -40,7 +40,8 @@ public sealed class TicketAcknowledgementHandler(
     TimeProvider timeProvider,
     CustomerNotificationModePolicy modePolicy,
     IRequestTypeRepository requestTypeRepository,
-    ICategoryRepository categoryRepository)
+    ICategoryRepository categoryRepository,
+    CustomerTicketSubjectResolver? subjectResolver = null)
     : CustomerTicketEmailHandler(
         ticketRepository, notificationRepository, contactResolver, emailSender, auditWriter, policy, timeProvider, modePolicy)
 {
@@ -55,7 +56,7 @@ public sealed class TicketAcknowledgementHandler(
     protected override void OnSent(Ticket ticket, DateTime sentAtUtc) => ticket.RecordAcknowledgementSent(sentAtUtc);
 
     protected override async Task<CustomerEmailContent> BuildContentAsync(
-        Ticket ticket, CustomerContact contact, DateTime occurredAtUtc, CancellationToken cancellationToken)
+        Ticket ticket, CustomerContact contact, OutboxMessage message, CancellationToken cancellationToken)
     {
         // "Request type/category where appropriate": the request type is
         // the customer-recognisable classification when one was chosen;
@@ -77,6 +78,7 @@ public sealed class TicketAcknowledgementHandler(
             contact.DisplayName,
             ticket.CreatedAtUtc,
             RequestTypeName: requestTypeName,
+            TicketSubject: subjectResolver is null ? null : await subjectResolver.ResolveAsync(ticket, cancellationToken),
             Language: contact.Language,
             Branding: ModePolicy.Branding,
             IsTest: ModePolicy.IsTest));

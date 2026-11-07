@@ -161,7 +161,25 @@ public enum NotificationType : byte
     Closed = 6,
 
     /// <summary>Customer Email Notifications increment — the customer-facing "your request has been reopened" email.</summary>
-    Reopened = 7
+    Reopened = 7,
+
+    /// <summary>Customer email: the ticket gained an owner (first assignment of the current cycle).</summary>
+    Assigned = 8,
+
+    /// <summary>Customer email: work on the ticket has started / resumed (status <c>InProgress</c>).</summary>
+    InProgress = 9,
+
+    /// <summary>Customer email: the ticket is waiting for the customer (status <c>PendingCustomer</c>).</summary>
+    PendingCustomer = 10,
+
+    /// <summary>Customer email: the request was cancelled (a resolution with the <c>Cancelled</c> outcome).</summary>
+    Cancelled = 11,
+
+    /// <summary>Internal email to a staff member: a ticket was assigned or transferred to them.</summary>
+    AgentAssigned = 12,
+
+    /// <summary>Internal email to the ticket's owner: the customer replied on the conversation.</summary>
+    CustomerReplyReceived = 13
 }
 
 /// <summary>MVP-Data-Dictionary.md §2.21: "MVP: Email only". SMS/WhatsApp/push are Phase 2 (Solution-Analysis.md §2.7) and deliberately have no value here.</summary>

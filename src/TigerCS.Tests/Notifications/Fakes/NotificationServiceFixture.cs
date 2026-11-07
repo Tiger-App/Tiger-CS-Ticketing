@@ -74,7 +74,80 @@ public sealed class NotificationServiceFixture
         ModePolicy, Resolutions, CreateSubjectResolver(), CreateInvitationService());
 
     public TicketReopenedNotificationHandler CreateReopenedHandler() => new(
-        Tickets, Notifications, CreateContactResolver(), CreateCustomerEmailSender(), Audit, NotificationPolicy, Time, ModePolicy);
+        Tickets, Notifications, CreateContactResolver(), CreateCustomerEmailSender(), Audit, NotificationPolicy, Time, ModePolicy,
+        CreateSubjectResolver());
+
+    public TicketAssignedNotificationHandler CreateAssignedHandler() => new(
+        Tickets, Notifications, CreateContactResolver(), CreateCustomerEmailSender(), Audit, NotificationPolicy, Time, ModePolicy,
+        CreateSubjectResolver());
+
+    public TicketInProgressNotificationHandler CreateInProgressHandler() => new(
+        Tickets, Notifications, CreateContactResolver(), CreateCustomerEmailSender(), Audit, NotificationPolicy, Time, ModePolicy,
+        CreateSubjectResolver());
+
+    public FakeTicketPendingRecordRepository PendingRecords { get; } = new();
+
+    public TicketPendingCustomerNotificationHandler CreatePendingCustomerHandler() => new(
+        Tickets, Notifications, CreateContactResolver(), CreateCustomerEmailSender(), Audit, NotificationPolicy, Time, ModePolicy,
+        CreateSubjectResolver(), PendingRecords);
+
+    /// <summary>Staff accounts (email addresses) and the employee directory the internal handlers read.</summary>
+    public TigerCS.Tests.Administration.Services.FakeUserAccountManager Accounts { get; } = new();
+
+    public TigerCS.Tests.IdentityAndAccess.Fakes.FakeEmployeeRepository Employees { get; } = new();
+
+    public AgentAssignedNotificationHandler CreateAgentAssignedHandler() => new(
+        Tickets, Notifications, CreateGuardedProvider(), Accounts, Employees, Departments, CreateContactResolver(), CreateSubjectResolver(),
+        Audit, NotificationPolicy, ModePolicy, Time);
+
+    public CustomerReplyNotificationHandler CreateCustomerReplyHandler() => new(
+        Tickets, Notifications, CreateGuardedProvider(), Accounts, Employees, Departments, CreateContactResolver(), CreateSubjectResolver(),
+        Audit, NotificationPolicy, ModePolicy, Time);
+
+    /// <summary>Queues a <c>TicketAssigned</c> / <c>TicketAssignedToAgent</c> message as the Outbox writer would.</summary>
+    public OutboxMessage EnqueueAssigned(
+        string eventType, Ticket ticket, Guid assignedEmployeeId, Guid? previousOwnerEmployeeId = null, Guid? actorEmployeeId = null,
+        DateTime? occurredAtUtc = null)
+    {
+        var occurred = occurredAtUtc ?? Time.GetUtcNow().UtcDateTime;
+        var payload = new TicketAssignedEventPayload(
+            ticket.TicketId, 1, ticket.ReopenCount, assignedEmployeeId, previousOwnerEmployeeId, actorEmployeeId, (byte)ticket.TicketStatus,
+            ticket.CurrentDepartmentId);
+        var record = new IdempotencyRecord(
+            OutboxEventTypes.OccurrenceIdempotencyKeyFor(eventType, ticket.TicketId, 1, ticket.ReopenCount, Guid.NewGuid().ToString("N")),
+            IdempotencyScopes.OutboxDispatch, occurred);
+        var message = new OutboxMessage(Guid.NewGuid(), eventType, payload.ToJson(), Guid.NewGuid(), record, occurred);
+        OutboxMessages.Messages.Add(message);
+        return message;
+    }
+
+    /// <summary>Queues a <c>TicketInProgress</c> / <c>TicketPendingCustomer</c> message as the Outbox writer would.</summary>
+    public OutboxMessage EnqueueStatusChanged(Ticket ticket, TicketStatus previous, TicketStatus next, DateTime? occurredAtUtc = null)
+    {
+        var eventType = next == TicketStatus.PendingCustomer ? OutboxEventTypes.TicketPendingCustomer : OutboxEventTypes.TicketInProgress;
+        var occurred = occurredAtUtc ?? Time.GetUtcNow().UtcDateTime;
+        var payload = new TicketStatusChangedEventPayload(ticket.TicketId, 1, ticket.ReopenCount, (byte)previous, (byte)next);
+        var record = new IdempotencyRecord(
+            OutboxEventTypes.OccurrenceIdempotencyKeyFor(eventType, ticket.TicketId, 1, ticket.ReopenCount, Guid.NewGuid().ToString("N")),
+            IdempotencyScopes.OutboxDispatch, occurred);
+        var message = new OutboxMessage(Guid.NewGuid(), eventType, payload.ToJson(), Guid.NewGuid(), record, occurred);
+        OutboxMessages.Messages.Add(message);
+        return message;
+    }
+
+    /// <summary>Queues a <c>CustomerReplyReceived</c> message as the Outbox writer would.</summary>
+    public OutboxMessage EnqueueCustomerReply(Ticket ticket, long interactionId, Guid assignedEmployeeId, int messageCount = 1, int latestSequence = 1)
+    {
+        var occurred = Time.GetUtcNow().UtcDateTime;
+        var payload = new CustomerReplyEventPayload(ticket.TicketId, 1, interactionId, assignedEmployeeId, messageCount, latestSequence, occurred);
+        var record = new IdempotencyRecord(
+            OutboxEventTypes.OccurrenceIdempotencyKeyFor(
+                OutboxEventTypes.CustomerReplyReceived, ticket.TicketId, 1, ticket.ReopenCount, $"interaction{interactionId}:seq{latestSequence}"),
+            IdempotencyScopes.OutboxDispatch, occurred);
+        var message = new OutboxMessage(Guid.NewGuid(), OutboxEventTypes.CustomerReplyReceived, payload.ToJson(), Guid.NewGuid(), record, occurred);
+        OutboxMessages.Messages.Add(message);
+        return message;
+    }
 
     public OutboxDispatcher CreateDispatcher(params IOutboxEventHandler[] handlers)
     {
@@ -174,7 +247,7 @@ public sealed class NotificationServiceFixture
     }
 
     public OutboxMessage EnqueueLifecycleEvent(
-        string eventType, long ticketId, int reopenCount = 0, Guid? correlationId = null, DateTime? occurredAtUtc = null)
+        string eventType, long ticketId, int reopenCount = 0, Guid? correlationId = null, DateTime? occurredAtUtc = null, string? closureKind = null)
     {
         var occurred = occurredAtUtc ?? Time.GetUtcNow().UtcDateTime;
         var record = new IdempotencyRecord(
@@ -185,7 +258,7 @@ public sealed class NotificationServiceFixture
         var message = new OutboxMessage(
             Guid.NewGuid(),
             eventType,
-            new TicketLifecycleEventPayload(ticketId, 1, reopenCount).ToJson(),
+            new TicketLifecycleEventPayload(ticketId, 1, reopenCount, closureKind).ToJson(),
             correlationId ?? Guid.NewGuid(),
             record,
             occurred);

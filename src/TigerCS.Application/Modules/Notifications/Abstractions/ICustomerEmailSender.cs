@@ -103,4 +103,22 @@ public static class CustomerEmailSkipReasons
 
     /// <summary><c>IsTestMode</c> is on but <c>CustomerNotifications:TestPhone</c> is missing or invalid. Never falls back to the customer.</summary>
     public const string TestPhoneMissing = "TestPhoneMissing";
+
+    /// <summary>
+    /// The ticket was already Closed (in the same resolution cycle) when an earlier event of that cycle came up for delivery — e.g.
+    /// Resolved immediately followed by Closed. The Closed email carries the outcome, so the intermediate email is not sent.
+    /// </summary>
+    public const string SupersededByClosure = "SupersededByClosure";
+
+    /// <summary>
+    /// The ticket had already moved past the state this event announces (another status, another owner, a new resolution cycle) when the
+    /// event came up for delivery. The later state has its own notification, so this one is not sent.
+    /// </summary>
+    public const string SupersededByLaterUpdate = "SupersededByLaterUpdate";
+
+    /// <summary>Internal notification: the staff member it is addressed to has no email address on their account.</summary>
+    public const string NoAgentEmail = "NoAgentEmail";
+
+    /// <summary>Internal notification: the staff member it is addressed to no longer has an account.</summary>
+    public const string AgentNotFound = "AgentNotFound";
 }

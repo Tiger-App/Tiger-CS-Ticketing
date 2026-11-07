@@ -291,4 +291,37 @@ public static class OutboxEventTypes
     /// </summary>
     public static string LifecycleIdempotencyKeyFor(string eventType, long ticketId, int eventVersion, int reopenCount) =>
         $"Ticket:{ticketId}:{eventType}:v{eventVersion}:cycle{reopenCount}";
+
+    /// <summary>Customer email: the ticket gained an owner. One per occurrence (see <see cref="OccurrenceIdempotencyKeyFor"/>).</summary>
+    public const string TicketAssigned = "TicketAssigned";
+
+    /// <summary>Customer email: the ticket entered <c>InProgress</c> through the Change Status operation.</summary>
+    public const string TicketInProgress = "TicketInProgress";
+
+    /// <summary>Customer email: the ticket entered <c>PendingCustomer</c>.</summary>
+    public const string TicketPendingCustomer = "TicketPendingCustomer";
+
+    /// <summary>Internal email: a ticket was assigned or transferred to a staff member by somebody else (a person or automation).</summary>
+    public const string TicketAssignedToAgent = "TicketAssignedToAgent";
+
+    /// <summary>Internal email: the customer replied on a conversation of a ticket a person is handling.</summary>
+    public const string CustomerReplyReceived = "CustomerReplyReceived";
+
+    public const int TicketAssignedVersion = 1;
+
+    public const int TicketInProgressVersion = 1;
+
+    public const int TicketPendingCustomerVersion = 1;
+
+    public const int TicketAssignedToAgentVersion = 1;
+
+    public const int CustomerReplyReceivedVersion = 1;
+
+    /// <summary>
+    /// Key for an event that can legitimately happen more than once per resolution cycle (an assignment, a status change back and
+    /// forth, a customer reply). <paramref name="occurrence"/> identifies the specific occurrence — the assignee and the previous owner,
+    /// the transition, the transcript position — so a genuine repeat is a new event while a retried request for the same occurrence is not.
+    /// </summary>
+    public static string OccurrenceIdempotencyKeyFor(string eventType, long ticketId, int eventVersion, int reopenCount, string occurrence) =>
+        $"{LifecycleIdempotencyKeyFor(eventType, ticketId, eventVersion, reopenCount)}:{occurrence}";
 }
