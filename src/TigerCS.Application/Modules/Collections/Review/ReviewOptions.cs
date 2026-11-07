@@ -112,25 +112,14 @@ public sealed class GenesysOutboundOptions
             : throw new InvalidOperationException($"No valid Genesys contact list id is configured for {type}.");
 
     /// <summary>
-    /// The dedicated "TigerCS Manual Collections" contact list (<c>ContactListIds:Manual</c>): every Manual send and Manual export goes there, whatever the campaign type; each unit keeps its own
-    /// ReminderType. There is NO default id (none is invented): a missing or invalid id is a configuration error, never a reason to use another list. It must also differ from every stage list,
-    /// so a Manual upload can never land in a list an Auto campaign dials.
+    /// The Genesys contact list id a Manual send of <paramref name="type"/> uploads to, from the existing <see cref="ContactListIds"/>: the campaign type's own list, or the one the person chose
+    /// among the lists that suit the type (<see cref="CampaignReminderTypes.ManualDestinations"/>). Throws <see cref="InvalidOperationException"/> with the reason otherwise.
     /// </summary>
-    public string ManualContactListId
+    public string ManualContactListIdFor(CampaignReminderType type, string? requested)
     {
-        get
-        {
-            const string setting = "Collections:GenesysOutbound:ContactListIds:" + CampaignReminderTypes.ManualListKey;
-            if (!ContactListIds.TryGetValue(CampaignReminderTypes.ManualListKey, out var id) || string.IsNullOrWhiteSpace(id))
-                throw new InvalidOperationException($"The {CampaignReminderTypes.ManualListName} contact list is not configured ({setting} is empty). Manual sending and Manual export need it; nothing is sent to another list.");
-            if (!Guid.TryParse(id, out var parsed))
-                throw new InvalidOperationException($"{setting} is not a valid Genesys contact list id (a GUID). Manual sending and Manual export need the {CampaignReminderTypes.ManualListName} list; nothing is sent to another list.");
-            var normalized = parsed.ToString("D");
-            foreach (var type in Enum.GetValues<CampaignReminderType>())
-                if (ContactListIds.TryGetValue(type.ToString(), out var other) && Guid.TryParse(other, out var otherId) && otherId == parsed)
-                    throw new InvalidOperationException($"{setting} is the same list as the {CampaignReminderTypes.DefaultLabel(type)} list (ContactListIds:{type}). The {CampaignReminderTypes.ManualListName} list must be its own list, so that Manual sends never land in a list an Auto campaign dials.");
-            return normalized;
-        }
+        if (!CampaignReminderTypes.TryResolveManualDestination(type, requested, out var destination))
+            throw new InvalidOperationException($"A {CampaignReminderTypes.DefaultLabel(type)} campaign cannot be sent to that contact list. Choose {string.Join(", ", CampaignReminderTypes.ManualDestinations(type).Select(CampaignReminderTypes.DefaultLabel))}.");
+        return ContactListIdFor(destination);
     }
 
     public string LabelFor(CampaignReminderType type) =>

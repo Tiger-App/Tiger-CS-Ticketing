@@ -1,7 +1,32 @@
 @using TigerCS.Web.Pages.Collections
 @model CampaignsModel
 @* Select Customers -> Approve & Send -> Genesys + Admin Email: the approval and send status of the Campaigns page. *@
-@if (Model.ApprovalError is not null) { <div class="panel"><div class="error-state" role="alert" data-approval-error><p>@Model.ApprovalError</p></div></div> }
+@if (Model.ApprovalError is not null)
+{
+    <div class="panel"><div class="error-state" role="alert" data-approval-error><p>@Model.ApprovalError</p>
+        @if (Model.OffersGenesysCheck)
+        {
+            <form method="post" asp-page-handler="CheckGenesys">
+                <input type="hidden" name="returnUrl" value="@Model.ReturnUrl()" />
+                <button class="btn btn-sm" type="submit" data-check-genesys>Check Genesys connection</button>
+                <span class="receivables-meta">Read-only: nothing is uploaded or changed.</span>
+            </form>
+        }
+    </div></div>
+}
+@if (Model.GenesysCheck is { } genesysCheck)
+{
+    <div class="panel" data-genesys-check data-genesys-check-ok="@(genesysCheck.Ok ? "true" : "false")">
+        <h2>Genesys connection check: @(genesysCheck.Ok ? "no problem found" : "a problem was found")</h2>
+        <p class="receivables-meta">Login service @genesysCheck.LoginHost · API @genesysCheck.ApiHost · checked @CollectionsDisplay.DubaiTime(genesysCheck.CheckedAtUtc). Read-only: nothing was uploaded or changed, and no customer was contacted.</p>
+        <ul>
+            @foreach (var line in genesysCheck.Lines)
+            {
+                <li data-check-line data-check-status="@line.Status"><strong>@line.Name</strong>: @line.Status. @line.Detail</li>
+            }
+        </ul>
+    </div>
+}
 @if (Model.ApprovalNotice is not null) { <div class="panel"><p role="status" data-approval-notice>@Model.ApprovalNotice</p></div> }
 
 @if (Model.Run is { } run && (Model.RunActive || run.Status == "Failed"))
@@ -147,7 +172,7 @@
                 "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
                 "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
         }
-        <input type="hidden" name="contactList" value="@Model.SelectedContactList" />
+        <input type="hidden" name="contactList" value="@Model.ContactList" />
         <input type="hidden" name="selectionMode" value="@Model.SelectionMode" /><input type="hidden" name="unitKeys" value="@Model.UnitKeys" />
         <input type="hidden" name="expectedCount" value="@s.Count" /><input type="hidden" name="expectedFingerprint" value="@s.Fingerprint" />
         <input type="hidden" name="idempotencyKey" value="@Model.ConfirmKey" />

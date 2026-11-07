@@ -455,6 +455,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<CurrentBalanceReader>();
         services.AddScoped<DispatchService>();
         services.AddScoped<GenesysExportService>();
+        services.AddScoped<GenesysConnectionCheckService>();
         services.AddScoped<ManualReviewExportService>();
         services.AddScoped<AutoDispatchService>();
         services.AddScoped<DispatchAdminReportService>();

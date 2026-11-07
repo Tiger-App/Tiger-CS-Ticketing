@@ -180,6 +180,10 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
     public Task<ApiResult<DispatchDto>> GetDispatchAsync(Guid dispatchId, CancellationToken cancellationToken) =>
         GetAsync<DispatchDto>($"{ReviewBase}/dispatches/{dispatchId:D}", cancellationToken);
 
+    /// <summary>The READ-ONLY Genesys connection check (region consistency, OAuth client and organization, every configured contact list). Uploads and changes nothing.</summary>
+    public Task<ApiResult<GenesysConnectionCheckDto>> CheckGenesysConnectionAsync(CancellationToken cancellationToken) =>
+        PostAsync<object, GenesysConnectionCheckDto>($"{ReviewBase}/dispatches/genesys-check", new { }, cancellationToken);
+
     public Task<ApiResult<DispatchDto>> RetryAdminEmailAsync(Guid dispatchId, CancellationToken cancellationToken) =>
         PostAsync<object, DispatchDto>($"{ReviewBase}/dispatches/{dispatchId:D}/admin-email/retry", new { }, cancellationToken);
 

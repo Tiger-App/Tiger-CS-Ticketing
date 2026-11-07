@@ -42,13 +42,21 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>Manual: the stored review records of the chosen campaign type that match the filters, with the amount calculated from the filters and their exact validation reasons.</summary>
     public ReviewPageDto? ManualPage { get; private set; }
     public int ManualTotalPages => ManualPage is null ? 1 : Math.Max(1, (int)Math.Ceiling(ManualPage.TotalCount / (double)ManualPage.PageSize));
+    /// <summary>Manual: the existing Genesys contact list the person chose (a campaign type name); empty = the campaign type\'s own list.</summary>
+    public string ContactList { get; private set; } = "";
+
     /// <summary>The campaign type the chosen stage stands for.</summary>
     public TigerCS.Domain.Modules.Collections.Review.CampaignReminderType ManualType =>
         CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage) ? TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.FromStage(stage) : TigerCS.Domain.Modules.Collections.Review.CampaignReminderType.Overdue;
 
-    /// <summary>Manual sends and exports always go to the dedicated Manual list; there is nothing to choose.</summary>
-    public string SelectedContactList => TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualListKey;
+    /// <summary>The existing contact lists that suit the chosen campaign type; the first is its own list and the default.</summary>
+    public IReadOnlyList<string> ContactListChoices => TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualDestinations(ManualType).Select(t => t.ToString()).ToList();
 
+    /// <summary>The list that is selected: the person\'s choice when it suits the campaign type, otherwise the type\'s own list.</summary>
+    public string SelectedContactList => ContactListChoices.Contains(ContactList, StringComparer.Ordinal) ? ContactList : ContactListChoices[0];
+
+    private static string ParseContactList(string? raw) =>
+        Enum.GetValues<TigerCS.Domain.Modules.Collections.Review.CampaignReminderType>().Select(t => t.ToString()).FirstOrDefault(n => string.Equals(n, raw?.Replace(" ", "").Trim(), StringComparison.OrdinalIgnoreCase)) ?? "";
     public int TotalPages => Report is null ? 1 : Math.Max(1, (int)Math.Ceiling(Report.TotalCount / (double)Report.PageSize));
     /// <summary>Distinct, valid tower ids from repeated <c>towerId</c> values; blanks and junk are ignored (an empty result means All projects).</summary>
     public static IReadOnlyList<int> ParseTowerIds(Microsoft.Extensions.Primitives.StringValues values) => TowerSelection.Parse(values);
@@ -76,6 +84,11 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         await LoadApprovalStateAsync(cancellationToken);
         if (TempData["ApprovalError"] is string error) ApprovalError = error;
         if (TempData["ApprovalNotice"] is string notice) ApprovalNotice = notice;
+        if (TempData["GenesysCheck"] is string checkJson)
+        {
+            try { GenesysCheck = System.Text.Json.JsonSerializer.Deserialize<GenesysConnectionCheckDto>(checkJson); }
+            catch (System.Text.Json.JsonException) { /* an unreadable result is simply not shown */ }
+        }
     }
 
     /// <summary>The results area only (HTML fragment): summary, snapshot status, table, pagination and export links.</summary>
@@ -168,6 +181,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     private void SetFilters(string stage, DateOnly? date, string? search, int page, DateOnly? from, DateOnly? to, int? month, int? year, string? load, string? paymentStatus, string? sendingMode = null)
     {
         SendingMode = CollectionsSendingModes.TryParse(sendingMode, out var parsedMode) ? parsedMode : CollectionsSendingModes.Auto;
+        ContactList = ParseContactList(Request.Query["contactList"]);
         PaymentStatus = CampaignPaymentFilters.TryParse(paymentStatus, out var payment) ? CampaignPaymentFilters.Name(payment) : paymentStatus!.Trim();
         RequestedBusinessDate = date; RequestedDateTo = to;   // what the person asked for; BusinessDate / DateTo are later filled with the report's own defaults
         Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
@@ -464,7 +478,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public int ContactPage { get; private set; } = 1;
     public static IReadOnlyList<string> FilterFieldNames => ["stage", "sendingMode", "businessDate", "dateFrom", "dateTo", "towerId", "minTotal", "paymentStatus", "search"];
     /// <summary>The Manual destination travels with the approval (it is part of the audited filter), but is not a customer filter.</summary>
-    public static string ContactListLabel(string name) => name switch { "CurrentMonth" => "Current Month", "FollowUp" => "Follow Up", "Manual" => TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualListName, _ => name };
+    public static string ContactListLabel(string name) => name switch { "CurrentMonth" => "Current Month", "FollowUp" => "Follow Up", _ => name };
 
     /// <summary>Progress / failure of the approval-data refresh and the latest sends, shown above the list. Never throws: a missing piece just hides its panel.</summary>
     private async Task LoadApprovalStateAsync(CancellationToken ct)
@@ -538,6 +552,30 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
             ? "The Tiger CS API did not confirm the outcome (it did not answer in time, could not be reached or sent an unusable reply), so it is not known whether this send was approved."
             : result.Outcome == ApiOutcome.Conflict ? result.Detail ?? "The list changed. Review the current list and confirm again." : Describe(result.Outcome, result.Detail);
         return new(false, null, null, 0, message, unknown, result.Outcome is ApiOutcome.ServiceUnavailable or ApiOutcome.Locked, result.Outcome.ToString());
+    }
+
+    /// <summary>The result of the last read-only Genesys connection check (shown once, after the redirect back to the same preview).</summary>
+    public GenesysConnectionCheckDto? GenesysCheck { get; private set; }
+
+    /// <summary>The check is offered where a send stopped because Genesys could not be checked (or is not configured), to people who may send.</summary>
+    public bool OffersGenesysCheck => CanSend && ApprovalError is { } error && error.Contains("Genesys", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A read-only check of the Genesys integration (never an upload): region consistency, OAuth client and organization, every configured contact list. The result is carried to the page the person
+    /// came from (same campaign, filters and Manual mode) and shown there once.
+    /// </summary>
+    public async Task<IActionResult> OnPostCheckGenesysAsync(string? returnUrl, CancellationToken ct)
+    {
+        var target = !string.IsNullOrEmpty(returnUrl) && Url.IsLocalUrl(returnUrl) ? returnUrl : "/Collections/Campaigns";
+        var result = await api.CheckGenesysConnectionAsync(ct);
+        if (result.IsSuccess && result.Value is { } check)
+        {
+            // TempData travels in a cookie: keep the lines short.
+            string Short(string text) => text.Length > 400 ? text[..400] + "…" : text;
+            TempData["GenesysCheck"] = System.Text.Json.JsonSerializer.Serialize(check with { Lines = check.Lines.Select(l => l with { Detail = Short(l.Detail) }).ToList() });
+        }
+        else TempData["ApprovalError"] = Describe(result.Outcome, result.Detail);
+        return LocalRedirect(target);
     }
 
     public async Task<IActionResult> OnPostRefreshApprovalAsync(string? returnUrl, CancellationToken ct)
@@ -705,6 +743,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         PaymentStatus = CampaignPaymentFilters.TryParse(Get("paymentStatus"), out var payment) ? CampaignPaymentFilters.Name(payment) : "Both";
         Stage = Get("stage") is { Length: > 0 } st ? st : "OverdueReminder";
         SendingMode = CollectionsSendingModes.TryParse(Get("sendingMode"), out var postedMode) ? postedMode : CollectionsSendingModes.Auto;
+        ContactList = ParseContactList(Get("contactList"));
         BusinessDate = Date("businessDate"); DateFrom = Date("dateFrom"); DateTo = Date("dateTo");
         TowerIds = ParseTowerIds(form is not null && form.TryGetValue("towerId", out var towerValues) ? towerValues : default);
         Search = Get("search")?.Trim();
@@ -798,6 +837,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["stage"] = Stage;
         if (IsManual) query["sendingMode"] = SendingMode;
+        if (IsManual && ContactList.Length > 0) query["contactList"] = SelectedContactList;
         if (BusinessDate is { } date) query["businessDate"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
@@ -823,7 +863,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (IsManual)
             return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo, MinRemaining: MinTotal ?? 0m, ReminderType: reminderType,
                 DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds, SendingMode: CollectionsSendingModes.Manual,
-                ContactList: IsManual ? SelectedContactList : null);
+                ContactList: ContactList.Length > 0 ? SelectedContactList : null);
         return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo,
             MinRemaining: MinTotal ?? 0m, ReminderType: reminderType, DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds,
             SendingMode: SendingMode);

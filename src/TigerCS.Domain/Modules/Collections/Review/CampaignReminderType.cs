@@ -32,20 +32,28 @@ public static class CampaignReminderTypes
         _ => throw new ArgumentOutOfRangeException(nameof(type))
     };
 
-    /// <summary>The name of the dedicated Genesys contact list every Manual send and Manual export goes to (a business-defined name, shown wherever the destination is shown).</summary>
-    public const string ManualListName = "TigerCS Manual Collections";
-
-    /// <summary>The configuration key (<c>Collections:GenesysOutbound:ContactListIds:Manual</c>) and the destination name of the dedicated Manual list.</summary>
-    public const string ManualListKey = "Manual";
-
     /// <summary>
-    /// True when <paramref name="requested"/> names the Manual list or nothing at all. Manual sending has exactly one destination: a request that names any other list is refused, never redirected.
-    /// The campaign's ReminderType is a property of each unit and is not touched by where it is sent.
+    /// The existing Genesys contact lists a Manual send of <paramref name="type"/> may use. A reminder (Overdue, Current Month, Follow Up) may go to any of the three reminder lists
+    /// (for example a Current Month reminder to the Follow Up list); a legal notice or legal case goes only to its own list, so legal wording never lands in a reminder list and vice versa.
+    /// The campaign type's own list is first and is the default.
     /// </summary>
-    public static bool IsManualList(string? requested)
+    public static IReadOnlyList<CampaignReminderType> ManualDestinations(CampaignReminderType type) => type switch
     {
+        CampaignReminderType.CurrentMonth => [CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp, CampaignReminderType.Overdue],
+        CampaignReminderType.FollowUp => [CampaignReminderType.FollowUp, CampaignReminderType.CurrentMonth, CampaignReminderType.Overdue],
+        CampaignReminderType.Overdue => [CampaignReminderType.Overdue, CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp],
+        _ => [type]
+    };
+
+    /// <summary>The chosen destination of a Manual send (blank = the campaign type's own list); false when the choice is not one of <see cref="ManualDestinations"/>.</summary>
+    public static bool TryResolveManualDestination(CampaignReminderType type, string? requested, out CampaignReminderType destination)
+    {
+        destination = type;
         var text = requested?.Replace(" ", "").Trim();
-        return string.IsNullOrEmpty(text) || string.Equals(text, ManualListKey, StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrEmpty(text)) return true;
+        foreach (var option in ManualDestinations(type))
+            if (string.Equals(text, option.ToString(), StringComparison.OrdinalIgnoreCase)) { destination = option; return true; }
+        return false;
     }
 
     /// <summary>

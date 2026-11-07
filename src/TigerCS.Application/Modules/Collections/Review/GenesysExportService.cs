@@ -84,16 +84,12 @@ public sealed class GenesysExportService(
         var type = types[0];
 
         // The destination list: the campaign's own, or the existing list the person chose among those that suit it (the same rule as a send, so the file goes where a send would).
-        var manualExport = CollectionsSendingModes.IsManual(mode);
-        if (manualExport && !CampaignReminderTypes.IsManualList(request.Filter?.ContactList))
-            return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest,
-                $"Manual exports use the dedicated {CampaignReminderTypes.ManualListName} contact list; a different contact list cannot be chosen.");
+        if (!CampaignReminderTypes.TryResolveManualDestination(type, request.Filter?.ContactList, out var destination))
+            return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, "That contact list does not suit this campaign.");
         string listId;
-        // Manual -> the dedicated Manual list (never a fallback); Auto -> the campaign type's own stage list, unchanged.
-        try { listId = manualExport ? genesys.ManualContactListId : genesys.ContactListIdFor(type); }
+        try { listId = genesys.ContactListIdFor(destination); }
         catch (InvalidOperationException ex) { return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, ex.Message); }
-        var destination = manualExport ? CampaignReminderTypes.ManualListKey : type.ToString();
-        var listLabel = manualExport ? CampaignReminderTypes.ManualListName : CampaignReminderTypes.DefaultLabel(type);
+        var listLabel = CampaignReminderTypes.DefaultLabel(destination);
 
         var schema = await ReadSchemaAsync(listId, listLabel, ct);
         if (schema.Problem is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, schema.Problem);
@@ -258,7 +254,7 @@ public sealed class GenesysExportService(
 
     // ---------------------------------------------------------------- the audit entry
 
-    private static string AuditDetails(CampaignReminderType type, string destination, string listId, GenesysExportRowSet rows, decimal total, string currency,
+    private static string AuditDetails(CampaignReminderType type, CampaignReminderType destination, string listId, GenesysExportRowSet rows, decimal total, string currency,
         IReadOnlyDictionary<string, int> byStatus, DataVerification data, Schema schema, string mode, SelectionRequest request, Repeat repeat, string hash, IReadOnlyList<string> fingerprints, int skipped)
     {
         var text = new StringBuilder();

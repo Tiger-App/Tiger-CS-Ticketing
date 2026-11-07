@@ -146,6 +146,29 @@ outbound "maximum attempts per contact / per number" settings. UAT step: upload 
   (3) `unsupported_grant_type` / `invalid_request`: a proxy rewrote the form body. Verify from the API host with `curl -u "<client-id>:<client-secret>" -d grant_type=client_credentials
   {LoginBaseUrl}/oauth/token` and read the `error` field; the application log line "Genesys token request was refused with HTTP 400 (<code>)" now carries the same code. The
   client also needs the `outbound` permissions of the Collections lists; a missing permission shows as 403 on the API call, not as 400 on the token.
+* **"The <type> contact list could not be checked in Genesys (Genesys rejected the contact list lookup (GET /api/v2/outbound/contactlists/{contactListId} at <api host>): HTTP 404 Not Found ...)".**
+  The failing request is exactly that one: before anything is uploaded the send reads the destination list (`GET {ApiBaseUrl}/api/v2/outbound/contactlists/{id}`, read-only). The message names the operation, the endpoint
+  (ids shown as placeholders), the API host, the HTTP status and Genesys' own error code and correlation id (never a credential, token, body or customer value); for 404 / 403 the send message adds the exact setting
+  and id to correct. What each status means for this call:
+
+  | Status | Meaning | Correct |
+  | --- | --- | --- |
+  | 401 / "login service refused the credentials" | token not issued or not valid in this region | `ClientId` / `ClientSecret`, `LoginBaseUrl`, `ApiBaseUrl` (same region) |
+  | **404 Not Found** | the OAuth client is authenticated, but **no list with that id exists in the organization it belongs to** (wrong id, a list of another organization or region, or deleted) | `Collections:GenesysOutbound:ContactListIds:<Type>` (the message names which, with the id) |
+  | 403 Forbidden | the list exists but the client's role may not read it | give the OAuth client `outbound:contactList:view` (and `outbound:contact:add` for the upload) in Genesys Admin > Roles |
+  | 400 | the request itself was malformed (not expected for this call) | report with the correlation id |
+
+  A 404 on **every** list, with a successful login, means the ids belong to another organization than the OAuth client (typically ids copied from a different org, or a test-org client with production ids); a 404 on
+  **one** list means that one id is wrong. The defaults shipped in `appsettings.json` are "the lists supplied for this integration": they are only correct for the organization that owns those lists. A wrong
+  region normally fails earlier (the login at the wrong region answers 400 `invalid_client`, or the API answers 401), so 404 points at the ids or the organization, not at the region, once login works.
+  Nothing falls back to another list: the send stops, and no upload happens.
+
+  **Safe verification (read-only; nothing is uploaded, no customer is contacted, no switch is changed).** On the Campaigns page, when a send stops with a Genesys message, press **Check Genesys connection** (API:
+  `POST /api/collections/review/dispatches/genesys-check`, send permission). It reports, one line each: the enabled switch and that both secrets are configured (never their values); whether `LoginBaseUrl` and
+  `ApiBaseUrl` name the same region (`login.<region>` / `api.<region>`; for the Middle East that is `mec1.pure.cloud`, for Frankfurt `mypurecloud.de`); that the OAuth client authenticates and **which
+  organization it acts in** (`GET /api/v2/organizations/me`); and for every `ContactListIds:*` entry whether that id exists in that organization (404), is readable (403) and carries the six template columns.
+  Compare the organization name and the list ids with Genesys Admin > Outbound > Contact Lists. Correct the named value in the environment's configuration (environment variable
+  `Collections__GenesysOutbound__ContactListIds__FollowUp`, or the secret store), restart, and run the check again. Production settings are never changed by the application.
 * Upload: `POST {ApiBaseUrl}/api/v2/outbound/contactlists/{id}/contacts`; body `[ { "contactListId": "<same id>", "data": { "Phone", "CustomerName",
   "Email Address", "ReminderType", "AmountDue", "DueDate" }, "callable": true } ]`, all data values strings, `DueDate` `yyyy-MM-dd`. One request = one list, ≤ 1,000 contacts.
 
