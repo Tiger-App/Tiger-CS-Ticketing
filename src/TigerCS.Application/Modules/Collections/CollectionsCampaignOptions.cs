@@ -26,6 +26,12 @@ public sealed class CollectionsCampaignOptions
     /// is what the procedure returns right now. Set false only to fall back to the sign-off alone.
     /// </summary>
     public bool RequireAutomatedReconciliation { get; set; } = true;
+    /// <summary>
+    /// The first due date the snapshot-consistency check compares (the window runs to the end of the current month). Every unpaid instalment due on or after it, on both sides (the snapshot
+    /// and a direct read of the same PACT procedure), is compared. It is the reconciliation's own window: the Campaigns eligibility scope (<c>CollectionsSource:PactReceivables:StartDate</c>)
+    /// and the Receivables filters are not changed by it. It cannot reach before the snapshot's coverage (<c>CollectionsSource:ReceivablesSnapshot:SourceFromDate</c>, 2000-01-01 by default).
+    /// </summary>
+    public DateTime ReconciliationStartDate { get; set; } = new(2014, 1, 1);
     /// <summary>How long a passing automated reconciliation counts (hours). Older evidence is "Expired" and must be re-run.</summary>
     public int ReconciliationMaxAgeHours { get; set; } = 24;
     /// <summary>The snapshot must be this fresh (minutes since its publish) when a reconciliation runs, otherwise payments made since the refresh show up as differences.</summary>

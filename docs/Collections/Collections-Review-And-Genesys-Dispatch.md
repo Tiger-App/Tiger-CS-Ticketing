@@ -226,6 +226,7 @@ Non-secret keys are in `appsettings.json`; supply secrets by user-secrets/enviro
 | `Collections:Campaigns:ValidatedProcedureSuffix` | `""` | procedure the reconciliation covered |
 | `Collections:Campaigns:ReconciliationReference` | – | evidence reference |
 | `Collections:Campaigns:LegalNoticeExportEnabled` / `LegalCaseDispatchApproved` | `false` / `false` | see blocker 4 |
+| `Collections:Campaigns:ReconciliationStartDate` | `2014-01-01` | first due date of the snapshot-consistency check; the window ends at the end of the current month. Both sides (snapshot and a direct read of the same PACT procedure) are read for that window; it never reaches before the snapshot coverage (`ReceivablesSnapshot:SourceFromDate`, 2000-01-01). The Campaigns scope (`PactReceivables:StartDate`) and the Receivables filters are separate |
 | `Collections:Review:DefaultMinimumRemaining` | `100` | AED |
 | `Collections:Review:MaxSelection` | `20000` | one approval |
 | `Collections:Review:FloatNoiseTolerance` | `0.0001` | AED |

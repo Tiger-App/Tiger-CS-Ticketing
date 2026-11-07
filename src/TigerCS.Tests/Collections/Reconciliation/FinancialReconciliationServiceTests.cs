@@ -21,12 +21,14 @@ public sealed class FinancialReconciliationServiceTests
         public List<PactReceivableInstalment> Rows { get; } = [];
         public Exception? Throw { get; set; }
         public int Reads { get; private set; }
+        /// <summary>The window the last read was asked for: the proof that PACT is read for the configured range, not only that the range is displayed.</summary>
+        public (DateOnly From, DateOnly Through)? LastWindow { get; private set; }
         public string ProcedureLabel(int companyId) => $"dbo.p{companyId}AccountReceivables";
         public Task<IReadOnlyList<PactReceivableInstalment>> ReadAsync(int companyId, DateOnly from, DateOnly through, CancellationToken ct)
         {
-            Reads++;
+            Reads++; LastWindow = (from, through);
             if (Throw is not null) throw Throw;
-            return Task.FromResult<IReadOnlyList<PactReceivableInstalment>>(Rows.Where(r => r.CompanyId == companyId).ToList());
+            return Task.FromResult<IReadOnlyList<PactReceivableInstalment>>(Rows.Where(r => r.CompanyId == companyId && DateOnly.FromDateTime(r.DueDate) >= from && DateOnly.FromDateTime(r.DueDate) <= through).ToList());
         }
     }
 
@@ -45,6 +47,7 @@ public sealed class FinancialReconciliationServiceTests
         public SyncLauncher Launcher = new();
         public CollectionsCampaignOptions Campaign = new() { FinancialSourceValidated = true };
         public PactReceivablesOptions Source = new() { Enabled = true };
+        public ReceivablesSnapshotOptions SnapshotOptions = new();
         public FinancialReconciliationService Service;
         public DateTime Clock = Now;
 
@@ -53,7 +56,7 @@ public sealed class FinancialReconciliationServiceTests
             var options = new CollectionsOptions { Enabled = true };
             var time = new FixedTime(this);
             Service = new(options, Campaign, Source, new CollectionsAuthorizationService(options, new FakeDepartmentRepository()), new CollectionsClock(options, time), Snapshot, Direct, History,
-                NullLogger<FinancialReconciliationService>.Instance, launcher ? Launcher : null);
+                NullLogger<FinancialReconciliationService>.Instance, launcher ? Launcher : null, SnapshotOptions);
             Launcher.Service = Service;
             Snapshot.MaxAgeMinutes = 180;
         }
@@ -66,6 +69,63 @@ public sealed class FinancialReconciliationServiceTests
     }
 
     private static ReconciliationRunDto Latest(Harness h) => h.History.Latest()!;
+
+    // ------------------------------------------------------------ the window: due dates from ReconciliationStartDate (2014-01-01) to the end of the current month
+
+    [Fact]
+    public async Task TheWindow_StartsAt2014ByDefault_EndsAtTheMonthEnd_AndBothSidesAreReadAndComparedForIt()
+    {
+        var h = new Harness();
+        Assert.Equal(new DateTime(2014, 1, 1), h.Campaign.ReconciliationStartDate);
+        Assert.Equal((new DateOnly(2014, 1, 1), new DateOnly(2026, 10, 31)), h.Service.Window());                  // the clock is 22 Oct 2026
+        // An old instalment that exists only in PACT is found: the direct read and the snapshot read are both asked for the window from 2014, and the comparison covers it.
+        h.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m));
+        h.Direct.Rows.Add(Harness.Row(4, "TP140-102", "OLD-2015", new(2015, 3, 1), 250m, 12));
+        h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        var started = await h.Service.StartAsync(Manager, null, CancellationToken.None);
+        Assert.True(started.IsSuccess, started.Detail);
+        var run = Latest(h);
+        Assert.Equal((new DateOnly(2014, 1, 1), new DateOnly(2026, 10, 31)), (run.From, run.Through));
+        Assert.Equal((new DateOnly(2014, 1, 1), new DateOnly(2026, 10, 31)), h.Direct.LastWindow);
+        Assert.Equal(new DateOnly(2014, 1, 1), h.Snapshot.LastRequest!.FromDate); Assert.Equal(new DateOnly(2026, 10, 31), h.Snapshot.LastRequest.ThroughDate);
+        Assert.Equal(ReconciliationStates.Failed, run.Status);
+        var dubai = run.Companies.Single(c => c.CompanyId == 4);
+        Assert.Equal((ReconciliationStates.Failed, 1), (dubai.Status, dubai.Comparison!.UnitsOnlyInSource));                 // the 2015 row is compared, not skipped
+        Assert.Equal(ReconciliationStates.Passed, run.Companies.Single(c => c.CompanyId == 32).Status);
+        Assert.Equal(0.01m, run.Tolerance);
+    }
+
+    [Fact]
+    public async Task AnInstalmentOlderThanTheStartDate_IsOutsideTheWindow_OnBothSides()
+    {
+        var h = new Harness();
+        h.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m));
+        h.Direct.Rows.Add(Harness.Row(4, "TP140-102", "OLD-2013", new(2013, 12, 31), 250m, 12));                              // the day before the window
+        h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        Assert.True((await h.Service.StartAsync(Manager, null, CancellationToken.None)).IsSuccess);
+        Assert.Equal(ReconciliationStates.Passed, Latest(h).Status);
+    }
+
+    [Fact]
+    public async Task TheReconciliationWindow_IsItsOwn_NotTheCampaignsScope_AndNeverBeforeTheSnapshotCoverage()
+    {
+        var h = new Harness();
+        h.Source.StartDate = new DateTime(2026, 1, 1);                                                                        // the Campaigns eligibility scope: unchanged and not used here
+        h.Campaign.ReconciliationStartDate = new DateTime(2018, 6, 1);
+        Assert.Equal(new DateOnly(2018, 6, 1), h.Service.Window().From);
+        Assert.Equal(new DateTime(2026, 1, 1), h.Source.StartDate);
+        // The snapshot holds nothing before its own coverage, so a start before it would only show "missing" rows: it is clamped to the coverage.
+        h.Campaign.ReconciliationStartDate = new DateTime(1990, 1, 1);
+        h.SnapshotOptions.SourceFromDate = new DateTime(2000, 1, 1);
+        Assert.Equal(new DateOnly(2000, 1, 1), h.Service.Window().From);
+        h.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m)); h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        Assert.True((await h.Service.StartAsync(Manager, null, CancellationToken.None)).IsSuccess);
+        Assert.Equal(new DateOnly(2000, 1, 1), Latest(h).From); Assert.Equal(new DateOnly(2000, 1, 1), h.Direct.LastWindow!.Value.From);
+        // A passing run never sets the sign-off, however wide the window: without it the gate stays closed.
+        Assert.Equal(ReconciliationStates.Passed, Latest(h).Status);
+        h.Campaign.FinancialSourceValidated = false;
+        Assert.False(h.Service.Gate().Reconciled); Assert.Equal(SourceGate.SignOffMissing, h.Service.Gate().Code);
+    }
 
     [Fact]
     public async Task MatchingData_Passes_ForBothCompanies_AndOpensTheGate()

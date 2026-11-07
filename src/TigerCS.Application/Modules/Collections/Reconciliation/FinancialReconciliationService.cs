@@ -16,7 +16,7 @@ namespace TigerCS.Application.Modules.Collections.Reconciliation;
 public sealed class FinancialReconciliationService(
     CollectionsOptions options, CollectionsCampaignOptions campaignOptions, PactReceivablesOptions sourceOptions,
     CollectionsAuthorizationService authorization, CollectionsClock clock, IPactReceivablesSource snapshotSource, IReconciliationSource directSource,
-    ReconciliationHistory history, ILogger<FinancialReconciliationService> logger, IReconciliationLauncher? launcher = null)
+    ReconciliationHistory history, ILogger<FinancialReconciliationService> logger, IReconciliationLauncher? launcher = null, ReceivablesSnapshotOptions? snapshotOptions = null)
 {
     public static readonly TimeSpan Cooldown = TimeSpan.FromMinutes(2);
 
@@ -53,10 +53,15 @@ public sealed class FinancialReconciliationService(
         return CollectionsResult<ReconciliationRunDto>.Ok(run, CollectionsOutcome.Accepted);
     }
 
-    private (DateOnly From, DateOnly Through) Window()
+    /// <summary>
+    /// The due-date window of a run: from <see cref="CollectionsCampaignOptions.ReconciliationStartDate"/> (never before the snapshot's own coverage, which has nothing earlier to compare) to the
+    /// end of the current month. Both sides are read for exactly this window and compared line by line inside it.
+    /// </summary>
+    public (DateOnly From, DateOnly Through) Window()
     {
-        var today = clock.BusinessDate;
-        return (DateOnly.FromDateTime(sourceOptions.StartDate), CollectionsDueMonth.MonthEnd(today));
+        var start = DateOnly.FromDateTime(campaignOptions.ReconciliationStartDate);
+        if (snapshotOptions is not null && DateOnly.FromDateTime(snapshotOptions.SourceFromDate) is var coverage && coverage > start) start = coverage;
+        return (start, CollectionsDueMonth.MonthEnd(clock.BusinessDate));
     }
 
     /// <summary>Runs a registered run to the end. Never throws: whatever happens ends the run in a terminal state with a reason.</summary>
