@@ -41,6 +41,8 @@ public interface IReviewStore
     /// <summary>Atomic Queued to Running; false when another worker already claimed it.</summary>
     Task<bool> TryStartRunAsync(long runId, DateTime nowUtc, CancellationToken ct);
     Task UpdateRunProgressAsync(long runId, string phase, int percent, int? sourceRows, CancellationToken ct);
+    /// <summary>Records on the run whether the financial source was reconciled (per the gate, for the companies the run covers) when its data was read.</summary>
+    Task SetRunSourceReconciledAsync(long runId, bool reconciled, CancellationToken ct);
     Task FailRunAsync(long runId, string error, DateTime nowUtc, CancellationToken ct);
     Task AddRecordsAsync(long runId, IReadOnlyList<CollectionsReviewRecord> records, CancellationToken ct);
     /// <summary>Marks the run Completed and current, then prunes older runs' records, in one transaction.</summary>

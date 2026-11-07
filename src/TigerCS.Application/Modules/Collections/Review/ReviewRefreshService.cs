@@ -20,12 +20,30 @@ public sealed class ReviewRefreshService(
 {
     public const string SourceLabel = "PACT receivables (companies 4 and 32)";
 
-    /// <summary>Whether the reconciliation sign-off applies to the procedure that is configured now.</summary>
+    /// <summary>Whether the financial source is reconciled for BOTH companies right now (sign-off, procedure, automated evidence per company).</summary>
     public bool SourceReconciled => SourceGate().Reconciled;
 
-    /// <summary>The one gate definition (sign-off, procedure, recent automated reconciliation) shared with the Campaigns preview.</summary>
-    public TigerCS.Application.Modules.Collections.Reconciliation.SourceGateDto SourceGate() =>
-        TigerCS.Application.Modules.Collections.Reconciliation.SourceGate.Evaluate(campaignOptions, sourceOptions, reconciliation, clock.UtcNow);
+    /// <summary>The one gate definition (sign-off, procedure, recent automated reconciliation per company) shared with the Campaigns preview.</summary>
+    public TigerCS.Application.Modules.Collections.Reconciliation.SourceGateDto SourceGate() => SourceGate(null);
+
+    /// <summary>
+    /// The gate bound to the snapshot in use: <paramref name="snapshotPublishedUtc"/> is each company's publish time as the caller just read it, so evidence taken against an older publish
+    /// counts as superseded (the data in use has not been checked) instead of covering it.
+    /// </summary>
+    public TigerCS.Application.Modules.Collections.Reconciliation.SourceGateDto SourceGate(IReadOnlyDictionary<int, DateTime?>? snapshotPublishedUtc) =>
+        TigerCS.Application.Modules.Collections.Reconciliation.SourceGate.Evaluate(campaignOptions, sourceOptions, reconciliation, clock.UtcNow, snapshotPublishedUtc);
+
+    /// <summary>The publish time of each company in a snapshot read, for binding the gate to it.</summary>
+    public static IReadOnlyDictionary<int, DateTime?>? PublishedUtc(PactReceivablesSnapshot snapshot) =>
+        snapshot.Snapshot?.Companies.ToDictionary(c => c.CompanyId, c => c.LastSuccessUtc);
+
+    /// <summary>Why nothing of <paramref name="companies"/> can be approved or sent under <paramref name="gate"/>, or null when every one of them is reconciled.</summary>
+    public static string? ClosedMessage(TigerCS.Application.Modules.Collections.Reconciliation.SourceGateDto gate, IEnumerable<int> companies)
+    {
+        var closed = gate.Closed(companies);
+        if (closed.Count == 0) return null;
+        return $"The financial source is not reconciled for {string.Join(" and ", closed.Select(c => c.CompanyName))} ({string.Join(" ", closed.Select(c => c.Message))}), so nothing of that company can be approved or sent. Reconcile it first; a reconciled company is not held back by it.";
+    }
 
     /// <summary>
     /// The per-instalment minimum of every source read of the review pipeline (the refresh and the revalidation before an upload): none. The Campaigns preview reads the same way, so the three
@@ -33,9 +51,12 @@ public sealed class ReviewRefreshService(
     /// </summary>
     public const decimal ReadMinimumAmount = 0m;
 
-    public ReviewBuildContext Context(DateOnly asOf, DateTime readAtUtc, CrmLinkSet? crm = null) => new(asOf, readAtUtc, SourceLabel, sourceOptions.Currency,
-        SourceReconciled, campaignOptions.LegalNoticeExportEnabled, campaignOptions.LegalCaseDispatchApproved,
-        reviewOptions.FloatNoiseTolerance, sourceOptions.SourceStatusMap, crm, PolicyStart);
+    public ReviewBuildContext Context(DateOnly asOf, DateTime readAtUtc, CrmLinkSet? crm = null, TigerCS.Application.Modules.Collections.Reconciliation.SourceGateDto? gate = null)
+    {
+        gate ??= SourceGate();
+        return new(asOf, readAtUtc, SourceLabel, sourceOptions.Currency, gate.Reconciled, campaignOptions.LegalNoticeExportEnabled, campaignOptions.LegalCaseDispatchApproved,
+            reviewOptions.FloatNoiseTolerance, sourceOptions.SourceStatusMap, crm, PolicyStart, gate.HeldUnitKeys());
+    }
 
     /// <summary>The first due date the stage policy looks at: the configured PACT start date, the Campaigns preview's eligibility scope.</summary>
     public DateOnly PolicyStart => DateOnly.FromDateTime(sourceOptions.StartDate);
@@ -183,7 +204,12 @@ public sealed class ReviewRefreshService(
                 throw new PactReceivablesSourceException("PACT returned a receivable without a valid company identity.");
 
             var crm = await ReadCrmAsync(snapshot.Items, budget.Token);
-            var built = ReviewRecordBuilder.Build(snapshot.Items, Context(run.AsOfDate, snapshot.ReadAtUtc, crm));
+            // The gate as it stands for the snapshot just read (evidence taken against an older publish does not count); the run records whether the companies it covers are reconciled, and
+            // the units a reconciled company holds back are stamped on their records.
+            var gate = SourceGate(PublishedUtc(snapshot));
+            var reconciled = run.CompanyId is { } one ? gate.IsOpen(one) : gate.Reconciled;
+            if (reconciled != run.SourceReconciled) { run.SourceReconciled = reconciled; await store.SetRunSourceReconciledAsync(runId, reconciled, ct); }
+            var built = ReviewRecordBuilder.Build(snapshot.Items, Context(run.AsOfDate, snapshot.ReadAtUtc, crm, gate));
             logger.LogInformation("Review refresh {RunId}: {Rows} source rows, {Records} records, {Noise} float-noise amounts normalized, {Settled} settled rows ignored.",
                 runId, snapshot.Items.Count, built.Records.Count, built.FloatNormalizedRows, built.SettledRows);
 

@@ -259,6 +259,8 @@ internal sealed class ReviewHarness : IDisposable
     public CollectionsOptions Options { get; } = new() { Enabled = true };
     public PactReceivablesOptions Sql { get; } = new() { Enabled = true };
     public CollectionsCampaignOptions Campaign { get; } = new() { FinancialSourceValidated = true, LegalNoticeExportEnabled = true };
+    /// <summary>The automated reconciliation evidence the gate consults (null = sign-off only, as most tests want; set a history to test the per-company gate and held units).</summary>
+    public TigerCS.Application.Modules.Collections.Reconciliation.ReconciliationHistory? Evidence { get; set; }
     public CollectionsReviewOptions Review { get; } = new();
     public GenesysOutboundOptions Genesys { get; } = new() { Enabled = true, LiveCustomerDispatchEnabled = true, SuppressionEnabled = true, LeaseHeartbeatSeconds = 0.02 };
     /// <summary>The shared CRM link service (null = CRM linking off: contacts are PACT's, as before).</summary>
@@ -327,7 +329,7 @@ internal sealed class ReviewHarness : IDisposable
             var auth = new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository());
             Query = new ReviewQueryService(h.Options, h.Review, auth, clock, Store, null, h.Genesys);
             Refresh = new ReviewRefreshService(h.Options, h.Campaign, h.Sql, h.Review, auth, clock, h.Source, Store, h.Scheduler, Query,
-                NullLogger<ReviewRefreshService>.Instance, h.Links);
+                NullLogger<ReviewRefreshService>.Instance, h.Links, h.Evidence);
             var balances = new CurrentBalanceReader(h.Sql, h.Source, Refresh, NullLogger<CurrentBalanceReader>.Instance);
             Dispatch = new DispatchService(h.Options, h.Genesys, auth, clock, Store, h.Scheduler, client ?? h.Client, Query, balances,
                 NullLogger<DispatchService>.Instance);

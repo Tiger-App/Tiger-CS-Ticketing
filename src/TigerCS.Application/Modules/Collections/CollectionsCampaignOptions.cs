@@ -26,6 +26,12 @@ public sealed class CollectionsCampaignOptions
     /// is what the procedure returns right now. Set false only to fall back to the sign-off alone.
     /// </summary>
     public bool RequireAutomatedReconciliation { get; set; } = true;
+    /// <summary>
+    /// The first due date the snapshot-consistency check compares (the window runs to the end of the current month). Every unpaid instalment due on or after it, on both sides (the snapshot
+    /// and a direct read of the same PACT procedure), is compared. It is the reconciliation's own window: the Campaigns eligibility scope (<c>CollectionsSource:PactReceivables:StartDate</c>)
+    /// and the Receivables filters are not changed by it. It cannot reach before the snapshot's coverage (<c>CollectionsSource:ReceivablesSnapshot:SourceFromDate</c>, 2000-01-01 by default).
+    /// </summary>
+    public DateTime ReconciliationStartDate { get; set; } = new(2014, 1, 1);
     /// <summary>How long a passing automated reconciliation counts (hours). Older evidence is "Expired" and must be re-run.</summary>
     public int ReconciliationMaxAgeHours { get; set; } = 24;
     /// <summary>The snapshot must be this fresh (minutes since its publish) when a reconciliation runs, otherwise payments made since the refresh show up as differences.</summary>
@@ -34,6 +40,18 @@ public sealed class CollectionsCampaignOptions
     public decimal ReconciliationToleranceAed { get; set; } = 0.01m;
     /// <summary>How many differing units a run keeps in its diagnostics (the counts are always complete).</summary>
     public int ReconciliationMaxDifferences { get; set; } = 500;
+    /// <summary>
+    /// Run the snapshot-consistency check of a company by itself right after each SUCCESSFUL snapshot refresh of that company (the scheduled two-hourly refresh, the start-up refresh and a
+    /// Retry). The evidence then follows the data: a new publish is checked within minutes, and a difference that was only the time between the refresh and the check never lingers for a day.
+    /// Costs one direct PACT read per refresh. False leaves the check to the Run button.
+    /// </summary>
+    public bool ReconcileAfterRefresh { get; set; } = true;
+    /// <summary>
+    /// When a check finds differences (or the snapshot is older than <see cref="ReconciliationMaxSnapshotAgeMinutes"/>), refresh that company's snapshot from PACT once and compare again, in the same run.
+    /// A difference that was only a payment made since the last refresh is resolved by it; one that persists after a successful refresh is reported as a synchronization or mapping defect and
+    /// its units are held back individually. Never more than one refresh per company per run. False reports the first comparison as it is.
+    /// </summary>
+    public bool ReconciliationRecoveryRefresh { get; set; } = true;
 
     /// <summary>Legal Case records are internal Legal referrals under the approved policy. Dispatching them to a customer
     /// contact list needs an explicit business decision; false until Legal/Collections record it.</summary>

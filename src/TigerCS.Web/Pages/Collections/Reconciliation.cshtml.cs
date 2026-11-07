@@ -40,7 +40,17 @@ public sealed class ReconciliationModel(CollectionsApiClient api) : PageModel
         ReconciliationStates.Error => "Could not be completed (no finding about the data)",
         ReconciliationStates.Running => "Running",
         ReconciliationStates.Expired => "Expired: older than allowed",
+        ReconciliationStates.Superseded => "Superseded: the snapshot was refreshed since",
         _ => "Not run"
+    };
+
+    public static string TriggerText(string trigger) => trigger == ReconciliationTriggers.AfterRefresh ? "run by itself after the snapshot refresh" : "run on request";
+
+    public static string GateCodeText(string code) => code switch
+    {
+        SourceGate.Reconciled => "Reconciled",
+        SourceGate.ReconciledWithHeldUnits => "Reconciled; some units held back",
+        _ => "Not reconciled"
     };
 
     public static string KindText(string kind) => kind switch
