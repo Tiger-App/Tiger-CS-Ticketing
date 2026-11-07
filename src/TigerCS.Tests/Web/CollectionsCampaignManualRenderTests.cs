@@ -259,7 +259,7 @@ public sealed class CollectionsCampaignManualRenderTests
         Assert.Contains(ReviewReasons.Explain(ReviewReasons.NoValidContact), text);
         Assert.Contains("data-reason-code=\"ManualSharedPhone\"", html);
         Assert.Contains("Why customers are held back", html);
-        Assert.Contains("Review: the same number is on several customers", text);                               // the review workflow for a shared phone
+        Assert.Contains("built before the per-unit calling decision", text);                                        // a stored shared-phone hold: refresh clears it
         Assert.Contains("Legal notices have not been released", text);
         Assert.Contains("data-refresh-approval", html);
         Assert.Contains("Held back", text); Assert.Contains("Needs review", text);

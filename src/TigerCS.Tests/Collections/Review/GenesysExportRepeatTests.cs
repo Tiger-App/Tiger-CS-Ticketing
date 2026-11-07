@@ -335,9 +335,9 @@ public sealed class GenesysExportRepeatTests
         await h.RefreshAsync();
         var dto = (await ReviewAsync(h, Manual())).Value!;
         var rows = GenesysContactTemplate.ParseCsv(dto.Csv);
-        Assert.Equal("Customer", rows[0][0]); Assert.Equal(5, dto.RowCount); Assert.Equal(3, dto.ReadyCount); Assert.Equal(6, rows.Count);
+        Assert.Equal("Customer", rows[0][0]); Assert.Equal(5, dto.RowCount); Assert.Equal(5, dto.ReadyCount); Assert.Equal(6, rows.Count);   // a shared number holds nobody back: each unit is its own call
         var status = rows[0].IndexOf("Status"); var reason = rows[0].IndexOf("Reasons"); var amount = rows[0].IndexOf("Amount");
-        Assert.Equal(2, rows.Skip(1).Count(r => r[status] != "Ready" && r[reason].Length > 0));       // held back: the exact reason is in the file
+        Assert.Equal(0, rows.Skip(1).Count(r => r[status] != "Ready" && r[reason].Length > 0));
         using var scope = h.NewScope();
         var preview = (await scope.Query.QueryAsync(h.Manager, Manual(), 1, 50, CancellationToken.None)).Value!;
         Assert.Equal(preview.Items.Select(i => i.RemainingAmount!.Value.ToString("0.00")).Order(), rows.Skip(1).Select(r => r[amount]).Order());   // the amounts the page shows

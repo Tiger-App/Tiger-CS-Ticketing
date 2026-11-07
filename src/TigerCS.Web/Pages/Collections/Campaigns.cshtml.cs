@@ -332,7 +332,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>What a person can do about a Manual hold: the review workflow behind each exact reason.</summary>
     public static string ManualAdvice(string code) => code switch
     {
-        "SharedPhoneMultipleUnits" or "ManualSharedPhone" => "Review: the same number is on several customers. Confirm the right owner in CRM, correct the contact, refresh the approval data and preview again.",
+        "SharedPhoneMultipleUnits" or "ManualSharedPhone" => "This hold comes from approval data built before the per-unit calling decision; refresh the approval data and preview again.",
         "ReminderTypeOverlap" or "ManualReminderTypeOverlap" => "This customer is also in another campaign that is scheduled today. Send that campaign (Auto does it on its date), or send this one on another day.",
         "ContactedToday" => "Contact-frequency limit: one contact per customer per day. Try again tomorrow.",
         "LegalNoticeReleaseRequired" => "Legal notices have not been released for customers. Nothing is sent until Legal releases them.",
@@ -431,9 +431,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "UnitAllocationNeedsReview" => "Unit allocation needs review",
         "ContradictoryPaymentStatus" => "Contradictory payment status",
         "CurrencyNeedsReview" => "Currency needs review",
-        "SharedPhoneMultipleUnits" => "Phone number shared by several customers",
+        "SharedPhoneMultipleUnits" => "Phone number shared (old approval data; refresh)",
         "ManualReminderTypeOverlap" => "Also in another campaign scheduled today",
-        "ManualSharedPhone" => "Phone number shared by several customers",
+        "ManualSharedPhone" => "Phone number shared (old approval data; refresh)",
         "ReminderTypeOverlap" => "Also in another campaign scheduled today",
         "LegalCaseNotApproved" => "Internal legal referral: never sent to a customer",
         "ContactedToday" => "Already contacted today (frequency limit)",
