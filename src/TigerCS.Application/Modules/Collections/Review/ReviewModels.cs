@@ -102,9 +102,12 @@ public sealed record DispatchReadinessDto(bool Ready, IReadOnlyList<string> Bloc
 /// <summary>Units left out of an Export for Genesys file, by reason: the code, how many units, and the plain-language explanation.</summary>
 public sealed record GenesysExportExclusionDto(string Code, int Units, string Explanation);
 
+/// <summary>One unit left out of an Export for Genesys file, named: which record (company, tenant, unit, customer, campaign type) and the exact reason code.</summary>
+public sealed record GenesysExportExcludedRecordDto(int CompanyId, string TenantId, string UnitCode, string CustomerName, string ReminderType, string Code);
+
 /// <summary>
 /// The "Export for Genesys" file: every customer matching the filters, in the format of the Genesys contact list the file is for. <c>Columns</c> is the file's header exactly. <c>RowCount</c> rows hold
-/// <c>UnitCount</c> customer units (<c>CombinedUnits</c> of them folded into <c>CombinedRows</c> rows of one customer on one number); <c>Exclusions</c> says which matching units are NOT in the file and why.
+/// <c>UnitCount</c> customer units (one per row: a phone number never merges or drops a record); <c>Exclusions</c> says which matching units are NOT in the file and why, and <c>ExcludedRecords</c> names each of them.
 /// <c>IncludedByStatus</c> counts the units by the status the Manual page shows (Ready, NeedsReview, Excluded, AlreadySent): a file is not a send, so held-back customers are in it.
 /// <c>DataVerified</c> is false when the financial data behind the amounts is not verified (unreconciled source, stale or not built today, or units whose data needs review, PaymentStatusUnknown
 /// included); <c>UnverifiedReasons</c> names why, and the file is labelled "Financial data not verified". <c>SchemaVerified</c> is true when the list's real columns were read from Genesys and fit;
@@ -114,8 +117,8 @@ public sealed record GenesysExportExclusionDto(string Code, int Units, string Ex
 public sealed record GenesysExportDto(
     string FileName, string Csv, int RowCount, string Campaign, string ContactList, string ContactListId, decimal TotalAmount, string Currency,
     IReadOnlyList<string> Columns, bool SchemaVerified, IReadOnlyList<string> Notices, string Sha256, int RepeatedCustomers = 0, DateTime? LastExportedAtUtc = null,
-    int UnitCount = 0, int CombinedRows = 0, int CombinedUnits = 0, IReadOnlyList<GenesysExportExclusionDto>? Exclusions = null, IReadOnlyDictionary<string, int>? IncludedByStatus = null,
-    bool DataVerified = true, IReadOnlyList<string>? UnverifiedReasons = null, int Skipped = 0)
+    int UnitCount = 0, IReadOnlyList<GenesysExportExclusionDto>? Exclusions = null, IReadOnlyDictionary<string, int>? IncludedByStatus = null,
+    bool DataVerified = true, IReadOnlyList<string>? UnverifiedReasons = null, int Skipped = 0, IReadOnlyList<GenesysExportExcludedRecordDto>? ExcludedRecords = null)
 {
     public int ExcludedUnits => Exclusions?.Sum(e => e.Units) ?? 0;
 }
