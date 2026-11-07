@@ -32,6 +32,32 @@ public sealed class FinancialReconciliationServiceTests
         }
     }
 
+    /// <summary>The per-company snapshot refresh as the reconciliation uses it: copies PACT into the snapshot (Sync), publishes without changing anything (NoChange: a mapping defect), fails, or is busy.</summary>
+    private sealed class FakeRefresher(Harness h) : IReceivablesRefresher
+    {
+        public string Mode { get; set; } = "Sync";
+        public List<(string Trigger, int? Company)> Calls { get; } = [];
+        public Task<ReceivablesRefreshResult> RefreshAsync(string triggerSource, int? companyId, CancellationToken ct, DateOnly? fromDate = null, DateOnly? throughDate = null)
+        {
+            Calls.Add((triggerSource, companyId));
+            var company = companyId!.Value;
+            switch (Mode)
+            {
+                case "Fail":
+                    return Task.FromResult(new ReceivablesRefreshResult(Guid.NewGuid(), "Failed", $"Company {company}: PACT timed out", [new(company, "Failed", null, null, null, null, null, -2, "PACT timed out")]));
+                case "AlreadyRunning":
+                    return Task.FromResult(new ReceivablesRefreshResult(null, "AlreadyRunning", "busy", [new(company, "AlreadyRunning", null, null, null, null, null, null, "busy")]));
+                case "Sync":
+                    h.Snapshot.Rows.RemoveAll(r => r.CompanyId == company);
+                    h.Snapshot.Rows.AddRange(h.Direct.Rows.Where(r => r.CompanyId == company));
+                    break;
+            }
+            h.Clock = h.Clock.AddMinutes(1);
+            h.Snapshot.Companies[company] = FakeSnapshotSource.Healthy(company, h.Clock);     // a new publish
+            return Task.FromResult(new ReceivablesRefreshResult(Guid.NewGuid(), "Succeeded", null, [new(company, "Succeeded", 10, 10, 0, 0, 0, null, null)]));
+        }
+    }
+
     private sealed class SyncLauncher : IReconciliationLauncher
     {
         public FinancialReconciliationService? Service { get; set; }
@@ -50,15 +76,18 @@ public sealed class FinancialReconciliationServiceTests
         public ReceivablesSnapshotOptions SnapshotOptions = new();
         public FinancialReconciliationService Service;
         public DateTime Clock = Now;
+        public FakeRefresher? Refresher;
 
-        public Harness(bool launcher = true)
+        public Harness(bool launcher = true, string? refresher = null)
         {
             var options = new CollectionsOptions { Enabled = true };
             var time = new FixedTime(this);
+            if (refresher is not null) Refresher = new FakeRefresher(this) { Mode = refresher };
             Service = new(options, Campaign, Source, new CollectionsAuthorizationService(options, new FakeDepartmentRepository()), new CollectionsClock(options, time), Snapshot, Direct, History,
-                NullLogger<FinancialReconciliationService>.Instance, launcher ? Launcher : null, SnapshotOptions);
+                NullLogger<FinancialReconciliationService>.Instance, launcher ? Launcher : null, SnapshotOptions, Refresher);
             Launcher.Service = Service;
             Snapshot.MaxAgeMinutes = 180;
+            Snapshot.NowUtc = () => Clock;
         }
 
         public static PactReceivableInstalment Row(int company, string unit, string voucher, DateTime due, decimal amount, int unitId = 11) =>
@@ -160,7 +189,196 @@ public sealed class FinancialReconciliationServiceTests
         Assert.False(gate.Reconciled);
         Assert.Equal(SourceGate.EvidenceFailed, gate.Code);
         Assert.Contains("Tiger Group Dubai", gate.Message);
-        Assert.DoesNotContain("Sharjah", gate.Message);
+        // Per company: Dubai is closed (no refresh could be made to resolve the difference: this harness has no refresher), Sharjah is open and is said to be.
+        Assert.False(gate.IsOpen(4)); Assert.True(gate.IsOpen(32));
+        Assert.Contains("Tiger Group Sharjah is reconciled and can still be sent", gate.Message);
+        Assert.Equal([4], gate.Closed([4, 32]).Select(c => c.CompanyId));
+    }
+
+    // ---------------------------------------------------------------- PACT is the source: a difference is first a synchronization to repair, with ONE controlled refresh
+
+    [Fact]
+    public async Task AChangedRemainingAmount_IsResolvedByOneRefreshOfThatCompany_AndTheRunPasses()
+    {
+        var h = new Harness(refresher: "Sync");
+        h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        h.Snapshot.Rows.Add(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m));
+        h.Direct.Rows.Add(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 400m));                 // a payment since the last refresh
+        await h.Service.StartAsync(Manager, null, CancellationToken.None);
+        var run = Latest(h);
+        Assert.Equal(ReconciliationStates.Passed, run.Status);
+        var dubai = run.Companies.Single(c => c.CompanyId == 4);
+        Assert.Equal(ReconciliationStates.Passed, dubai.Status);
+        Assert.Equal((ReconciliationRecoveryReasons.Differences, "Succeeded", true, 1, true), (dubai.Recovery!.Reason, dubai.Recovery.RefreshStatus, dubai.Recovery.Refreshed, dubai.Recovery.MismatchedUnitsBefore, dubai.Recovery.Resolved));
+        Assert.Equal("TP140-101", dubai.Recovery.ComparisonBefore!.Diffs.Single().UnitCode);           // the exact differences are recorded even though they are resolved
+        Assert.Contains("Recovered", dubai.Message);
+        Assert.Equal([(FinancialReconciliationService.RecoveryRefreshTrigger, (int?)4)], h.Refresher!.Calls);   // only the company that differed, once, under its own trigger
+        Assert.Null(run.Companies.Single(c => c.CompanyId == 32).Recovery);
+        Assert.True(dubai.Recovery.SnapshotAfterUtc > dubai.Recovery.SnapshotBeforeUtc);
+        Assert.True(h.Service.Gate().Reconciled); Assert.Equal(SourceGate.Reconciled, h.Service.Gate().Code);
+    }
+
+    [Fact]
+    public async Task ADeletedInstalment_ANewUnit_AndAMovedDueDate_AreAllResolvedByTheRefresh()
+    {
+        var h = new Harness(refresher: "Sync");
+        h.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m));
+        h.Snapshot.Rows.Add(Harness.Row(4, "TP140-101", "V9", new(2026, 9, 6), 77m));                 // paid / cancelled: no longer returned by PACT
+        h.Direct.Rows.Add(Harness.Row(4, "TP140-102", "NEW", new(2026, 10, 7), 300m, 12));             // a new unit in PACT
+        h.Snapshot.Rows.Add(Harness.Row(4, "TP140-103", "V3", new(2026, 9, 30), 50m, 13));
+        h.Direct.Rows.Add(Harness.Row(4, "TP140-103", "V3", new(2026, 10, 2), 50m, 13));               // the due date moved across the month boundary
+        await h.Service.StartAsync(Manager, 4, CancellationToken.None);
+        var dubai = Assert.Single(Latest(h).Companies);
+        Assert.Equal(ReconciliationStates.Passed, dubai.Status);
+        Assert.Equal(3, dubai.Recovery!.MismatchedUnitsBefore);
+        var kinds = dubai.Recovery.ComparisonBefore!.Diffs.SelectMany(d => d.Instalments).Select(i => i.Kind).OrderBy(k => k).ToArray();
+        Assert.Equal([ReconDifferenceKinds.DueDateMismatch, ReconDifferenceKinds.MissingInSnapshot, ReconDifferenceKinds.MissingInSource], kinds);
+        Assert.Single(h.Refresher!.Calls);
+        // The snapshot now holds exactly what PACT returns: the new unit is in, the paid instalment is out, the date moved.
+        Assert.Equal(h.Direct.Rows.Count, h.Snapshot.Rows.Count(r => r.CompanyId == 4));
+    }
+
+    [Fact]
+    public async Task ADifferenceThatPersistsAfterTheRefresh_IsADefectToInvestigate_HoldsOnlyThatUnit_AndIsNeverRetriedAgain()
+    {
+        var h = new Harness(refresher: "NoChange");                                                    // the refresh publishes, but the mapping still differs
+        h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        h.Both(Harness.Row(4, "TP140-100", "V0", new(2026, 9, 5), 10m, 10));
+        h.Snapshot.Rows.Add(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m));
+        h.Direct.Rows.Add(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 400m));
+        await h.Service.StartAsync(Manager, null, CancellationToken.None);
+        var run = Latest(h);
+        var dubai = run.Companies.Single(c => c.CompanyId == 4);
+        Assert.Equal(ReconciliationStates.Failed, dubai.Status);
+        Assert.True(dubai.PersistentAfterRefresh);
+        Assert.Equal((true, false, 1), (dubai.Recovery!.Refreshed, dubai.Recovery.Resolved, dubai.Recovery.MismatchedUnitsBefore));
+        Assert.Contains("synchronization or mapping defect", dubai.Message);
+        Assert.Single(h.Refresher!.Calls);                                                              // one refresh per company per run: no endless retry
+        // The gate: both companies open; the one unit that differs is held back, the other unit of Dubai and all of Sharjah are not.
+        var gate = h.Service.Gate();
+        Assert.True(gate.Reconciled); Assert.Equal(SourceGate.ReconciledWithHeldUnits, gate.Code);
+        Assert.True(gate.IsOpen(4)); Assert.True(gate.IsOpen(32)); Assert.Empty(gate.Closed([4, 32]));
+        var held = Assert.Single(gate.HeldUnits);
+        Assert.Equal((4, "T11", 11L, "TP140-101"), (held.CompanyId, held.TenantId, held.UnitId, held.UnitCode));
+        Assert.Contains((4, "T11", 11L), gate.HeldUnitKeys());
+        Assert.Equal(1, gate.MismatchUnits);
+        Assert.Contains("defect", gate.Message);
+    }
+
+    [Fact]
+    public async Task WhenTheRefreshFails_ThePreviousSnapshotStays_TheCompanyStaysClosed_AndTheOtherCompanyIsOpen()
+    {
+        var h = new Harness(refresher: "Fail");
+        h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        h.Snapshot.Rows.Add(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m));
+        h.Direct.Rows.Add(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 400m));
+        await h.Service.StartAsync(Manager, null, CancellationToken.None);
+        var dubai = Latest(h).Companies.Single(c => c.CompanyId == 4);
+        Assert.Equal(ReconciliationStates.Failed, dubai.Status);
+        Assert.False(dubai.PersistentAfterRefresh);
+        Assert.Equal(("Failed", false), (dubai.Recovery!.RefreshStatus, dubai.Recovery.Refreshed));
+        Assert.Contains("could not be refreshed", dubai.Message); Assert.Contains("PACT timed out", dubai.Message);
+        Assert.Equal(1000m, h.Snapshot.Rows.Single(r => r.CompanyId == 4).Amount);                      // nothing was published from the failed attempt
+        var gate = h.Service.Gate();
+        Assert.False(gate.Reconciled); Assert.Equal(SourceGate.EvidenceFailed, gate.Code);
+        Assert.False(gate.IsOpen(4)); Assert.True(gate.IsOpen(32)); Assert.Empty(gate.HeldUnits);        // closed as a whole: no consistent refresh confirmed the other units
+        Assert.Single(h.Refresher!.Calls);
+        // A refresh that is busy (another refresh of the company holds its lock) is reported the same way, without a second attempt.
+        var busy = new Harness(refresher: "AlreadyRunning");
+        busy.Snapshot.Rows.Add(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m)); busy.Direct.Rows.Add(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 400m));
+        await busy.Service.StartAsync(Manager, 4, CancellationToken.None);
+        Assert.Equal("AlreadyRunning", Assert.Single(Latest(busy).Companies).Recovery!.RefreshStatus);
+        Assert.Single(busy.Refresher!.Calls);
+    }
+
+    [Fact]
+    public async Task AStaleSnapshot_IsRefreshedBeforeTheComparison_InsteadOfAnError()
+    {
+        var h = new Harness(refresher: "Sync");
+        h.Snapshot.Companies[4] = FakeSnapshotSource.Healthy(4, Now.AddMinutes(-120));
+        h.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m));
+        await h.Service.StartAsync(Manager, 4, CancellationToken.None);
+        var dubai = Assert.Single(Latest(h).Companies);
+        Assert.Equal(ReconciliationStates.Passed, dubai.Status);
+        Assert.Equal((ReconciliationRecoveryReasons.StaleSnapshot, true, true, 0), (dubai.Recovery!.Reason, dubai.Recovery.Refreshed, dubai.Recovery.Resolved, dubai.Recovery.MismatchedUnitsBefore));
+        Assert.Equal(1, h.Direct.Reads);                                                                // PACT is read once, for the comparison of the fresh snapshot
+        // The recovery can be switched off: then the first comparison stands as it is (here: the old snapshot is an Error, as before).
+        var off = new Harness(refresher: "Sync");
+        off.Campaign.ReconciliationRecoveryRefresh = false;
+        off.Snapshot.Companies[4] = FakeSnapshotSource.Healthy(4, Now.AddMinutes(-120));
+        off.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m));
+        await off.Service.StartAsync(Manager, 4, CancellationToken.None);
+        Assert.Equal(ReconciliationStates.Error, Assert.Single(Latest(off).Companies).Status);
+        Assert.Empty(off.Refresher!.Calls);
+    }
+
+    // ---------------------------------------------------------------- the evidence follows the snapshot: a refresh supersedes it, and the check runs after each refresh
+
+    [Fact]
+    public async Task ARefreshAfterAPassingCheck_SupersedesTheEvidenceOfThatCompanyOnly_UntilTheCheckRunsAgain()
+    {
+        var h = new Harness(refresher: "Sync");
+        h.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m)); h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        await h.Service.StartAsync(Manager, null, CancellationToken.None);
+        Assert.True(h.Service.Gate().Reconciled);
+        // 1. The refresh job of this process publishes Dubai again (noted on the evidence): Dubai's pass no longer describes the data in use; Sharjah's still does.
+        h.Clock = Now.AddMinutes(30);
+        h.History.NoteSnapshotPublished(4, h.Clock);
+        var gate = h.Service.Gate();
+        Assert.False(gate.Reconciled); Assert.Equal(SourceGate.EvidenceSuperseded, gate.Code);
+        Assert.False(gate.IsOpen(4)); Assert.True(gate.IsOpen(32));
+        Assert.Contains("republished", gate.Message);
+        // 2. The same from a caller that read the snapshot itself: a publish time that differs from the one the check compared.
+        var fresh = new Harness(refresher: "Sync");
+        fresh.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m)); fresh.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        await fresh.Service.StartAsync(Manager, null, CancellationToken.None);
+        var checkedAt = fresh.History.Latest()!.Companies.Single(c => c.CompanyId == 32).SnapshotSuccessUtc;
+        var bound = SourceGate.Evaluate(fresh.Campaign, fresh.Source, fresh.History, Now, new Dictionary<int, DateTime?> { [4] = Now.AddMinutes(-10), [32] = checkedAt!.Value.AddMinutes(5) });
+        Assert.True(bound.IsOpen(4)); Assert.False(bound.IsOpen(32)); Assert.Equal(SourceGate.EvidenceSuperseded, bound.Code);
+        // 3. The check that follows the refresh (the job calls it) covers the new publish: Dubai is open again, by its own run, without a cooldown and without touching Sharjah.
+        var after = await h.Service.RunAfterRefreshAsync(4, CancellationToken.None);
+        Assert.NotNull(after);
+        Assert.Equal((ReconciliationTriggers.AfterRefresh, 4, ReconciliationStates.Passed, FinancialReconciliationService.SystemActor), (after!.Trigger, after.CompanyScope, after.Status, after.RequestedBy));
+        Assert.Equal(4, Assert.Single(after.Companies).CompanyId);
+        Assert.True(h.Service.Gate().Reconciled);
+        Assert.Equal(0, h.Launcher.Launches - 1);                                                       // it ran inline in the caller's job, not through the launcher
+    }
+
+    [Fact]
+    public async Task TheCheckAfterARefresh_SkipsWhileARunOfThatCompanyIsInProgress_AndIsOffByConfiguration()
+    {
+        var h = new Harness(refresher: "Sync");
+        h.Both(Harness.Row(4, "TP140-101", "V1", new(2026, 9, 5), 1000m)); h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        // A run of both companies is in progress: the after-refresh check of Dubai does not start a second comparison of it.
+        var running = new ReconciliationRunDto(Guid.NewGuid(), ReconciliationStates.Running, Now, null, new(2014, 1, 1), new(2026, 10, 31), null, 0.01m, "x", [], ReconciliationTriggers.AfterRefresh);
+        Assert.True(h.History.TryBegin(running, TimeSpan.Zero, out _));
+        Assert.Null(await h.Service.RunAfterRefreshAsync(4, CancellationToken.None));
+        // A run of the OTHER company in progress does not stop it.
+        h.History.Replace(running with { Status = ReconciliationStates.Error, FinishedUtc = Now });
+        var sharjah = new ReconciliationRunDto(Guid.NewGuid(), ReconciliationStates.Running, Now, null, new(2014, 1, 1), new(2026, 10, 31), 32, 0.01m, "x", [], ReconciliationTriggers.AfterRefresh);
+        Assert.True(h.History.TryBegin(sharjah, TimeSpan.Zero, out _));
+        Assert.NotNull(await h.Service.RunAfterRefreshAsync(4, CancellationToken.None));
+        h.History.Replace(sharjah with { Status = ReconciliationStates.Error, FinishedUtc = Now });
+        // A person's cooldown never delays it (it follows the refresh schedule), while a person's second click is still refused.
+        Assert.Equal(CollectionsOutcome.Accepted, (await h.Service.StartAsync(Manager, 32, CancellationToken.None)).Outcome);
+        Assert.Equal(CollectionsOutcome.Conflict, (await h.Service.StartAsync(Manager, 32, CancellationToken.None)).Outcome);
+        Assert.NotNull(await h.Service.RunAfterRefreshAsync(32, CancellationToken.None));
+        // Switched off: nothing runs after a refresh, but the publish is still noted (the old evidence is superseded rather than silently reused).
+        h.Campaign.ReconcileAfterRefresh = false;
+        h.Clock = h.Clock.AddMinutes(5);
+        Assert.Null(await h.Service.RunAfterRefreshAsync(32, CancellationToken.None));
+        Assert.Equal(SourceGate.EvidenceSuperseded, h.Service.Gate().Company(32)!.Code);
+        h.Campaign.ReconcileAfterRefresh = true; h.Campaign.RequireAutomatedReconciliation = false;
+        Assert.Null(await h.Service.RunAfterRefreshAsync(32, CancellationToken.None));
+        Assert.True(h.Service.Gate().Reconciled);                                                      // sign-off only, by configuration
+    }
+
+    [Fact]
+    public void TheDefaults_RunTheCheckAfterEachRefresh_AndRepairOnce()
+    {
+        var options = new CollectionsCampaignOptions();
+        Assert.True(options.ReconcileAfterRefresh); Assert.True(options.ReconciliationRecoveryRefresh);
+        Assert.False(options.FinancialSourceValidated); Assert.False(options.AutoSendingEnabled);        // neither is ever set by a passing check
     }
 
     [Fact]

@@ -77,7 +77,20 @@ public sealed class AutoDispatchService(
         var request = new SelectionRequest(new ReviewFilter(ReminderType: type.ToString(), SendingMode: CollectionsSendingModes.Auto), ReviewQueryService.ModeAllMatching);
         var resolved = await query.ResolveAsync(request, ct);
         if (resolved.Error is not null) return new(type.ToString(), "Refused", resolved.Error, 0);
-        if (!refresh.SourceReconciled) return new(type.ToString(), "NotReconciled", DispatchService.NotReconciledMessage, 0);
+        // The gate per company: a company that is not reconciled is not dispatched (its Ready customers wait); the other company is dispatched on its own.
+        var gate = refresh.SourceGate();
+        var closed = gate.Closed(resolved.Records.Count == 0 ? [4, 32] : resolved.Records.Select(r => r.CompanyId));
+        if (closed.Count > 0 && (resolved.Records.Count == 0 || resolved.Records.All(r => !gate.IsOpen(r.CompanyId))))
+            return new(type.ToString(), "NotReconciled", ReviewRefreshService.ClosedMessage(gate, closed.Select(c => c.CompanyId)) ?? DispatchService.NotReconciledMessage, 0);
+        if (closed.Count > 0)
+        {
+            logger.LogWarning("Automatic dispatch {Stage}: {Company} is not reconciled and its Ready customers are not dispatched; the reconciled company is.", type, string.Join(" and ", closed.Select(c => c.CompanyName)));
+            // Two companies only: when one is closed the dispatch is the other company's campaign (the filter narrows it, so the idempotency key and the audit record stay the campaign's).
+            var open = resolved.Records.Select(r => r.CompanyId).Distinct().Single(c => gate.IsOpen(c));
+            request = request with { Filter = request.Filter! with { CompanyId = open } };
+            resolved = await query.ResolveAsync(request, ct);
+            if (resolved.Error is not null) return new(type.ToString(), "Refused", resolved.Error, 0);
+        }
         if (resolved.Records.Count == 0) return new(type.ToString(), "NothingReady", "No customer is Ready for this campaign.", 0);
 
         // The operator who switched AutoSendingEnabled on accepted that the campaign's own Genesys campaign dials what is uploaded to its list; there is no person to tick the box.

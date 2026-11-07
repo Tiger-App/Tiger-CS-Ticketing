@@ -40,6 +40,18 @@ public sealed class CollectionsCampaignOptions
     public decimal ReconciliationToleranceAed { get; set; } = 0.01m;
     /// <summary>How many differing units a run keeps in its diagnostics (the counts are always complete).</summary>
     public int ReconciliationMaxDifferences { get; set; } = 500;
+    /// <summary>
+    /// Run the snapshot-consistency check of a company by itself right after each SUCCESSFUL snapshot refresh of that company (the scheduled two-hourly refresh, the start-up refresh and a
+    /// Retry). The evidence then follows the data: a new publish is checked within minutes, and a difference that was only the time between the refresh and the check never lingers for a day.
+    /// Costs one direct PACT read per refresh. False leaves the check to the Run button.
+    /// </summary>
+    public bool ReconcileAfterRefresh { get; set; } = true;
+    /// <summary>
+    /// When a check finds differences (or the snapshot is older than <see cref="ReconciliationMaxSnapshotAgeMinutes"/>), refresh that company's snapshot from PACT once and compare again, in the same run.
+    /// A difference that was only a payment made since the last refresh is resolved by it; one that persists after a successful refresh is reported as a synchronization or mapping defect and
+    /// its units are held back individually. Never more than one refresh per company per run. False reports the first comparison as it is.
+    /// </summary>
+    public bool ReconciliationRecoveryRefresh { get; set; } = true;
 
     /// <summary>Legal Case records are internal Legal referrals under the approved policy. Dispatching them to a customer
     /// contact list needs an explicit business decision; false until Legal/Collections record it.</summary>

@@ -17,7 +17,8 @@ namespace TigerCS.Application.Modules.Collections.Review;
 public sealed record ReviewBuildContext(
     DateOnly AsOfDate, DateTime SourceReadAtUtc, string SourceLabel, string Currency, bool SourceReconciled,
     bool LegalNoticeReleased, bool LegalCaseApproved, decimal FloatTolerance,
-    IReadOnlyDictionary<string, string> StatusMap, CrmLinkSet? Crm = null, DateOnly? PolicyStart = null);
+    IReadOnlyDictionary<string, string> StatusMap, CrmLinkSet? Crm = null, DateOnly? PolicyStart = null,
+    IReadOnlySet<(int CompanyId, string TenantId, long UnitId)>? HeldUnits = null);
 
 public sealed record ReviewBuildResult(IReadOnlyList<CollectionsReviewRecord> Records, int FloatNormalizedRows, int SettledRows, int CancelledRows = 0);
 
@@ -113,8 +114,10 @@ public static class ReviewRecordBuilder
                 if (contactConflict) reasons.Add(ReviewReasons.ConflictingContactDetails);
                 if (ambiguousTenants.Contains((unit.Key.CompanyId, unit.Key.Tenant))) reasons.Add(ReviewReasons.UnitAllocationNeedsReview);
                 if (!context.Currency.Equals("AED", StringComparison.Ordinal)) reasons.Add(ReviewReasons.CurrencyNeedsReview);
-                // Reconciliation is a property of the SOURCE, not of the customer: the run records it (CollectionsReviewRun.SourceReconciled) and the send refuses on it as one gate.
-                // It is never stamped on each record, so a customer's own status says what is wrong with the customer's data, and nothing else.
+                // Reconciliation is a property of the SOURCE, not of the customer: the run records it (CollectionsReviewRun.SourceReconciled) and the send refuses on it as one gate per company.
+                // It is never stamped on each record, so a customer's own status says what is wrong with the customer's data, and nothing else. The one exception IS the customer's data:
+                // a unit whose snapshot amounts differ persistently from PACT after a refresh is held back on its own (SourceGate.HeldUnits), while every other unit stays as it is.
+                if (context.HeldUnits is { Count: > 0 } held && held.Contains((unit.Key.CompanyId, unit.Key.Tenant, (long)(unit.Key.UnitId ?? 0)))) reasons.Add(ReviewReasons.SourceMismatchUnresolved);
                 if (linked.Phone.Length == 0) reasons.Add(ReviewReasons.NoValidContact);
                 if (linked.CrmCustomerAmbiguous) reasons.Add(ReviewReasons.CrmCustomerAmbiguous);
                 if (linked.CrmCompanyAmbiguous) reasons.Add(ReviewReasons.CrmCompanyAmbiguous);

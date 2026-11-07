@@ -245,6 +245,10 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.Phase, phase).SetProperty(r => r.ProgressPercent, percent)
                 .SetProperty(r => r.SourceRowCount, r => sourceRows ?? r.SourceRowCount), token), ct);
 
+    public Task SetRunSourceReconciledAsync(long runId, bool reconciled, CancellationToken ct) =>
+        WriteWithRetryAsync("record the reconciliation state on the review refresh", token => db.CollectionsReviewRuns.Where(r => r.CollectionsReviewRunId == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.SourceReconciled, reconciled), token), ct);
+
     private static ReviewStorageException TransientFailure(string what, int attempts, Exception ex) => new(
         $"Could not {what}: the database connection was lost or timed out after {attempts} attempt(s)" + (ReviewWriteRetryPolicy.NumberOf(ex) is { } n ? $" (SQL error {n})" : "")
         + ". Nothing was published; the previous review data is still in use. Retry.", true, ReviewWriteRetryPolicy.NumberOf(ex), ex);
