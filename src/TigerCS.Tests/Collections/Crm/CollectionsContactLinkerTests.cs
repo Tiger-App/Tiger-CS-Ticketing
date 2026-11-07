@@ -12,7 +12,7 @@ public sealed class CollectionsContactLinkerTests
     {
         var linked = CollectionsContactLinker.Link(C("Pact Name", "+971500000001", "p@x.test"), SourceContact.Empty, CrmLinkStatus.None);
         Assert.Equal(("Pact Name", "+971500000001", "p@x.test", "Pact", "Pact", "Pact"), (linked.Name, linked.Phone, linked.Email, linked.NameSource, linked.PhoneSource, linked.EmailSource));
-        Assert.False(linked.SourceConflict); Assert.True(linked.HasContact);
+        Assert.True(linked.HasContact);
     }
 
     [Fact]
@@ -22,7 +22,6 @@ public sealed class CollectionsContactLinkerTests
         var linked = CollectionsContactLinker.Link(C("Pact Name", "", "p@x.test"), C("Crm Name", "+971501111111", ""), CrmLinkStatus.Single);
         Assert.Equal(("Crm Name", "+971501111111", "p@x.test"), (linked.Name, linked.Phone, linked.Email));
         Assert.Equal(("Crm", "Crm", "Pact"), (linked.NameSource, linked.PhoneSource, linked.EmailSource));
-        Assert.False(linked.SourceConflict);
         // CRM empty everywhere: nothing is blanked out, PACT fills all three.
         var empty = CollectionsContactLinker.Link(C("P", "+971502222222", "p@x.test"), C(), CrmLinkStatus.Single);
         Assert.Equal(("P", "+971502222222", "p@x.test"), (empty.Name, empty.Phone, empty.Email));
@@ -32,20 +31,51 @@ public sealed class CollectionsContactLinkerTests
     }
 
     [Fact]
-    public void DifferentPhones_AreTwoPeople_NotMerged_AndFlagged()
+    public void DifferentPhones_CrmWins_NothingIsFlagged_AndPactIsOnlyAFallbackForMissingValues()
     {
         var linked = CollectionsContactLinker.Link(C("Pact Person", "+971500000001", "pact@x.test"), C("Crm Person", "+971509999999", ""), CrmLinkStatus.Single);
-        Assert.True(linked.SourceConflict);
-        Assert.Equal(("Crm Person", "+971509999999", ""), (linked.Name, linked.Phone, linked.Email));   // CRM alone: PACT's e-mail is NOT borrowed for the CRM customer
-        Assert.True(CollectionsContactLinker.Flags(linked, true).HasFlag(CollectionsCampaignFlags.ContactSourceConflict));
+        Assert.Equal(("Crm Person", "+971509999999", "pact@x.test"), (linked.Name, linked.Phone, linked.Email));   // CRM phone wins; the e-mail CRM lacks falls back to PACT
+        Assert.Equal(("Crm", "Crm", "Pact"), (linked.NameSource, linked.PhoneSource, linked.EmailSource));
+        Assert.Equal(CollectionsCampaignFlags.None, CollectionsContactLinker.Flags(linked, true));
     }
 
     [Fact]
-    public void DifferentEmails_ConflictOnlyWhenThePhonesCannotConfirmTheSamePerson()
+    public void DifferentEmails_CrmWins_WhetherOrNotThePhonesAgree_AndNothingIsFlagged()
     {
-        Assert.False(CollectionsContactLinker.Link(C("A", "+971500000001", "old@x.test"), C("A", "+971500000001", "new@x.test"), CrmLinkStatus.Single).SourceConflict);   // same phone: same person
-        Assert.True(CollectionsContactLinker.Link(C("A", "", "old@x.test"), C("A", "", "new@x.test"), CrmLinkStatus.Single).SourceConflict);                         // nothing confirms it
-        Assert.True(CollectionsContactLinker.Link(C("A", "", "old@x.test"), C("A", "+971500000001", "new@x.test"), CrmLinkStatus.Single).SourceConflict);
+        foreach (var (pactPhone, crmPhone) in new[] { ("+971500000001", "+971500000001"), ("", ""), ("", "+971500000001"), ("+971500000002", "+971500000001") })
+        {
+            var linked = CollectionsContactLinker.Link(C("A", pactPhone, "old@x.test"), C("A", crmPhone, "new@x.test"), CrmLinkStatus.Single);
+            Assert.Equal(("new@x.test", "Crm"), (linked.Email, linked.EmailSource));
+            Assert.Equal(CollectionsCampaignFlags.None, CollectionsContactLinker.Flags(linked, true));
+        }
+    }
+
+    [Fact]
+    public void MissingCrmContact_FallsBackToPact_OnlyForAUniquelyIdentifiedCrmCustomer()
+    {
+        var single = CollectionsContactLinker.Link(C("P", "+971502222222", "p@x.test"), C("Crm", "", ""), CrmLinkStatus.Single);
+        Assert.Equal(("+971502222222", "Pact", "p@x.test", "Pact"), (single.Phone, single.PhoneSource, single.Email, single.EmailSource));
+        // No CRM customer for the unit: CRM contributes nothing, PACT is the contact.
+        var none = CollectionsContactLinker.Link(C("P", "+971502222222", ""), C("Crm", "+971509999999", "c@x.test"), CrmLinkStatus.None);
+        Assert.Equal("+971502222222", none.Phone);
+    }
+
+    [Fact]
+    public void AmbiguousCrmIdentity_NeverUsesCrmContact_AndKeepsTheReviewFlag()
+    {
+        var linked = CollectionsContactLinker.Link(C("P", "+971502222222", ""), C("Crm", "+971509999999", "c@x.test"), CrmLinkStatus.Ambiguous);
+        Assert.Equal("+971502222222", linked.Phone);
+        Assert.True(CollectionsContactLinker.Flags(linked, true).HasFlag(CollectionsCampaignFlags.CrmCustomerAmbiguous));
+    }
+
+    [Fact]
+    public void TwoCustomersSharingAPhone_AreLinkedIndependently_NothingIsMerged()
+    {
+        var a = CollectionsContactLinker.Link(C("Pact A", "", ""), C("Crm A", "+971500000001", "a@x.test"), CrmLinkStatus.Single);
+        var b = CollectionsContactLinker.Link(C("Pact B", "", ""), C("Crm B", "+971500000001", "b@x.test"), CrmLinkStatus.Single);
+        Assert.Equal(("Crm A", "a@x.test"), (a.Name, a.Email));
+        Assert.Equal(("Crm B", "b@x.test"), (b.Name, b.Email));
+        Assert.Equal(a.Phone, b.Phone);
     }
 
     [Fact]

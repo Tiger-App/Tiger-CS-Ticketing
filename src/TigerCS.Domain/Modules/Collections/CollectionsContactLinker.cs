@@ -24,7 +24,7 @@ public sealed record SourceContact(string Name, string Phone, string Email)
 /// <summary>The contact to use and where each value came from (<c>Crm</c>, <c>Pact</c> or empty), plus the review reasons the linking raised.</summary>
 public sealed record LinkedContact(
     string Name, string Phone, string Email, string NameSource, string PhoneSource, string EmailSource,
-    CrmLinkStatus CrmStatus, bool SourceConflict)
+    CrmLinkStatus CrmStatus)
 {
     public bool CrmCustomerAmbiguous => CrmStatus == CrmLinkStatus.Ambiguous;
     public bool CrmCompanyAmbiguous => CrmStatus == CrmLinkStatus.CompanyAmbiguous;
@@ -36,10 +36,9 @@ public sealed record LinkedContact(
 /// <c>usp_Collections_GetCampaignUnits</c>). The rules:
 /// <list type="number">
 /// <item>CRM first: when exactly one eligible CRM customer holds the unit, its name / phone / e-mail win.</item>
-/// <item>PACT completes what CRM lacks (a missing name, phone or e-mail); an existing value is never replaced by an empty one.</item>
+/// <item>PACT completes only what CRM lacks (a missing name, phone or e-mail) and only for a uniquely identified CRM customer; an existing CRM value is never replaced.</item>
 /// <item>Several CRM customers: nobody is chosen - CRM is not used at all and the unit is flagged; PACT's own contact stays.</item>
-/// <item>Conflict - both sources have a phone and they differ, or (when the phones cannot confirm the same person) both have an e-mail and they differ:
-/// two people are never merged. CRM's values alone are used, PACT is not mixed in, and the unit is flagged for review.</item>
+/// <item>Different CRM and PACT phones or e-mails are NOT a conflict: CRM wins and nothing is flagged. Customers are never merged by phone, e-mail or name.</item>
 /// </list>
 /// </summary>
 public static class CollectionsContactLinker
@@ -47,25 +46,22 @@ public static class CollectionsContactLinker
     public static LinkedContact Link(SourceContact pact, SourceContact crm, CrmLinkStatus status)
     {
         if (status != CrmLinkStatus.Single)
-            return new(pact.Name, pact.Phone, pact.Email, pact.Name.Length > 0 ? "Pact" : "", pact.Phone.Length > 0 ? "Pact" : "", pact.Email.Length > 0 ? "Pact" : "", status, false);
+            return new(pact.Name, pact.Phone, pact.Email, pact.Name.Length > 0 ? "Pact" : "", pact.Phone.Length > 0 ? "Pact" : "", pact.Email.Length > 0 ? "Pact" : "", status);
 
-        var phonesConfirm = crm.Phone.Length > 0 && pact.Phone.Length > 0 && crm.Phone == pact.Phone;
-        var conflict = (crm.Phone.Length > 0 && pact.Phone.Length > 0 && crm.Phone != pact.Phone)
-            || (crm.Email.Length > 0 && pact.Email.Length > 0 && crm.Email != pact.Email && !phonesConfirm);
-        // Under a conflict PACT is not mixed into CRM's customer.
-        string Pick(string fromCrm, string fromPact) => fromCrm.Length > 0 || conflict ? fromCrm : fromPact;
+        // CRM is the authoritative contact source: every CRM value wins, even when PACT holds a different phone or e-mail (that is not a conflict and raises no review flag).
+        // PACT is only a fallback for a value CRM lacks, and only here, where exactly one CRM customer is tied to the unit (a reliable identity).
+        string Pick(string fromCrm, string fromPact) => fromCrm.Length > 0 ? fromCrm : fromPact;
         string Source(string value, string fromCrm) => value.Length == 0 ? "" : fromCrm.Length > 0 ? "Crm" : "Pact";
         var name = Pick(crm.Name, pact.Name); var phone = Pick(crm.Phone, pact.Phone); var email = Pick(crm.Email, pact.Email);
-        return new(name, phone, email, Source(name, crm.Name), Source(phone, crm.Phone), Source(email, crm.Email), status, conflict);
+        return new(name, phone, email, Source(name, crm.Name), Source(phone, crm.Phone), Source(email, crm.Email), status);
     }
 
-    /// <summary>The review flags a linking raises (CrmCustomerAmbiguous, ContactSourceConflict) and NoValidContact when the linked contact has neither phone nor e-mail.</summary>
+    /// <summary>The review flags a linking raises (CrmCustomerAmbiguous, CrmCompanyAmbiguous) and NoValidContact when the linked contact has neither phone nor e-mail.</summary>
     public static CollectionsCampaignFlags Flags(LinkedContact linked, bool contactRequired)
     {
         var flags = CollectionsCampaignFlags.None;
         if (linked.CrmCustomerAmbiguous) flags |= CollectionsCampaignFlags.CrmCustomerAmbiguous;
         if (linked.CrmCompanyAmbiguous) flags |= CollectionsCampaignFlags.CrmCompanyAmbiguous;
-        if (linked.SourceConflict) flags |= CollectionsCampaignFlags.ContactSourceConflict;
         if (contactRequired && !linked.HasContact) flags |= CollectionsCampaignFlags.NoValidContact;
         return flags;
     }

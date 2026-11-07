@@ -50,10 +50,10 @@ public sealed class CollectionsTowerAndCrmDisplayTests
         var crmOnly = ReceivablesModel.Lines(Report(Unit("Blue Wave", "115", crmCustomers: 1, crmPhone: "+966508650505", crmName: "Mohammad Mousa Abdul Hamid", crmEmail: "m@example.test"))).Single();
         Assert.Equal(("Mohammad Mousa Abdul Hamid", "+966508650505", "m@example.test"), (crmOnly.Customer, crmOnly.Phone, crmOnly.Email));
         Assert.Empty(crmOnly.Notes);
-        // CRM has the mobile and no e-mail; PACT has a different mobile: two people, nothing mixed, review.
+        // CRM has the mobile and no e-mail; PACT has a different mobile: CRM wins and no "contacts differ" review note is raised.
         var conflict = ReceivablesModel.Lines(Report(Unit("Blue Wave", "115", crmCustomers: 1, crmPhone: "+966508650505", crmName: "Crm", crmEmail: "", pactPhone: "971500003001"))).Single();
         Assert.Equal("+966508650505", conflict.Phone);
-        Assert.Contains(conflict.Notes, n => n.Contains("differ") && n.Contains("review"));
+        Assert.DoesNotContain(conflict.Notes, n => n.Contains("differ"));
     }
 
     [Fact]

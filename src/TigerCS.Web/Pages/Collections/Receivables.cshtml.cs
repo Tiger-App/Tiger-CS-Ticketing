@@ -208,7 +208,6 @@ public sealed record UnitLine(string Customer, string Phone, string Email, strin
             var notes = new List<string>();
             if (linked.CrmCustomerAmbiguous) notes.Add("Several CRM customers: needs review");
             if (linked.CrmCompanyAmbiguous) notes.Add("CRM sale cannot be tied to one company: needs review");
-            if (linked.SourceConflict) notes.Add("CRM and PACT contacts differ: needs review");
             // A CRM SERVICE problem is not "CRM has no value": when CRM linking is on but unusable, the contact below is PACT-only and unconfirmed.
             if (report.Crm is { Blocks: true }) notes.Add("CRM unavailable: contact unconfirmed, needs review");
             else if (!linked.HasContact) notes.Add(NoContactNote(report.Crm?.State, crmStatus));

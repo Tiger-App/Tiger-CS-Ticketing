@@ -124,13 +124,13 @@ public sealed partial class CollectionsCrmLinkingTests
     }
 
     [Fact]
-    public async Task CrmAndPactDisagreeingOnThePerson_NeedsReview_AndTwoPeopleAreNeverMerged()
+    public async Task CrmAndPactDisagreeingOnThePhone_CrmWins_WithoutReviewOrMerging()
     {
         var r = new Rig(); r.Source.Items.Add(Row("T1", 101, mobile: "971500003001"));
         r.Owners(Owner(1, "TP140", "101", mobile: "0551112222"));
         var unit = Assert.Single(await r.Units());
-        Assert.Contains("ContactSourceConflict", unit.Reason);
-        Assert.Equal("+971551112222", unit.Phone); // CRM alone, PACT's phone is not mixed in
+        Assert.DoesNotContain("ContactSourceConflict", unit.Reason);
+        Assert.Equal("+971551112222", unit.Phone); // CRM is authoritative
         Assert.Equal("crm@example.test", unit.Email);
     }
 
@@ -349,11 +349,11 @@ public sealed partial class CollectionsCrmLinkingTests
     }
 
     [Fact]
-    public void Summary_ConflictingPeople_NeedsReview_AndCrmAloneIsShown()
+    public void Summary_DifferentPactPhone_CrmWins_AndIsNotReviewed()
     {
         var link = new CrmUnitLink(CrmLinkStatus.Single, 1, 11, 55, 77, new("Crm Customer", "+971551112222", "crm@example.test"));
         var s = Compose(new(Snapshot(4), [Id(mobile: "971500003001")], [Inst()], new Dictionary<int, CrmUnitLink> { [4] = link }, true, Now));
-        Assert.Equal("NeedsReview", s.LinkStatus); Assert.Contains("ContactSourceConflict", s.ReviewReasons);
+        Assert.DoesNotContain("ContactSourceConflict", s.ReviewReasons);
         Assert.Equal("+971551112222", s.Customer.Mobile);
     }
 

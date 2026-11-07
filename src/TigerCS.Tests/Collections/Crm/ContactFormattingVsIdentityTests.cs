@@ -19,26 +19,22 @@ public sealed class ContactFormattingVsIdentityTests
     public void FormattingDifferences_AreTheSamePerson_NoConflict(string crm, string pact)
     {
         var linked = Link(crm, pact);
-        Assert.False(linked.SourceConflict);
         Assert.Equal("+971501234567", linked.Phone);
         Assert.Equal("Crm", linked.PhoneSource);
     }
 
     [Fact]
-    public void ADifferentNumber_IsARealConflict_CrmAloneIsUsed_AndPactIsNotMixedIn()
+    public void ADifferentNumber_CrmWins_AndIsNotAConflict()
     {
         var linked = Link("0501234567", "0559876543", pactEmail: "other@example.ae");
-        Assert.True(linked.SourceConflict);
         Assert.Equal("+971501234567", linked.Phone);
-        Assert.Equal("", linked.Email);                                       // PACT's e-mail belongs to the other person
-        Assert.Contains(CollectionsCampaignFlags.ContactSourceConflict, new[] { CollectionsContactLinker.Flags(linked, true) }.SelectMany(f => Enum.GetValues<CollectionsCampaignFlags>().Where(x => x != 0 && f.HasFlag(x))));
+        Assert.Equal(CollectionsCampaignFlags.None, CollectionsContactLinker.Flags(linked, true));
     }
 
     [Fact]
     public void AMissingCrmPhone_IsFilledFromPact_WhenNothingContradictsIt()
     {
         var linked = Link("", "0501234567", crmEmail: "a@example.ae", pactEmail: "a@example.ae");
-        Assert.False(linked.SourceConflict);
         Assert.Equal(("+971501234567", "Pact"), (linked.Phone, linked.PhoneSource));
     }
 
@@ -46,7 +42,6 @@ public sealed class ContactFormattingVsIdentityTests
     public void AnInvalidPactNumber_IsNeverInvented_AndDoesNotCreateAConflict()
     {
         var linked = Link("0501234567", "12345");
-        Assert.False(linked.SourceConflict);
         Assert.Equal("+971501234567", linked.Phone);
     }
 }
