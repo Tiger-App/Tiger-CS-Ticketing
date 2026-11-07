@@ -262,7 +262,15 @@ internal sealed class ReviewHarness : IDisposable
     /// <summary>The automated reconciliation evidence the gate consults (null = sign-off only, as most tests want; set a history to test the per-company gate and held units).</summary>
     public TigerCS.Application.Modules.Collections.Reconciliation.ReconciliationHistory? Evidence { get; set; }
     public CollectionsReviewOptions Review { get; } = new();
-    public GenesysOutboundOptions Genesys { get; } = new() { Enabled = true, LiveCustomerDispatchEnabled = true, SuppressionEnabled = true, LeaseHeartbeatSeconds = 0.02 };
+    /// <summary>The dedicated Manual list id used by the tests (a made-up GUID; nothing is ever sent to Genesys).</summary>
+    public const string ManualListId = "11111111-2222-4333-8444-555555555555";
+    public GenesysOutboundOptions Genesys { get; } = NewGenesys();
+    private static GenesysOutboundOptions NewGenesys()
+    {
+        var options = new GenesysOutboundOptions { Enabled = true, LiveCustomerDispatchEnabled = true, SuppressionEnabled = true, LeaseHeartbeatSeconds = 0.02 };
+        options.ContactListIds["Manual"] = ManualListId;
+        return options;
+    }
     /// <summary>The shared CRM link service (null = CRM linking off: contacts are PACT's, as before).</summary>
     public TigerCS.Application.Modules.Collections.Services.CollectionsUnitLinkService? Links { get; set; }
     public FakeGenesysClient Client { get; } = new();

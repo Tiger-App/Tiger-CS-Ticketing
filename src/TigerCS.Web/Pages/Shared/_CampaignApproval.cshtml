@@ -147,7 +147,7 @@
                 "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
                 "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
         }
-        <input type="hidden" name="contactList" value="@Model.ContactList" />
+        <input type="hidden" name="contactList" value="@Model.SelectedContactList" />
         <input type="hidden" name="selectionMode" value="@Model.SelectionMode" /><input type="hidden" name="unitKeys" value="@Model.UnitKeys" />
         <input type="hidden" name="expectedCount" value="@s.Count" /><input type="hidden" name="expectedFingerprint" value="@s.Fingerprint" />
         <input type="hidden" name="idempotencyKey" value="@Model.ConfirmKey" />
