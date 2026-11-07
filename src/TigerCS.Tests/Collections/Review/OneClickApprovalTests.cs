@@ -98,8 +98,9 @@ public sealed class OneClickApprovalTests
         await h.RefreshAsync();
         using var scope = h.NewScope();
         var summary = (await scope.Query.SummarizeAsync(h.Manager, Units(1), CancellationToken.None)).Value!;
-        Assert.Equal(0, summary.Count);
         Assert.False(summary.SourceReconciled);
+        var refused = await scope.Dispatch.ConfirmAsync(h.Manager, new ConfirmDispatchRequest(Units(1), summary.Count, summary.Fingerprint, "gate", true), CancellationToken.None);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("not reconciled", refused.Detail); Assert.Empty(h.Scheduler.Dispatches);
 
         using var ok = await SeededAsync(1);
         var (dispatch, _) = await ApproveAndSendAsync(ok, Units(1));

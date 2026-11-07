@@ -60,15 +60,15 @@ else if (Model.Report is { } report)
                 @if (Model.CampaignName is { } campaignName) { <span>Campaign <strong data-campaign-name>@campaignName</strong></span> }
                 <span>Payment <strong>@(report.PaymentStatus == "Both" ? "Due and Overdue" : report.PaymentStatus)</strong></span>
             </p>
-            @if (blockedCount > 0 || report.PreviewOnlyCount > 0)
+            @{ var gateReasons = Model.NotReadyGateReasons(); }
+            @if (blockedCount > 0 || report.PreviewOnlyCount > 0 || gateReasons.Count > 0)
             {
                 @* The blockers are safety information: the report-wide gates (financial data, reconciliation, CRM, timing) and the per-customer reasons are all listed, in a small panel that expands on demand.
-                   A reconciliation blocker is also always visible in the status strip, and the Approve & Send tooltip gives the exact reason for the button. *@
-                var gateReasons = Model.NotReadyGateReasons();
+                   A gate (for example the reconciliation) blocks every customer at once and is never written against a customer; it is also visible in the status strip and in the Approve & Send tooltip. *@
                 var customerReasons = Model.NotReadyCustomerReasons();
                 <details class="campaign-blockers" data-not-ready-reasons>
                     <summary>Why sending is blocked <span class="campaign-blockers__count">@(gateReasons.Count + customerReasons.Count)</span></summary>
-                    <p class="receivables-meta">@(report.ReadyCount == 0 ? "No customer is" : "Some customers are not") Ready to send:</p>
+                    <p class="receivables-meta">@(gateReasons.Count > 0 ? "No customer can be sent while a gate is closed:" : report.ReadyCount == 0 ? "No customer is Ready to send:" : "Some customers are not Ready to send:")</p>
                     <ul class="campaign-blockers__list">
                         @foreach (var reason in gateReasons.Concat(customerReasons)) { <li data-not-ready-reason>@reason</li> }
                     </ul>

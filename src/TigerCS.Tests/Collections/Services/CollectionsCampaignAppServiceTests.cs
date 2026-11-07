@@ -97,12 +97,11 @@ public sealed class CollectionsCampaignAppServiceTests
         var h = new Harness(); h.Source.Items.Add(Row());
         var report = (await h.Service.PreviewAsync(h.Manager, "CurrentMonthReminder")).Value!;
         var row = Assert.Single(report.Items);
-        Assert.Equal("NeedsReview", row.Status);
-        Assert.Contains("SourceReconciliationRequired", row.Reason);
-        Assert.Equal(CollectionsOutcome.InvalidRequest, (await h.Service.ExportAsync(h.Manager, "CurrentMonthReminder", "genesys")).Outcome);
+        Assert.False(report.FinancialSourceValidated); Assert.DoesNotContain("SourceReconciliationRequired", row.Reason);   // one gate for the report, not a reason per unit
+        var refused = await h.Service.ExportAsync(h.Manager, "CurrentMonthReminder", "genesys");
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("not reconciled", refused.Detail);
         var review = (await h.Service.ExportAsync(h.Manager, "CurrentMonthReminder", "review")).Value!;
         Assert.Contains("InternalReviewOnly", review.Csv);
-        Assert.Contains("SourceReconciliationRequired", review.Csv);
     }
 
     [Fact]

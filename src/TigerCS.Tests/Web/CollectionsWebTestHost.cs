@@ -140,7 +140,7 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
                 TigerCS.Application.Modules.Collections.Review.ReviewRecordDto Record(int n, string status, params string[] reasons) => new($"RK{n}", q["reminderType"] ?? "CurrentMonth", 4, $"Campaign Customer {n}", $"+9715000030{n:D2}", $"c{n}@example.test",
                     "TP140", $"TP140-{n}", "Unpaid", 500m * n, "AED", new DateOnly(2026, 10, 20), status, reasons.Select(r => new TigerCS.Application.Modules.Collections.Review.ReviewReasonDto(r, "NeedsReview", r)).ToList(), "PACT", read, null, null, "140", "Tower 140", $"300{n}");
                 var records = IncludeNotEligible ? new List<TigerCS.Application.Modules.Collections.Review.ReviewRecordDto> { Record(1, "Ready"), Record(2, "Ready") }
-                    : [Record(1, "NeedsReview", SourceUnreconciled ? "SourceReconciliationRequired" : "NoValidContact")];
+                    : SourceUnreconciled ? [Record(1, "Ready")] : [Record(1, "NeedsReview", "NoValidContact")];
                 var ready = records.Count(r => r.ValidationStatus == "Ready");
                 return Json(new TigerCS.Application.Modules.Collections.Review.ReviewPageDto(run, new(records.Count, ready, records.Count - ready, 0, 0), 1, 25, records.Count, records, 0m, false,
                     records.Where(r => r.ValidationStatus == "Ready").Sum(r => r.RemainingAmount ?? 0m)));
@@ -162,8 +162,10 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
                          new("ID2", "ext:Pact:3002", 4, "3002", "Not Eligible Customer", "+971500003002", "n@example.test", 102, "TP140-102", "TP140", 0m, "AED", null, "CurrentMonthReminder", "2026-10:CurrentMonthReminder", "NotEligible", "NoQualifyingBalance", "140", "Al Ghaf", 300m, 0m)],
                         from, to, [], null, Snapshot(from, to), 100m, new ServerTimingsDto(9, 2, 15), null, 1, q["paymentStatus"] ?? "Both", 650m, OutstandingAmount), q));
                 return Json(new CollectionsCampaignPreviewDto(date, date, DateTime.UtcNow, "PACT", "CurrentMonthReminder", "2026-10:CurrentMonthReminder", [date], true, !SourceUnreconciled, false, !ExportForbidden,
-                    NothingLoaded ? 0 : 1, 0, NothingLoaded ? 0 : 1, 1, 25,
-                    NothingLoaded ? [] : [new("ID", "ext:Pact:3001", 4, "3001", "Campaign Customer", "+971500003001", "", 101, "TP140-101", "TP140", 500m, "AED", date, "CurrentMonthReminder", "2026-10:CurrentMonthReminder", "NeedsReview", "SourceReconciliationRequired", "140", "Al Ghaf", 0m, 650m)],
+                    // One customer: with the source unreconciled the customer is Ready and only the report-wide gate blocks the send; otherwise the customer needs review for a reason of its own.
+                    NothingLoaded ? 0 : 1, !NothingLoaded && SourceUnreconciled ? 1 : 0, !NothingLoaded && !SourceUnreconciled ? 1 : 0, 1, 25,
+                    NothingLoaded ? [] : [new("ID", "ext:Pact:3001", 4, "3001", "Campaign Customer", "+971500003001", "", 101, "TP140-101", "TP140", 500m, "AED", date, "CurrentMonthReminder", "2026-10:CurrentMonthReminder",
+                        SourceUnreconciled ? "Ready" : "NeedsReview", SourceUnreconciled ? "Qualifies" : "AmountPrecisionNeedsReview", "140", "Al Ghaf", 0m, 650m)],
                     from, to, [], int.TryParse(q["towerId"], out var tower) ? tower : null, Snapshot(from, to),
                     decimal.Parse(q["minAmount"] ?? "100", System.Globalization.CultureInfo.InvariantCulture), new ServerTimingsDto(9, 2, 15), null, 0, q["paymentStatus"] ?? "Both", NothingLoaded ? 0m : 650m, OutstandingAmount));
             }

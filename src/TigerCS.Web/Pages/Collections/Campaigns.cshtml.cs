@@ -621,13 +621,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         var result = await api.SummarizeSelectionAsync(BuildSelection(), ct);
         if (!result.IsSuccess) { ApprovalError = Describe(result.Outcome, result.Detail); return; }
         var summary = result.Value!;
-        if (summary.Count == 0)
-        {
-            ApprovalError = !summary.SourceReconciled
-                ? "The financial source has not been reconciled against PACT for the configured procedure, so nothing can be sent."
-                : "None of the selected customers is Ready to send now (needs review, paid, or already sent).";
-            return;
-        }
+        // The reconciliation gate is decided once, for the source: no confirmation dialog is shown while it is not passed, whatever the customers' own status.
+        if (!summary.SourceReconciled) { ApprovalError = "The financial source has not been reconciled against PACT for the configured procedure, so nothing can be sent."; return; }
+        if (summary.Count == 0) { ApprovalError = "None of the selected customers is Ready to send now (needs review, paid, or already sent)."; return; }
         Summary = summary;
         var overlaps = await api.GetOverlapsAsync(1, ct);
         if (overlaps.IsSuccess) Overlaps = overlaps.Value;

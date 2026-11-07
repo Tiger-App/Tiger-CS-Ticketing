@@ -204,7 +204,7 @@ public sealed class GenesysExportTests
         Assert.Contains(ReviewReasons.SourceReconciliationRequired, dto.UnverifiedReasons!);
         Assert.Contains(dto.Notices, n => n.Contains("has not been reconciled against PACT"));
         Assert.EndsWith($" ({GenesysExportService.UnverifiedDataLabel}).csv", dto.FileName);
-        Assert.Equal(2, dto.IncludedByStatus!["NeedsReview"]);                                        // what the Manual page shows for them
+        Assert.Equal(2, dto.IncludedByStatus!["Ready"]);                                              // the customers' own status; the source gate is on the run
         using var context = h.CreateContext();
         var audit = (await context.AuditEntries.ToListAsync()).Single().AfterValue!;
         Assert.Contains("DataVerified=False;Unverified=SourceReconciliationRequired", audit); Assert.Contains(GenesysExportService.UnverifiedDataLabel, audit);
