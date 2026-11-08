@@ -33,7 +33,7 @@ const PAGE = `<!doctype html><html><body>
     <input type="hidden" name="__RequestVerificationToken" value="tok" />
     <input type="hidden" name="stage" value="CurrentMonthReminder" /><input type="hidden" name="sendingMode" value="Manual" />
     <input type="hidden" name="dateFrom" value="2026-09-01" /><input type="hidden" name="minTotal" value="250" /><input type="hidden" name="paymentStatus" value="Overdue" />
-    <input type="hidden" name="towerId" value="7" /><input type="hidden" name="contactList" value="FollowUp" />
+    <input type="hidden" name="towerId" value="7" /><input type="hidden" name="contactList" value="Manual" />
     <input type="hidden" name="selectionMode" value="SelectedUnits" /><input type="hidden" name="unitKeys" value="a,b" />
     <input type="hidden" name="expectedCount" value="2" /><input type="hidden" name="expectedFingerprint" value="FP" /><input type="hidden" name="idempotencyKey" value="key-1" />
     <label><input type="checkbox" name="ackCampaign" value="true" required checked /> I understand</label>
@@ -107,7 +107,7 @@ test('the request is the plain post: same fields, acknowledgement included, Manu
     assert.equal(options.method, 'POST'); assert.equal(options.headers['X-Requested-With'], 'tigercs-confirm'); assert.equal(options.headers.Accept, 'application/json');
     const f = t.fields(options);
     assert.equal(f.ackCampaign, 'true', 'read before the controls were locked');
-    assert.deepEqual([f.stage, f.sendingMode, f.dateFrom, f.minTotal, f.paymentStatus, f.towerId, f.contactList], ['CurrentMonthReminder', 'Manual', '2026-09-01', '250', 'Overdue', '7', 'FollowUp']);
+    assert.deepEqual([f.stage, f.sendingMode, f.dateFrom, f.minTotal, f.paymentStatus, f.towerId, f.contactList], ['CurrentMonthReminder', 'Manual', '2026-09-01', '250', 'Overdue', '7', 'Manual']);
     assert.deepEqual([f.selectionMode, f.unitKeys, f.expectedCount, f.expectedFingerprint, f.idempotencyKey, f.__RequestVerificationToken], ['SelectedUnits', 'a,b', '2', 'FP', 'key-1', 'tok']);
     assert.equal(t.window.location.href, 'https://tiger.test/Collections/Campaigns', 'the page itself is not navigated');
     // "Back to the list" returns to the same preview: campaign, filters and Manual mode.

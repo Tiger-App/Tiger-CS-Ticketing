@@ -76,15 +76,23 @@ public sealed class GenesysConnectionCheckService(
         }
 
         // 3. Every configured contact list, once per distinct id (read only).
-        var byId = new Dictionary<string, List<CampaignReminderType>>(StringComparer.OrdinalIgnoreCase);
+        var byId = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
         foreach (var type in Enum.GetValues<CampaignReminderType>())
         {
             string id;
             try { id = genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { Add($"ContactListIds:{type}", "Failed", "No valid contact list id (a GUID) is configured."); continue; }
             if (!byId.TryGetValue(id, out var types)) byId[id] = types = [];
-            types.Add(type);
+            types.Add(type.ToString());
         }
+        // The dedicated Manual list is read like the others; a missing, invalid or duplicated id is reported by name.
+        try
+        {
+            var manualId = genesys.ManualContactListId;
+            if (!byId.TryGetValue(manualId, out var manualTypes)) byId[manualId] = manualTypes = [];
+            manualTypes.Add(CampaignReminderTypes.ManualListKey);
+        }
+        catch (InvalidOperationException ex) { Add($"ContactListIds:{CampaignReminderTypes.ManualListKey}", "Failed", ex.Message); }
         foreach (var (id, types) in byId)
         {
             var name = string.Join(" / ", types.Select(t => $"ContactListIds:{t}"));

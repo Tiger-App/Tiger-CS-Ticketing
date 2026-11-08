@@ -18,7 +18,7 @@ namespace TigerCS.Tests.Collections.Review;
 /// </summary>
 public sealed class GenesysExportTests
 {
-    private const string CurrentMonthList = "79e5ae74-ea6e-4941-b76d-45ddf487d8d1", FollowUpList = "3a91c06e-47ab-4a5e-a720-004bd5cf5bba";
+    private const string CurrentMonthList = "79e5ae74-ea6e-4941-b76d-45ddf487d8d1", FollowUpList = "3a91c06e-47ab-4a5e-a720-004bd5cf5bba", ManualList = ReviewHarness.ManualListId;
     private static readonly string[] Template = ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"];
 
     /// <summary>Customer 1 owes 5,000 due 20 Oct (Due) and 8,000 due 10 Aug (Overdue); customer 2 owes 500 due 20 Oct.</summary>
@@ -231,28 +231,50 @@ public sealed class GenesysExportTests
     // ------------------------------------------------------------ the contact list
 
     [Theory]
-    [InlineData("CurrentMonth", null, "CurrentMonth", CurrentMonthList)]
-    [InlineData("CurrentMonth", "FollowUp", "FollowUp", FollowUpList)]
-    [InlineData("FollowUp", "CurrentMonth", "CurrentMonth", CurrentMonthList)]
-    [InlineData("FollowUp", null, "FollowUp", FollowUpList)]
-    public async Task TheFile_IsForTheChosenExistingList_AndCarriesTheCampaignsReminderType(string type, string? chosen, string listName, string listId)
+    [InlineData("CurrentMonth")]
+    [InlineData("FollowUp")]
+    [InlineData("Overdue")]
+    public async Task AManualExport_IsForTheDedicatedManualList_AndCarriesTheUnitsOwnReminderType(string type)
     {
         using var h = await SeededAsync();
-        var dto = (await ExportAsync(h, All(Manual(type, chosen)))).Value!;
-        Assert.Equal(listId, dto.ContactListId); Assert.StartsWith($"genesys-{type}-to-{listName}-20261015-", dto.FileName); Assert.EndsWith(".csv", dto.FileName);
+        var dto = (await ExportAsync(h, All(Manual(type)))).Value!;
+        Assert.Equal(ManualList, dto.ContactListId); Assert.StartsWith($"genesys-{type}-to-Manual-20261015-", dto.FileName); Assert.EndsWith(".csv", dto.FileName);
+        Assert.Equal("TigerCS Manual Collections", dto.ContactList);
         Assert.Equal(CampaignReminderTypes.StageName(Enum.Parse<CampaignReminderType>(type)), dto.Campaign);
         Assert.All(Parse(dto).Skip(1), r => Assert.Equal(CampaignReminderTypes.DefaultLabel(Enum.Parse<CampaignReminderType>(type)), r[3]));
     }
 
     [Theory]
+    [InlineData("CurrentMonth", CurrentMonthList)]
+    [InlineData("FollowUp", FollowUpList)]
+    public async Task AnAutoExport_StaysOnTheStagesOwnList(string type, string listId)
+    {
+        using var h = await SeededAsync();
+        var dto = (await ExportAsync(h, All(new ReviewFilter(ReminderType: type, SendingMode: "Auto", MinRemaining: 0m)))).Value!;
+        Assert.Equal(listId, dto.ContactListId); Assert.StartsWith($"genesys-{type}-to-{type}-20261015-", dto.FileName);
+    }
+
+    [Theory]
     [InlineData("CurrentMonth", "LegalNotice")]
+    [InlineData("CurrentMonth", "FollowUp")]
     [InlineData("CurrentMonth", "Nonsense")]
     [InlineData("LegalNotice", "CurrentMonth")]
-    public async Task AListThatDoesNotSuitTheCampaign_IsRefused(string type, string list)
+    public async Task AManualExport_ToAnotherList_IsRefused(string type, string list)
     {
         using var h = await SeededAsync(null, ReviewHarness.Row(1), ReviewHarness.Row(2, 2000m) with { DueDate = new DateTime(2026, 9, 10) });
         var refused = await ExportAsync(h, All(Manual(type, list)));
-        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("TigerCS Manual Collections", refused.Detail);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-a-guid")]
+    public async Task AMissingOrInvalidManualListId_IsAConfigurationError_NeverAnotherList(string id)
+    {
+        using var h = await SeededAsync(x => x.Genesys.ContactListIds["Manual"] = id);
+        var refused = await ExportAsync(h, All(Manual()));
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("ContactListIds:Manual", refused.Detail);
+        Assert.Empty(h.Client.ListChecks);
     }
 
     // ------------------------------------------------------------ the list's real schema
@@ -261,20 +283,20 @@ public sealed class GenesysExportTests
         SeededAsync(h => { h.Genesys.ClientId = "client"; h.Genesys.ClientSecret = "secret"; more?.Invoke(h); });
 
     [Theory]
-    [InlineData("CurrentMonth", CurrentMonthList)]
-    [InlineData("FollowUp", FollowUpList)]
-    public async Task WithGenesysConfigured_TheListsRealColumnsAreReadAndChecked(string list, string listId)
+    [InlineData("CurrentMonth")]
+    [InlineData("FollowUp")]
+    public async Task WithGenesysConfigured_TheManualListsRealColumnsAreReadAndChecked(string type)
     {
         using var h = await WithGenesysAsync();
-        var dto = (await ExportAsync(h, All(Manual("CurrentMonth", list)))).Value!;
-        Assert.True(dto.SchemaVerified); Assert.Empty(dto.Notices); Assert.Contains(listId, h.Client.ListChecks);
+        var dto = (await ExportAsync(h, All(Manual(type)))).Value!;
+        Assert.True(dto.SchemaVerified); Assert.Empty(dto.Notices); Assert.Contains(ManualList, h.Client.ListChecks);
         Assert.Equal(Template, Parse(dto)[0]);
     }
 
     [Fact]
     public async Task ExtraColumnsOfTheList_AreKeptEmpty_InTheListsOwnOrder_AfterTheSixTemplateColumns()
     {
-        using var h = await WithGenesysAsync(x => x.Client.ListColumns[CurrentMonthList] = ["DueDate", "Notes", "Phone", "AmountDue", "CustomerName", "Email Address", "Region", "ReminderType"]);
+        using var h = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = ["DueDate", "Notes", "Phone", "AmountDue", "CustomerName", "Email Address", "Region", "ReminderType"]);
         var dto = (await ExportAsync(h, All(Manual()))).Value!;
         Assert.Equal([.. Template, "Notes", "Region"], Parse(dto)[0]);
         Assert.All(Parse(dto).Skip(1), r => { Assert.Equal(8, r.Count); Assert.Equal("", r[6]); Assert.Equal("", r[7]); Assert.NotEqual("", r[0]); });
@@ -285,14 +307,14 @@ public sealed class GenesysExportTests
     public async Task AListThatLacksOrMisnamesAColumn_RefusesTheExport_NamingTheColumn()
     {
         // A list that WAS read and really conflicts with the template is an incompatibility: reported, never guessed around.
-        using var missing = await WithGenesysAsync(x => x.Client.ListColumns[CurrentMonthList] = ["Phone", "CustomerName", "Email Address", "ReminderType", "DueDate"]);
+        using var missing = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = ["Phone", "CustomerName", "Email Address", "ReminderType", "DueDate"]);
         var refused = await ExportAsync(missing, All(Manual()));
         Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("missing column AmountDue", refused.Detail); Assert.Contains("Nothing was exported", refused.Detail);
 
-        using var misnamed = await WithGenesysAsync(x => x.Client.ListColumns[FollowUpList] = ["Phone", "CustomerName", "EmailAddress", "ReminderType", "AmountDue", "DueDate"]);
-        var wrong = await ExportAsync(misnamed, All(Manual("CurrentMonth", "FollowUp")));
+        using var misnamed = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = ["Phone", "CustomerName", "EmailAddress", "ReminderType", "AmountDue", "DueDate"]);
+        var wrong = await ExportAsync(misnamed, All(Manual("CurrentMonth")));
         Assert.Equal(CollectionsOutcome.InvalidRequest, wrong.Outcome); Assert.Contains("misnamed column Email Address (found \"EmailAddress\")", wrong.Detail);
-        Assert.True((await ExportAsync(misnamed, All(Manual("CurrentMonth", "CurrentMonth")))).IsSuccess);   // the other list is fine
+        Assert.True((await ExportAsync(misnamed, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto", MinRemaining: 0m)))).IsSuccess);   // the Auto stage list is fine
     }
 
     [Fact]
@@ -350,13 +372,13 @@ public sealed class GenesysExportTests
     public async Task EveryExportIsAudited_WithTheCountsOfTheFile_AndWithoutAnyCustomerData()
     {
         using var h = await WithGenesysAsync();
-        var dto = (await ExportAsync(h, All(Manual("CurrentMonth", "FollowUp", f => f with { DueStatus = "Due" })))).Value!;
+        var dto = (await ExportAsync(h, All(Manual("CurrentMonth", null, f => f with { DueStatus = "Due" })))).Value!;
         using var context = h.CreateContext();
         var entry = Assert.Single(await context.AuditEntries.ToListAsync());
         Assert.Equal((GenesysExportService.AuditAction, GenesysExportService.AuditEntityType, (Guid?)h.Manager.EmployeeId), (entry.Action, entry.EntityType, entry.ActorEmployeeId));
         Assert.Equal(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(dto.Csv)))[..16], entry.EntityId);
         var after = entry.AfterValue!;
-        Assert.Contains("Campaign=CurrentMonth", after); Assert.Contains($"ContactList=FollowUp ({FollowUpList})", after); Assert.Contains("Rows=2;Units=2;Excluded=0;Exclusions=", after);
+        Assert.Contains("Campaign=CurrentMonth", after); Assert.Contains($"ContactList=Manual ({ManualList})", after); Assert.Contains("Rows=2;Units=2;Excluded=0;Exclusions=", after);
         Assert.Contains("Total=AED 5500.00", after); Assert.Contains("IncludedByStatus=Ready:2", after); Assert.Contains("DataVerified=True;Unverified=;", after);
         Assert.Contains("SchemaVerified=True", after); Assert.Contains("Mode=Manual", after); Assert.Contains("\"DueStatus\":\"Due\"", after); Assert.Contains("Repeated=0;RepeatCheck=Checked", after); Assert.Contains(dto.Sha256, after);
         Assert.Equal(dto.TotalAmount, Parse(dto).Skip(1).Sum(r => decimal.Parse(r[4], System.Globalization.CultureInfo.InvariantCulture)));   // the audit total is the total of the rows

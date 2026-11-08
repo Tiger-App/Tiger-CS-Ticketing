@@ -40,6 +40,22 @@ The **Sending mode** selector on Collections Campaigns has two options.
 | Contact list | The campaign's own list, or another **existing** list that suits it (see below). | The campaign's own list. |
 | This page | List, filters, selection, confirmation dialog. | A read-only preview of the schedule and the Ready figures; it sends nothing. |
 
+### The dedicated Manual contact list ("TigerCS Manual Collections")
+
+Every **Manual** send and every **Manual** Export for Genesys goes to one dedicated Genesys contact list, **TigerCS Manual Collections**, whatever the campaign type. **Auto** is unchanged: each
+stage keeps its own list (CurrentMonth, FollowUp, Overdue, LegalNotice, LegalCase).
+
+* Setting: `Collections:GenesysOutbound:ContactListIds:Manual` (env var `Collections__GenesysOutbound__ContactListIds__Manual`). The committed value is empty on purpose: no id is invented and
+  Production settings are never changed by the application. Set it to the id of the list in the organization the OAuth client belongs to.
+* A **missing, non-GUID or duplicated** id (the same list as a stage list) is a configuration error that names the setting. Nothing is uploaded and **nothing falls back to another list**.
+  The readiness check and the "Check Genesys connection" button report it too.
+* The list is checked in Genesys right before the upload (it exists, it has the six columns Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate) and again before each batch.
+  Assumption: a Genesys campaign named "TigerCS Manual Collections" is the intended consumer of that list; any other ON or stopping campaign dialling it blocks the send.
+* Each unit stays its own record with its own `ReminderType` (CurrentMonth, FollowUp, ...); phones are never merged and amounts are never combined.
+* The contact-list chooser is gone: the confirmation dialog shows the destination ("Send N customer(s) to the TigerCS Manual Collections contact list?"). A request that names another list is refused.
+  An approval made earlier for another list stops without uploading ("approve again").
+* Manual does not depend on `AutoSendingEnabled`. Financial reconciliation, authorization, approval, idempotency and the Genesys safety checks are unchanged.
+
 ### Manual
 * **Contact list.** A reminder (Overdue, Current Month, Follow Up) may go to any of the three reminder lists (`CurrentMonth`, `FollowUp`, `Overdue`; for example a Current Month reminder to the Follow Up list). A Legal Notice or Legal Case goes only to its own list, so legal wording never lands in a reminder list. The campaign's own list is the default. All lists come from the existing `Collections:GenesysOutbound:ContactListIds`; there is no list of its own for Manual.
 * **The amount** is the sum of the customer's unpaid instalments that match the filters:

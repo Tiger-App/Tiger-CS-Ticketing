@@ -16,6 +16,7 @@ namespace TigerCS.Tests.Collections.Review;
 public sealed class ManualSendingModeTests
 {
     private const string CurrentMonthList = "79e5ae74-ea6e-4941-b76d-45ddf487d8d1", FollowUpList = "3a91c06e-47ab-4a5e-a720-004bd5cf5bba", OverdueList = "d5f4d808-2e12-410e-8fe6-b810cca1ef4c";
+    private const string ManualList = ReviewHarness.ManualListId;
     private const string LegalNoticeList = "372d81d7-6d2d-4b9e-8f09-cf2262aecfdf";
     private static readonly DateOnly Today = new(2026, 10, 15);
 
@@ -250,7 +251,7 @@ public sealed class ManualSendingModeTests
         var notice = ReviewHarness.Row(2, 2000m) with { DueDate = new DateTime(2026, 9, 10) };
         using var released = await SeededAsync(null, true, legal, notice);
         Assert.Equal(["TP140-2"], (await ListAsync(released, Manual("LegalNotice"))).Items.Select(i => i.UnitCode));
-        Assert.Equal(1, (await SummaryAsync(released, All(Manual("LegalNotice", list: "LegalNotice")))).Value!.Count);
+        Assert.Equal(1, (await SummaryAsync(released, All(Manual("LegalNotice")))).Value!.Count);
         var referral = await ListAsync(released, Manual("LegalCase"));
         Assert.Equal(["TP140-1"], referral.Items.Select(i => i.UnitCode)); Assert.Equal(0, referral.Counts.Ready);
         Assert.Contains(referral.Items[0].Reasons, r => r.Code == ReviewReasons.LegalCaseNotApproved);
@@ -265,42 +266,102 @@ public sealed class ManualSendingModeTests
     // ------------------------------------------------------------ contact lists
 
     [Theory]
-    [InlineData("CurrentMonth", null, CurrentMonthList, "CurrentMonth")]            // a campaign's own list is the default
-    [InlineData("CurrentMonth", "FollowUp", FollowUpList, "FollowUp")]              // a Current Month reminder may go to the Follow Up list ...
-    [InlineData("FollowUp", "CurrentMonth", CurrentMonthList, "CurrentMonth")]      // ... and a Follow Up reminder to the Current Month list
-    [InlineData("FollowUp", null, FollowUpList, "FollowUp")]
-    public async Task TheContactList_IsTheCampaignsOwn_OrAnotherExistingListThatSuitsIt(string type, string? chosen, string listId, string expectedName)
+    [InlineData("CurrentMonth")]
+    [InlineData("FollowUp")]
+    public async Task EveryManualSend_GoesToTheDedicatedManualList_AndEachRecordKeepsItsOwnReminderType(string type)
     {
         using var h = await SeededAsync();
-        var (summary, confirm) = await h.PrepareAsync(All(Manual(type, chosen)), $"list-{type}-{chosen}");
-        Assert.Equal(listId, summary.ContactListByReminderType![type]); Assert.Equal(expectedName, summary.ContactListName);
+        var (summary, confirm) = await h.PrepareAsync(All(Manual(type)), $"list-{type}");
+        Assert.Equal(ManualList, summary.ContactListByReminderType![type]); Assert.Equal("Manual", summary.ContactListName);
         using var scope = h.NewScope();
         Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
         await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
         var call = Assert.Single(h.Client.Calls);
-        Assert.Equal(listId, call.ContactListId);                                                      // uploaded to exactly the chosen existing list
+        Assert.Equal(ManualList, call.ContactListId);                                                  // the dedicated Manual list, never a stage list
         Assert.All(call.Contacts, c => Assert.Equal(CampaignReminderTypes.DefaultLabel(Enum.Parse<CampaignReminderType>(type)), c.ReminderType));
+    }
+
+    [Fact]
+    public async Task AutoRouting_IsUnchanged_EachStageKeepsItsOwnList()
+    {
+        using var h = await SeededAsync(null, advanceDay: false);                                       // 14 Oct: Current Month is scheduled
+        var summary = (await SummaryAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto", MinRemaining: 0m)))).Value!;
+        Assert.Equal(CurrentMonthList, summary.ContactListByReminderType!["CurrentMonth"]);
+        Assert.NotEqual(ManualList, summary.ContactListByReminderType["CurrentMonth"]);
     }
 
     [Theory]
     [InlineData("CurrentMonth", "LegalNotice")]
     [InlineData("CurrentMonth", "Nonsense")]
-    [InlineData("FollowUp", "LegalCase")]
+    [InlineData("CurrentMonth", "FollowUp")]
     [InlineData("LegalNotice", "CurrentMonth")]                                     // legal wording never lands in a reminder list
-    [InlineData("LegalNotice", "FollowUp")]
-    public async Task AListThatDoesNotSuitTheCampaign_IsRefused(string type, string list)
+    public async Task AManualSend_ToAnyOtherList_IsRefused(string type, string list)
     {
         using var h = await SeededAsync(null, true, ReviewHarness.Row(1), ReviewHarness.Row(2, 2000m) with { DueDate = new DateTime(2026, 9, 10) });
         var refused = await SummaryAsync(h, All(Manual(type, list)));
-        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("cannot be sent to that contact list", refused.Detail);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("TigerCS Manual Collections", refused.Detail);
         Assert.Empty(h.Scheduler.Dispatches);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-a-guid")]
+    [InlineData(CurrentMonthList)]                                                   // the same list as a stage: refused, never shared
+    public async Task AMissingInvalidOrDuplicatedManualListId_IsAConfigurationError_NothingIsLookedUpOrUploaded(string id)
+    {
+        using var h = await SeededAsync(x => x.Genesys.ContactListIds["Manual"] = id);
+        var (_, confirm) = await h.PrepareAsync(All(Manual()), "config");
+        using var scope = h.NewScope();
+        var refused = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("ContactListIds:Manual", refused.Detail);
+        Assert.Empty(h.Scheduler.Dispatches); Assert.Empty(h.Client.Calls); Assert.Empty(h.Client.ListChecks);   // no fallback to another list
+    }
+
     [Fact]
-    public async Task Confirm_AuditsTheDispatch_WithTheCampaign_TheChosenList_AndWhoApproved()
+    public async Task ManualSending_DoesNotDependOnAutoSendingEnabled()
+    {
+        using var h = await SeededAsync(x => x.Campaign.AutoSendingEnabled = false);
+        var (_, confirm) = await h.PrepareAsync(All(Manual()), "independent");
+        using var scope = h.NewScope();
+        Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
+    }
+
+    [Fact]
+    public async Task UnitsSharingAPhone_StayOneRecordEach_WithTheirOwnReminderTypeAndAmount()
+    {
+        using var h = await SeededAsync(null, true, ReviewHarness.Row(1, 5000m), ReviewHarness.Row(2, 700m, mobile: ReviewHarness.Row(1).Mobile));
+        var (_, confirm) = await h.PrepareAsync(All(Manual()), "shared-phone");
+        using var scope = h.NewScope();
+        Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
+        await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
+        var call = Assert.Single(h.Client.Calls);
+        Assert.Equal(2, call.Contacts.Count); Assert.Equal(2, call.Contacts.Select(c => c.AmountDue).Distinct().Count());   // never merged, never summed
+    }
+
+    [Fact]
+    public async Task AnApprovalMadeForAnotherStoredList_StopsWithNothingUploaded()
     {
         using var h = await SeededAsync();
-        var (_, confirm) = await h.PrepareAsync(All(Manual("CurrentMonth", "FollowUp")), "audit");
+        var (_, confirm) = await h.PrepareAsync(All(Manual()), "stale-list");
+        using var scope = h.NewScope();
+        Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
+        using (var context = h.CreateContext())
+        {
+            var stored = context.CollectionsDispatches.Single();
+            stored.FilterJson = stored.FilterJson.Replace("\"ContactList\":\"Manual\"", "\"ContactList\":\"FollowUp\"");
+            if (!stored.FilterJson.Contains("\"ContactList\":\"FollowUp\"")) stored.FilterJson = stored.FilterJson.Replace("\"ContactList\":null", "\"ContactList\":\"FollowUp\"");
+            await context.SaveChangesAsync();
+        }
+        await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
+        Assert.Empty(h.Client.Calls);
+    }
+
+    [Fact]
+    public async Task Confirm_AuditsTheDispatch_WithTheCampaign_TheManualList_AndWhoApproved()
+    {
+        using var h = await SeededAsync();
+        var (_, confirm) = await h.PrepareAsync(All(Manual("CurrentMonth")), "audit");
         using var scope = h.NewScope();
         var accepted = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
         Assert.Equal(CollectionsOutcome.Accepted, accepted.Outcome); Assert.Equal(h.Manager.EmployeeId, accepted.Value!.InitiatedByEmployeeId);
@@ -309,18 +370,18 @@ public sealed class ManualSendingModeTests
         var done = (await scope.Dispatch.GetAsync(h.Manager, accepted.Value.DispatchId, CancellationToken.None)).Value!;
         Assert.Equal("Completed", done.Status); Assert.Equal(2, done.UploadedCount);
         var batch = Assert.Single(done.Batches);
-        Assert.Equal("CurrentMonth", batch.ReminderType); Assert.Equal(FollowUpList, batch.ContactListId); Assert.Equal("Current month reminder - day 14", batch.StageName);   // purpose + list id
+        Assert.Equal("CurrentMonth", batch.ReminderType); Assert.Equal(ManualList, batch.ContactListId); Assert.Equal("Current month reminder - day 14", batch.StageName);
         using var context = h.CreateContext();
         var stored = context.CollectionsDispatches.Single();
-        Assert.Contains("\"ContactList\":\"FollowUp\"", stored.FilterJson); Assert.Contains("\"SendingMode\":\"Manual\"", stored.FilterJson); Assert.Contains("\"ReminderType\":\"CurrentMonth\"", stored.FilterJson);
-        Assert.True(h.Client.ListChecks.Contains(FollowUpList) && h.Client.CampaignChecks.Contains(FollowUpList));    // the list was validated in Genesys
+        Assert.Contains("\"SendingMode\":\"Manual\"", stored.FilterJson); Assert.Contains("\"ReminderType\":\"CurrentMonth\"", stored.FilterJson);
+        Assert.True(h.Client.ListChecks.Contains(ManualList) && h.Client.CampaignChecks.Contains(ManualList));    // the list was validated in Genesys
     }
 
     [Fact]
     public async Task TheDestination_MustHaveTheRequiredColumns_AndNoOtherActiveCampaign()
     {
         using var columns = await SeededAsync();
-        columns.Client.ListColumns[CurrentMonthList] = ["Phone", "CustomerName", "Email Address", "ReminderType"];
+        columns.Client.ListColumns[ManualList] = ["Phone", "CustomerName", "Email Address", "ReminderType"];
         var (_, withColumns) = await columns.PrepareAsync(All(Manual()), "cols");
         using (var scope = columns.NewScope())
         {
@@ -329,15 +390,15 @@ public sealed class ManualSendingModeTests
         }
         Assert.Empty(columns.Scheduler.Dispatches);
 
-        // The campaign this very send is meant for (its stage campaign, on its own list) is not interference ...
+        // A campaign named like the list is its intended consumer and is not interference ...
         using var own = await SeededAsync();
-        own.Client.Campaigns.Add(new GenesysCampaignRef("c-stage", "Current month reminder - day 14", CurrentMonthList, "on"));
+        own.Client.Campaigns.Add(new GenesysCampaignRef("c-manual", "TigerCS Manual Collections", ManualList, "on"));
         var (_, ownConfirm) = await own.PrepareAsync(All(Manual()), "own");
         using (var scope = own.NewScope()) Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(own.Manager, ownConfirm, CancellationToken.None)).Outcome);
 
-        // ... but any other active campaign on the list is, and so is the stage campaign when the contacts go to a different list.
+        // ... but any other active campaign on the list is.
         using var other = await SeededAsync();
-        other.Client.Campaigns.Add(new GenesysCampaignRef("c-other", "Some other campaign", CurrentMonthList, "on"));
+        other.Client.Campaigns.Add(new GenesysCampaignRef("c-other", "Some other campaign", ManualList, "on"));
         var (_, otherConfirm) = await other.PrepareAsync(All(Manual()), "other");
         using (var scope = other.NewScope())
         {
@@ -345,14 +406,6 @@ public sealed class ManualSendingModeTests
             Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("Some other campaign", refused.Detail); Assert.Contains("active", refused.Detail);
             other.Client.Campaigns[0] = other.Client.Campaigns[0] with { Status = "off" };
             Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(other.Manager, otherConfirm, CancellationToken.None)).Outcome);
-        }
-        using var cross = await SeededAsync();
-        cross.Client.Campaigns.Add(new GenesysCampaignRef("c-fu", "Follow-up reminder - day 28", FollowUpList, "on"));
-        var (_, crossConfirm) = await cross.PrepareAsync(All(Manual("CurrentMonth", "FollowUp")), "cross");
-        using (var scope = cross.NewScope())
-        {
-            var refused = await scope.Dispatch.ConfirmAsync(cross.Manager, crossConfirm, CancellationToken.None);
-            Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("Follow-up reminder - day 28", refused.Detail);
         }
     }
 
@@ -363,7 +416,7 @@ public sealed class ManualSendingModeTests
         var (_, confirm) = await h.PrepareAsync(All(Manual()), "late");
         using var scope = h.NewScope();
         Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
-        h.Client.Campaigns.Add(new GenesysCampaignRef("c-late", "Switched on after approval", CurrentMonthList, "on"));
+        h.Client.Campaigns.Add(new GenesysCampaignRef("c-late", "Switched on after approval", ManualList, "on"));
         await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
         Assert.Empty(h.Client.Calls);                                                                    // nothing reached the contact list
         var dispatch = (await scope.Dispatch.ListAsync(h.Manager, CancellationToken.None)).Value!.Single();

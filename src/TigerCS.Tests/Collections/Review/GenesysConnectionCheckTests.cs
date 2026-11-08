@@ -60,7 +60,9 @@ public sealed class GenesysConnectionCheckTests
             var line = Line(check, $"ContactListIds:{type}");
             Assert.Equal("Ok", line.Status); Assert.Contains(ListId(h, type), line.Detail); Assert.Contains("six template columns", line.Detail);
         }
-        Assert.Equal(Enum.GetValues<CampaignReminderType>().Length, h.Client.ListChecks.Distinct().Count());
+        var manual = Line(check, "ContactListIds:Manual");                                           // the dedicated Manual list is read too
+        Assert.Equal("Ok", manual.Status); Assert.Contains(ReviewHarness.ManualListId, manual.Detail);
+        Assert.Equal(Enum.GetValues<CampaignReminderType>().Length + 1, h.Client.ListChecks.Distinct().Count());
         Assert.Equal(1, h.Client.OrganizationChecks);
         AssertNothingWasWritten(h);
     }
@@ -79,7 +81,7 @@ public sealed class GenesysConnectionCheckTests
         Assert.Contains("organization \"Tiger Test Org\" at api.mypurecloud.de", bad.Detail);
         Assert.Contains("correct Collections:GenesysOutbound:ContactListIds:FollowUp", bad.Detail);
         Assert.Contains("another organization or region", bad.Detail);
-        Assert.Equal(4, check.Lines.Count(l => l.Name.StartsWith("ContactListIds:", StringComparison.Ordinal) && l.Status == "Ok"));
+        Assert.Equal(5, check.Lines.Count(l => l.Name.StartsWith("ContactListIds:", StringComparison.Ordinal) && l.Status == "Ok"));
         AssertNothingWasWritten(h);
     }
 
@@ -92,6 +94,20 @@ public sealed class GenesysConnectionCheckTests
         Assert.False(check.Ok);
         Assert.Equal("Ok", Line(check, "OAuth client and organization").Status);                     // authenticated fine: the lists are simply not in this organization
         Assert.All(Enum.GetValues<CampaignReminderType>(), type => Assert.Equal("Failed", Line(check, $"ContactListIds:{type}").Status));
+        h.Client.ListAnswers[ReviewHarness.ManualListId] = NotFound;
+        Assert.Equal("Failed", Line((await Service(h).CheckAsync(h.Manager, CancellationToken.None)).Value!, "ContactListIds:Manual").Status);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-a-guid")]
+    public async Task AMissingOrInvalidManualListId_IsNamed_AndNothingIsReadForIt(string id)
+    {
+        using var h = Configured(x => x.Genesys.ContactListIds["Manual"] = id);
+        var check = (await Service(h).CheckAsync(h.Manager, CancellationToken.None)).Value!;
+        var line = Line(check, "ContactListIds:Manual");
+        Assert.Equal("Failed", line.Status); Assert.Contains("ContactListIds:Manual", line.Detail);
+        Assert.False(check.Ok); Assert.DoesNotContain(ReviewHarness.ManualListId, h.Client.ListChecks);
     }
 
     [Fact]
@@ -139,7 +155,7 @@ public sealed class GenesysConnectionCheckTests
         using var h = Configured(x => x.Client.Organization = new(GenesysUploadOutcome.Rejected, 403, null, null, "Genesys rejected the organization lookup (...): HTTP 403 Forbidden."));
         var check = (await Service(h).CheckAsync(h.Manager, CancellationToken.None)).Value!;
         Assert.Equal("Failed", Line(check, "OAuth client and organization").Status);
-        Assert.Equal(Enum.GetValues<CampaignReminderType>().Length, h.Client.ListChecks.Count);   // the token worked: the lists are still checked
+        Assert.Equal(Enum.GetValues<CampaignReminderType>().Length + 1, h.Client.ListChecks.Count);   // the token worked: the lists are still checked
     }
 
     [Fact]
@@ -169,7 +185,7 @@ public sealed class GenesysConnectionCheckTests
         var shared = check.Lines.Where(l => l.Name == "ContactListIds:CurrentMonth / ContactListIds:FollowUp").ToList();
         Assert.Equal(["Info", "Ok"], shared.Select(l => l.Status));                                    // said once as information, and the one shared list is read once
         Assert.Contains("share one list id", shared[0].Detail);
-        Assert.Equal(3, h.Client.ListChecks.Count);                                                  // the shared id is read once
+        Assert.Equal(4, h.Client.ListChecks.Count);                                                  // the shared id is read once
     }
 
     [Fact]
@@ -197,35 +213,35 @@ public sealed class GenesysConnectionCheckTests
 
     // ------------------------------------------------------------ the real send stops with the exact setting to correct, and never falls back
 
-    private static async Task<(ReviewHarness H, ConfirmDispatchRequest Confirm)> ManualToFollowUpAsync(Action<ReviewHarness>? configure = null)
+    private static async Task<(ReviewHarness H, ConfirmDispatchRequest Confirm)> ManualSendAsync(Action<ReviewHarness>? configure = null)
     {
         var h = Configured(configure);
         h.Time.Advance(TimeSpan.FromDays(1)); h.Source.ReadAt = ReviewHarness.Now.AddDays(1);
         h.Source.Items.AddRange([ReviewHarness.Row(1, 500m), ReviewHarness.Row(2, 700m)]);
         await h.RefreshAsync();
-        var (_, confirm) = await h.PrepareAsync(h.All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Manual", ContactList: "FollowUp", MinRemaining: 0m)), "follow-up");
+        var (_, confirm) = await h.PrepareAsync(h.All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Manual", MinRemaining: 0m)), "manual");
         return (h, confirm);
     }
 
     [Fact]
-    public async Task AManualSendToFollowUp_Stopped_By404_NamesTheExactSettingAndId_UploadsNothing_AndNeverUsesAnotherList()
+    public async Task AManualSend_Stopped_By404_NamesTheExactSettingAndId_UploadsNothing_AndNeverUsesAnotherList()
     {
-        var (h, confirm) = await ManualToFollowUpAsync();
+        var (h, confirm) = await ManualSendAsync();
         using (h)
         {
-            var followUp = ListId(h, CampaignReminderType.FollowUp);
+            var followUp = ReviewHarness.ManualListId;
             h.Client.ListAnswers[followUp] = NotFound;
             using var scope = h.NewScope();
             var refused = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
             Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome);
             var detail = refused.Detail!;
-            Assert.StartsWith("The Follow Up contact list could not be checked in Genesys (Genesys rejected the contact list lookup (GET /api/v2/outbound/contactlists/{contactListId} at api.mypurecloud.de)", detail);
+            Assert.StartsWith("The TigerCS Manual Collections contact list could not be checked in Genesys (Genesys rejected the contact list lookup (GET /api/v2/outbound/contactlists/{contactListId} at api.mypurecloud.de)", detail);
             Assert.Contains("HTTP 404 Not Found", detail);
-            Assert.Contains($"Check Collections:GenesysOutbound:ContactListIds:FollowUp (list id {followUp})", detail);
+            Assert.Contains($"Check Collections:GenesysOutbound:ContactListIds:Manual (list id {followUp})", detail);
             Assert.Contains("organization of the OAuth client", detail); Assert.Contains("ApiBaseUrl / LoginBaseUrl", detail);
             Assert.EndsWith("Nothing was uploaded.", detail);
             Assert.DoesNotContain("AutoSendingEnabled", detail);                                    // the Auto switch is not part of this
-            Assert.Equal([followUp], h.Client.ListChecks);                                          // only the chosen list was looked at: no fallback to the Current Month list
+            Assert.Equal([followUp], h.Client.ListChecks);                                          // only the chosen list was looked at: no fallback to a stage list
             AssertNothingWasWritten(h);
             Assert.Empty(h.Client.CampaignChecks);
         }
@@ -234,10 +250,10 @@ public sealed class GenesysConnectionCheckTests
     [Fact]
     public async Task A403OnTheList_NamesThePermission_AndTheSendStillStops()
     {
-        var (h, confirm) = await ManualToFollowUpAsync();
+        var (h, confirm) = await ManualSendAsync();
         using (h)
         {
-            h.Client.ListAnswers[ListId(h, CampaignReminderType.FollowUp)] = Forbidden;
+            h.Client.ListAnswers[ReviewHarness.ManualListId] = Forbidden;
             using var scope = h.NewScope();
             var refused = await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None);
             Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("outbound:contactList:view", refused.Detail);
@@ -248,7 +264,7 @@ public sealed class GenesysConnectionCheckTests
     [Fact]
     public async Task AWorkingList_StillSendsOnManual_WithAutoOff_AndTheFinancialAndContactChecksIntact()
     {
-        var (h, confirm) = await ManualToFollowUpAsync();
+        var (h, confirm) = await ManualSendAsync();
         using (h)
         {
             using var scope = h.NewScope();
@@ -256,10 +272,10 @@ public sealed class GenesysConnectionCheckTests
             Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
             await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
             var upload = h.Client.Calls.Single();
-            Assert.Equal(ListId(h, CampaignReminderType.FollowUp), upload.ContactListId); Assert.Equal(2, upload.Contacts.Count);
+            Assert.Equal(ReviewHarness.ManualListId, upload.ContactListId); Assert.Equal(2, upload.Contacts.Count);
         }
         // The financial gate is untouched by any of this.
-        var (unreconciled, blocked) = await ManualToFollowUpAsync(x => x.Campaign.FinancialSourceValidated = false);
+        var (unreconciled, blocked) = await ManualSendAsync(x => x.Campaign.FinancialSourceValidated = false);
         using (unreconciled)
         {
             using var scope = unreconciled.NewScope();

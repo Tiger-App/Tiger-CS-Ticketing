@@ -104,7 +104,7 @@ public sealed class GenesysExportIndependenceTests
     {
         var notice = ReviewHarness.Row(2, 2000m) with { DueDate = new DateTime(2026, 9, 10) };
         using var h = await SeededAsync(x => x.Campaign.LegalNoticeExportEnabled = false, notice);
-        var dto = (await ExportAsync(h, All(Filter("Manual", "LegalNotice", f => f with { ContactList = "LegalNotice" })))).Value!;
+        var dto = (await ExportAsync(h, All(Filter("Manual", "LegalNotice", f => f)))).Value!;
         Assert.Equal(1, dto.RowCount); Assert.Equal(1, dto.IncludedByStatus!["Excluded"]); Assert.Equal("Legal Notice", Rows(dto)[1][3]);
         Assert.True(dto.DataVerified);                                                           // a policy hold is not unverified data; it is said separately
         Assert.Contains(dto.Notices, n => n.Contains("held back from sending (Held back 1)"));
