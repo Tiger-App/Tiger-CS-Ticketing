@@ -94,7 +94,7 @@ public sealed class GenesysExportRepeatTests
         using var h = await SeededAsync();
         await ExportAsync(h, All());
         using var scope = h.NewScope();
-        var otherList = await scope.Export.ExportAsync(h.Manager, new SelectionRequest(Manual() with { ContactList = "FollowUp" }, ReviewQueryService.ModeAllMatching), CancellationToken.None);
+        var otherList = await scope.Export.ExportAsync(h.Manager, new SelectionRequest(Manual() with { SendingMode = "Auto" }, ReviewQueryService.ModeAllMatching), CancellationToken.None);   // Auto: the stage's own list
         Assert.Equal(3, otherList.Value!.RepeatedCustomers);
         var otherUser = new CollectionsCaller(Guid.NewGuid(), [Roles.CsManager], []);
         Assert.Equal(3, (await ExportAsync(h, All(), caller: otherUser)).Value!.RepeatedCustomers);

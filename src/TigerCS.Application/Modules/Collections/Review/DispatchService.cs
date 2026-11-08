@@ -109,9 +109,13 @@ public sealed class DispatchService(
         foreach (var type in types)
         {
             string listId;
-            try { listId = manual ? genesys.ManualContactListIdFor(type, request.Selection.Filter?.ContactList) : genesys.ContactListIdFor(type); }
+            if (manual && !CampaignReminderTypes.IsManualList(request.Selection.Filter?.ContactList))
+                return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest,
+                    $"Manual sends go to the dedicated {CampaignReminderTypes.ManualListName} contact list; a different contact list cannot be chosen.");
+            // Missing / invalid Manual id is a configuration error: it never falls back to another list.
+            try { listId = manual ? genesys.ManualContactListId : genesys.ContactListIdFor(type); }
             catch (InvalidOperationException ex) { return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, ex.Message); }
-            if (await CheckDestinationAsync(type, listId, ct) is { } destinationProblem)
+            if (await CheckDestinationAsync(type, listId, manual, ct) is { } destinationProblem)
                 return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, destinationProblem);
         }
 
@@ -159,12 +163,14 @@ public sealed class DispatchService(
     /// the intended consumer of its own list and is not interference. Anything that cannot be checked is refused.</item>
     /// </list>
     /// </summary>
-    private async Task<string?> CheckDestinationAsync(CampaignReminderType type, string listId, CancellationToken ct)
+    private async Task<string?> CheckDestinationAsync(CampaignReminderType type, string listId, bool manualList, CancellationToken ct)
     {
         // The list's own label, and the one campaign that is meant to dial it: the type's stage campaign, but only when the list IS that type's own list.
+        // The dedicated Manual list is labelled by its own name; its intended consumer is a campaign of that same name (assumption, documented).
         var owner = Enum.GetValues<CampaignReminderType>().FirstOrDefault(t => string.Equals(genesys.ContactListIds.GetValueOrDefault(t.ToString()), listId, StringComparison.OrdinalIgnoreCase), type);
-        var label = CampaignReminderTypes.DefaultLabel(owner);
-        var intended = string.Equals(owner.ToString(), type.ToString(), StringComparison.Ordinal) ? CampaignReminderTypes.StageName(type) : null;
+        var label = manualList ? CampaignReminderTypes.ManualListName : CampaignReminderTypes.DefaultLabel(owner);
+        var intended = manualList ? CampaignReminderTypes.ManualListName
+            : string.Equals(owner.ToString(), type.ToString(), StringComparison.Ordinal) ? CampaignReminderTypes.StageName(type) : null;
         GenesysContactListInfo list;
         try { list = await client.GetContactListAsync(listId, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -174,7 +180,7 @@ public sealed class DispatchService(
             return $"The {label} contact list could not be checked in Genesys. Nothing was uploaded.";
         }
         if (list.Outcome != GenesysUploadOutcome.Accepted)
-            return $"The {label} contact list could not be checked in Genesys ({list.Error}){ListConfigurationHint(owner, listId, list.HttpStatus)} Nothing was uploaded.";
+            return $"The {label} contact list could not be checked in Genesys ({list.Error}){ListConfigurationHint(manualList ? CampaignReminderTypes.ManualListKey : owner.ToString(), listId, list.HttpStatus)} Nothing was uploaded.";
         var missing = GenesysContactTemplate.Columns.Where(c => !list.Columns.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
         if (missing.Count > 0)
             return $"The {label} contact list does not have the required column(s): {string.Join(", ", missing)}. Nothing was uploaded.";
@@ -200,7 +206,7 @@ public sealed class DispatchService(
     /// What to correct when Genesys answers a contact list read with 404 or 403: the exact configuration key and id (identifiers, not secrets), so nobody has to guess which of the five lists or which
     /// setting is wrong. The send is never redirected to another list: it stops, and the list stays whatever is configured.
     /// </summary>
-    internal static string ListConfigurationHint(CampaignReminderType owner, string listId, int? httpStatus) => httpStatus switch
+    internal static string ListConfigurationHint(string owner, string listId, int? httpStatus) => httpStatus switch
     {
         404 => $" Check Collections:GenesysOutbound:ContactListIds:{owner} (list id {listId}): that list must exist in the organization of the OAuth client, in the region of Collections:GenesysOutbound:ApiBaseUrl / LoginBaseUrl.",
         403 => " The OAuth client needs permission to view outbound contact lists (outbound:contactList:view).",
@@ -241,6 +247,8 @@ public sealed class DispatchService(
             try { _ = genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { blockers.Add($"No valid Genesys contact list id is configured for {type} (Collections:GenesysOutbound:ContactListIds:{type})."); }
         }
+        try { _ = genesys.ManualContactListId; }
+        catch (InvalidOperationException ex) { blockers.Add(ex.Message); }
         return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers, permissions.CanSendReminders));
     }
 
@@ -478,7 +486,14 @@ public sealed class DispatchService(
         // The destination list of each type: its own, or (Manual) the one the person chose at approval, which is kept in the stored filter.
         var manualSend = ManualFilters.FromStored(dispatch.FilterJson) is not null;
         var chosenList = ManualFilters.StoredContactList(dispatch.FilterJson);
-        string ListFor(CampaignReminderType type) => manualSend ? genesys.ManualContactListIdFor(type, chosenList) : genesys.ContactListIdFor(type);
+        string ListFor(CampaignReminderType type) => manualSend ? genesys.ManualContactListId : genesys.ContactListIdFor(type);
+        // An approval created before the dedicated list existed may carry another stored list: it is stopped, never rerouted.
+        if (manualSend && !CampaignReminderTypes.IsManualList(chosenList))
+        {
+            await store.UpdateItemsAsync(all, ct);
+            return await StopAsync(dispatch, DispatchStatus.Failed,
+                $"This approval was made for a different contact list. Manual sends go to the {CampaignReminderTypes.ManualListName} list only. Nothing was uploaded; approve again.", ct);
+        }
         try { foreach (var type in items.Select(i => i.ReminderType).Distinct()) _ = ListFor(type); }
         catch (InvalidOperationException ex)
         {
@@ -563,11 +578,17 @@ public sealed class DispatchService(
     /// therefore run one at a time per campaign name inside this process (the second waits, then finds the first one's campaign and reuses it). Several API instances would need
     /// Genesys's own unique-name rule as the backstop - it refuses a second campaign with the same name, which the batch then reports as not created.
     /// </summary>
+    private bool IsManualList(string listId)
+    {
+        try { return string.Equals(listId, genesys.ManualContactListId, StringComparison.OrdinalIgnoreCase); }
+        catch (InvalidOperationException) { return false; }
+    }
+
     private async Task<bool> EnsureCampaignAsync(CollectionsDispatch dispatch, CollectionsGenesysBatch batch, CancellationToken ct)
     {
         // Right before the upload the destination is checked again: the list must still fit the upload and no OTHER active campaign may dial it. Anything that cannot be verified fails the batch with
         // nothing uploaded.
-        var checkProblem = await CheckDestinationAsync(batch.ReminderType, batch.ContactListId, ct);
+        var checkProblem = await CheckDestinationAsync(batch.ReminderType, batch.ContactListId, IsManualList(batch.ContactListId), ct);
         if (checkProblem is not null)
         {
             logger.LogWarning("Dispatch {DispatchId} batch {BatchId}: the destination contact list failed its check before the upload.", dispatch.CollectionsDispatchId, batch.CollectionsGenesysBatchId);

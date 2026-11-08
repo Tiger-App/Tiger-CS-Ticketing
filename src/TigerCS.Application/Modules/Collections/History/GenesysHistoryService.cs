@@ -207,7 +207,8 @@ public sealed class GenesysHistoryService(
         foreach (var id in await store.ListSubmitterIdsAsync(ct)) people.Add(new(id.ToString("D"), await names.NameAsync(id, ct)));
         return new(
             Enum.GetValues<CampaignReminderType>().Select(t => new GenesysFilterOptionDto(t.ToString(), CampaignReminderTypes.StageName(t))).ToList(),
-            Enum.GetValues<CampaignReminderType>().Select(t => new GenesysFilterOptionDto(t.ToString(), ListLabel(t))).ToList(),
+            Enum.GetValues<CampaignReminderType>().Select(t => new GenesysFilterOptionDto(t.ToString(), ListLabel(t)))
+                .Append(new GenesysFilterOptionDto(CampaignReminderTypes.ManualListKey, CampaignReminderTypes.ManualListName + " list")).ToList(),
             GenesysUploadStates.All.Select(s => new GenesysFilterOptionDto(s, GenesysUploadStates.Label(s))).ToList(),
             [new(CollectionsSendingModes.Manual, "Manual"), new(CollectionsSendingModes.Auto, "Auto")],
             people.OrderBy(p => p.Label, StringComparer.OrdinalIgnoreCase).ToList());
@@ -241,7 +242,12 @@ public sealed class GenesysHistoryService(
         if (!string.IsNullOrWhiteSpace(f.List))
         {
             var text = f.List.Trim();
-            if (Enum.TryParse<CampaignReminderType>(text, true, out var type) && Enum.IsDefined(type))
+            if (CampaignReminderTypes.IsManualList(text) && string.Equals(text.Replace(" ", ""), CampaignReminderTypes.ManualListKey, StringComparison.OrdinalIgnoreCase))
+            {
+                try { listId = genesys.ManualContactListId; }
+                catch (InvalidOperationException ex) { problem = ex.Message; return null; }
+            }
+            else if (Enum.TryParse<CampaignReminderType>(text, true, out var type) && Enum.IsDefined(type))
             {
                 try { listId = genesys.ContactListIdFor(type); }
                 catch (InvalidOperationException) { problem = $"No contact list is configured for {CampaignReminderTypes.DefaultLabel(type)}."; return null; }
@@ -270,6 +276,8 @@ public sealed class GenesysHistoryService(
     /// <summary>The configured list a contact-list id belongs to ("Overdue list"), else a neutral label with the end of the id: never a guess.</summary>
     public string ListLabel(string listId)
     {
+        try { if (string.Equals(genesys.ManualContactListId, listId, StringComparison.OrdinalIgnoreCase)) return CampaignReminderTypes.ManualListName + " list"; }
+        catch (InvalidOperationException) { /* not configured: fall through to the neutral label */ }
         foreach (var type in Enum.GetValues<CampaignReminderType>())
             if (genesys.ContactListIds.TryGetValue(type.ToString(), out var id) && string.Equals(id?.Trim(), listId, StringComparison.OrdinalIgnoreCase)) return ListLabel(type);
         return "Other contact list …" + (listId.Length > 6 ? listId[^6..] : listId);

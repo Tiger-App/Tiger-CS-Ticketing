@@ -296,6 +296,7 @@ Non-secret keys are in `appsettings.json`; supply secrets by user-secrets/enviro
 | `Collections:GenesysOutbound:ClientId` | *secret* | `Collections__GenesysOutbound__ClientId=<client-id-placeholder>` |
 | `Collections:GenesysOutbound:ClientSecret` | *secret* | `Collections__GenesysOutbound__ClientSecret=<client-secret-placeholder>` |
 | `Collections:GenesysOutbound:ContactListIds:<ReminderType>` | table above | |
+| `Collections:GenesysOutbound:ContactListIds:Manual` | empty (must be set) | The dedicated "TigerCS Manual Collections" list: all Manual sends and exports. No default; must differ from the stage lists. |
 | `Collections:GenesysOutbound:ReminderTypeLabels:<ReminderType>` | – | optional text override |
 | `Collections:GenesysOutbound:BatchSize` | `1000` | clamped to 1–1000 |
 | `BackgroundJobs:Enabled` | `true` | with `false`, refresh and dispatch jobs stay *Queued* and are shown as such (cancel a queued dispatch to release its records) |

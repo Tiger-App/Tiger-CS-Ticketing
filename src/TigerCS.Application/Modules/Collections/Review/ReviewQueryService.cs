@@ -200,8 +200,8 @@ public sealed class ReviewQueryService(
     {
         if (!CollectionsSendingModes.IsManual(filter?.SendingMode)) return null;
         if (spec.ReminderType is not { } type) return "Choose the campaign type to send.";
-        if (!CampaignReminderTypes.TryResolveManualDestination(type, filter?.ContactList, out _))
-            return $"A {CampaignReminderTypes.DefaultLabel(type)} campaign cannot be sent to that contact list. Choose {string.Join(", ", CampaignReminderTypes.ManualDestinations(type).Select(CampaignReminderTypes.DefaultLabel))}.";
+        if (!CampaignReminderTypes.IsManualList(filter?.ContactList))
+            return $"Manual sends and exports go to the dedicated {CampaignReminderTypes.ManualListName} contact list; a different contact list cannot be chosen.";
         var today = clock.BusinessDate;
         if (run.AsOfDate != today) return $"The review data was built for {run.AsOfDate:dd MMM yyyy}, not today ({today:dd MMM yyyy}). Refresh it, then approve.";
         return ManualCoverageProblem(filter, run);
@@ -428,8 +428,7 @@ public sealed class ReviewQueryService(
         return new(resolved.Run!.CollectionsReviewRunId, records.Count, Fingerprint(records), TotalsByCurrency(records),
             records.GroupBy(r => r.ReminderType.ToString()).OrderBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count()),
             shared.Records, shared.Numbers, page, size, contacts, notices, ContactLists(records, request.Filter), resolved.Run.SourceReconciled,
-            CollectionsSendingModes.IsManual(request.Filter?.SendingMode) && records.Select(r => r.ReminderType).Distinct().ToList() is [var only]
-                && CampaignReminderTypes.TryResolveManualDestination(only, request.Filter?.ContactList, out var chosen) ? chosen.ToString() : null);
+            CollectionsSendingModes.IsManual(request.Filter?.SendingMode) ? CampaignReminderTypes.ManualListKey : null);
     }
 
     /// <summary>The Genesys contact list each reminder type of the selection will be uploaded to (an unconfigured list is shown as such; confirming is then refused).</summary>
@@ -438,7 +437,8 @@ public sealed class ReviewQueryService(
         var lists = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var type in records.Select(r => r.ReminderType).Distinct().OrderBy(t => t.ToString(), StringComparer.Ordinal))
         {
-            try { lists[type.ToString()] = genesys is null ? "(not configured)" : CollectionsSendingModes.IsManual(filter?.SendingMode) && CampaignReminderTypes.TryResolveManualDestination(type, filter?.ContactList, out var destination) ? genesys.ContactListIdFor(destination) : genesys.ContactListIdFor(type); }
+            // Manual: every type goes to the one dedicated list; Auto: each stage's own list. A list that is not configured is shown as such (confirming is then refused, never redirected).
+            try { lists[type.ToString()] = genesys is null ? "(not configured)" : CollectionsSendingModes.IsManual(filter?.SendingMode) ? genesys.ManualContactListId : genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { lists[type.ToString()] = "(not configured)"; }
         }
         return lists;
