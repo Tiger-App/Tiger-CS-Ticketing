@@ -140,21 +140,21 @@
         <dl class="review-snapshot review-snapshot--compact" data-selection-snapshot>
             <dt>Unit records</dt><dd data-snapshot-count>@s.Count</dd>
             <dt>Total amount</dt><dd data-snapshot-total>@string.Join(" · ", s.TotalsByCurrency.Select(t => $"{t.Key} {CampaignsModel.Money(t.Value)}"))</dd>
-            <dt>Sending mode</dt><dd data-snapshot-mode>@(Model.IsManual ? "Manual (any time; no send date or schedule)" : "Auto (campaign schedule)")</dd>
+            <dt class="summary-extra">Sending mode</dt><dd class="summary-extra" data-snapshot-mode>@(Model.IsManual ? "Manual (any time; no send date or schedule)" : "Auto (campaign schedule)")</dd>
             <dt>Campaign</dt><dd data-snapshot-stage>@string.Join(", ", s.CountByReminderType.Keys.Select(CampaignsModel.StageName))</dd>
             <dt>Destination Genesys contact list</dt>
             <dd data-snapshot-list>@if (s.ContactListByReminderType is { Count: > 0 } lists) { @foreach (var l in lists) { <div>@(s.ContactListName is { } destination ? $"{CampaignsModel.ContactListLabel(destination)} contact list" : CampaignsModel.StageName(l.Key)): <code>@l.Value</code></div> } } else { <text>—</text> }</dd>
-            <dt>Financial source</dt><dd>@(s.SourceReconciled ? "Reconciled" : "Not reconciled")</dd>
+            <dt class="summary-extra">Financial source</dt><dd class="summary-extra">@(s.SourceReconciled ? "Reconciled" : "Not reconciled")</dd>
         </dl>
         @foreach (var n in s.Notices) { <p role="status">@n</p> }
         @if (Model.Overlaps is { TotalPhones: > 0 } overlaps) { <p role="status" data-overlap-note>@overlaps.TotalPhones phone number(s) are held back to avoid repeated calls (several units on one phone, or several reminder types for one unit). They are not in this list.</p> }
         </div>
         <div class="review-confirm__table" data-confirm-table tabindex="0" role="region" aria-label="Unit records to be sent"><table class="table confirm-table">
-            <thead><tr><th>Customer</th><th>Phone</th><th class="confirm-col-optional">Email</th><th>Unit</th><th class="confirm-col-optional">Stage</th><th class="num">Amount due</th><th>Due date</th></tr></thead>
+            <thead><tr><th>Customer</th><th>Phone</th><th class="confirm-col-optional">Email</th><th>Unit</th><th class="confirm-col-optional">Stage</th><th class="num">Amount due</th><th class="confirm-col-optional">Due date</th></tr></thead>
             <tbody>
             @foreach (var c in s.Contacts)
             {
-                <tr><td>@c.CustomerName</td><td>@c.Phone</td><td class="confirm-col-optional">@c.Email</td><td>@c.UnitCode</td><td class="confirm-col-optional">@CampaignsModel.StageName(c.ReminderType)</td><td class="num">@c.Currency @CampaignsModel.Money(c.Amount)</td><td>@c.DueDate.ToString("dd MMM yyyy")</td></tr>
+                <tr><td>@c.CustomerName</td><td>@c.Phone</td><td class="confirm-col-optional">@c.Email</td><td>@c.UnitCode</td><td class="confirm-col-optional">@CampaignsModel.StageName(c.ReminderType)</td><td class="num">@c.Currency @CampaignsModel.Money(c.Amount)</td><td class="confirm-col-optional">@c.DueDate.ToString("dd MMM yyyy")</td></tr>
             }
             </tbody>
         </table></div>

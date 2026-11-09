@@ -226,6 +226,9 @@
         const submitter = event.submitter;
         if (submitter && !submitter.hasAttribute('data-confirm-button')) return;   // "More contacts" / "Previous contacts" post the form normally
         event.preventDefault();
+        // The acknowledgement is required before anything is sent: a forced submit (Enter, script) is held here and the reason is shown; the server refuses an unacknowledged confirmation as well.
+        const ack = form.querySelector('input[name="ackCampaign"]');
+        if (ack && !ack.checked) { syncAcknowledgement(form); return; }
         send(form);
         // Capture phase on purpose: this must run BEFORE the bubbling submit listener of collections-campaign-approve.js (plain-post fallback), which only acts on a submit nobody cancelled.
     }, true);
