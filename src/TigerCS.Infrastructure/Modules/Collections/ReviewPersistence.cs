@@ -418,6 +418,8 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
                 || EF.Functions.Like(r.Email, name, "\\") || (r.TowerNumber != null && EF.Functions.Like(r.TowerNumber, name, "\\")) || (r.TowerName != null && EF.Functions.Like(r.TowerName, name, "\\"))
                 || (digits != null && EF.Functions.Like(r.Phone, digits, "\\")));
         }
+        // Special case units are never part of a campaign list, whatever the stored run still holds (the exclusion also applies to data stored before it was configured).
+        if (s.ExcludedUnitCodes is { Count: > 0 } excluded) q = q.Where(r => !excluded.Contains(r.UnitCode.Trim().ToUpper()));
         if (s.DueFrom is { } from) q = q.Where(r => r.DueDate >= from);
         if (s.DueTo is { } to) q = q.Where(r => r.DueDate <= to);
         if (s.PaymentStatuses is { } statuses) q = q.Where(r => statuses.Contains(r.PaymentStatus));

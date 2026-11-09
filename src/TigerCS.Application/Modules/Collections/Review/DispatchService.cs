@@ -26,8 +26,11 @@ public sealed class DispatchService(
     CollectionsOptions options, GenesysOutboundOptions genesys, CollectionsAuthorizationService authorization, CollectionsClock clock,
     IReviewStore store, IReviewJobScheduler scheduler, IGenesysOutboundClient client,
     ReviewQueryService query, CurrentBalanceReader balances, ILogger<DispatchService> logger,
-    TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository? employees = null)
+    TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository? employees = null, PactReceivablesOptions? sourceOptions = null)
 {
+    private readonly SpecialCaseUnits special = SpecialCaseUnits.From(sourceOptions);
+    private const string SpecialCaseReason = "Special case unit: handled outside the Collections campaigns, never sent from here";
+
     public const string UploadDisclaimer =
         "Uploaded to Genesys means the contact was added to the outbound contact list. It does not mean the customer was called, " +
         "messaged or reached. If a Genesys campaign using that list is active it may start dialing at any time; call and message results " +
@@ -97,6 +100,9 @@ public sealed class DispatchService(
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired, "The review data is stale. Refresh it and review again.");
         // Defence in depth: such records are already held back, so this can only happen through a stale or tampered list. A number shared by several units is NOT refused: each unit is its own
         // contact record and its own call (the confirmed business decision); the unit-level duplicate protections (record key, live-record index, contact-frequency per unit) stay in force.
+        if (special.Any && resolved.Records.Any(r => special.IsSpecial(r.UnitCode)))
+            return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
+                "The list contains a special case unit, which is handled outside the Collections campaigns. Review the current list.");
         if (resolved.Records.Any(r => !IsVoiceEligible(r.Phone)))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
                 "The list contains records without a callable phone number. Review the current list.");
@@ -409,6 +415,12 @@ public sealed class DispatchService(
         var manual = manualCriteria is not null;
         foreach (var item in items)
         {
+            // A previously prepared approval can still hold a unit that has since been configured as a special case: it is never sent, and the rest of the approval is unaffected.
+            if (special.IsSpecial(item.UnitCode))
+            {
+                item.Status = DispatchItemStatus.Excluded; item.StatusReason = SpecialCaseReason;
+                settled.Add(item); continue;
+            }
             if (!current.TryGetValue(item.RecordKey, out var now))
             {
                 item.Status = DispatchItemStatus.Excluded; item.StatusReason = "Paid or settled: no qualifying balance remains";
@@ -467,11 +479,12 @@ public sealed class DispatchService(
     {
         var all = (await store.GetItemsAsync(dispatch.CollectionsDispatchId, ct)).Where(i => i.Status == DispatchItemStatus.Approved).ToList();
         // callable is set only for approved voice-eligible contacts; anything else is never uploaded.
-        var ineligible = all.Where(i => ReviewRecordBuilder.IsCancelledUnit(i.UnitCode) || !i.VoiceEligible || !IsVoiceEligible(i.Phone)).ToList();
+        var ineligible = all.Where(i => ReviewRecordBuilder.IsCancelledUnit(i.UnitCode) || special.IsSpecial(i.UnitCode) || !i.VoiceEligible || !IsVoiceEligible(i.Phone)).ToList();
         foreach (var item in ineligible)
         {
             item.Status = DispatchItemStatus.Excluded;
-            item.StatusReason = ReviewRecordBuilder.IsCancelledUnit(item.UnitCode) ? "Cancelled unit (code contains *): no reminder is sent" : "Not voice eligible: no valid international phone number";
+            item.StatusReason = ReviewRecordBuilder.IsCancelledUnit(item.UnitCode) ? "Cancelled unit (code contains *): no reminder is sent"
+                : special.IsSpecial(item.UnitCode) ? SpecialCaseReason : "Not voice eligible: no valid international phone number";
         }
         if (ineligible.Count > 0) await store.UpdateItemsAsync(ineligible, ct);
         var items = all.Except(ineligible).ToList();
