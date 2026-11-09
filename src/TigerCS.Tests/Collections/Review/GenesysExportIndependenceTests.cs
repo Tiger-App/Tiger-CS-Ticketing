@@ -130,13 +130,14 @@ public sealed class GenesysExportIndependenceTests
     }
 
     [Fact]
-    public async Task ABalanceWithUnresolvedDecimals_IsNeverRoundedIntoTheFile_ItIsCountedOut()
+    public async Task ExtraDecimalsAreRoundedIntoTheFile_AndASmallPositiveBalanceIsCountedOut()
     {
-        // 50.125 is not rounding noise: the stored value is the raw one, and "550.13" would be an invented figure. The unit stays out, with its reason; the clean customer is exported.
+        // 50.125 is a valid balance with extra decimals: it is rounded half away from zero (50.13), so the unit is exported at 550.13. The fils-level residue 0.004 would round to a settled 0.00, so it
+        // is never rounded away: that unit stays out with its reason and the clean customer is exported.
         using var h = await SeededAsync(null, ReviewHarness.Row(1, 500m, day: 20), ReviewHarness.Row(1, 50.125m, day: 10) with { DueDate = new DateTime(2026, 8, 10), VoucherNumber = "INV-1-X" },
-            ReviewHarness.Row(2, 300m, day: 20));
+            ReviewHarness.Row(2, 300m, day: 20), ReviewHarness.Row(3, 0.004m, day: 20));
         var dto = (await ExportAsync(h, All(Filter("Manual")))).Value!;
-        Assert.Equal(1, dto.RowCount); Assert.Equal("Customer 2", Rows(dto)[1][1]); Assert.DoesNotContain("550.13", dto.Csv); Assert.DoesNotContain("550.125", dto.Csv);
+        Assert.Equal(2, dto.RowCount); Assert.Contains("550.13", dto.Csv); Assert.DoesNotContain("550.125", dto.Csv); Assert.DoesNotContain("Customer 3", dto.Csv);
         Assert.Equal([(GenesysExportRows.AmountPrecisionUnresolved, 1)], dto.Exclusions!.Select(e => (e.Code, e.Units)));
         Assert.Contains("Exclusions=AmountPrecisionUnresolved:1", await AuditAsync(h));
     }

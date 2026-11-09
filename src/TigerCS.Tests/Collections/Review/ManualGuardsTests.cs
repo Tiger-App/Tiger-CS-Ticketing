@@ -33,10 +33,17 @@ public sealed class ManualGuardsTests
     }
 
     [Fact]
-    public async Task AUnitWithAnUnresolvedAmount_IsHeldBack_AndNeverRoundedIntoAFile()
+    public async Task AUnitWithAnAmountThatCannotBeStated_IsHeldBack_AndNeverRoundedIntoAFile()
     {
-        // The unresolved 50.125 is an OVERDUE instalment, outside the current-month stage's own rows: the unit is still held, not summed with its clean 500.00 into a sendable amount.
-        using var h = await SeededAsync(ReviewHarness.Row(1, 500m, day: 20), ReviewHarness.Row(1, 50.125m, day: 10) with { DueDate = new DateTime(2026, 8, 10), VoucherNumber = "INV-1-X" });
+        // 50.125 is a normal balance with extra decimals and is simply rounded (50.13). A POSITIVE residue below 0.005 would round to a settled 0.00, so it is never rounded away: it is an OVERDUE
+        // instalment outside the current-month stage's own rows, and the unit is still held, not summed with its clean 500.00 into a sendable amount.
+        using var rounded = await SeededAsync(ReviewHarness.Row(1, 500m, day: 20), ReviewHarness.Row(1, 50.125m, day: 10) with { DueDate = new DateTime(2026, 8, 10), VoucherNumber = "INV-1-X" });
+        using (var roundedScope = rounded.NewScope())
+        {
+            var okPage = (await roundedScope.Query.QueryAsync(rounded.Manager, Manual(), 1, 50, CancellationToken.None)).Value!;
+            Assert.DoesNotContain(okPage.Items, i => i.Reasons.Any(r => r.Code == ReviewReasons.AmountPrecisionNeedsReview));
+        }
+        using var h = await SeededAsync(ReviewHarness.Row(1, 500m, day: 20), ReviewHarness.Row(1, 0.004m, day: 10) with { DueDate = new DateTime(2026, 8, 10), VoucherNumber = "INV-1-X" });
         using var scope = h.NewScope();
         var page = (await scope.Query.QueryAsync(h.Manager, Manual(), 1, 50, CancellationToken.None)).Value!;
         Assert.Equal(0, page.Counts.Ready);

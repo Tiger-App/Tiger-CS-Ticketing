@@ -50,13 +50,52 @@ public sealed class ReviewDomainRulesTests
     }
 
     [Fact]
-    public void DecimalSourceWithExtraPlacesIsUnresolvedNotRounded()
+    public void DecimalSourceWithExtraPlacesIsRoundedToFils_AndTheOriginalIsKept()
     {
-        // 99.999 formats as "100.00" but is a different amount: it must stay a visible precision problem.
+        // Business decision: extra decimals on a valid positive balance are rounded (half away from zero), not held for review. The original value stays in Raw.
         var result = MoneyNormalizer.Normalize(99.999m, sourceIsFloatingPoint: false);
+        Assert.Equal(AmountPrecision.Rounded, result.Precision);
+        Assert.True(result.IsResolved);
+        Assert.Equal(100.00m, result.Value);
+        Assert.Equal(99.999m, result.Raw);
+    }
+
+    [Theory]
+    [InlineData("0.005", "0.01")]       // the midpoint rounds away from zero (banker's rounding would give 0.00)
+    [InlineData("0.015", "0.02")]
+    [InlineData("1.005", "1.01")]
+    [InlineData("2.675", "2.68")]
+    [InlineData("500.005", "500.01")]
+    [InlineData("2.674", "2.67")]
+    [InlineData("99.994", "99.99")]
+    [InlineData("12345.678", "12345.68")]
+    public void ExtraDecimalsAreRoundedHalfAwayFromZero_WithDecimalArithmetic(string raw, string expected)
+    {
+        var result = MoneyNormalizer.Normalize(decimal.Parse(raw, System.Globalization.CultureInfo.InvariantCulture), sourceIsFloatingPoint: false);
+        Assert.Equal(AmountPrecision.Rounded, result.Precision);
+        Assert.Equal(decimal.Parse(expected, System.Globalization.CultureInfo.InvariantCulture), result.Value);
+        Assert.Equal(decimal.Parse(raw, System.Globalization.CultureInfo.InvariantCulture), result.Raw);
+    }
+
+    [Theory]
+    [InlineData("0.004")]               // a small POSITIVE balance is not rounded into a settled 0.00 ("paid"); it stays blocked
+    [InlineData("0.0049999")]
+    [InlineData("0.00001")]
+    [InlineData("-12.345")]
+    public void ABalanceThatWouldRoundToZeroOrIsNegative_StaysUnresolved(string raw)
+    {
+        var value = decimal.Parse(raw, System.Globalization.CultureInfo.InvariantCulture);
+        var result = MoneyNormalizer.Normalize(value, sourceIsFloatingPoint: false);
         Assert.Equal(AmountPrecision.Unresolved, result.Precision);
         Assert.Null(result.Value);
-        Assert.Equal(99.999m, result.Raw);
+        Assert.Equal(value, result.Raw);
+    }
+
+    [Fact]
+    public void ExactAmountsAndZeroAreUnchanged()
+    {
+        Assert.Equal((AmountPrecision.Exact, 250.50m), (MoneyNormalizer.Normalize(250.50m, false).Precision, MoneyNormalizer.Normalize(250.50m, false).Value!.Value));
+        Assert.Equal(AmountPrecision.Exact, MoneyNormalizer.Normalize(0m, false).Precision);
     }
 
     [Fact]
@@ -66,8 +105,9 @@ public sealed class ReviewDomainRulesTests
         Assert.Equal(AmountPrecision.FloatingPointNoise, noise.Precision);
         Assert.Equal(250.00m, noise.Value);
 
-        var genuine = MoneyNormalizer.Normalize(250.004m, sourceIsFloatingPoint: true);   // 0.4 fils is not float noise
-        Assert.Equal(AmountPrecision.Unresolved, genuine.Precision);
+        var genuine = MoneyNormalizer.Normalize(250.004m, sourceIsFloatingPoint: true);   // 0.4 fils is not float noise: it is rounded like any other extra decimal, not snapped
+        Assert.Equal(AmountPrecision.Rounded, genuine.Precision);
+        Assert.Equal(250.00m, genuine.Value); Assert.Equal(250.004m, genuine.Raw);
     }
 
     [Fact]

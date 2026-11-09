@@ -51,7 +51,7 @@ public static class GenesysExportRows
     public static string Explain(string code) => code switch
     {
         AmountUnavailable => "The amount could not be calculated from the stored instalments (ambiguous or unreadable), so no value was invented and the unit was left out.",
-        AmountPrecisionUnresolved => "A source amount of this unit has more than two decimals that are not rounding noise. The real balance must be confirmed in PACT; it was not rounded into the file.",
+        AmountPrecisionUnresolved => "A source amount of this unit is a positive balance below 0.005 (it would round to zero) or not a valid balance. The real balance must be confirmed in PACT; nothing was rounded into the file.",
         NoCallablePhone => "No valid international (E.164) phone number, so Genesys could not dial the unit's customer; nothing was substituted.",
         _ => code
     };

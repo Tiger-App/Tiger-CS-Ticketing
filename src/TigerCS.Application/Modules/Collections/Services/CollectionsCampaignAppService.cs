@@ -327,8 +327,8 @@ public sealed class CollectionsCampaignAppService(
         // eligibility rows - exactly as before the read scope was widened; the read scope adds nothing but the Due / Overdue / Total figures and the ordering date.
         var eligibleStart = eligibleFrom ?? from;
         // Defensive: a legacy source may ignore the window.
-        // Floating-point residue from the deployed procedures (e.g. 1E-12 on a settled instalment) is snapped to fils; a genuine
-        // sub-fils amount stays as read so AmountPrecisionNeedsReview still fires. Rounding is never used to hide it.
+        // Floating-point residue from the deployed procedures (e.g. 1E-12 on a settled instalment) is snapped to fils; a valid positive balance with extra decimals is rounded to two places
+        // (half away from zero), exactly as the Review records do. A positive balance below 0.005 stays as read so AmountPrecisionNeedsReview still fires: it is never rounded into "paid".
         var rows = items
             .Select(r => MoneyNormalizer.Normalize(r.Amount, r.AmountIsFloatingPoint) is { IsResolved: true, Value: { } value } ? r with { Amount = value } : r)
             .Where(r => r.Amount > 0 && r.Amount >= min && DateOnly.FromDateTime(r.DueDate) >= from && DateOnly.FromDateTime(r.DueDate) <= to

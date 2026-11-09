@@ -191,12 +191,15 @@ public sealed class ReviewUatReadinessTests(ITestOutputHelper output)
     }
 
     [Theory]
-    [InlineData("0.397999999985586")]     // 0.398 AED: a genuine three-decimal balance
-    [InlineData("291906.6510000000708")]  // 291,906.651 AED
-    public void GenuineSubFilsBalancesSeenInTheExport_StayUnresolved(string raw)
+    [InlineData("0.397999999985586", "0.40")]          // 0.398 AED: a genuine three-decimal balance is rounded to fils (business decision), the original is kept
+    [InlineData("291906.6510000000708", "291906.65")]  // 291,906.651 AED
+    public void GenuineSubFilsBalancesSeenInTheExport_AreRoundedToFils_AndTheOriginalIsKept(string raw, string expected)
     {
-        var result = MoneyNormalizer.Normalize(decimal.Parse(raw, System.Globalization.CultureInfo.InvariantCulture), sourceIsFloatingPoint: true);
-        Assert.Equal(AmountPrecision.Unresolved, result.Precision);
+        var original = decimal.Parse(raw, System.Globalization.CultureInfo.InvariantCulture);
+        var result = MoneyNormalizer.Normalize(original, sourceIsFloatingPoint: true);
+        Assert.Equal(AmountPrecision.Rounded, result.Precision);
+        Assert.Equal(decimal.Parse(expected, System.Globalization.CultureInfo.InvariantCulture), result.Value);
+        Assert.Equal(original, result.Raw);
     }
 
     [Theory]

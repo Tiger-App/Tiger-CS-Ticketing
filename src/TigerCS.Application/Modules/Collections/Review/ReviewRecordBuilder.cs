@@ -100,7 +100,10 @@ public static class ReviewRecordBuilder
                 if (unresolved) reasons.Add(ReviewReasons.AmountPrecisionNeedsReview);
 
                 // Payment status follows the verified remaining amount (0 = Paid, more = Unpaid); only a missing, invalid or contradicted remainder is Unknown and holds the record.
-                var statuses = stageRows.Select(r => PaymentStatusRules.Derive(r.Row.SourceStatus, r.Amount, r.Row.PlanAmount, r.Row.AllocatedAmount)).ToList();
+                // The decision is taken on the actual remaining amount BEFORE rounding: a balance rounded to fils (or one that cannot be) is judged by its original value, so rounding can neither turn a
+                // small positive balance into "paid" nor make a rounded amount contradict the source's own original / paid amounts. Exact values and float noise keep their normalized amount.
+                var statuses = stageRows.Select(r => PaymentStatusRules.Derive(r.Row.SourceStatus, r.Money.Precision is AmountPrecision.Rounded or AmountPrecision.Unresolved ? r.Money.Raw : r.Amount,
+                    r.Row.PlanAmount, r.Row.AllocatedAmount)).ToList();
                 if (stageRows.Any(r => r.Row is { PlanAmount: { } plan, AllocatedAmount: { } paid } && !PaymentStatusRules.AmountsAddUp(plan, paid, r.Money.Raw)))
                     reasons.Add(ReviewReasons.SourceAmountsInconsistent);
                 if (statuses.Contains(ReviewPaymentStatus.Paid) || stageRows.Any(r => string.Equals(r.Row.SourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase)))
