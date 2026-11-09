@@ -106,6 +106,13 @@ public sealed class TicketDetailsModel(
 
     /// <summary>The customer's phone: the intake snapshot the history read reports, else the originating interaction's caller number.</summary>
     public string? CustomerPhone { get; private set; }
+
+    /// <summary>
+    /// The customer's valid email address, or null. Taken from the Api's customer history, which resolves it with the same resolver the
+    /// lifecycle emails use; when that call failed, the facts this page already holds are read in the same order (Genesys, then
+    /// agent-entered). An invalid value is never shown.
+    /// </summary>
+    public string? CustomerEmail { get; private set; }
     public string? DepartmentName { get; private set; }
     public string? OwnerName { get; private set; }
 
@@ -297,7 +304,7 @@ public sealed class TicketDetailsModel(
     /// <summary>The Customer Summary band: who the customer is and how sure the ticket is about it. Null only when the ticket did not load.</summary>
     public TicketCustomerSummary? CustomerSummary => Ticket is null
         ? null
-        : TicketCustomerSummary.Build(Ticket, CustomerNameLabel, CustomerDisplayName is not null, CustomerVerificationLabel, CustomerPhone, CustomerProfileHref, CustomerNameSource);
+        : TicketCustomerSummary.Build(Ticket, CustomerNameLabel, CustomerDisplayName is not null, CustomerVerificationLabel, CustomerPhone, CustomerProfileHref, CustomerNameSource, CustomerEmail);
 
     private TicketGuidance? guidance;
 
@@ -1249,6 +1256,7 @@ public sealed class TicketDetailsModel(
 
         CustomerDisplayName = resolvedName.Name;
         CustomerNameSource = resolvedName.Source;
+        CustomerEmail = ResolveCustomerEmail(CustomerHistory, Interactions);
         CustomerKey = CustomerHistory?.CustomerKey
             ?? CustomerIdentity.FromTicketFacts(Ticket.CrmBuyerCustomerId, Ticket.CustomerVerificationSource, Ticket.ExternalCustomerId, CustomerPhone)?.Key;
 
@@ -1579,6 +1587,22 @@ public sealed class TicketDetailsModel(
         }
 
         return [.. entries.OrderBy(e => e.TimestampUtc)];
+    }
+
+    /// <summary>The valid customer email to display: the Api's resolved address, else the page's own facts in the resolver's order.</summary>
+    internal static string? ResolveCustomerEmail(CustomerHistoryDto? history, IReadOnlyList<TicketInteractionDto> interactions)
+    {
+        var ordered = interactions.OrderByDescending(i => i.IsOriginatingInteraction).ThenByDescending(i => i.StartedAtUtc).Select(i => i.CustomerEmail);
+        foreach (var candidate in new[] { history?.CustomerEmail }.Concat(ordered).Append(history?.ManualCustomerEmail))
+        {
+            var normalized = TigerCS.Application.Modules.Notifications.Services.CustomerEmailAddress.Normalize(candidate);
+            if (normalized is not null && TigerCS.Application.Modules.Notifications.Services.CustomerEmailAddress.IsValid(normalized))
+            {
+                return normalized;
+            }
+        }
+
+        return null;
     }
 
     private static IReadOnlyList<ActivityEntry> BuildTimelineFeed(

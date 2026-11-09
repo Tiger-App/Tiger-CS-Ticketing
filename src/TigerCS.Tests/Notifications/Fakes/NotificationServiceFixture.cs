@@ -45,7 +45,39 @@ public sealed class NotificationServiceFixture
 
     public FakeTimeProvider Time { get; } = new(new DateTime(2026, 8, 22, 9, 0, 0, DateTimeKind.Utc));
 
-    public CustomerContactResolver CreateContactResolver() => new(Snapshots, Interactions);
+    public FakeCustomerContactDetailRepository ContactDetails { get; } = new();
+
+    /// <summary>The same resolver production registers: snapshot, Genesys interaction, external snapshot and agent-entered contact details.</summary>
+    public CustomerContactResolver CreateContactResolver() => new(Snapshots, Interactions, ContactDetails);
+
+    /// <summary>
+    /// A manually entered customer, as the New Ticket wizard creates one: an unverified ticket whose only trace of the customer is the
+    /// originating local interaction's phone number. Any email lives solely in the saved contact details for that phone.
+    /// </summary>
+    public async Task<Ticket> SeedManualCustomerTicketAsync(
+        string phone = "+971 50 777 0001", string? savedEmail = "manual.customer@example.com", string ticketNumber = "TG-HO-20261109-0001")
+    {
+        var department = Departments.AddDepartment("Handover", "HO");
+        var ticket = Ticket.CreateUnverified(
+            ticketNumber, department.DepartmentId, categoryId: 1, priorityId: 2, "Handover inspection.", Time.GetUtcNow().UtcDateTime,
+            manualProjectName: "Tiger Tower", manualUnitNumber: "T-1204");
+        await Tickets.AddAsync(ticket);
+        await Interactions.AddAsync(TicketInteraction.CreateLocal(
+            ticket.TicketId, WellKnownChannels.Phone, phone, Time.GetUtcNow().UtcDateTime, isOriginatingInteraction: true));
+        ContactDetails.Save(phone, "Manual Customer", savedEmail);
+        return ticket;
+    }
+
+    /// <summary>A PACT-verified ticket: the external customer's email is snapshotted on the ticket itself.</summary>
+    public async Task<Ticket> SeedExternalCustomerTicketAsync(string? externalEmail, string ticketNumber = "TG-CS-20261109-0002")
+    {
+        var department = Departments.AddDepartment("Customer Service", "CS");
+        var ticket = Ticket.CreateFromExternalLookup(
+            ticketNumber, department.DepartmentId, "Pact", "T-77", "U-5", "Tiger Tower", "T-1204", categoryId: 1, priorityId: 2,
+            "Service charge enquiry.", Time.GetUtcNow().UtcDateTime, "Omar Saleh", externalEmail);
+        await Tickets.AddAsync(ticket);
+        return ticket;
+    }
 
     /// <summary>The recording provider wrapped in the real delivery guard — what every production sender sits behind.</summary>
     public IEmailSender CreateGuardedProvider() =>

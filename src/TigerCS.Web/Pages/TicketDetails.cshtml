@@ -588,11 +588,18 @@ else
                             <span class="tw-fact__v tw-who__phone">@(customer.Phone ?? "No phone recorded")</span>
                         </div>
                     </div>
-                    @* The ticket carries no customer email today, so this states that plainly rather than leaving a blank. *@
+                    @* The valid email the lifecycle emails go to; "Not available" only when the ticket has none. *@
                     <div class="tw-fact">
                         <div class="tw-fact__body">
                             <span class="tw-fact__k">Email Address</span>
-                            <span class="tw-fact__v is-muted">Not available</span>
+                            @if (customer.Email is { } customerEmail)
+                            {
+                                <span class="tw-fact__v tw-who__email" data-customer-email>@customerEmail</span>
+                            }
+                            else
+                            {
+                                <span class="tw-fact__v is-muted" data-customer-email-missing>Not available</span>
+                            }
                         </div>
                     </div>
                   </div>
