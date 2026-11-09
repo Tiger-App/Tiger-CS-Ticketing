@@ -330,7 +330,7 @@ public sealed class GenesysHistoryServiceTests
         var after = await RecordsAsync(h, publicId);
         Assert.Equal(before.Items.Select(r => (r.CustomerName, r.UnitCode, r.Amount, r.DueDate, r.Phone, r.Result, r.GenesysContactId)),
             after.Items.Select(r => (r.CustomerName, r.UnitCode, r.Amount, r.DueDate, r.Phone, r.Result, r.GenesysContactId)));
-        Assert.Equal(submissionBefore, Assert.Single((await ListAsync(h)).Items));
+        Assert.Equal(submissionBefore with { Companies = null }, Assert.Single((await ListAsync(h)).Items) with { Companies = null });
     }
 
     // ------------------------------------------------------------ access control
@@ -421,7 +421,12 @@ public sealed class GenesysHistoryServiceTests
         var controller = typeof(TigerCS.Api.Controllers.CollectionsGenesysHistoryController);
         var actions = controller.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.DeclaredOnly);
         Assert.NotEmpty(actions);
-        Assert.All(actions, m => Assert.NotNull(m.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.HttpGetAttribute), false).SingleOrDefault()));
-        Assert.All(actions, m => Assert.Empty(m.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.HttpPostAttribute), false)));
+        // Every route is a GET except the manual Sync from Genesys, which only READS from Genesys and writes the local sync tables (see GenesysCampaignSyncServiceTests).
+        var posts = actions.Where(m => m.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.HttpPostAttribute), false).Length > 0).ToList();
+        Assert.Equal(["Sync"], posts.Select(m => m.Name));
+        Assert.All(actions.Except(posts), m => Assert.NotNull(m.GetCustomAttributes(typeof(Microsoft.AspNetCore.Mvc.HttpGetAttribute), false).SingleOrDefault()));
+        Assert.DoesNotContain(typeof(IReviewStore), typeof(TigerCS.Application.Modules.Collections.History.GenesysCampaignSyncService).GetConstructors().Single().GetParameters().Select(p => p.ParameterType));
+        Assert.DoesNotContain(typeof(DispatchService), typeof(TigerCS.Application.Modules.Collections.History.GenesysCampaignSyncService).GetConstructors().Single().GetParameters().Select(p => p.ParameterType));
+        Assert.DoesNotContain(typeof(IReviewJobScheduler), typeof(TigerCS.Application.Modules.Collections.History.GenesysCampaignSyncService).GetConstructors().Single().GetParameters().Select(p => p.ParameterType));
     }
 }

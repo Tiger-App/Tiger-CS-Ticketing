@@ -177,6 +177,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
     public DbSet<CollectionsDispatchItem> CollectionsDispatchItems => Set<CollectionsDispatchItem>();
 
     public DbSet<CollectionsGenesysBatch> CollectionsGenesysBatches => Set<CollectionsGenesysBatch>();
+    public DbSet<CollectionsGenesysMessageResult> CollectionsGenesysMessageResults => Set<CollectionsGenesysMessageResult>();
+    public DbSet<CollectionsGenesysSyncState> CollectionsGenesysSyncStates => Set<CollectionsGenesysSyncState>();
 
     public DbSet<TicketApproval> TicketApprovals => Set<TicketApproval>();
 
@@ -260,6 +262,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new CollectionsDispatchConfiguration());
         builder.ApplyConfiguration(new CollectionsDispatchItemConfiguration());
         builder.ApplyConfiguration(new CollectionsGenesysBatchConfiguration());
+        builder.ApplyConfiguration(new CollectionsGenesysMessageResultConfiguration());
+        builder.ApplyConfiguration(new CollectionsGenesysSyncStateConfiguration());
         builder.ApplyConfiguration(new TicketApprovalConfiguration());
         builder.ApplyConfiguration(new TicketWorkflowEventConfiguration());
         builder.ApplyConfiguration(new RequestTypeApprovalRequirementConfiguration());

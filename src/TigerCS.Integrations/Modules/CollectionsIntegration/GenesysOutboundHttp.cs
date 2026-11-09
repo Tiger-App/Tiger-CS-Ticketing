@@ -258,6 +258,89 @@ public sealed class GenesysOutboundHttpClient(HttpClient http, IGenesysTokenProv
         return new(GenesysUploadOutcome.Unknown, raw.Status, null, "Genesys accepted the campaign but returned no usable id.");
     }
 
+    public async Task<GenesysCampaignConversationsResult> GetCampaignConversationsAsync(string campaignId, DateTime fromUtc, DateTime toUtc, CancellationToken ct)
+    {
+        if (!Guid.TryParse(campaignId, out var id)) throw new ArgumentException("A campaign id is required.", nameof(campaignId));
+        var found = new List<GenesysCampaignConversation>();
+        var interval = $"{fromUtc.ToUniversalTime():yyyy-MM-ddTHH:mm:ss.fffZ}/{toUtc.ToUniversalTime():yyyy-MM-ddTHH:mm:ss.fffZ}";
+        for (var page = 1; page <= MaxConversationPages; page++)
+        {
+            var body = JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["interval"] = interval,
+                ["order"] = "asc",
+                ["orderBy"] = "conversationStart",
+                ["paging"] = new { pageSize = 100, pageNumber = page },
+                ["segmentFilters"] = new object[] { new { type = "and", predicates = new object[] { new { dimension = "outboundCampaignId", value = id.ToString("D") } } } }
+            });
+            var raw = await SendAsync(HttpMethod.Post, "api/v2/analytics/conversations/details/query", body, "campaign interactions lookup", ct);
+            if (raw.Outcome != GenesysUploadOutcome.Accepted) return new(raw.Outcome, raw.Status, [], false, raw.Error);
+            try
+            {
+                using var doc = JsonDocument.Parse(string.IsNullOrWhiteSpace(raw.Body) ? "{}" : raw.Body);
+                if (!doc.RootElement.TryGetProperty("conversations", out var conversations) || conversations.ValueKind != JsonValueKind.Array || conversations.GetArrayLength() == 0)
+                    return new(GenesysUploadOutcome.Accepted, raw.Status, found, true, null);
+                foreach (var c in conversations.EnumerateArray())
+                {
+                    var conversationId = Str(c, "conversationId");
+                    if (string.IsNullOrEmpty(conversationId)) continue;
+                    string? contact = null, list = null;
+                    if (c.TryGetProperty("participants", out var participants) && participants.ValueKind == JsonValueKind.Array)
+                        foreach (var p in participants.EnumerateArray())
+                            if (p.TryGetProperty("sessions", out var sessions) && sessions.ValueKind == JsonValueKind.Array)
+                                foreach (var s in sessions.EnumerateArray())
+                                {
+                                    var campaign = Str(s, "outboundCampaignId");
+                                    if (campaign is not null && !string.Equals(campaign, id.ToString("D"), StringComparison.OrdinalIgnoreCase)) continue;
+                                    contact ??= Str(s, "outboundContactId");
+                                    list ??= Str(s, "outboundContactListId");
+                                }
+                    found.Add(new(conversationId, contact, list, DateTime.TryParse(Str(c, "conversationStart"), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var start) ? start : null));
+                }
+                if (conversations.GetArrayLength() < 100) return new(GenesysUploadOutcome.Accepted, raw.Status, found, true, null);
+            }
+            catch (JsonException) { return new(GenesysUploadOutcome.Unknown, raw.Status, [], false, "Genesys returned an unreadable interaction list."); }
+        }
+        return new(GenesysUploadOutcome.Accepted, null, found, false, "The campaign has more interactions than one sync reads; the figures are partial.");
+    }
+
+    public async Task<GenesysConversationMessagesResult> GetConversationMessagesAsync(string conversationId, CancellationToken ct)
+    {
+        if (!Guid.TryParse(conversationId, out var id)) throw new ArgumentException("A conversation id is required.", nameof(conversationId));
+        var raw = await SendAsync(HttpMethod.Get, $"api/v2/conversations/messages/{id:D}", null, "conversation message lookup", ct);
+        if (raw.Status == 404) return new(GenesysUploadOutcome.Accepted, 404, [], null);
+        if (raw.Outcome != GenesysUploadOutcome.Accepted) return new(raw.Outcome, raw.Status, [], raw.Error);
+        try
+        {
+            using var doc = JsonDocument.Parse(raw.Body ?? "");
+            var byId = new Dictionary<string, GenesysMessageInfo>(StringComparer.OrdinalIgnoreCase);
+            if (doc.RootElement.TryGetProperty("participants", out var participants) && participants.ValueKind == JsonValueKind.Array)
+                foreach (var p in participants.EnumerateArray())
+                    if (p.TryGetProperty("messages", out var messages) && messages.ValueKind == JsonValueKind.Array)
+                        foreach (var m in messages.EnumerateArray())
+                        {
+                            var messageId = Str(m, "messageId") ?? Str(m, "id");
+                            var status = Str(m, "messageStatus")?.Trim().ToLowerInvariant();
+                            if (string.IsNullOrEmpty(messageId) || string.IsNullOrEmpty(status)) continue;
+                            DateTime? time = DateTime.TryParse(Str(m, "messageTime"), System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.AdjustToUniversal | System.Globalization.DateTimeStyles.AssumeUniversal, out var t) ? t : null;
+                            string? reason = null;
+                            if (m.TryGetProperty("errorInfo", out var error) && error.ValueKind == JsonValueKind.Object)
+                            {
+                                var text = Str(error, "message") ?? Str(error, "code");
+                                if (!string.IsNullOrWhiteSpace(text)) reason = text.Length > 300 ? text[..300] : text;
+                            }
+                            // The same message can appear under several participants: one entry per message id, never a second count.
+                            byId[messageId] = new(messageId, status, time, reason);
+                        }
+            return new(GenesysUploadOutcome.Accepted, raw.Status, byId.Values.ToList(), null);
+        }
+        catch (JsonException) { return new(GenesysUploadOutcome.Unknown, raw.Status, [], "Genesys returned unreadable messages."); }
+    }
+
+    private const int MaxConversationPages = 100;
+
+    private static string? Str(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
+
     private const int MaxLookupPages = 10;
 
     private static GenesysCampaignRef? ReadCampaign(JsonElement e)
@@ -320,6 +403,7 @@ public sealed class GenesysOutboundHttpClient(HttpClient http, IGenesysTokenProv
         var q = path.IndexOf('?', StringComparison.Ordinal);
         var p = "/" + (q >= 0 ? path[..q] : path).TrimStart('/');
         p = System.Text.RegularExpressions.Regex.Replace(p, @"(?<=/contactlists/)[^/]+", "{contactListId}");
+        p = System.Text.RegularExpressions.Regex.Replace(p, @"(?<=/conversations/messages/)[^/]+$", "{conversationId}");
         return System.Text.RegularExpressions.Regex.Replace(p, @"(?<=/contacts/)[^/]+$", "{contactId}");
     }
 
@@ -346,6 +430,8 @@ public sealed class GenesysOutboundHttpClient(HttpClient http, IGenesysTokenProv
         "suppression" => "outbound:contact:edit",
         "campaign creation" => "outbound:campaign:add",
         "organization lookup" => "none expected; check the client's role",
+        "campaign interactions lookup" => "analytics:conversationDetail:view",
+        "conversation message lookup" => "conversation:message:view",
         _ => "outbound:campaign:view"
     };
 

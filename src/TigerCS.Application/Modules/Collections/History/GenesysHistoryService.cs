@@ -25,7 +25,7 @@ namespace TigerCS.Application.Modules.Collections.History;
 public sealed class GenesysHistoryService(
     CollectionsOptions options, GenesysOutboundOptions genesys, CollectionsAuthorizationService authorization,
     IGenesysHistoryStore store, ILogger<GenesysHistoryService> logger,
-    CollectionsUnitLinkService? links = null, IEmployeeRepository? employees = null)
+    CollectionsUnitLinkService? links = null, IEmployeeRepository? employees = null, IGenesysDeliveryStore? delivery = null)
 {
     private readonly IEmployeeRepository? _employees = employees;
 
@@ -49,25 +49,29 @@ public sealed class GenesysHistoryService(
         var result = await store.ListSubmissionsAsync(spec, (page - 1) * pageSize, pageSize, ct);
         var names = new NameCache(this);
         var items = new List<GenesysSubmissionDto>();
-        foreach (var row in result.Items) items.Add(await MapAsync(row, names, ct));
+        var states = delivery is null || result.Items.Count == 0 ? new Dictionary<long, SyncStateRow>() : (await delivery.GetStatesAsync(result.Items.Select(r => r.DispatchId).ToList(), ct)).ToDictionary(k => k.Key, v => v.Value);
+        foreach (var row in result.Items) items.Add((await MapAsync(row, names, ct)) with { Delivery = DeliveryOf(row, states.GetValueOrDefault(row.DispatchId)) });
         return CollectionsResult<GenesysHistoryPageDto>.Ok(new(page, pageSize, result.TotalCount, items, Summarize(result.Summary),
-            await OptionsAsync(names, ct), GenesysUploadStates.CallOutcomeNote, permissions.CanSendReminders));
+            await OptionsAsync(names, ct), GenesysUploadStates.CallOutcomeNote, permissions.CanSendReminders,
+            delivery is null ? null : await delivery.GetLastSyncedAsync(ct), delivery is not null && permissions.CanSendReminders));
     }
 
     public async Task<CollectionsResult<GenesysSubmissionDetailDto>> GetAsync(CollectionsCaller caller, Guid submissionId, CancellationToken ct)
     {
-        if (!(await authorization.ResolveAsync(caller, ct)).CanReadFinancials) return CollectionsResult<GenesysSubmissionDetailDto>.Fail(CollectionsOutcome.Forbidden);
+        var detailPermissions = await authorization.ResolveAsync(caller, ct);
+        if (!detailPermissions.CanReadFinancials) return CollectionsResult<GenesysSubmissionDetailDto>.Fail(CollectionsOutcome.Forbidden);
         var detail = await store.GetSubmissionAsync(submissionId, ct);
         if (detail is null) return CollectionsResult<GenesysSubmissionDetailDto>.Fail(CollectionsOutcome.NotFound);
         var names = new NameCache(this);
-        var submission = await MapAsync(detail.Row, names, ct);
+        var detailState = delivery is null ? null : (await delivery.GetStatesAsync([detail.Row.DispatchId], ct)).GetValueOrDefault(detail.Row.DispatchId);
+        var submission = (await MapAsync(detail.Row, names, ct)) with { Delivery = DeliveryOf(detail.Row, detailState) };
         var batches = detail.Batches.OrderBy(b => b.Sequence).Select(b => new GenesysBatchDetailDto(
             b.Sequence, b.ReminderType.ToString(), b.StageName, b.ContactListId, ListLabel(b.ContactListId), b.Status.ToString(), BatchLabel(b.Status),
             b.ContactCount, b.Status is GenesysBatchStatus.Pending or GenesysBatchStatus.Submitting ? null : b.ReturnedContactCount, b.HttpStatus, b.AttemptCount, b.StartedAtUtc, b.CompletedAtUtc,
             b.GenesysCampaignName, b.GenesysCampaignId, b.CampaignAction, Short(b.RequestHash), b.Error, b.ReconciliationNote, b.ReconciledAtUtc)).ToList();
         var d = detail.Row;
         return CollectionsResult<GenesysSubmissionDetailDto>.Ok(new(submission, batches, d.ApprovedCount, d.ExcludedAtDispatch, detail.SharedPhoneRecords,
-            d.StatusReason, d.Phase, d.StartedAtUtc, d.CompletedAtUtc, links is not null, GenesysUploadStates.CallOutcomeNote));
+            d.StatusReason, d.Phase, d.StartedAtUtc, d.CompletedAtUtc, links is not null, GenesysUploadStates.CallOutcomeNote, delivery is not null && detailPermissions.CanSendReminders));
     }
 
     public async Task<CollectionsResult<GenesysRecordsPageDto>> RecordsAsync(CollectionsCaller caller, Guid submissionId, string? result, string? search, int page, int pageSize, CancellationToken ct)
@@ -102,15 +106,20 @@ public sealed class GenesysHistoryService(
             }
         }
 
+        var messages = delivery is null ? new Dictionary<long, List<StoredMessage>>()
+            : (await delivery.ListMessagesForItemsAsync(found.Items.Select(r => r.Item.CollectionsDispatchItemId).ToList(), ct)).GroupBy(m => m.ItemId).ToDictionary(g => g.Key, g => g.ToList());
+        var synced = delivery is not null && (await delivery.GetStatesAsync([detail.Row.DispatchId], ct)).ContainsKey(detail.Row.DispatchId);
         var items = found.Items.Select(r =>
         {
             var i = r.Item;
             var submitted = i.CollectionsGenesysBatchId is not null && i.Status is not (DispatchItemStatus.Excluded or DispatchItemStatus.Released);
             var text = GenesysUploadStateRules.RecordResult(i.Status, submitted, finished);
+            var d = RecordDelivery(i, messages.GetValueOrDefault(i.CollectionsDispatchItemId), synced);
             return new GenesysSubmissionRecordDto(
                 i.CollectionsDispatchItemId, i.CustomerName, crm.TryGetValue((i.CompanyId, i.UnitCode), out var crmId) ? crmId : null, i.UnitCode, i.Phone, i.Email,
                 i.ReminderType.ToString(), CampaignReminderTypes.DefaultLabel(i.ReminderType), i.Amount, i.Currency, i.DueDate, text, ResultState(text), i.UploadedAtUtc, r.BatchStartedAtUtc,
-                i.GenesysContactId, i.Status is DispatchItemStatus.UploadedToGenesys ? null : i.StatusReason, r.SharedPhone, SuppressionText(i.SuppressionStatus), GenesysUploadStates.CallOutcomeUnavailable);
+                i.GenesysContactId, i.Status is DispatchItemStatus.UploadedToGenesys ? null : i.StatusReason, r.SharedPhone, SuppressionText(i.SuppressionStatus), GenesysUploadStates.CallOutcomeUnavailable,
+                d.Status, d.SentAt, d.DeliveredAt, d.Reason, d.Interaction, d.Attempts);
         }).ToList();
         return CollectionsResult<GenesysRecordsPageDto>.Ok(new(page, pageSize, found.TotalCount, items, GenesysUploadStates.CallOutcomeNote));
     }
@@ -157,6 +166,30 @@ public sealed class GenesysHistoryService(
             Flag("DataVerified"), Flag("SchemaVerified"), Find(@"(?:^|;)Mode=([A-Za-z]+);Population="), Int("Repeated"), Find(@"Sha256=([0-9A-Fa-f]+)"));
     }
 
+    // ---------------------------------------------------------------- delivery (what Genesys confirmed, from the last manual sync)
+
+    public const string NotSyncedText = "Not synced";
+
+    private static GenesysDeliveryDto DeliveryOf(SubmissionRow row, SyncStateRow? state)
+    {
+        if (state is null || state.LastCompletedAtUtc is null)
+            return new(false, state?.LastSyncedAtUtc, state?.Outcome, state?.Error, null, null, null, null, row.Counts.Excluded + row.Counts.Released + row.Counts.Failed, 0);
+        var t = state.Tally;
+        return new(true, state.LastSyncedAtUtc, state.Outcome, state.Error, t.Sent, t.Delivered, t.Failed, t.Pending, t.NotSent, t.MessageAttempts);
+    }
+
+    /// <summary>The message status, times, reason and Genesys interaction id of one contact. Several attempts are shown as the best outcome; the attempt count is separate.</summary>
+    private static (string Status, DateTime? SentAt, DateTime? DeliveredAt, string? Reason, string? Interaction, int Attempts) RecordDelivery(CollectionsDispatchItem item, List<StoredMessage>? own, bool synced)
+    {
+        var inBatch = item.CollectionsGenesysBatchId is not null;
+        var outcome = GenesysDeliveryRules.Outcome(item.Status, inBatch, (own ?? []).Select(m => m.Status));
+        if (outcome == GenesysContactOutcomes.NotSent) return (GenesysContactOutcomes.Label(outcome), null, null, item.StatusReason, null, 0);
+        if (own is not { Count: > 0 }) return (synced ? GenesysContactOutcomes.Label(GenesysContactOutcomes.Pending) : NotSyncedText, null, null, null, null, 0);
+        var best = own.OrderByDescending(m => m.Status == GenesysMessageStates.Delivered ? 3 : m.Status == GenesysMessageStates.Sent ? 2 : m.Status == GenesysMessageStates.Failed ? 1 : 0).ThenByDescending(m => m.DeliveredAtUtc ?? m.SentAtUtc).First();
+        return (GenesysContactOutcomes.Label(outcome), own.Where(m => m.SentAtUtc != null).Select(m => m.SentAtUtc).Min(), own.Where(m => m.DeliveredAtUtc != null).Select(m => m.DeliveredAtUtc).Min(),
+            outcome == GenesysContactOutcomes.Failed ? own.Select(m => m.FailureReason).FirstOrDefault(r => !string.IsNullOrWhiteSpace(r)) : null, best.ConversationId, own.Count);
+    }
+
     // ---------------------------------------------------------------- mapping
 
     private async Task<GenesysSubmissionDto> MapAsync(SubmissionRow row, NameCache names, CancellationToken ct)
@@ -179,7 +212,8 @@ public sealed class GenesysHistoryService(
             row.InitiatedBy, auto ? AutoSubmitterName : await names.NameAsync(row.InitiatedBy, ct),
             planned ? c.Submitted : row.ApprovedCount, planned ? "Submitted" : "Approved", amount, "AED", planned ? c.SubmittedOtherCurrency : 0,
             state, GenesysUploadStates.Label(state), GenesysUploadStateRules.Explain(state, c, reason), reason,
-            campaigns.Count == 0 ? null : string.Join(", ", campaigns), c.Uploaded, c.Failed, c.Uncertain, c.Excluded + c.Released, GenesysUploadStates.CallOutcomeUnavailable);
+            campaigns.Count == 0 ? null : string.Join(", ", campaigns), c.Uploaded, c.Failed, c.Uncertain, c.Excluded + c.Released, GenesysUploadStates.CallOutcomeUnavailable,
+            row.CompanyIds?.Select(CompanyName).ToList(), null, row.ApprovedCount);
     }
 
     private static decimal ApprovedAed(string json)
@@ -211,7 +245,8 @@ public sealed class GenesysHistoryService(
                 .Append(new GenesysFilterOptionDto(CampaignReminderTypes.ManualListKey, CampaignReminderTypes.ManualListName + " list")).ToList(),
             GenesysUploadStates.All.Select(s => new GenesysFilterOptionDto(s, GenesysUploadStates.Label(s))).ToList(),
             [new(CollectionsSendingModes.Manual, "Manual"), new(CollectionsSendingModes.Auto, "Auto")],
-            people.OrderBy(p => p.Label, StringComparer.OrdinalIgnoreCase).ToList());
+            people.OrderBy(p => p.Label, StringComparer.OrdinalIgnoreCase).ToList(),
+            [new("4", "Dubai"), new("32", "Sharjah")]);
     }
 
     // ---------------------------------------------------------------- filter
@@ -255,9 +290,10 @@ public sealed class GenesysHistoryService(
             else if (Guid.TryParse(text, out var guid)) listId = guid.ToString("D");
             else { problem = "Unknown destination list."; return null; }
         }
+        if (f.Company is { } company && company is not (4 or 32)) { problem = "Company must be Dubai or Sharjah."; return null; }
         var search = string.IsNullOrWhiteSpace(f.Search) ? null : f.Search.Trim();
         if (search is { Length: > 100 }) search = search[..100];
-        return new(DubaiStart(f.From), f.To is { } to ? DubaiStart(to.AddDays(1)) : null, stage, status, mode, f.EmployeeId, listId, search);
+        return new(DubaiStart(f.From), f.To is { } to ? DubaiStart(to.AddDays(1)) : null, stage, status, mode, f.EmployeeId, listId, search, f.Company);
     }
 
     /// <summary>The UTC instant at which a Dubai calendar day begins.</summary>
@@ -312,6 +348,8 @@ public sealed class GenesysHistoryService(
         ContactSuppressionStatus.Unconfirmed => "Making it not callable after payment is unconfirmed",
         _ => null
     };
+
+    public static string CompanyName(int companyId) => companyId == 4 ? "Dubai" : companyId == 32 ? "Sharjah" : $"Company {companyId}";
 
     private static string? Short(string? hash) => hash is { Length: >= 12 } ? hash[..12].ToLowerInvariant() : hash;
 

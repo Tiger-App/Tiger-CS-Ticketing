@@ -464,6 +464,9 @@ public static class InfrastructureServiceCollectionExtensions
         // Genesys Campaign History: read-only over the dispatch / batch / item / audit data the approval and upload already persist.
         services.AddScoped<TigerCS.Application.Modules.Collections.History.IGenesysHistoryStore, GenesysHistoryStore>();
         services.AddScoped<TigerCS.Application.Modules.Collections.History.GenesysHistoryService>();
+        // Manual Sync from Genesys: reads delivery results from Genesys on demand and persists them. No scheduled job.
+        services.AddScoped<TigerCS.Application.Modules.Collections.History.IGenesysDeliveryStore, GenesysDeliveryStore>();
+        services.AddScoped<TigerCS.Application.Modules.Collections.History.GenesysCampaignSyncService>();
         services.AddScoped<CollectionsAccountQueryAppService>();
         services.AddScoped<ICollectionsCustomerProfiles, CustomerDirectoryCollectionsProfiles>();
         services.AddScoped(sp => sp.GetRequiredService<IOptions<CollectionsEdsmOptions>>().Value);

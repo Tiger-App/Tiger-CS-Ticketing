@@ -32,3 +32,13 @@
 tr.history-shared-phone td { background: var(--color-gold-pale); }
 
 @media (max-width: 720px) { .history-cards { grid-template-columns: repeat(2, 1fr); } }
+
+/* Campaign List */
+.campaign-sync { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 12px; margin: 0 0 8px; flex-wrap: wrap; }
+.campaign-sync .receivables-meta { display: block; }
+.campaign-list-table td.num, .campaign-list-table th.num { text-align: right; font-variant-numeric: tabular-nums; }
+.campaign-list-table .receivables-meta { display: block; }
+.history-more { flex-basis: 100%; }
+.history-more > summary { cursor: pointer; font-weight: 600; color: var(--color-text-secondary); margin: 4px 0; }
+.history-more[open] { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; }
+.history-more[open] > summary { flex-basis: 100%; }
