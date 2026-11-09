@@ -118,17 +118,21 @@ news, when a customer reply is worth an email — are written once.
 
 ### Where the customer email comes from
 
-No new column was added. Two existing fields are consulted, in order:
+No new column was added. `CustomerContactResolver` — the one resolver every lifecycle and staff notification uses, and the one behind
+the Email Address on Ticket Details — consults these sources in order, and the first **valid** address wins (an invalid value is
+skipped, never used):
 
-1. `TicketRequesterSnapshot.SnapshotContactChannel` — the CRM-verified
-   contact captured at creation. It is an untyped phone-or-email value and is
-   used only when it is unambiguously a single bare email address.
-2. `TicketInteraction.CustomerEmail` — the email Genesys supplied with the
-   inquiry (originating interaction first, then the latest interaction that
-   carries one).
+1. `TicketRequesterSnapshot.SnapshotContactChannel` — the CRM-verified contact captured at creation (used only when it is a single
+   bare email address).
+2. `TicketInteraction.CustomerEmail` — the email Genesys supplied (originating interaction first, then the latest that carries one).
+3. `Tickets.ExternalCustomerEmail` — the verified external (PACT) customer's email snapshotted at creation.
+4. `CustomerContactDetails.Email` — the email an agent typed in for a manually entered customer (New Ticket / Customer Details),
+   matched by the digits-only form of the originating interaction's phone number.
 
-The greeting name comes from `SnapshotContactDisplayName`, then
-`Ticket.CrmBuyerCustomerName`, then the interaction's `CustomerName`.
+The greeting name comes from `SnapshotContactDisplayName`, `Ticket.CrmBuyerCustomerName`, the interaction's `CustomerName`, then
+`Tickets.ExternalCustomerName` and the agent-entered name. A ticket with no valid address is recorded as `Skipped` with reason
+`NoCustomerEmail` (`InvalidCustomerEmail` when a value exists but is not an address). Ticket Details shows the resolved address, or
+"Not available" when there is none.
 
 ## 3. Skip / failure behaviour
 

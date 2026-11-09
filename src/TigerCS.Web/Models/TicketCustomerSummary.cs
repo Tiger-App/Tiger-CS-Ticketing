@@ -39,6 +39,7 @@ public enum CustomerLookupState
 /// <param name="StateLabel">The badge text — the existing verification wording, unchanged.</param>
 /// <param name="StateCss">The badge colour key: verified, external or unverified.</param>
 /// <param name="Hint">One short sentence for the agent when the identity is not confirmed; null when it is.</param>
+/// <param name="Email">The customer's valid email address, or null when the ticket has none (the page then says "Not available").</param>
 /// <param name="ProfileHref">The Customer Profile for this customer, or null when there is nothing to open.</param>
 /// <param name="NameSource">Where the name came from. A <see cref="CustomerNameSource.Submitted"/> name is known but says nothing about a verified identity; the verification badge alone speaks to that.</param>
 /// <param name="NameNote">"Name as provided · not verified" beside a name nobody verified; null for a verified name or no name.</param>
@@ -54,11 +55,12 @@ public sealed record TicketCustomerSummary(
     string? Hint,
     string? ProfileHref,
     CustomerNameSource NameSource = CustomerNameSource.None,
-    string? NameNote = null)
+    string? NameNote = null,
+    string? Email = null)
 {
     public static TicketCustomerSummary Build(
         TicketDetailDto ticket, string name, bool hasName, string verificationLabel, string? phone, string? profileHref,
-        CustomerNameSource? nameSource = null)
+        CustomerNameSource? nameSource = null, string? email = null)
     {
         var hasCrm = ticket.CrmBuyerUnitId is not null;
         var hasExternal = !hasCrm && !string.IsNullOrWhiteSpace(ticket.CustomerVerificationSource);
@@ -106,6 +108,7 @@ public sealed record TicketCustomerSummary(
         return new TicketCustomerSummary(
             name, hasName, string.IsNullOrWhiteSpace(phone) ? null : phone.Trim(), projectUnit,
             state is CustomerLookupState.VerifiedCrm or CustomerLookupState.VerifiedExternal,
-            state, verificationLabel, css, hint, profileHref, source, note);
+            state, verificationLabel, css, hint, profileHref, source, note,
+            string.IsNullOrWhiteSpace(email) ? null : email.Trim());
     }
 }

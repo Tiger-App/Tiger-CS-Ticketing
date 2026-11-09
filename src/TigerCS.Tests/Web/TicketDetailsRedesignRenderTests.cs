@@ -97,6 +97,47 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     private static string NextStep(string html) => Section(html, "class=\"tw-next ", "</section>");
     private static string Menu(string html) => Section(html, "id=\"actions-menu\"", "class=\"tw-next ");
 
+    // ---------------------------------------------------------------- customer email display
+
+    private static string EmailRow(string html) => Section(html, "<span class=\"tw-fact__k\">Email Address</span>", "</div>");
+
+    [Fact]
+    public async Task ManualCustomer_WithAnAgentEnteredEmail_ShowsTheActualEmailNotNotAvailable()
+    {
+        var row = EmailRow(await Page(230));
+
+        Assert.Contains("data-customer-email>manual.customer@example.com<", row);
+        Assert.DoesNotContain("Not available", row);
+    }
+
+    [Fact]
+    public async Task GenesysCustomer_EmailFromTheInteraction_IsShown_WhenTheCustomerHistoryHasNone()
+    {
+        var row = EmailRow(await Page(231));
+
+        Assert.Contains("data-customer-email>fatima@example.com<", row);
+        Assert.DoesNotContain("Not available", row);
+    }
+
+    [Fact]
+    public async Task TicketWithNoEmail_SaysNotAvailable()
+    {
+        var row = EmailRow(await Page(232));
+
+        Assert.Contains("data-customer-email-missing>Not available<", row);
+        Assert.DoesNotContain("data-customer-email>", row);
+    }
+
+    [Fact]
+    public async Task AnInvalidEmail_IsNeverShown()
+    {
+        var html = await Page(233);
+        var row = EmailRow(html);
+
+        Assert.Contains("Not available", row);
+        Assert.DoesNotContain("not-an-email", html);
+    }
+
     // ---------------------------------------------------------------- the four questions, every scenario
 
     [Fact]
@@ -515,6 +556,11 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
             219 => T(219, "Open", category: null, priority: 3, classified: false, summary: "Phone Call – CS – Contract Status or Unit Registration")
                 with { ManualProjectName = "NOT_REGISTERED", ManualUnitNumber = "NOT_REGISTERED", OriginatingChannelName = "Phone" },
             220 => T(220, "Open", owner: Someone, collectionsAssign: true),
+            // Customer email display: an agent-entered (manual) customer, a Genesys email, an invalid value and no email at all.
+            230 => T(230, "Open", owner: Someone),
+            231 => T(231, "Open", owner: Someone),
+            232 => T(232, "Open", owner: Someone),
+            233 => T(233, "Open", owner: Someone),
             _ => null,
         };
 
@@ -541,8 +587,8 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         {
             var start = DateTime.UtcNow.AddHours(-3);
             TicketInteractionDto Chat(string phone, string? name, string state, AgentHandoffSummaryDto? handoff = null, string? agent = null, string channel = "Website chat",
-                string? queue = null, DateTime? end = null, IReadOnlyList<TicketInteractionMessageDto>? messages = null) =>
-                new(1, true, "Genesys", 1, channel, phone, name, null, "Inbound", "conv", null, queue, agent, null, start, end ?? start.AddMinutes(7), "Customer disconnected", "Ended",
+                string? queue = null, DateTime? end = null, IReadOnlyList<TicketInteractionMessageDto>? messages = null, string? email = null) =>
+                new(1, true, "Genesys", 1, channel, phone, name, email, "Inbound", "conv", null, queue, agent, null, start, end ?? start.AddMinutes(7), "Customer disconnected", "Ended",
                     messages ?? [new(1, "Customer", null, start, "Hello"), new(2, "VirtualAgent", null, start.AddMinutes(1), "How can I help?")], handoff, state);
             return id switch
             {
@@ -554,6 +600,10 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
                 216 => [Chat("+971507770003", "Typed By Customer", "Human")],
                 217 => [Chat("+971507770004", "Sara Khalid", "Human")],
                 218 => [Chat("+971507770005", "Huda Nasser", "Human")],
+                230 => [Chat("+971507770030", null, "Human")],
+                231 => [Chat("+971507770031", "Fatima Al-Mansoori", "Human", email: "fatima@example.com")],
+                232 => [Chat("+971507770032", "No Email Customer", "Human")],
+                233 => [Chat("+971507770033", "Bad Email Customer", "Human", email: "not-an-email")],
                 206 => [Chat("+971509998888", "Omar", "Human", agent: "Layla Hassan", channel: "Phone", messages: [])],
                 219 => [Chat("+971506856307", null, "Ai", channel: "Phone", messages: []) with { Status = "Active", EndedAtUtc = null, EndReason = null }],
                 _ => [],
@@ -598,6 +648,9 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
                     "approvals" => new TicketApprovalsViewDto([], [], [], null, null, false),
                     "customer-history" when id == 219 => new CustomerHistoryDto("Unverified", null, "+971506856307", null, 4, 4, 0,
                         Enumerable.Range(0, 4).Select(i => new CustomerHistoryTicketDto(219 - i, $"TG-CS-{219 - i}", Now.AddDays(-i), "Open", 3, null, CustomerService, null, null, "Unverified")).ToList()),
+                    "customer-history" when id is 230 or 233 => new CustomerHistoryDto("Unverified", null, "+971507770030", null, 0, 0, 0, [],
+                        ManualCustomerName: "Manual Customer", ManualCustomerEmail: id == 230 ? "manual.customer@example.com" : null,
+                        CustomerEmail: id == 230 ? "manual.customer@example.com" : "not-an-email"),
                     "reviews" => new TicketReviewsDto(id, []),
                     _ => null,
                 };
