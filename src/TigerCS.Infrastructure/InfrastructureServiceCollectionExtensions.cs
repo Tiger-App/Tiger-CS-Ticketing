@@ -450,6 +450,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IReviewStore, ReviewStore>();
         services.AddScoped<IGenesysExportHistory, ReviewStore>();
         services.AddScoped<IGenesysExportLock, GenesysExportRunLock>();
+        // Unit exception policies (permanent special cases; GULF_CUSTOMERS with the day-14 window and manual inclusions). Configuration-driven; audited; no automatic sending.
+        services.AddScoped<TigerCS.Application.Modules.Collections.Exceptions.CollectionsExceptionPolicy>();
+        services.AddScoped<TigerCS.Application.Modules.Collections.Exceptions.IExceptionInclusionStore, ExceptionInclusionStore>();
+        services.AddScoped<TigerCS.Application.Modules.Collections.Exceptions.ExceptionInclusionService>();
         services.AddScoped<ReviewQueryService>();
         services.AddScoped<ReviewRefreshService>();
         services.AddScoped<IReviewRefreshRunner>(sp => sp.GetRequiredService<ReviewRefreshService>());

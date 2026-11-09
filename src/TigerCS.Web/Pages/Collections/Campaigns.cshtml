@@ -19,7 +19,7 @@
             <p class="receivables-eyebrow">Collections</p>
             <h1 class="page-title">Collections Campaigns</h1>
         </div>
-        <div class="page-header__actions"><a class="btn" href="/Collections/Receivables">Due &amp; Overdue Customers</a><a class="btn" href="/Collections/CampaignList" data-history-link>Campaign List</a></div>
+        <div class="page-header__actions"><a class="btn btn-compact" href="/Collections/Exceptions?stage=@Model.Stage" data-manage-exceptions title="Include selected GULF_CUSTOMERS units in the current Manual campaign">Manage Exceptions</a><a class="btn" href="/Collections/Receivables">Due &amp; Overdue Customers</a><a class="btn" href="/Collections/CampaignList" data-history-link>Campaign List</a></div>
     </div>
     <partial name="_CampaignApproval" model="Model" />
 @{
@@ -131,6 +131,14 @@
         </div>
     </section>
 </div>
+<script>
+    // Manage Exceptions follows the campaign type chosen above (the page itself decides nothing).
+    (function () {
+        var select = document.querySelector('[data-campaign-stage]'), link = document.querySelector('[data-manage-exceptions]');
+        if (!select || !link) return;
+        select.addEventListener('change', function () { link.setAttribute('href', '/Collections/Exceptions?stage=' + encodeURIComponent(select.value)); });
+    })();
+</script>
 <script src="~/js/info-tip.js" asp-append-version="true"></script>
 <script src="~/js/receivables-load-monitor.js" asp-append-version="true"></script>
 <script src="~/js/receivables.js" asp-append-version="true"></script>

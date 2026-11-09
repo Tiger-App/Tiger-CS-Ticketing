@@ -1,0 +1,105 @@
+@page "/Collections/Exceptions"
+@model TigerCS.Web.Pages.Collections.ExceptionsModel
+@using TigerCS.Web.Pages.Collections
+@{
+    ViewData["Title"] = "Manage Exceptions";
+    ViewData["ActiveNav"] = "collections";
+    Layout = "_Layout";
+}
+<link rel="stylesheet" href="~/css/collections-campaigns.css" asp-append-version="true" />
+<link rel="stylesheet" href="~/css/collections-exceptions.css" asp-append-version="true" />
+<div class="page receivables-workspace exceptions">
+    <div class="page-header">
+        <div>
+            <p class="receivables-eyebrow">Collections</p>
+            <h1 class="page-title">Manage Exceptions</h1>
+        </div>
+        <div class="page-header__actions"><a class="btn" href="/Collections/Campaigns?stage=@Model.Stage&sendingMode=Manual" data-back-to-campaigns>Back to Campaigns</a></div>
+    </div>
+
+    @if (Model.Notice is { } notice) { <div class="receivables-notice" role="status" data-ex-notice>@notice</div> }
+    @if (Model.Error is { } error) { <div class="receivables-notice receivables-notice--warning" role="alert" data-ex-error>@error</div> }
+
+    <p class="exceptions__intro">
+        GULF_CUSTOMERS (cheque) units are excluded from campaigns, except in a <strong>Manual</strong> campaign on the 14th of the month. Tick a unit to include it in <strong>today's Manual campaign</strong>
+        of the chosen type on any other day. An inclusion applies only to that campaign, can be removed before sending, and never overrides a permanent special case or any financial, legal, contact,
+        authorization or duplicate-send check.
+    </p>
+
+    <form class="campaign-filters panel" method="get" action="/Collections/Exceptions" data-ex-filters>
+        <div class="campaign-filters__main">
+            <div class="field-group">
+                <label class="field-label" for="exStage">Campaign type</label>
+                <select class="field-select" id="exStage" name="stage">
+                    @foreach (var (value, label) in ExceptionsModel.Stages) { <option value="@value" selected="@(value == Model.Stage)">@label</option> }
+                </select>
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="exSearch">Search</label>
+                <input class="field-input" id="exSearch" name="search" type="search" maxlength="200" value="@Model.Search" placeholder="Unit code, tower or customer" autocomplete="off" />
+            </div>
+            <div class="campaign-filters__actions"><button class="btn btn-primary" type="submit">Search</button></div>
+        </div>
+    </form>
+
+    @if (Model.Data is not { } data)
+    {
+        <div class="panel"><div class="error-state" role="alert" data-ex-load-error>@Model.LoadError</div></div>
+    }
+    else
+    {
+        <section class="panel exceptions__results">
+            <p class="exceptions__summary" data-ex-summary>
+                <strong>@data.TotalCount</strong> GULF_CUSTOMERS unit(s) · <strong data-ex-included-count>@data.IncludedCount</strong> manually included for <span data-ex-campaign>@data.CampaignKey</span>
+                @if (data.InclusionDay) { <span class="campaign-pill campaign-pill--ok" data-ex-day>Today is the 14th: all eligible GULF_CUSTOMERS units are available to the Manual campaign</span> }
+            </p>
+            @if (data.Items.Count == 0)
+            {
+                <p class="campaign-idle" role="status" data-ex-empty>No GULF_CUSTOMERS units match in the current approval data for this campaign type.</p>
+            }
+            else
+            {
+                <form method="post" data-ex-form>
+                    <input type="hidden" name="stage" value="@Model.Stage" />
+                    <input type="hidden" name="search" value="@Model.Search" />
+                    <input type="hidden" name="page" value="@data.Page" />
+                    <div class="exceptions__actions">
+                        <button class="btn btn-primary" type="submit" asp-page-handler="Include" data-ex-include>Add selected to Manual campaign</button>
+                        <button class="btn" type="submit" asp-page-handler="Remove" data-ex-remove>Remove inclusion</button>
+                    </div>
+                    <div class="table-wrap">
+                        <table class="data-table" data-ex-table>
+                            <thead><tr><th scope="col"><span class="visually-hidden">Select</span></th><th scope="col">Unit</th><th scope="col">Customer</th><th scope="col">Tower</th><th scope="col" class="num">Amount</th><th scope="col">Status</th></tr></thead>
+                            <tbody>
+                            @foreach (var unit in data.Items)
+                            {
+                                <tr data-ex-row="@unit.UnitKey">
+                                    <td><input type="checkbox" name="unitKey" value="@unit.UnitKey" disabled="@unit.SpecialCase" aria-label="Select unit @unit.UnitCode" /></td>
+                                    <td>@unit.UnitCode</td>
+                                    <td>@unit.CustomerName</td>
+                                    <td>@(string.Join(" ", new[] { unit.TowerNumber, unit.TowerName }.Where(t => !string.IsNullOrWhiteSpace(t))))</td>
+                                    <td class="num">@(unit.Amount is { } amount ? $"{amount:N2} {unit.Currency}" : "-")</td>
+                                    <td>
+                                        @if (unit.SpecialCase) { <span class="campaign-pill campaign-pill--warn" data-ex-special>Permanently excluded</span> }
+                                        else if (unit.ManuallyIncluded) { <span class="campaign-pill campaign-pill--ok" data-ex-included>Manually Included</span> }
+                                        else { <span class="campaign-pill campaign-pill--idle">Not included</span> }
+                                        @if (!unit.SpecialCase && !unit.EligibleOtherwise) { <span class="exceptions__note" data-ex-blocked title="@string.Join(" ", unit.OtherReasons.Select(r => r.Explanation))">Other checks hold this unit: @string.Join(", ", unit.OtherReasons.Select(r => r.Code))</span> }
+                                    </td>
+                                </tr>
+                            }
+                            </tbody>
+                        </table>
+                    </div>
+                </form>
+                @if (Model.TotalPages > 1)
+                {
+                    <nav class="exceptions__pager" aria-label="Pages">
+                        @if (data.Page > 1) { <a class="btn" href="/Collections/Exceptions?stage=@Model.Stage&search=@Uri.EscapeDataString(Model.Search ?? "")&page=@(data.Page - 1)">Previous</a> }
+                        <span>Page @data.Page of @Model.TotalPages</span>
+                        @if (data.Page < Model.TotalPages) { <a class="btn" href="/Collections/Exceptions?stage=@Model.Stage&search=@Uri.EscapeDataString(Model.Search ?? "")&page=@(data.Page + 1)">Next</a> }
+                    </nav>
+                }
+            }
+        </section>
+    }
+</div>

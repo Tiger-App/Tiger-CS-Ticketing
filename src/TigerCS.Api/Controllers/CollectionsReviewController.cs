@@ -2,6 +2,7 @@ using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using TigerCS.Api.OpenApi;
+using TigerCS.Application.Modules.Collections.Exceptions;
 using TigerCS.Application.Modules.Collections.Review;
 using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Domain.Modules.Collections;
@@ -22,7 +23,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/collections/review")]
 [Tags(OpenApiTags.Collections)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-public sealed class CollectionsReviewController(ReviewQueryService query, ReviewRefreshService refresh, DispatchService dispatch, DispatchAdminReportService adminReport, GenesysExportService genesysExport, ManualReviewExportService reviewExport, GenesysConnectionCheckService genesysCheck) : ControllerBase
+public sealed class CollectionsReviewController(ReviewQueryService query, ReviewRefreshService refresh, DispatchService dispatch, DispatchAdminReportService adminReport, GenesysExportService genesysExport, ManualReviewExportService reviewExport, GenesysConnectionCheckService genesysCheck, ExceptionInclusionService exceptions) : ControllerBase
 {
     public sealed record StartRefreshRequest(int? CompanyId);
 
@@ -91,6 +92,30 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
     [ProducesResponseType<ReviewExportDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> ExportReview([FromBody] ReviewFilter filter, CancellationToken ct) =>
         Caller() is { } caller ? Result(await reviewExport.ExportAsync(caller, filter, ct)) : Unauthorized();
+
+    /// <summary>
+    /// "Manage Exceptions": the GULF_CUSTOMERS units of the current approval data for one campaign type (search by unit code, tower, customer) with their manual-inclusion state for today's Manual campaign.
+    /// Needs the send right.
+    /// </summary>
+    [HttpGet("exceptions")]
+    [RequirePermission(Permissions.CollectionsSend)]
+    [ProducesResponseType<ExceptionListDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> ExceptionUnits([FromQuery] string? reminderType, [FromQuery] string? search, [FromQuery] int[]? towerIds, [FromQuery] int page = 1, [FromQuery] int pageSize = 25, CancellationToken ct = default) =>
+        Caller() is { } caller ? Result(await exceptions.ListAsync(caller, new ExceptionListRequest(reminderType, search, towerIds, page, pageSize), ct)) : Unauthorized();
+
+    /// <summary>Includes the selected GULF_CUSTOMERS units in today's Manual campaign of the chosen type. Only those units, only this campaign; a permanent special case is refused. Audited.</summary>
+    [HttpPost("exceptions/include")]
+    [RequirePermission(Permissions.CollectionsSend)]
+    [ProducesResponseType<ExceptionChangeResultDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> IncludeExceptionUnits([FromBody] ExceptionChangeRequest request, CancellationToken ct) =>
+        Caller() is { } caller ? Result(await exceptions.IncludeAsync(caller, request, ct)) : Unauthorized();
+
+    /// <summary>Removes manual inclusions from today's Manual campaign of the chosen type (before sending). Audited.</summary>
+    [HttpPost("exceptions/remove")]
+    [RequirePermission(Permissions.CollectionsSend)]
+    [ProducesResponseType<ExceptionChangeResultDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> RemoveExceptionUnits([FromBody] ExceptionChangeRequest request, CancellationToken ct) =>
+        Caller() is { } caller ? Result(await exceptions.RemoveAsync(caller, request, ct)) : Unauthorized();
 
     /// <summary>Approves the exact list (count and fingerprint must match) and queues the revalidation-and-upload job.</summary>
     [HttpPost("dispatches")]

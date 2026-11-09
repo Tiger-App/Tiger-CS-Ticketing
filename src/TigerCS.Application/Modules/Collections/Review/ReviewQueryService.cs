@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.Logging;
+using TigerCS.Application.Modules.Collections.Exceptions;
 using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Domain.Modules.Collections;
 using TigerCS.Domain.Modules.Collections.Review;
@@ -13,7 +15,8 @@ namespace TigerCS.Application.Modules.Collections.Review;
 /// </summary>
 public sealed class ReviewQueryService(
     CollectionsOptions options, CollectionsReviewOptions reviewOptions, CollectionsAuthorizationService authorization,
-    CollectionsClock clock, IReviewStore store, ReceivablesSnapshotOptions? snapshotOptions = null, GenesysOutboundOptions? genesys = null)
+    CollectionsClock clock, IReviewStore store, ReceivablesSnapshotOptions? snapshotOptions = null, GenesysOutboundOptions? genesys = null,
+    CollectionsExceptionPolicy? exceptions = null, IExceptionInclusionStore? inclusions = null, ILogger<ReviewQueryService>? logger = null)
 {
     public const string UnpaidOrPartial = "UnpaidOrPartial";
     public const string ModeSelectedKeys = "SelectedKeys";
@@ -188,6 +191,21 @@ public sealed class ReviewQueryService(
             && v.Record.RemainingAmount is > 0 && v.Record.DueDate is not null)
             .Select(v => v.Record).OrderBy(r => r.RecordKey, StringComparer.Ordinal).ToList();
         skipped += views.Count - ready.Count;
+        // Defence in depth: whatever list reached here, a unit the exception policy excludes is never approved (a record built before the policy, a tampered key list, a changed date).
+        if (exceptions is { HasExclusions: true } && ready.Count > 0)
+        {
+            var allowed = await InclusionsAsync(manualMode ? ready.Where(r => exceptions.IsGulfCustomer(r.UnitCode)).Select(r => r.ReminderType) : [], ct);
+            var today = clock.BusinessDate;
+            var kept = new List<CollectionsReviewRecord>(ready.Count);
+            foreach (var r in ready)
+            {
+                var isIncluded = allowed.TryGetValue(r.ReminderType, out var set) && set.Contains(ExceptionInclusionService.Identity(r.CompanyId, r.TenantId, r.UnitCode));
+                var decision = exceptions.Evaluate(r.UnitCode, today, manualMode, isIncluded);
+                if (decision.Excluded) { LogExcluded("Approval", r.UnitCode, decision.ReasonCode!); skipped++; continue; }
+                kept.Add(r);
+            }
+            ready = kept;
+        }
         return new(run, ready, skipped, null);
     }
 
@@ -231,7 +249,7 @@ public sealed class ReviewQueryService(
     /// own status (reconciliation, contact, identity, shared phone, legal release, duplicates, frequency) is untouched. The returned records are detached copies of the stored ones carrying the
     /// calculated amount and the earliest qualifying due date: what the list shows, the approval freezes, the upload quotes and the confirmation totals.
     /// </summary>
-    private async Task<ManualCalc> ManualCalculatedAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, CancellationToken ct)
+    private async Task<ManualCalc> ManualCalculatedAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, CancellationToken ct, string stage = "Preview")
     {
         // The date range, Payment status and minimum are about instalments, not about the stage record's own fields: they are applied by the calculation, not by the stored-record query.
         // The review list's own status filter (Unpaid / PartiallyPaid / Paid / Unknown) applies only when the person chose one. Its default, UnpaidOrPartial, would silently drop a
@@ -247,6 +265,9 @@ public sealed class ReviewQueryService(
         var views = await store.ResolveAsync(run.CollectionsReviewRunId, coarse, null, stale, capacity + 1, ct, units);
         if (views.Count > capacity)
             return new ManualCalc([], $"This Manual list has more customers than one pass can read ({capacity:N0} at most). Narrow the filters, for example by campaign type or tower.");
+        // The exception policies, decided NOW (today's Dubai date and this campaign's manual inclusions), whatever the stored record says: special cases and every GULF_CUSTOMERS unit that is neither
+        // on the 14th nor manually included are not part of the list, so Preview, Export, Approval and the totals never see them; an allowed GULF_CUSTOMERS unit carries its notice.
+        views = await ApplyExceptionPolicyAsync(views, stage, ct);
         var criteria = ManualCriteria(filter ?? new ReviewFilter());
         var today = clock.BusinessDate;
         var result = new List<ReviewRecordView>(views.Count);
@@ -269,6 +290,42 @@ public sealed class ReviewQueryService(
     }
 
     private static bool IsManuallySendable(CollectionsReviewRecord record) => ReviewRecordBuilder.IsManuallySendable(record);
+
+    /// <summary>The active manual inclusions of today's Manual campaigns of the given types, as <see cref="ExceptionInclusionService.Identity"/> keys per campaign type.</summary>
+    private async Task<Dictionary<CampaignReminderType, HashSet<string>>> InclusionsAsync(IEnumerable<CampaignReminderType> types, CancellationToken ct)
+    {
+        var result = new Dictionary<CampaignReminderType, HashSet<string>>();
+        if (inclusions is null) return result;
+        foreach (var type in types.Distinct())
+            result[type] = ExceptionInclusionService.IncludedSet(await inclusions.ListActiveAsync(CollectionsExceptionPolicy.CampaignKey(clock.BusinessDate, type), ct));
+        return result;
+    }
+
+    private async Task<IReadOnlyList<ReviewRecordView>> ApplyExceptionPolicyAsync(IReadOnlyList<ReviewRecordView> views, string stage, CancellationToken ct)
+    {
+        if (exceptions is not { HasExclusions: true }) return views;
+        var today = clock.BusinessDate;
+        var included = await InclusionsAsync(views.Where(v => exceptions.IsGulfCustomer(v.Record.UnitCode)).Select(v => v.Record.ReminderType), ct);
+        var kept = new List<ReviewRecordView>(views.Count);
+        foreach (var view in views)
+        {
+            var r = view.Record;
+            var isIncluded = included.TryGetValue(r.ReminderType, out var set) && set.Contains(ExceptionInclusionService.Identity(r.CompanyId, r.TenantId, r.UnitCode));
+            var decision = exceptions.Evaluate(r.UnitCode, today, manual: true, isIncluded);
+            if (decision.Excluded) { LogExcluded(stage, r.UnitCode, decision.ReasonCode!); continue; }
+            ExceptionRecordRules.Apply(r, decision);
+            kept.Add(view);
+        }
+        return kept;
+    }
+
+    /// <summary>One line per excluded unit: the stage, the unit code and the reason code. No customer name, phone, e-mail or amount.</summary>
+    private void LogExcluded(string stage, string unitCode, string reason)
+    {
+        if (logger is null) return;
+        var level = stage == "Preview" ? LogLevel.Debug : LogLevel.Information;
+        logger.Log(level, "Collections exception: unit {UnitCode} excluded from Manual {Stage} ({Reason}).", unitCode, stage, reason);
+    }
 
     /// <summary>The status a Manual list shows: a record held back by the stage schedule alone is Ready (the schedule is the one rule Manual waives); everything else is what it is.</summary>
     private static ReviewValidationStatus ManualStatus(ReviewRecordView v, bool stale)
@@ -364,7 +421,7 @@ public sealed class ReviewQueryService(
         else if (!string.Equals(request.Mode, ModeAllMatching, StringComparison.OrdinalIgnoreCase))
             return new(run, [], 0, stale, "A record-key list carries no Manual filter: an export is of all customers matching the filters (AllMatching) or of the ticked customers (SelectedUnits).");
 
-        var manual = await ManualCalculatedAsync(run, spec, filter, units, stale, ct);
+        var manual = await ManualCalculatedAsync(run, spec, filter, units, stale, ct, "Export");
         if (manual.Problem is not null) return new(run, [], 0, stale, manual.Problem);
         var views = manual.Views;
         var max = Math.Max(1, reviewOptions.MaxSelection);
@@ -383,7 +440,7 @@ public sealed class ReviewQueryService(
     {
         if (CollectionsSendingModes.IsManual(filter?.SendingMode))
         {
-            var manual = await ManualCalculatedAsync(run, spec, filter, units, stale, ct);
+            var manual = await ManualCalculatedAsync(run, spec, filter, units, stale, ct, "Approval");
             if (manual.Problem is not null) return (Array.Empty<ReviewRecordView>(), manual.Problem);
             return (manual.Views.Where(v => ManualStatus(v, stale) == ReviewValidationStatus.Ready).Take(max + 1).ToList(), null);
         }
