@@ -10,7 +10,10 @@ public enum AmountPrecision
     /// <summary>A floating-point source value within tolerance of a fils amount; normalized to that amount.</summary>
     FloatingPointNoise,
 
-    /// <summary>More than two decimals that cannot be explained as floating-point noise: the source must be corrected.</summary>
+    /// <summary>More than two decimals on a valid positive balance: rounded to fils (half away from zero) by the business rule. The original value is kept alongside.</summary>
+    Rounded,
+
+    /// <summary>No fils amount can honestly stand for the value: a positive balance that rounds to zero (below 0.005), or a negative one. It stays blocked and is never rounded or treated as paid.</summary>
     Unresolved
 }
 
@@ -23,10 +26,10 @@ public sealed record MoneyResult(decimal? Value, decimal Raw, AmountPrecision Pr
 }
 
 /// <summary>
-/// Monetary values are decimal throughout. Two-decimal rounding is applied only where it provably loses nothing:
-/// a decimal source with more than two places is <b>unresolved</b> (never rounded to look clean), and a
-/// floating-point source is snapped to fils only when it lies within the float tolerance of one — which is
-/// representation noise, not money. A remainder that snaps to zero is a settled instalment.
+/// Monetary values are decimal throughout. A valid positive remaining amount with more than two decimals is rounded to fils with
+/// <see cref="MidpointRounding.AwayFromZero"/> (business decision: extra decimals alone are not a reason to hold a customer); the original value is always kept (<see cref="MoneyResult.Raw"/>) for
+/// traceability, and Paid / Unpaid is decided from the amount BEFORE rounding. A floating-point source within the float tolerance of a fils amount is representation noise and is snapped to it; a
+/// remainder that snaps to zero is a settled instalment. A positive balance that would round to zero (below 0.005) or a negative one is <b>unresolved</b>: blocked, never rounded away into "paid".
 /// </summary>
 public static class MoneyNormalizer
 {
@@ -38,6 +41,8 @@ public static class MoneyNormalizer
         if (raw == rounded) return new(rounded, raw, AmountPrecision.Exact);
         if (sourceIsFloatingPoint && Math.Abs(raw - rounded) <= floatTolerance)
             return new(rounded, raw, AmountPrecision.FloatingPointNoise);
+        // Rounding is only for a valid, positive balance that still has an amount after rounding: 0.004 must not silently become a settled 0.00.
+        if (raw > 0 && rounded > 0) return new(rounded, raw, AmountPrecision.Rounded);
         return new(null, raw, AmountPrecision.Unresolved);
     }
 
