@@ -352,7 +352,7 @@ else
                                                 <span class="field-hint">No other active department is available to transfer to.</span>
                                             }
                                         </div>
-                                        <partial name="_CollectionsTowerUnit" model="@(new TigerCS.Web.Models.CollectionsTowerUnitFields("transfer", "Transfer", "#Transfer_TargetDepartmentId", Model.CollectionsDepartmentIds, t.TicketId))" />
+                                        <partial name="_CollectionsTowerUnit" model="@(new TigerCS.Web.Models.CollectionsTowerUnitFields("transfer", "Transfer", "#Transfer_TargetDepartmentId", Model.CollectionsDepartmentIds, t.TicketId, Optional: true))" />
                                         <div class="field-group">
                                             <label class="field-label" asp-for="Transfer.ReasonCode">Why is it being transferred?</label>
                                             <select class="field-select" asp-for="Transfer.ReasonCode">

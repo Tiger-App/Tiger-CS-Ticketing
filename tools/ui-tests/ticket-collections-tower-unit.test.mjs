@@ -26,11 +26,11 @@ const PAGE = `<!doctype html><body><form id="f" method="post">
 const windows = [];
 after(() => windows.forEach(w => w.close()));
 
-async function load() {
-    const dom = new JSDOM(PAGE, { runScripts: 'outside-only', url: 'http://localhost/Tickets/1' });
+async function load(page = PAGE, options = OPTIONS) {
+    const dom = new JSDOM(page, { runScripts: 'outside-only', url: 'http://localhost/Tickets/1' });
     windows.push(dom.window);
     let fetched = 0;
-    dom.window.fetch = async () => { fetched++; return { json: async () => OPTIONS }; };
+    dom.window.fetch = async () => { fetched++; return { json: async () => options }; };
     dom.window.eval(script);
     const d = dom.window.document;
     const pick = (id, value) => { const s = d.getElementById(id); s.value = value; s.dispatchEvent(new dom.window.Event('change', { bubbles: true })); };
@@ -82,4 +82,49 @@ test('submitting without both a tower and a unit is blocked with a clear message
     unit.value = 'crm:4'; unit.dispatchEvent(new t.win.Event('change', { bubbles: true }));
     assert.equal(error.hidden, true);
     assert.equal(t.submit(), false);
+});
+
+// ---- Transfer: the Tower is optional (data-ct-optional). Reopen keeps the mandatory markup above.
+const OPTIONAL_PAGE = PAGE.replace('data-ct data-ct-trigger', 'data-ct data-ct-optional data-ct-trigger').replace('<option value="">Select a tower</option>', '<option value="">No tower (Collections queue)</option>');
+
+test('optional Tower: with nothing selected the transfer goes through (no verified tower on the ticket)', async () => {
+    const none = { status: 'Ok', message: 'No verified tower and unit were found for this customer in CRM or PACT, so the ticket cannot be moved to Collections.', preselectedTowerId: null, preselectedUnitRef: null, towers: [] };
+    const t = await load(OPTIONAL_PAGE, none);
+    t.pick('Transfer_TargetDepartmentId', '7'); await t.settle();
+    const hint = t.d.querySelector('[data-ct-hint]'), error = t.d.querySelector('[data-ct-error]');
+    assert.equal(t.submit(), false);
+    assert.equal(error.hidden, true);
+    assert.match(hint.textContent, /transferred to the Collections queue without an assignee/);
+    assert.doesNotMatch(hint.textContent, /cannot be moved/);
+});
+
+test('optional Tower: the ticket\'s own tower and unit are still preselected, and the first option says what leaving it empty does', async () => {
+    const t = await load(OPTIONAL_PAGE);
+    t.pick('Transfer_TargetDepartmentId', '7'); await t.settle();
+    const tower = t.d.querySelector('[data-ct-tower]'), unit = t.d.querySelector('[data-ct-unit]');
+    assert.equal(tower.value, '1');
+    assert.equal(unit.value, 'crm:3');
+    assert.equal(tower.options[0].text, 'No tower (Collections queue)');
+    tower.value = ''; tower.dispatchEvent(new t.win.Event('change', { bubbles: true }));    // the agent clears the tower
+    assert.equal(unit.disabled, true);
+    assert.equal(t.submit(), false);
+});
+
+test('optional Tower: a tower without a unit is blocked, with both or neither it goes through', async () => {
+    const t = await load(OPTIONAL_PAGE);
+    t.pick('Transfer_TargetDepartmentId', '7'); await t.settle();
+    const tower = t.d.querySelector('[data-ct-tower]'), unit = t.d.querySelector('[data-ct-unit]'), error = t.d.querySelector('[data-ct-error]');
+    tower.value = '2'; tower.dispatchEvent(new t.win.Event('change', { bubbles: true }));
+    assert.equal(t.submit(), true);
+    assert.equal(error.textContent, 'Select both a Tower and a Unit, or leave both empty to transfer the ticket to the Collections queue.');
+    unit.value = 'crm:4'; unit.dispatchEvent(new t.win.Event('change', { bubbles: true }));
+    assert.equal(t.submit(), false);
+});
+
+test('optional Tower: another department still posts nothing and is never blocked', async () => {
+    const t = await load(OPTIONAL_PAGE);
+    assert.equal(t.d.querySelector('[data-ct]').hidden, true);
+    assert.equal(t.d.querySelector('[data-ct-tower]').disabled, true);
+    assert.equal(t.submit(), false);
+    assert.equal(t.fetched(), 0);
 });
