@@ -52,13 +52,31 @@ public sealed class ReviewValidationTests
     }
 
     [Fact]
-    public void AmountPrecision_DecimalSubFilsAmountIsFlagged_AndCarriesNoQuotedAmount()
+    public void AmountPrecision_ExtraDecimalsAreRoundedHalfAwayFromZero_AndTheCustomerStaysReady_WithTheOriginalKept()
     {
         var record = Single([ReviewHarness.Row(1, amount: 500.005m, plan: 500.005m)]);
+        Assert.Empty(Reasons(record));   // decimals alone are no longer a blocker
+        Assert.Equal(500.01m, record.RemainingAmount);                                        // midpoint: away from zero
+        Assert.Equal(500.005m, record.RawRemainingAmount);                                    // the original PACT value is kept for traceability
+        Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
+    }
+
+    [Fact]
+    public void AmountPrecision_ASmallPositiveBalanceIsNeverSilentlyPaid_ItStaysBlockedAndUnrounded()
+    {
+        // 0.004 rounds to 0.00, which would look settled. The decision is taken on the actual amount: it is a positive balance, so it is neither dropped as paid nor sent as 0.00.
+        var record = Single([ReviewHarness.Row(1, amount: 0.004m, plan: 0.004m)]);
         Assert.Contains(ReviewReasons.AmountPrecisionNeedsReview, Reasons(record));
-        Assert.Null(record.RemainingAmount);                 // the unresolved value is never quoted as a clean two-decimal figure
-        Assert.Equal(500.005m, record.RawRemainingAmount);   // and the raw source value stays visible for review
+        Assert.Null(record.RemainingAmount);
+        Assert.Equal(0.004m, record.RawRemainingAmount);
         Assert.NotEqual(ReviewValidationStatus.Ready, record.ValidationStatus);
+        Assert.NotEqual(ReviewPaymentStatus.Paid, record.PaymentStatus);
+    }
+
+    [Fact]
+    public void AmountPrecision_ASettledZeroBalanceIsStillSettled()
+    {
+        Assert.Empty(ReviewRecordBuilder.Build([ReviewHarness.Row(1, amount: 0m, plan: 500m)], Context()).Records);
     }
 
     [Fact]
@@ -81,10 +99,12 @@ public sealed class ReviewValidationTests
     }
 
     [Fact]
-    public void AmountPrecision_FloatNoiseDoesNotExcuseAGenuineSubFilsAmount()
+    public void AmountPrecision_AGenuineSubFilsAmountOnAFloatSourceIsRoundedLikeAnyOther()
     {
         var row = ReviewHarness.Row(1) with { Amount = 500.004m, PlanAmount = 500.004m, AmountIsFloatingPoint = true };
-        Assert.Contains(ReviewReasons.AmountPrecisionNeedsReview, Reasons(Single([row])));
+        var record = Single([row]);
+        Assert.DoesNotContain(ReviewReasons.AmountPrecisionNeedsReview, Reasons(record));
+        Assert.Equal(500.00m, record.RemainingAmount); Assert.Equal(500.004m, record.RawRemainingAmount);
     }
 
     [Theory]
