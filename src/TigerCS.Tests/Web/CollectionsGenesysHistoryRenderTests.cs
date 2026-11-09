@@ -82,27 +82,23 @@ public sealed class CollectionsGenesysHistoryRenderTests
         api.Submissions = Page([
             Sub(Id1, "Uploaded", reference: "camp-123"),
             Sub(Id2, "Failed", "Overdue", 2, 200m, "Auto", "Automatic (scheduler)", error: "Genesys rejected the request (HTTP 400); nothing was created.")]);
-        var (status, html) = await GetAsync(api, "/Collections/CampaignHistory");
+        var (status, html) = await GetAsync(api, "/Collections/CampaignList");
 
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal(["GET /api/collections/genesys-history/submissions?page=1&pageSize=25"], api.Calls);
-        foreach (var header in new[] { "Submitted (Dubai)", "Campaign stage", "Mode", "Destination list", "Submitted by", "Unit records", "Amount (AED)", "Upload status", "Genesys reference" })
+        foreach (var header in new[] { "Campaign Name", "Company", "Created Date", "Total Contacts", "Sent", "Delivered", "Missed / Failed", "Pending / Unknown", "Campaign Status", "View Details" })
             Assert.Contains(header, html);
         var text = Text(html);
         Assert.Contains("14 Oct 2026 12:00 (Dubai)", text);
         Assert.Contains("Current month reminder - day 14", text);
         Assert.Contains("Overdue reminder - day 1", text);
-        Assert.Contains("Automatic (scheduler)", text);
-        Assert.Contains("camp-123", text);
-        Assert.Contains("Not provided by Genesys", text);
-        Assert.Contains("306.00", text);
+        Assert.Contains("Auto ·", text);
         Assert.Matches(new Regex(@"data-status=""Uploaded""[\s\S]*?data-status-badge>Uploaded<"), html);
         Assert.Matches(new Regex(@"data-status=""Failed""[\s\S]*?data-status-badge>Failed<"), html);
-        Assert.Contains("Explained: Failed", text);                                                       // the status explanation is on the row
         Assert.Contains("data-call-outcome-note", html);
         Assert.Contains("does not mean the customer was called, contacted or reached", text);
         Assert.Equal(2, Regex.Matches(html, "data-view-details").Count);
-        Assert.Contains($"href=\"/Collections/CampaignHistory/{Id1:D}\"", html);
+        Assert.Contains($"href=\"/Collections/CampaignList/{Id1:D}\"", html);
         // Summary cards: submissions, records, amount, confirmed records, attention.
         Assert.Matches(new Regex(@"data-card=""submissions"">2<"), html);
         Assert.Matches(new Regex(@"data-card=""records"">5<"), html);
@@ -116,7 +112,7 @@ public sealed class CollectionsGenesysHistoryRenderTests
     {
         var api = NewApi();
         api.Submissions = Page([Sub(Id1, "Uploaded"), Sub(Id2, "Unknown")]);
-        var (_, html) = await GetAsync(api, "/Collections/CampaignHistory");
+        var (_, html) = await GetAsync(api, "/Collections/CampaignList");
         var text = Text(html);
 
         Assert.DoesNotMatch(new Regex("<form[^>]*method=\"post\"", RegexOptions.IgnoreCase), Content(html));   // only GET filter forms
@@ -131,13 +127,13 @@ public sealed class CollectionsGenesysHistoryRenderTests
     public async Task AnEmptyHistory_SaysNothingHasBeenSubmitted_AndAFilterThatMatchesNothingSaysSo()
     {
         var api = NewApi();
-        var (_, html) = await GetAsync(api, "/Collections/CampaignHistory");
+        var (_, html) = await GetAsync(api, "/Collections/CampaignList");
         Assert.Contains("data-history-empty", html);
         Assert.Contains("No campaign has been submitted to Genesys yet.", Text(html));
         Assert.DoesNotContain("data-history-table", html);
 
-        var (_, filtered) = await GetAsync(api, "/Collections/CampaignHistory?status=Failed");
-        Assert.Contains("No submissions match these filters.", Text(filtered));
+        var (_, filtered) = await GetAsync(api, "/Collections/CampaignList?status=Failed");
+        Assert.Contains("No campaigns match these filters.", Text(filtered));
         Assert.Contains("Clear filters", Text(filtered));
     }
 
@@ -146,7 +142,7 @@ public sealed class CollectionsGenesysHistoryRenderTests
     {
         var api = NewApi();
         api.Submissions = Page([Sub(Id1, "Uploaded")], total: 60, page: 2);
-        var (_, html) = await GetAsync(api, "/Collections/CampaignHistory?from=2026-10-01&to=2026-10-31&stage=Overdue&status=Failed&mode=Auto&list=Overdue&search=TP140&pageNumber=2");
+        var (_, html) = await GetAsync(api, "/Collections/CampaignList?from=2026-10-01&to=2026-10-31&stage=Overdue&status=Failed&mode=Auto&list=Overdue&search=TP140&pageNumber=2");
 
         var call = Assert.Single(api.Calls);
         foreach (var part in new[] { "from=2026-10-01", "to=2026-10-31", "stage=Overdue", "status=Failed", "mode=Auto", "list=Overdue", "search=TP140", "page=2" }) Assert.Contains(part, call);
@@ -169,7 +165,7 @@ public sealed class CollectionsGenesysHistoryRenderTests
     {
         var api = NewApi();
         api.Status = code;
-        var (status, html) = await GetAsync(api, "/Collections/CampaignHistory");
+        var (status, html) = await GetAsync(api, "/Collections/CampaignList");
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Contains("data-history-error", html);
         Assert.Contains(expected, Text(html));
@@ -184,7 +180,7 @@ public sealed class CollectionsGenesysHistoryRenderTests
         var api = NewApi();
         api.Submissions = Page([Sub(Id1, "Uploaded")]);
         api.Exports = new(1, 25, 1, [new(5, Approved, Guid.NewGuid(), "Mona Manager", "Overdue", "Overdue", "FollowUp", "Manual", 12, 14, 2, 1234.5m, "AED", false, true, 3, "abcdef012345")], GenesysHistoryService.ExportNotice);
-        var (_, tab) = await GetAsync(api, "/Collections/CampaignHistory?tab=exports");
+        var (_, tab) = await GetAsync(api, "/Collections/CampaignList?tab=exports");
         var text = Text(tab);
 
         Assert.Equal(["GET /api/collections/genesys-history/exports?page=1&pageSize=25"], api.Calls);       // the submissions are not even asked for
@@ -197,7 +193,7 @@ public sealed class CollectionsGenesysHistoryRenderTests
         Assert.Matches(new Regex(@"data-history-tab=""exports""[^>]*>Export history<"), tab);
         Assert.Matches(new Regex(@"is-active"" href=""[^""]*tab=exports"), tab);
 
-        var (_, main) = await GetAsync(api, "/Collections/CampaignHistory");
+        var (_, main) = await GetAsync(api, "/Collections/CampaignList");
         Assert.DoesNotContain("abcdef012345", main);                                                        // the download is not in the submissions
         Assert.Contains("data-history-table", main);
     }
@@ -206,10 +202,10 @@ public sealed class CollectionsGenesysHistoryRenderTests
     public async Task TheExportHistory_ExplainsAMissingRight_AndAnEmptyList()
     {
         var api = NewApi();
-        var (_, empty) = await GetAsync(api, "/Collections/CampaignHistory?tab=exports");
+        var (_, empty) = await GetAsync(api, "/Collections/CampaignList?tab=exports");
         Assert.Contains("No file has been downloaded with Export for Genesys yet.", Text(empty));
         api.Status = HttpStatusCode.Forbidden;
-        var (_, forbidden) = await GetAsync(api, "/Collections/CampaignHistory?tab=exports");
+        var (_, forbidden) = await GetAsync(api, "/Collections/CampaignList?tab=exports");
         Assert.Contains("needs the same right as Export for Genesys", Text(forbidden));
     }
 
@@ -230,13 +226,13 @@ public sealed class CollectionsGenesysHistoryRenderTests
             Rec(1, "Ahmed Ali", "TP140-1", "+971500000099", shared: true, amount: 101m), Rec(2, "Sara Khan", "TP140-2", "+971500000099", shared: true, crm: null, amount: 102m),
             Rec(3, "Omar Said", "TP140-3", "+971500000003", "Failed", error: "Genesys rejected the request (HTTP 400)."), Rec(4, "Layla Nour", "TP140-4", "+971500000004", "Excluded before upload", crm: null, error: "Paid or settled: no qualifying balance remains")],
             GenesysUploadStates.CallOutcomeNote);
-        var (status, html) = await GetAsync(api, $"/Collections/CampaignHistory/{Id1:D}");
+        var (status, html) = await GetAsync(api, $"/Collections/CampaignList/{Id1:D}");
         var text = Text(html);
 
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Equal(2, Regex.Matches(text, @"\+971500000099").Count);                                    // the same phone on two units: two rows, never one
         Assert.Equal(4, Regex.Matches(html, "data-record=").Count);
-        foreach (var column in new[] { "Customer", "CRM customer ID", "Unit", "Phone", "Email", "Reminder", "Amount due (AED)", "Due date", "Upload result", "Submitted (Dubai)" }) Assert.Contains(column, html);
+        foreach (var column in new[] { "Customer", "CRM customer ID", "Unit", "Mobile Number", "Email", "Reminder", "Amount due (AED)", "Due date", "Upload result", "Message Status", "Sent Time", "Delivered Time", "Failure Reason", "Genesys Interaction ID" }) Assert.Contains(column, html);
         Assert.Contains("TP140-1", text); Assert.Contains("TP140-2", text); Assert.Contains("ahmed.ali@example.test", text); Assert.Contains("7001", text); Assert.Contains("20 Oct 2026", text);
         Assert.Equal(2, Regex.Matches(html, @"title=""Another unit in this submission").Count);
         Assert.Contains("(each unit is its own record)", text);
@@ -259,7 +255,7 @@ public sealed class CollectionsGenesysHistoryRenderTests
         var s = Sub(Id1, "Failed", error: "Genesys rejected the request (HTTP 400); nothing was created.");
         api.Detail = Detail(s, batchError: true);
         api.Records = new(1, 50, 1, [Rec(1, "Ahmed Ali", "TP140-1", "+971500000001", "Failed", error: "Genesys rejected the request (HTTP 400); nothing was created.")], GenesysUploadStates.CallOutcomeNote);
-        var (_, html) = await GetAsync(api, $"/Collections/CampaignHistory/{Id1:D}");
+        var (_, html) = await GetAsync(api, $"/Collections/CampaignList/{Id1:D}");
         var text = Text(html);
 
         Assert.Contains("data-submission-error", html);
@@ -275,7 +271,7 @@ public sealed class CollectionsGenesysHistoryRenderTests
         var api = NewApi();
         api.Detail = Detail(Sub(Id1, "Uploaded"));
         api.Records = new(2, 50, 120, [Rec(51, "Ahmed Ali", "TP140-51", "+971500000051")], GenesysUploadStates.CallOutcomeNote);
-        var (_, html) = await GetAsync(api, $"/Collections/CampaignHistory/{Id1:D}?pageNumber=2&result=Uploaded&search=TP140");
+        var (_, html) = await GetAsync(api, $"/Collections/CampaignList/{Id1:D}?pageNumber=2&result=Uploaded&search=TP140");
 
         Assert.Contains("result=Uploaded&page=2", api.Calls.Last().Replace("&search=TP140", ""));
         Assert.Contains("Page 2 of 3", Text(html));
@@ -289,10 +285,10 @@ public sealed class CollectionsGenesysHistoryRenderTests
     public async Task AnUnknownSubmission_IsNotFound_AndAFailedLoadIsExplained()
     {
         var api = NewApi();
-        var (missing, _) = await GetAsync(api, $"/Collections/CampaignHistory/{Guid.NewGuid():D}");
+        var (missing, _) = await GetAsync(api, $"/Collections/CampaignList/{Guid.NewGuid():D}");
         Assert.Equal(HttpStatusCode.NotFound, missing);
         api.Status = HttpStatusCode.Forbidden;
-        var (status, html) = await GetAsync(api, $"/Collections/CampaignHistory/{Id1:D}");
+        var (status, html) = await GetAsync(api, $"/Collections/CampaignList/{Id1:D}");
         Assert.Equal(HttpStatusCode.OK, status);
         Assert.Contains("does not have permission", Text(html));
     }
@@ -306,10 +302,37 @@ public sealed class CollectionsGenesysHistoryRenderTests
         foreach (var page in new[] { "/Collections/Receivables", "/Collections/Campaigns", "/Collections/Reconciliation" })
         {
             var (_, html) = await GetAsync(api, page);
-            Assert.Matches(new Regex(@"href=""/Collections/CampaignHistory""[^>]*data-history-link>Genesys Campaign History<"), html);
+            Assert.Matches(new Regex(@"href=""/Collections/CampaignList""[^>]*data-history-link>Campaign List<"), html);
         }
-        var (_, history) = await GetAsync(api, "/Collections/CampaignHistory");
-        Assert.Contains("<title>Genesys Campaign History", history.Replace("\r", ""));
-        Assert.Matches(new Regex(@"app-nav__link is-active"" href=""/Collections/Receivables"""), history);
+        var (_, history) = await GetAsync(api, "/Collections/CampaignList");
+        Assert.Contains("<title>Campaign List", history.Replace("\r", ""));
+        Assert.Matches(new Regex(@"app-nav__link is-active"" href=""/Collections/CampaignList"""), history);
+    }
+
+    [Fact]
+    public async Task TheCampaignList_ShowsSyncedFigures_LastSynced_AndAManualSyncButton_OnlyForASender()
+    {
+        var api = NewApi();
+        var synced = Sub(Id1, "Uploaded") with { ApprovedRecords = 10, Companies = ["Dubai"], Delivery = new(true, Approved.AddDays(1), "Completed", null, 6, 4, 1, 2, 1, 11) };
+        var never = Sub(Id2, "Uploaded") with { ApprovedRecords = 5, Companies = ["Sharjah"], Delivery = new(false, null, null, null, null, null, null, null, 0, 0) };
+        api.Submissions = Page([synced, never]) with { LastSyncedAtUtc = Approved.AddDays(1), CanSync = true };
+        var (_, html) = await GetAsync(api, "/Collections/CampaignList");
+        var text = Text(html);
+        Assert.Matches(new Regex(@"data-sent>6<"), html);
+        Assert.Matches(new Regex(@"data-delivered>4<"), html);
+        Assert.Matches(new Regex(@"data-failed>1<"), html);
+        Assert.Matches(new Regex(@"data-pending>2<"), html);
+        Assert.Contains("1 not sent", text);
+        Assert.Matches(new Regex(@"data-sent>(—|&#x2014;)<"), html);                                               // never synced: no figure, not zero
+        Assert.Contains("Not synced", text);
+        Assert.Contains("Dubai", text); Assert.Contains("Sharjah", text);
+        Assert.Contains("15 Oct 2026 12:00 (Dubai)", text);                                             // Last synced
+        Assert.Matches(new Regex(@"<form[^>]*method=""post""[^>]*data-sync-form"), html);
+        Assert.Contains("Sync from Genesys", text);
+
+        api.Submissions = Page([synced]);                                                                // no CanSync: no button
+        var (_, readOnly) = await GetAsync(api, "/Collections/CampaignList");
+        Assert.DoesNotContain("data-sync-form", readOnly);
+        Assert.Contains("Last synced from Genesys", Text(readOnly));
     }
 }

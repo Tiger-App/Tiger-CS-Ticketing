@@ -38,6 +38,10 @@ builder.Services.AddRazorPages(options =>
     // Pages/Collections, so the /Admin folder's System-Administrator-only rule does not apply to it. It has its own gate: the Collections
     // managers and the System Administrator. The Api (CollectionsTeam.CanManageTowersAsync) is the real protection.
     options.Conventions.AuthorizePage("/Collections/TowerAssignments", TowerAssignmentsPolicy.Name);
+
+    // The History page is now the Campaign List (/Collections/CampaignList). The former URLs keep working so bookmarks and links already sent still open it.
+    options.Conventions.AddPageRoute("/Collections/CampaignHistory", "Collections/CampaignHistory");
+    options.Conventions.AddPageRoute("/Collections/CampaignHistoryDetails", "Collections/CampaignHistory/{id:guid}");
 });
 builder.Services.AddHttpContextAccessor();
 

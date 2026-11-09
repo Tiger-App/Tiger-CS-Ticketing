@@ -4,7 +4,7 @@ namespace TigerCS.Application.Modules.Collections.History;
 
 /// <summary>The normalized filter the store runs in SQL. Dates are UTC instants (the Dubai day boundaries already applied).</summary>
 public sealed record GenesysHistorySpec(
-    DateTime? FromUtc, DateTime? ToUtcExclusive, CampaignReminderType? Stage, string? Status, string? Mode, Guid? EmployeeId, string? ListId, string? Search);
+    DateTime? FromUtc, DateTime? ToUtcExclusive, CampaignReminderType? Stage, string? Status, string? Mode, Guid? EmployeeId, string? ListId, string? Search, int? CompanyId = null);
 
 /// <summary>One Genesys batch of a submission in the shape the list needs.</summary>
 public sealed record SubmissionBatchRow(CampaignReminderType Type, string ContactListId, string? CampaignId, string? RequestHash, GenesysBatchStatus Status, string? Error, DateTime? StartedAtUtc);
@@ -13,7 +13,7 @@ public sealed record SubmissionBatchRow(CampaignReminderType Type, string Contac
 public sealed record SubmissionRow(
     long DispatchId, Guid PublicId, DateTime InitiatedAtUtc, DateTime? StartedAtUtc, DateTime? CompletedAtUtc, DispatchStatus Status, string? StatusReason, string? Phase,
     Guid InitiatedBy, int ApprovedCount, string ApprovedTotalsJson, int ExcludedAtDispatch, SubmissionCounts Counts,
-    IReadOnlyList<CampaignReminderType> Types, IReadOnlyList<SubmissionBatchRow> Batches);
+    IReadOnlyList<CampaignReminderType> Types, IReadOnlyList<SubmissionBatchRow> Batches, IReadOnlyList<int>? CompanyIds = null);
 
 public sealed record SummaryRow(DispatchStatus Status, SubmissionCounts Counts);
 

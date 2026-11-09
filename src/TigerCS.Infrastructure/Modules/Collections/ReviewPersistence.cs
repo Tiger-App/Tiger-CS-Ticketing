@@ -138,6 +138,36 @@ public class CollectionsGenesysBatchConfiguration : IEntityTypeConfiguration<Col
     }
 }
 
+public class CollectionsGenesysMessageResultConfiguration : IEntityTypeConfiguration<CollectionsGenesysMessageResult>
+{
+    public void Configure(EntityTypeBuilder<CollectionsGenesysMessageResult> builder)
+    {
+        builder.ToTable("CollectionsGenesysMessageResults");
+        builder.HasKey(r => r.CollectionsGenesysMessageResultId);
+        builder.Property(r => r.CollectionsGenesysMessageResultId).ValueGeneratedOnAdd();
+        builder.Property(r => r.GenesysConversationId).HasMaxLength(64).IsUnicode(false).IsRequired();
+        builder.Property(r => r.GenesysMessageId).HasMaxLength(128).IsUnicode(false).IsRequired();
+        builder.Property(r => r.GenesysContactId).HasMaxLength(64).IsUnicode(false);
+        builder.Property(r => r.Status).HasMaxLength(16).IsUnicode(false).IsRequired();
+        builder.Property(r => r.FailureReason).HasMaxLength(300);
+        // One row per Genesys message, whatever the number of syncs or delivery events.
+        builder.HasIndex(r => new { r.GenesysConversationId, r.GenesysMessageId }).IsUnique().HasDatabaseName("UX_CollectionsGenesysMessageResults_Message");
+        builder.HasIndex(r => new { r.CollectionsDispatchId, r.CollectionsDispatchItemId }).HasDatabaseName("IX_CollectionsGenesysMessageResults_Dispatch_Item");
+    }
+}
+
+public class CollectionsGenesysSyncStateConfiguration : IEntityTypeConfiguration<CollectionsGenesysSyncState>
+{
+    public void Configure(EntityTypeBuilder<CollectionsGenesysSyncState> builder)
+    {
+        builder.ToTable("CollectionsGenesysSyncStates");
+        builder.HasKey(s => s.CollectionsDispatchId);
+        builder.Property(s => s.CollectionsDispatchId).ValueGeneratedNever();
+        builder.Property(s => s.Outcome).HasMaxLength(16).IsUnicode(false).IsRequired();
+        builder.Property(s => s.Error).HasMaxLength(500);
+    }
+}
+
 /// <summary>
 /// Which database failures are worth a bounded retry, and how long to wait. Only connection-level failures (a dropped or timed-out link, a failed-over server, a deadlock victim) qualify;
 /// a constraint violation or any logic error is never retried. Callers retry ONLY writes that are safe to repeat.

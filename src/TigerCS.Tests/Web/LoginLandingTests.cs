@@ -25,7 +25,7 @@ namespace TigerCS.Tests.Web;
 /// </summary>
 public sealed class LoginLandingTests
 {
-    private const string Collections = "/Collections/Receivables";
+    private const string Collections = "/Collections/CampaignList";
 
     private sealed class Api : HttpMessageHandler
     {
@@ -194,7 +194,7 @@ public sealed class LoginLandingTests
         using var client = factory.CreateClient();
         var html = await (await client.GetAsync("/Collections/Receivables")).Content.ReadAsStringAsync();
         Assert.Matches(new Regex(@"app-nav__link[^>]*href=""/Dashboard""[^>]*>Dashboard<"), html);
-        Assert.Matches(new Regex(@"app-nav__link is-active""[^>]*href=""/Collections/Receivables""[^>]*>Collections<"), html);
+        Assert.Matches(new Regex(@"app-nav__link is-active""[^>]*href=""/Collections/CampaignList""[^>]*>Collections<"), html);
         var dashboard = await client.GetAsync("/Dashboard");
         Assert.NotEqual(HttpStatusCode.NotFound, dashboard.StatusCode);                              // the route is unchanged
     }
