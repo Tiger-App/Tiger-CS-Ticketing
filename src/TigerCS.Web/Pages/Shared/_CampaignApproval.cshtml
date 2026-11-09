@@ -170,6 +170,7 @@
         @foreach (var name in CampaignsModel.FilterFieldNames)
         {
             if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
+            if (name == "floor") { foreach (var floor in Model.FloorIds) { <input type="hidden" name="floor" value="@floor" /> } continue; }
             <input type="hidden" name="@name" value="@(name switch {
                 "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => Model.BusinessDate?.ToString("yyyy-MM-dd"), "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
                 "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />

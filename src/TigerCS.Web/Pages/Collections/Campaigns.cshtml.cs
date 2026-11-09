@@ -26,6 +26,12 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public string PaymentStatus { get; private set; } = "Both";
     /// <summary>The chosen towers (local ids, repeated <c>towerId</c> query values). Empty = All projects, which is also the default.</summary>
     public IReadOnlyList<int> TowerIds { get; private set; } = [];
+    /// <summary>The chosen apartment floors (repeated <c>floor</c> query values; derived from the unit number). Empty = All Floors, which is also the default and means no filtering.</summary>
+    public IReadOnlyList<int> FloorIds { get; private set; } = [];
+    /// <summary>The floors offered for the chosen towers (the page shell only).</summary>
+    public IReadOnlyList<CollectionsFloorDto> FloorOptions { get; private set; } = [];
+    public bool FloorsFailed { get; private set; }
+    private IReadOnlyList<int>? FloorFilter => FloorIds.Count == 0 ? null : FloorIds;
     /// <summary>Minimum Total (AED): a unit is listed only when its Due + Overdue is greater than this. Default 100; null (cleared) = every unit that has a Due or Overdue amount.</summary>
     public decimal? MinTotal { get; private set; } = ReceivablesModel.DefaultMinTotal;
     public string MinTotalText => MinTotal?.ToString("0.####", CultureInfo.InvariantCulture) ?? "";
@@ -72,6 +78,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         var towers = await api.GetTowersAsync(cancellationToken);
         Towers = towers.IsSuccess && towers.Value is { } list ? list : [];
         TowersFailed = !towers.IsSuccess;
+        await LoadFloorOptionsAsync(cancellationToken);
         if (RenderFull) await LoadReportAsync(cancellationToken);
         await LoadApprovalStateAsync(cancellationToken);
         if (TempData["ApprovalError"] is string error) ApprovalError = error;
@@ -98,6 +105,22 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         return Partial("_CampaignResults", this);
     }
 
+    /// <summary>The floors of the apartments in the chosen towers (all towers when none), for the Floor dropdown; a failure leaves the dropdown on "All Floors" and says so.</summary>
+    private async Task LoadFloorOptionsAsync(CancellationToken cancellationToken)
+    {
+        var floors = await api.GetFloorsAsync(TowerIds, cancellationToken);
+        FloorOptions = floors.IsSuccess && floors.Value is { } value ? value.Floors : [];
+        FloorsFailed = !floors.IsSuccess;
+    }
+
+    /// <summary>JSON for the Floor dropdown: the floors of the towers in the query (<c>towerId</c>, repeated). The browser reloads it whenever the towers change.</summary>
+    public async Task<IActionResult> OnGetFloorsAsync(CancellationToken cancellationToken)
+    {
+        var floors = await api.GetFloorsAsync(TowerSelection.Parse(Request.Query["towerId"]), cancellationToken);
+        Response.Headers.CacheControl = "no-store";
+        return new JsonResult(FloorSelection.Payload(floors.IsSuccess ? floors.Value : null, !floors.IsSuccess));
+    }
+
     /// <summary>The results / export / approval requests do not render the picker: load the tower list only when several towers are chosen, so "every tower chosen" still means All projects.</summary>
     private async Task EnsureTowersAsync(CancellationToken cancellationToken)
     {
@@ -113,7 +136,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         // Instalments due from the next month on are neither Due nor Overdue and never listed: a period that starts there has nothing to ask the API for.
         if (DateFrom is { } start && !CollectionsDueMonth.IsInScope(start, CollectionsDisplay.DubaiToday())) { NothingDueYet = true; return; }
         await EnsureTowersAsync(cancellationToken);
-        var result = await api.GetCampaignPreviewAsync(Stage, BusinessDate, null, Search, PageNumber, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode);
+        var result = await api.GetCampaignPreviewAsync(Stage, BusinessDate, null, Search, PageNumber, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode, FloorFilter);
         Outcome = result.Outcome;
         Report = result.IsSuccess ? result.Value : null;
         Error = result.Detail;
@@ -155,7 +178,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (!ModelState.IsValid) { Outcome = ApiOutcome.ValidationError; Error = "Choose valid filters and retry."; return Page(); }
         // Same stage, preview date, tower, dates, minimum amount and search as the preview: the file contains exactly the previewed units.
         await EnsureTowersAsync(cancellationToken);
-        var result = await api.GetCampaignExportAsync(Stage, mode, BusinessDate, null, Search, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode);
+        var result = await api.GetCampaignExportAsync(Stage, mode, BusinessDate, null, Search, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode, FloorFilter);
         if (result.IsSuccess && result.Value is { } file)
         {
             // Review export: the simplified employee workbook. Genesys export: the unchanged machine CSV.
@@ -175,7 +198,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         SendingMode = CollectionsSendingModes.TryParse(sendingMode, out var parsedMode) ? parsedMode : CollectionsSendingModes.Auto;
         PaymentStatus = CampaignPaymentFilters.TryParse(paymentStatus, out var payment) ? CampaignPaymentFilters.Name(payment) : paymentStatus!.Trim();
         RequestedBusinessDate = date; RequestedDateTo = to;   // what the person asked for; BusinessDate / DateTo are later filled with the report's own defaults
-        Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
+        Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); FloorIds = FloorSelection.Parse(Request.Query["floor"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
         MinTotal = ReceivablesModel.ParseMinTotal(Request.Query);
         LoadNotice = CollectionsDisplay.NoticeText(load) is { Length: > 0 } text ? text : null;
         // Month / Year are no longer controls; an old bookmark that still carries them keeps working as its whole-month range.
@@ -222,7 +245,8 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         || (RequestedDateTo is { } requestedTo && requestedTo != (RequestedBusinessDate ?? CollectionsDisplay.DubaiToday()))
         || !PaymentStatus.Equals("Both", StringComparison.OrdinalIgnoreCase)
         || (RequestedBusinessDate is { } requestedDate && requestedDate != CollectionsDisplay.DubaiToday())
-        || MinTotal != ReceivablesModel.DefaultMinTotal;
+        || MinTotal != ReceivablesModel.DefaultMinTotal
+        || FloorIds.Count > 0;
 
     /// <summary>Environment settings that stop any send to Genesys (switched off, missing credentials or contact lists); empty when configured or when it could not be read.</summary>
     public IReadOnlyList<string> DispatchBlockers { get; private set; } = [];
@@ -467,7 +491,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public string SelectionMode { get; private set; } = ReviewQueryService.ModeSelectedUnits;
     public string UnitKeys { get; private set; } = "";
     public int ContactPage { get; private set; } = 1;
-    public static IReadOnlyList<string> FilterFieldNames => ["stage", "sendingMode", "businessDate", "dateFrom", "dateTo", "towerId", "minTotal", "paymentStatus", "search"];
+    public static IReadOnlyList<string> FilterFieldNames => ["stage", "sendingMode", "businessDate", "dateFrom", "dateTo", "towerId", "floor", "minTotal", "paymentStatus", "search"];
     /// <summary>The Manual destination travels with the approval (it is part of the audited filter), but is not a customer filter.</summary>
     public static string ContactListLabel(string name) => name switch { "CurrentMonth" => "Current Month", "FollowUp" => "Follow Up", "Manual" => TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualListName, _ => name };
 
@@ -739,6 +763,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         SendingMode = CollectionsSendingModes.TryParse(Get("sendingMode"), out var postedMode) ? postedMode : CollectionsSendingModes.Auto;
         BusinessDate = Date("businessDate"); DateFrom = Date("dateFrom"); DateTo = Date("dateTo");
         TowerIds = ParseTowerIds(form is not null && form.TryGetValue("towerId", out var towerValues) ? towerValues : default);
+        FloorIds = FloorSelection.Parse(form is not null && form.TryGetValue("floor", out var floorValues) ? floorValues : default);
         Search = Get("search")?.Trim();
         MinTotal = ParseMinTotalText(form?.ContainsKey("minTotal") == true, Get("minTotal"));
     }
@@ -819,6 +844,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         foreach (var tower in TowerIds) query.Add("towerId", tower.ToString(CultureInfo.InvariantCulture));
+        foreach (var floor in FloorIds) query.Add("floor", floor.ToString(CultureInfo.InvariantCulture));
         query["minTotal"] = MinTotalText;
         query["paymentStatus"] = PaymentStatus;
         if (!string.IsNullOrWhiteSpace(Search)) query["search"] = Search;
@@ -834,6 +860,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (DateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         foreach (var tower in TowerIds) query.Add("towerId", tower.ToString(CultureInfo.InvariantCulture));
+        foreach (var floor in FloorIds) query.Add("floor", floor.ToString(CultureInfo.InvariantCulture));
         query["minTotal"] = MinTotalText;
         query["paymentStatus"] = PaymentStatus;
         if (!string.IsNullOrWhiteSpace(Search)) query["search"] = Search;
@@ -855,10 +882,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (IsManual)
             return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo, MinRemaining: MinTotal ?? 0m, ReminderType: reminderType,
                 DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds, SendingMode: CollectionsSendingModes.Manual,
-                ContactList: IsManual ? SelectedContactList : null);
+                ContactList: IsManual ? SelectedContactList : null, Floors: FloorFilter);
         return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo,
             MinRemaining: MinTotal ?? 0m, ReminderType: reminderType, DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds,
-            SendingMode: SendingMode);
+            SendingMode: SendingMode, Floors: FloorFilter);
     }
 
     /// <summary>The stage's display name = the Genesys campaign name used when this list is sent.</summary>

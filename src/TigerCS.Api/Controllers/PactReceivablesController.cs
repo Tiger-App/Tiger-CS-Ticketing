@@ -65,6 +65,7 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
     /// <param name="dueMonth">Optional <c>yyyy-MM</c>: narrow the list and its totals to instalments due in that month. The returned <c>months</c> overview ignores it and always covers every month of the other filters.</param>
     /// <param name="status">With <c>view=units</c> only: <c>all</c> (default), <c>overdue</c> or <c>due</c> - the units that have an instalment of that class. The unit view lists only instalments due before the end of the current Dubai month (Overdue: before the first day of the month, Due: any day inside it, even a coming one), so <c>dateTo</c> is capped at the month end; a month filter only narrows the window.</param>
     /// <param name="minTotal">With <c>view=units</c> only: keep units whose total (Due + Overdue) is GREATER than this value; omit for no minimum. <c>minAmount</c> is not applied per instalment in the unit view.</param>
+    /// <param name="floors">Optional apartment floors (repeat the parameter: <c>floors=1&amp;floors=2</c>, 0 = ground floor). The floor is derived from the unit number; a unit that is not a recognisable apartment never matches. Applied before totals and paging, together with every other filter. Omit for all floors.</param>
     /// <param name="cancellationToken">Request cancellation.</param>
     [HttpGet("/api/collections/receivables/instalments")]
     [RequirePermission(Permissions.CollectionsView)]
@@ -73,11 +74,11 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
     public async Task<IActionResult> Instalments([FromQuery] int? towerId, [FromQuery] DateOnly? dateFrom, [FromQuery] DateOnly? dateTo, [FromQuery] string? paymentStatus,
-        [FromQuery] decimal? minAmount, [FromQuery] string? search, [FromQuery] int page = 1, [FromQuery] int pageSize = 25, [FromQuery] string? view = null, [FromQuery] string? dueMonth = null, [FromQuery] string? status = null, [FromQuery] decimal? minTotal = null, CancellationToken cancellationToken = default, [FromQuery] int[]? towerIds = null)
+        [FromQuery] decimal? minAmount, [FromQuery] string? search, [FromQuery] int page = 1, [FromQuery] int pageSize = 25, [FromQuery] string? view = null, [FromQuery] string? dueMonth = null, [FromQuery] string? status = null, [FromQuery] decimal? minTotal = null, CancellationToken cancellationToken = default, [FromQuery] int[]? towerIds = null, [FromQuery] int[]? floors = null)
     {
         var caller = Caller();
         if (caller is null) return Unauthorized();
-        var result = await instalments.ListAsync(caller, towerId, dateFrom, dateTo, paymentStatus, minAmount, search, page, pageSize, cancellationToken, view, dueMonth, status, minTotal, towerIds);
+        var result = await instalments.ListAsync(caller, towerId, dateFrom, dateTo, paymentStatus, minAmount, search, page, pageSize, cancellationToken, view, dueMonth, status, minTotal, towerIds, floors);
         return result.IsSuccess ? Ok(result.Value) : Failure(result.Outcome, result.Detail);
     }
 
@@ -109,6 +110,25 @@ public sealed class PactReceivablesController(PactReceivableCustomersAppService 
         var caller = Caller();
         if (caller is null) return Unauthorized();
         var result = await service.ListTowersAsync(caller, cancellationToken);
+        return result.IsSuccess ? Ok(result.Value) : Failure(result.Outcome, result.Detail);
+    }
+
+    /// <summary>
+    /// Floors of the apartment units in the chosen towers (all towers when none is named), for the Floor dropdown. The floor is derived from the unit number (no floor column exists); units that are not
+    /// recognisable apartments are left out. Read from the local snapshot's unit directory; PACT is not contacted.
+    /// </summary>
+    /// <param name="towerIds">Optional local tower ids (repeat the parameter). Omit for all towers.</param>
+    [HttpGet("/api/collections/receivables/floors")]
+    [RequirePermission(Permissions.CollectionsView)]
+    [ProducesResponseType<CollectionsFloorsDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status503ServiceUnavailable)]
+    public async Task<IActionResult> Floors([FromQuery] int[]? towerIds = null, CancellationToken cancellationToken = default)
+    {
+        var caller = Caller();
+        if (caller is null) return Unauthorized();
+        var result = await service.ListFloorsAsync(caller, towerIds, cancellationToken);
         return result.IsSuccess ? Ok(result.Value) : Failure(result.Outcome, result.Detail);
     }
 

@@ -102,6 +102,7 @@ public sealed class FakeInstalmentSource(DateTime nowUtc) : IPactReceivablesSour
         var monthStart = request.ClassifyByDay ? CollectionsDueMonth.MonthStart(request.AsOf) : request.AsOf; var nextMonth = monthStart.AddMonths(1);
         var rows = Rows.Where(r => loaded.Any(c => c.CompanyId == r.Company && c.HasSnapshot) && r.UnitId > 0 && r.UnitCode.Trim() is not ("" or "0") && !r.UnitCode.Contains('*'))
             .Where(r => chosen.Count == 0 || chosen.Any(t => t.CompanyId == r.Company && t.TowerNumber == CollectionsTowerNumber.Parse(r.UnitCode)))
+            .Where(r => request.Floors is not { Count: > 0 } floors || (CollectionsUnitFloor.Parse(r.UnitCode) is { } floor && floors.Contains(floor)))   // dbo.fn_CollectionsUnitFloor: the chosen floors, before grouping
             .Where(r => { var d = DateOnly.FromDateTime(r.Due); return d >= request.From && d <= request.To && (!request.ClassifyByDay || d < nextMonth); })
             .Where(r => filter switch
             {

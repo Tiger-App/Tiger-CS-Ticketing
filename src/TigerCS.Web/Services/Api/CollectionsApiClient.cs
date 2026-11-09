@@ -21,17 +21,17 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
 
     public Task<ApiResult<CollectionsCampaignPreviewDto>> GetCampaignPreviewAsync(string stage, DateOnly? businessDate,
         int? companyId, string? search, int page, CancellationToken cancellationToken,
-        DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null) =>
-        GetAsync<CollectionsCampaignPreviewDto>($"{Base}/campaigns/preview?{CampaignQuery(stage, businessDate, companyId, search, dateFrom, dateTo, towerId, minTotal, paymentStatus, towerIds, sendingMode)}&page={Id(page)}", cancellationToken);
+        DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null, IReadOnlyList<int>? floors = null) =>
+        GetAsync<CollectionsCampaignPreviewDto>($"{Base}/campaigns/preview?{CampaignQuery(stage, businessDate, companyId, search, dateFrom, dateTo, towerId, minTotal, paymentStatus, towerIds, sendingMode, floors)}&page={Id(page)}", cancellationToken);
 
     public Task<ApiResult<CollectionsCampaignExportDto>> GetCampaignExportAsync(string stage, string mode,
         DateOnly? businessDate, int? companyId, string? search, CancellationToken cancellationToken,
-        DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null) =>
-        GetAsync<CollectionsCampaignExportDto>($"{Base}/campaigns/export?{CampaignQuery(stage, businessDate, companyId, search, dateFrom, dateTo, towerId, minTotal, paymentStatus, towerIds, sendingMode)}&mode={Uri.EscapeDataString(mode)}", cancellationToken);
+        DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null, IReadOnlyList<int>? floors = null) =>
+        GetAsync<CollectionsCampaignExportDto>($"{Base}/campaigns/export?{CampaignQuery(stage, businessDate, companyId, search, dateFrom, dateTo, towerId, minTotal, paymentStatus, towerIds, sendingMode, floors)}&mode={Uri.EscapeDataString(mode)}", cancellationToken);
 
     /// <summary>Instalment-level list from the local snapshot (the Receivables page).</summary>
     public Task<ApiResult<PactInstalmentsPageDto>> GetInstalmentsAsync(int? towerId, DateOnly? dateFrom, DateOnly? dateTo, string? paymentStatus, decimal? minAmount,
-        string? search, int page, CancellationToken cancellationToken, string? view = null, string? dueMonth = null, string? status = null, decimal? minTotal = null, IReadOnlyList<int>? towerIds = null)
+        string? search, int page, CancellationToken cancellationToken, string? view = null, string? dueMonth = null, string? status = null, decimal? minTotal = null, IReadOnlyList<int>? towerIds = null, IReadOnlyList<int>? floors = null)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         if (!string.IsNullOrWhiteSpace(view)) query["view"] = view;
@@ -39,6 +39,7 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         if (!string.IsNullOrWhiteSpace(dueMonth)) query["dueMonth"] = dueMonth;
         if (towerId is { } tower) query["towerId"] = Id(tower);
         foreach (var id in towerIds ?? []) query.Add("towerIds", Id(id));
+        foreach (var floor in floors ?? []) query.Add("floors", Id(floor));
         if (dateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (dateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (!string.IsNullOrWhiteSpace(paymentStatus)) query["paymentStatus"] = paymentStatus;
@@ -60,6 +61,14 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
     /// <summary>Per-company refresh state only (small); polled while a refresh runs.</summary>
     public Task<ApiResult<SnapshotStatusDto>> GetSnapshotStatusAsync(CancellationToken cancellationToken) =>
         GetAsync<SnapshotStatusDto>($"{Base}/receivables/snapshot/status", cancellationToken);
+
+    /// <summary>Floors of the apartment units of the chosen towers (all towers when none) for the Floor dropdown (local snapshot; no PACT call).</summary>
+    public Task<ApiResult<CollectionsFloorsDto>> GetFloorsAsync(IReadOnlyList<int>? towerIds, CancellationToken cancellationToken)
+    {
+        var query = HttpUtility.ParseQueryString(string.Empty);
+        foreach (var id in towerIds ?? []) query.Add("towerIds", Id(id));
+        return GetAsync<CollectionsFloorsDto>($"{Base}/receivables/floors?{query}", cancellationToken);
+    }
 
     /// <summary>Active towers for the searchable tower dropdown (local table; no PACT call).</summary>
     public Task<ApiResult<List<CollectionsTowerDto>>> GetTowersAsync(CancellationToken cancellationToken) =>
@@ -127,6 +136,7 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         void Add(string name, string? value) { if (!string.IsNullOrWhiteSpace(value)) query[name] = value; }
         Add("companyId", filter.CompanyId?.ToString(CultureInfo.InvariantCulture));
         Add("project", filter.Project); Add("towerId", filter.TowerId?.ToString(CultureInfo.InvariantCulture)); foreach (var id in filter.TowerIds ?? []) query.Add("towerIds", id.ToString(CultureInfo.InvariantCulture));
+        foreach (var floor in filter.Floors ?? []) query.Add("floors", floor.ToString(CultureInfo.InvariantCulture));
         Add("unit", filter.Unit); Add("customer", filter.Customer);
         Add("year", filter.Year?.ToString(CultureInfo.InvariantCulture)); Add("month", filter.Month?.ToString(CultureInfo.InvariantCulture));
         Add("dueFrom", filter.DueFrom?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
@@ -191,7 +201,7 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         PostAsync<ReconcileBatchRequest, DispatchDto>($"{ReviewBase}/dispatches/{dispatchId:D}/batches/{batchId.ToString(CultureInfo.InvariantCulture)}/reconcile", request, cancellationToken);
 
     private static string CampaignQuery(string stage, DateOnly? businessDate, int? companyId, string? search,
-        DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null)
+        DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null, IReadOnlyList<int>? floors = null)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["stage"] = stage;
@@ -200,6 +210,7 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         if (minTotal is { } minimum) query["minTotal"] = minimum.ToString("0.####", CultureInfo.InvariantCulture);
         if (towerId is { } tower) query["towerId"] = Id(tower);
         foreach (var id in towerIds ?? []) query.Add("towerIds", Id(id));
+        foreach (var floor in floors ?? []) query.Add("floors", Id(floor));
         if (dateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (dateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (businessDate is { } date) query["businessDate"] = date.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);

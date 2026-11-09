@@ -14,7 +14,8 @@ public sealed class PactReceivableCustomersAppService(
     IPactReceivablesSource source,
     ILogger<PactReceivableCustomersAppService> logger,
     ICollectionsTowerCatalog? towerCatalog = null,
-    IReceivablesRangeLoader? rangeLoader = null)
+    IReceivablesRangeLoader? rangeLoader = null,
+    IUnitFloorDirectory? floorDirectory = null)
 {
     /// <summary>
     /// Asks for a background load of a due-date range the snapshot does not cover. Needs the same permission as reading the list;
@@ -85,6 +86,34 @@ public sealed class PactReceivableCustomersAppService(
         catch (PactReceivablesSourceException ex)
         {
             return CollectionsResult<IReadOnlyList<CollectionsTowerDto>>.Fail(CollectionsOutcome.FinanceUnavailable, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The floors of the apartment units of the chosen towers (every tower when none is named), for the Floor dropdown. Same authorization as the list. A unit that is not a recognisable apartment
+    /// (see <see cref="CollectionsUnitFloor"/>) contributes nothing. Read from the local snapshot's unit directory; never from PACT.
+    /// </summary>
+    public async Task<CollectionsResult<CollectionsFloorsDto>> ListFloorsAsync(CollectionsCaller caller, IReadOnlyList<int>? towerIds, CancellationToken cancellationToken = default)
+    {
+        if (!(await authorization.ResolveAsync(caller, cancellationToken)).CanReadFinancials)
+            return CollectionsResult<CollectionsFloorsDto>.Fail(CollectionsOutcome.Forbidden);
+        if (!collectionsOptions.Enabled || !sourceOptions.Enabled || floorDirectory is null)
+            return CollectionsResult<CollectionsFloorsDto>.Fail(CollectionsOutcome.Disabled);
+        var towers = (towerIds ?? []).Distinct().Order().ToList();
+        if (towers.Any(id => id <= 0) || towers.Count > PactInstalmentsAppService.MaxTowers)
+            return CollectionsResult<CollectionsFloorsDto>.Fail(CollectionsOutcome.InvalidRequest, "The selected towers are not valid. Choose towers from the list.");
+        try
+        {
+            var codes = await floorDirectory.ListUnitCodesAsync(towers, cancellationToken);
+            var floors = codes.Select(c => c.Trim()).Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(code => CollectionsUnitFloor.Parse(code)).OfType<int>()
+                .GroupBy(floor => floor).OrderBy(g => g.Key)
+                .Select(g => new CollectionsFloorDto(g.Key, CollectionsUnitFloor.Label(g.Key), g.Count())).ToList();
+            return CollectionsResult<CollectionsFloorsDto>.Ok(new(floors, towers));
+        }
+        catch (PactReceivablesSourceException ex)
+        {
+            return CollectionsResult<CollectionsFloorsDto>.Fail(CollectionsOutcome.FinanceUnavailable, ex.Message);
         }
     }
 

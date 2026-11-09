@@ -500,6 +500,7 @@ public sealed class ReviewQueryService(
             return (null, "Year and month go together (2000-2100, 1-12).");
         if (f.DueFrom is { } from && f.DueTo is { } to && from > to) return (null, "The due-date range starts after it ends.");
         if (f.TowerId is <= 0 || f.TowerIds?.Any(t => t <= 0) == true) return (null, "Choose a valid project / tower.");
+        if (CollectionsUnitFloor.HasInvalid(f.Floors)) return (null, "Choose valid floors (0-99).");
         if (f.MinRemaining is < 0 || f.MaxRemaining is < 0 || (f.MinRemaining is { } lo && f.MaxRemaining is { } hi && lo > hi))
             return (null, "Minimum remaining must not exceed maximum remaining, and neither may be negative.");
         if (new[] { f.Project, f.Unit, f.Customer, f.Reason }.Any(v => v?.Length > 200)) return (null, "Text filters are limited to 200 characters.");
@@ -564,7 +565,8 @@ public sealed class ReviewQueryService(
         return (new ReviewQuerySpec(f.CompanyId, Blank(f.Project), Blank(f.Unit), Blank(customer), digits, dueFrom, dueTo, statuses,
             f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, towerSet is { Count: 1 } onlyTower ? onlyTower[0] : null, towerSet is { Count: > 1 } manyTowers ? manyTowers : null,
             // A Manual or Auto dispatch request carries the contact-frequency limit: a customer already added to a Genesys dispatch today is held back.
-            string.IsNullOrWhiteSpace(f.SendingMode) ? null : clock.BusinessDayStartUtc), null);
+            string.IsNullOrWhiteSpace(f.SendingMode) ? null : clock.BusinessDayStartUtc,
+            CollectionsUnitFloor.Normalize(f.Floors) is { Count: > 0 } floors ? floors : null), null);
     }
 
     /// <summary>The distinct tower ids of a filter (the single id and the list together); empty = All projects.</summary>

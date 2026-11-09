@@ -51,6 +51,15 @@ public interface ICollectionsTowerCatalog
     Task<IReadOnlyList<CollectionsTowerDto>> ListActiveAsync(CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// The unit directory behind the Floor dropdown: the distinct unit codes the local snapshot knows for the chosen towers (all towers when none are named). Local snapshot only - PACT is never called. The
+/// floor of each code is derived by <see cref="TigerCS.Domain.Modules.Collections.CollectionsUnitFloor"/>; no floor column exists or is added.
+/// </summary>
+public interface IUnitFloorDirectory
+{
+    Task<IReadOnlyList<string>> ListUnitCodesAsync(IReadOnlyList<int> towerIds, CancellationToken cancellationToken);
+}
+
 /// <summary>Raised when the request names a tower that does not exist (or clashes with the company filter).</summary>
 public sealed class PactReceivablesScopeException(string message) : Exception(message);
 
@@ -136,11 +145,12 @@ public interface IPactInstalmentSource
 /// reference (<c>CollectionsDueMonth</c>): Overdue = due before the first day of that month, Due = due inside it (any day), anything later is not in scope. PaymentFilter is outstanding, unpaid, partial, paid or all. Status (By unit only) keeps the units that have
 /// at least one instalment of that class: overdue or due (null = every unit). MinTotal (By unit): keep units whose summed remaining amount is GREATER than it (null = no minimum).
 /// TowerIds: two or more local tower ids chosen together (OR; null = not used). One tower travels as TowerId, as before. The source filters the instalments by the set BEFORE it sums, counts and pages.
+/// Floors: apartment floors chosen together (OR; null / empty = All floors). The floor is derived from the unit code (CollectionsUnitFloor); like the towers it is applied BEFORE the instalments are summed, counted and paged, and combines (AND) with every other filter.
 /// </remarks>
 public sealed record PactInstalmentsRequest(
     DateOnly From, DateOnly To, DateOnly AsOf, decimal MinAmount, string PaymentFilter, string? Search, string? PhoneDigits,
     int Page, int PageSize, int? CompanyId, int? TowerId, string? Status = null, bool ClassifyByDay = false, decimal? MinTotal = null,
-    IReadOnlyList<int>? TowerIds = null);
+    IReadOnlyList<int>? TowerIds = null, IReadOnlyList<int>? Floors = null);
 
 public sealed record PactInstalmentsPage(
     PactInstalmentTotalsDto Totals, IReadOnlyList<PactInstalmentRowDto> Rows, bool Unavailable, SnapshotStatusDto Snapshot, DateTime ReadAtUtc, double SqlMs);
