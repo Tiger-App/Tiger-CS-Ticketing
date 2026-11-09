@@ -55,7 +55,7 @@ public sealed class ReviewRefreshService(
     {
         gate ??= SourceGate();
         return new(asOf, readAtUtc, SourceLabel, sourceOptions.Currency, gate.Reconciled, campaignOptions.LegalNoticeExportEnabled, campaignOptions.LegalCaseDispatchApproved,
-            reviewOptions.FloatNoiseTolerance, sourceOptions.SourceStatusMap, crm, PolicyStart, gate.HeldUnitKeys(),
+            reviewOptions.FloatNoiseTolerance, sourceOptions.SourceStatusMap, crm, PolicyStart, gate.HeldUnitKeys(), SpecialCaseUnits.From(sourceOptions),
             new TigerCS.Application.Modules.Collections.Exceptions.CollectionsExceptionPolicy(sourceOptions));
     }
 

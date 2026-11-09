@@ -354,14 +354,14 @@ internal sealed class ReviewHarness : IDisposable
             // The unit exception policies (special cases, GULF_CUSTOMERS) read the harness's PACT options as they are when the scope is made.
             Policy = new CollectionsExceptionPolicy(h.Sql);
             var inclusions = new ExceptionInclusionStore(context);
-            Query = new ReviewQueryService(h.Options, h.Review, auth, clock, Store, null, h.Genesys, Policy, inclusions, h.QueryLog);
+            Query = new ReviewQueryService(h.Options, h.Review, auth, clock, Store, null, h.Genesys, h.Sql, Policy, inclusions, h.QueryLog);
             Exceptions = new ExceptionInclusionService(h.Options, auth, clock, Policy, Store, inclusions, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time),
                 new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, NullLogger<ExceptionInclusionService>.Instance);
             Refresh = new ReviewRefreshService(h.Options, h.Campaign, h.Sql, h.Review, auth, clock, h.Source, Store, h.Scheduler, Query,
                 NullLogger<ReviewRefreshService>.Instance, h.Links, h.Evidence);
             var balances = new CurrentBalanceReader(h.Sql, h.Source, Refresh, NullLogger<CurrentBalanceReader>.Instance);
             Dispatch = new DispatchService(h.Options, h.Genesys, auth, clock, Store, h.Scheduler, client ?? h.Client, Query, balances,
-                NullLogger<DispatchService>.Instance, null, Policy, inclusions);
+                NullLogger<DispatchService>.Instance, null, h.Sql, Policy, inclusions);
             Export = new GenesysExportService(h.Options, h.Sql, h.Genesys, auth, clock, Query, client ?? h.Client, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), h.Review, new ReviewStore(context, h.RetryPolicy), new FreeExportLock(), NullLogger<GenesysExportService>.Instance);
             ReviewExport = new ManualReviewExportService(h.Options, h.Sql, auth, clock, Query, new TigerCS.Infrastructure.Audit.AuditEntryWriter(context, h.Time), new TigerCS.Infrastructure.Modules.Collections.CollectionsUnitOfWork(context), NullLogger<ManualReviewExportService>.Instance);
             Auto = new AutoDispatchService(h.Options, h.Campaign, clock, Store, Query, Refresh, Dispatch, NullLogger<AutoDispatchService>.Instance);

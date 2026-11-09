@@ -18,7 +18,7 @@ public sealed record ReviewBuildContext(
     DateOnly AsOfDate, DateTime SourceReadAtUtc, string SourceLabel, string Currency, bool SourceReconciled,
     bool LegalNoticeReleased, bool LegalCaseApproved, decimal FloatTolerance,
     IReadOnlyDictionary<string, string> StatusMap, CrmLinkSet? Crm = null, DateOnly? PolicyStart = null,
-    IReadOnlySet<(int CompanyId, string TenantId, long UnitId)>? HeldUnits = null,
+    IReadOnlySet<(int CompanyId, string TenantId, long UnitId)>? HeldUnits = null, SpecialCaseUnits? SpecialUnits = null,
     TigerCS.Application.Modules.Collections.Exceptions.CollectionsExceptionPolicy? Exceptions = null);
 
 public sealed record ReviewBuildResult(IReadOnlyList<CollectionsReviewRecord> Records, int FloatNormalizedRows, int SettledRows, int CancelledRows = 0);
@@ -43,6 +43,8 @@ public static class ReviewRecordBuilder
         {
             // PACT marks a cancelled unit with an asterisk anywhere in its code ('*', '**'): dropped before any matching or grouping, and never matched to a CRM unit with the mark removed.
             if (IsCancelledUnit(row.UnitCode)) { cancelled++; continue; }
+            // A special case unit is handled outside the normal campaigns: it never becomes a review record (so it is never listed, approved, exported or sent). The source and Receivables keep it.
+            if (context.SpecialUnits is { Any: true } special && special.IsSpecial(row.UnitCode)) continue;
             var money = MoneyNormalizer.Normalize(row.Amount, row.AmountIsFloatingPoint, context.FloatTolerance);
             if (money.Precision == AmountPrecision.FloatingPointNoise) floatNormalized++;
             // Settled or noise-only remainders are not receivables. An unresolved precision issue is kept and flagged.

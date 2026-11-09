@@ -152,12 +152,12 @@ public sealed class ExceptionPoliciesTests
     }
 
     [Fact]
-    public void WithoutTheConfiguredFlags_NoUnitIsExcluded_AndTheListIsNotConsulted()
+    public void TheGulfList_IsNotConsulted_UntilItIsSwitchedOn_WhileTheSpecialListFollowsItsCodes()
     {
-        var off = new CollectionsExceptionPolicy(new PactReceivablesOptions { SpecialCaseUnitCodes = [Special], GulfCustomerUnitCodes = [Gulf] });   // lists present, but not switched on
-        Assert.False(off.HasExclusions);
-        Assert.False(off.Evaluate(Special, new DateOnly(2026, 10, 15), true, false).Excluded);
+        var off = new CollectionsExceptionPolicy(new PactReceivablesOptions { SpecialCaseUnitCodes = [Special], GulfCustomerUnitCodes = [Gulf] });   // Gulf list present, but not switched on
         Assert.False(off.Evaluate(Gulf, new DateOnly(2026, 10, 15), true, false).Excluded);
+        Assert.True(off.Evaluate(Special, new DateOnly(2026, 10, 15), true, false).Excluded);                 // the Campaigns pipeline's special-case list is active whenever it has codes
+        Assert.False(new CollectionsExceptionPolicy(new PactReceivablesOptions()).HasExclusions);
     }
 
     [Fact]
@@ -403,9 +403,8 @@ public sealed class ExceptionPoliciesTests
             return (await scope.Exceptions.ListAsync(h.Manager, new ExceptionListRequest("CurrentMonth", search), CancellationToken.None)).Value!;
         }
         var all = await List();
-        Assert.Equal(["TP140-1", "TP140-2", "TP140-4"], all.Items.Select(i => i.UnitCode)); Assert.Equal(3, all.TotalCount); Assert.Equal(1, all.IncludedCount);
+        Assert.Equal(["TP140-2", "TP140-4"], all.Items.Select(i => i.UnitCode)); Assert.Equal(2, all.TotalCount); Assert.Equal(1, all.IncludedCount);   // a special case has no campaign record at all, so it is never offered
         Assert.True(all.Items.Single(i => i.UnitCode == Gulf).ManuallyIncluded); Assert.False(all.Items.Single(i => i.UnitCode == OtherGulf).ManuallyIncluded);
-        Assert.True(all.Items.Single(i => i.UnitCode == Special).SpecialCase);                               // shown as permanently excluded, cannot be ticked
         Assert.False(all.InclusionDay);
         Assert.Equal([Gulf], (await List("TP140-2")).Items.Select(i => i.UnitCode));                         // unit code
         Assert.Equal([OtherGulf], (await List("Customer 4")).Items.Select(i => i.UnitCode));                 // customer
@@ -509,7 +508,7 @@ public sealed class ExceptionPoliciesTests
         Assert.DoesNotContain(sent, c => c.Phone == "+971500000001");
         Assert.Equal(5, sent.Count);
         using var check = h.CreateContext();
-        Assert.Contains("special case", (await check.CollectionsDispatchItems.AsNoTracking().SingleAsync(i => i.UnitCode == Special)).StatusReason);
+        Assert.Contains("Special case", (await check.CollectionsDispatchItems.AsNoTracking().SingleAsync(i => i.UnitCode == Special)).StatusReason);
     }
 
     // ------------------------------------------------------------ Auto dispatcher and Auto preview
@@ -547,7 +546,6 @@ public sealed class ExceptionPoliciesTests
         using var h = await SeededAsync(DubaiNoon(10, 15));
         using (var scope = h.NewScope()) await scope.Query.ResolveAsync(All(Manual()), CancellationToken.None);
         var lines = h.QueryLog.Entries.Where(e => e.Level == LogLevel.Information).Select(e => e.Message).ToList();
-        Assert.Contains(lines, l => l.Contains(Special) && l.Contains(ReviewReasons.SpecialCaseExcluded));
         Assert.Contains(lines, l => l.Contains(Gulf) && l.Contains(ReviewReasons.GulfCustomerExcluded));
         Assert.Contains(lines, l => l.Contains(OtherGulf) && l.Contains(ReviewReasons.GulfCustomerExcluded));
         Assert.All(h.QueryLog.Messages, m => { Assert.DoesNotContain("Customer ", m); Assert.DoesNotContain("97150", m); Assert.DoesNotContain("@example.test", m); });

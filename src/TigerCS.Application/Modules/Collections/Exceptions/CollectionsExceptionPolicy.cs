@@ -1,3 +1,4 @@
+using TigerCS.Domain.Modules.Collections;
 using TigerCS.Domain.Modules.Collections.Review;
 
 namespace TigerCS.Application.Modules.Collections.Exceptions;
@@ -5,7 +6,7 @@ namespace TigerCS.Application.Modules.Collections.Exceptions;
 /// <summary>Exact, normalized unit-code matching: surrounding white space and letter case are ignored; nothing else (no prefix, wildcard or partial match).</summary>
 public static class UnitCodeNormalizer
 {
-    public static string Normalize(string? unitCode) => string.IsNullOrWhiteSpace(unitCode) ? "" : unitCode.Trim().ToUpperInvariant();
+    public static string Normalize(string? unitCode) => CollectionsUnitKey.Normalize(unitCode) ?? "";
 }
 
 /// <param name="Excluded">True when the unit is not part of the campaign.</param>
@@ -28,13 +29,14 @@ public sealed record ExceptionDecision(bool Excluded, string? ReasonCode, string
 /// </summary>
 public sealed class CollectionsExceptionPolicy
 {
-    private readonly HashSet<string> special;
+    private readonly SpecialCaseUnits special;
     private readonly HashSet<string> gulf;
     private readonly int inclusionDay;
 
     public CollectionsExceptionPolicy(PactReceivablesOptions options)
     {
-        special = options.SpecialCasesConfigured ? ToSet(options.SpecialCaseUnitCodes) : [];
+        // The one special-case list and normalization of the Campaigns pipeline (SpecialCaseUnits): active whenever codes are configured.
+        special = SpecialCaseUnits.From(options);
         gulf = options.GulfCustomersConfigured ? ToSet(options.GulfCustomerUnitCodes) : [];
         inclusionDay = options.GulfCustomersInclusionDay;
     }
@@ -43,11 +45,11 @@ public sealed class CollectionsExceptionPolicy
         (codes ?? []).Select(UnitCodeNormalizer.Normalize).Where(c => c.Length > 0).ToHashSet(StringComparer.Ordinal);
 
     /// <summary>True when at least one unit can be affected (nothing is evaluated or logged otherwise).</summary>
-    public bool HasExclusions => special.Count > 0 || gulf.Count > 0;
+    public bool HasExclusions => special.Any || gulf.Count > 0;
 
     public IReadOnlyCollection<string> GulfUnitCodes => gulf;
 
-    public bool IsSpecialCase(string? unitCode) => special.Contains(UnitCodeNormalizer.Normalize(unitCode));
+    public bool IsSpecialCase(string? unitCode) => special.IsSpecial(unitCode);
 
     public bool IsGulfCustomer(string? unitCode) => gulf.Contains(UnitCodeNormalizer.Normalize(unitCode));
 
@@ -65,7 +67,7 @@ public sealed class CollectionsExceptionPolicy
     {
         if (!HasExclusions) return ExceptionDecision.Allowed;
         var code = UnitCodeNormalizer.Normalize(unitCode);
-        if (special.Contains(code)) return new(true, ReviewReasons.SpecialCaseExcluded);   // permanent: no date and no inclusion overrides it
+        if (special.IsSpecial(unitCode)) return new(true, ReviewReasons.SpecialCaseExcluded);   // permanent: no date and no inclusion overrides it
         if (!gulf.Contains(code)) return ExceptionDecision.Allowed;
         if (!manual) return new(true, ReviewReasons.GulfCustomerExcluded);
         if (manuallyIncluded) return new(false, null, ReviewReasons.ManuallyIncluded);
