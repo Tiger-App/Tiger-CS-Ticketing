@@ -150,16 +150,41 @@
 /* Manual: controls that belong to another sending mode are hidden by attribute; this keeps [hidden] winning over the layout rules above. */
 .campaign-filters [hidden] { display: none !important; }
 .campaign-manual__advice { margin: 0; padding: 0 var(--space-3) var(--space-2); font-size: var(--text-xs); color: var(--color-text-secondary); }
-.manual-confirm { max-width: min(46rem, 94vw); width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px); background: var(--color-surface); color: inherit; padding: 0; }
+.manual-confirm { max-width: min(56rem, 96vw); width: 100%; border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px); background: var(--color-surface); color: inherit; padding: 0; overflow: hidden; }
 .manual-confirm::backdrop { background: rgba(0, 0, 0, .45); }
 .manual-confirm .review-confirm { margin: 0; border: 0; }
-/* The confirmation dialog never grows past the window: the title and the sending / result state stay at the top, the list scrolls, and the buttons stay in view at the bottom. */
-.manual-confirm[open] { display: flex; flex-direction: column; max-height: 92vh; }
-.manual-confirm .review-confirm { display: flex; flex-direction: column; min-height: 0; max-height: 92vh; padding: 0; }
-.manual-confirm .review-confirm > h2 { flex: none; margin: 0; padding: var(--space-3, 12px) var(--space-4, 16px); }
-.manual-confirm .review-confirm__body { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 0 var(--space-4, 16px) var(--space-3, 12px); }
-.manual-confirm .review-confirm__footer { flex: none; padding: var(--space-3, 12px) var(--space-4, 16px); border-top: 1px solid var(--color-border); background: var(--color-surface); }
-.manual-confirm .review-confirm__status { margin: 0 var(--space-4, 16px) var(--space-2, 8px); }
+/* The confirmation dialog never grows past the window and has NO scrollbar of its own: the title, the summary and the buttons stay in view, and only the list of unit records scrolls (both ways handled
+   below: the table fits the width, so there is no sideways scrolling). */
+.manual-confirm[open] { display: flex; flex-direction: column; max-height: min(88vh, 88dvh); }
+.manual-confirm .review-confirm { display: flex; flex-direction: column; min-height: 0; max-height: min(88vh, 88dvh); padding: 0; overflow: hidden; }
+.manual-confirm .review-confirm > h2 { flex: none; margin: 0; padding: var(--space-3, 12px) var(--space-4, 16px) var(--space-2, 8px); font-size: 1.05rem; }
+.manual-confirm .review-confirm__body { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 0 var(--space-4, 16px) var(--space-2, 8px); }
+.manual-confirm .review-confirm__summary { flex: none; }
+.manual-confirm .review-snapshot--compact { grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr); gap: 0.15rem 0.75rem; margin: 0 0 0.5rem; font-size: var(--text-sm, 0.9rem); }
+.manual-confirm .review-snapshot--compact dd { overflow-wrap: anywhere; }
+.manual-confirm .review-snapshot--compact [data-snapshot-count], .manual-confirm .review-snapshot--compact [data-snapshot-total] { font-weight: 700; }
+.manual-confirm .review-confirm__summary p { margin: 0.25rem 0; font-size: var(--text-sm, 0.9rem); }
+.manual-confirm .review-confirm__table { flex: 1 1 auto; min-height: 7rem; overflow-y: auto; overflow-x: hidden; border: 1px solid var(--color-border); border-radius: 6px; }
+.manual-confirm .confirm-table { width: 100%; table-layout: fixed; margin: 0; font-size: var(--text-sm, 0.9rem); }
+.manual-confirm .confirm-table th, .manual-confirm .confirm-table td { overflow-wrap: anywhere; word-break: break-word; padding: 0.3rem 0.5rem; vertical-align: top; }
+.manual-confirm .confirm-table thead th { position: sticky; top: 0; background: var(--color-surface); z-index: 1; }
+.manual-confirm .confirm-table .num { text-align: right; }
+.manual-confirm .review-confirm__body > p { flex: none; margin: 0.35rem 0 0; font-size: var(--text-sm, 0.9rem); }
+.manual-confirm .review-confirm__footer { flex: none; padding: var(--space-2, 8px) var(--space-4, 16px) var(--space-3, 12px); border-top: 1px solid var(--color-border); background: var(--color-surface); }
+.manual-confirm .review-confirm__footer > label { display: block; font-size: var(--text-sm, 0.9rem); }
+.review-confirm__hint { margin: 0.35rem 0 0; font-size: var(--text-xs, 0.8rem); color: var(--color-text-secondary, inherit); }
+.review-confirm__hint[hidden] { display: none; }
+.review-confirm__actions { display: flex; flex-wrap: wrap; gap: var(--space-2, 8px); margin-top: var(--space-2, 8px); }
+.review-confirm [data-confirm-button][disabled] { opacity: .55; cursor: not-allowed; }
+.manual-confirm .review-confirm__status { margin: 0 var(--space-4, 16px) var(--space-2, 8px); flex: none; }
+/* Narrow screens: fewer columns (the email and the stage are in the summary / not needed to decide), a single-column summary, and a shorter list so the buttons stay on screen. */
+@media (max-width: 40rem) {
+    .manual-confirm { max-width: 100vw; width: 100vw; max-height: 100dvh; border-radius: 0; }
+    .manual-confirm[open], .manual-confirm .review-confirm { max-height: 100dvh; }
+    .manual-confirm .review-snapshot--compact { grid-template-columns: max-content minmax(0, 1fr); }
+    .manual-confirm .confirm-col-optional { display: none; }
+    .manual-confirm .review-confirm__actions .btn { flex: 1 1 100%; }
+}
 .review-confirm__status { display: flex; align-items: flex-start; gap: var(--space-3, 12px); padding: var(--space-3, 12px); border-radius: 6px; border-left: 4px solid currentColor; color: #35506b; background: #eaf1f8; outline: none; }
 .review-confirm__status[hidden], .review-confirm__status [hidden] { display: none; }
 .review-confirm__status-text { flex: 1 1 auto; min-width: 0; }

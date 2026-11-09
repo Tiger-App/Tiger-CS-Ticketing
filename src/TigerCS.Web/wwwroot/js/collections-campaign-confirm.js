@@ -1,5 +1,5 @@
 /*
-  Collections Campaigns: the "Confirm: send N customer(s) to Genesys" dialog.
+  Collections Campaigns: the "Confirm: send N unit record(s) to Genesys" dialog.
 
   What the person sees, in order, inside the dialog (the state is always at its top, never below the contact list):
     1. Confirm is pressed: at once the button is disabled, the form is locked and a spinner says "Sending to Genesys... Please do not close this window."
@@ -191,6 +191,30 @@
         window.dispatchEvent(new CustomEvent('collections-send-accepted', { detail: { dispatchId } }));   // the ticked customers are spent
         await track(form, dispatchId);
     };
+
+    // ------------------------------------------------------------ the acknowledgement
+
+    /**
+     * Confirm stays unavailable until the acknowledgement is ticked, and the line under the box says so (a greyed button without a reason looked broken). Without JavaScript the button is enabled and
+     * the browser's own "required" check on the box applies, so nothing depends on this for safety: the server refuses an unacknowledged confirmation as well.
+     */
+    const syncAcknowledgement = form => {
+        if (state !== 'idle') return;
+        const p = parts(form);
+        const ack = form.querySelector('input[name="ackCampaign"]');
+        if (!p.button || !ack) return;
+        p.button.disabled = !ack.checked;
+        const hint = form.querySelector('[data-confirm-hint]');
+        if (hint) hint.hidden = ack.checked;
+    };
+    const syncAll = () => document.querySelectorAll('[data-confirm-form]').forEach(syncAcknowledgement);
+    syncAll();
+    document.addEventListener('DOMContentLoaded', syncAll);
+    document.addEventListener('change', event => {
+        const ack = event.target && event.target.closest ? event.target.closest('input[name="ackCampaign"]') : null;
+        const form = ack ? ack.closest('[data-confirm-form]') : null;
+        if (form) syncAcknowledgement(form);
+    });
 
     // ------------------------------------------------------------ wiring
 
