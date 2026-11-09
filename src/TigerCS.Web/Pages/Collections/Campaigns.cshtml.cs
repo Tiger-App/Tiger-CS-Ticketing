@@ -601,6 +601,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         SelectionMode = string.Equals(selectionMode, ReviewQueryService.ModeAllMatching, StringComparison.OrdinalIgnoreCase) ? ReviewQueryService.ModeAllMatching : ReviewQueryService.ModeSelectedUnits;
         UnitKeys = unitKeys ?? "";
         ContactPage = Math.Max(1, contactPage);
+        // The list the person was looking at stays on the page behind the dialog (same filters, same mode): the dialog is shown over it, not instead of it.
+        RenderFull = true;
+        await LoadReportAsync(ct);
         await LoadApprovalStateAsync(ct);
 
         // The approval data is a stored, validated copy of the financial snapshot. Missing, failed or stale data starts a visible refresh instead of approving from a guess.

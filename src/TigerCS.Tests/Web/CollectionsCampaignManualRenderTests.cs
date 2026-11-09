@@ -316,8 +316,13 @@ public sealed class CollectionsCampaignManualRenderTests
             ("selectionMode", "SelectedUnits"), ("unitKeys", "4|3001|TP140-1,4|3002|TP140-2"), ("contactList", posted))))).Content.ReadAsStringAsync();
         var dialog = Regex.Match(html, "<dialog[^>]*data-manual-confirm[^>]*>.*?</dialog>", RegexOptions.Singleline).Value;
         Assert.NotEmpty(dialog);
-        Assert.Contains($"Send 2 customer(s) to the {label} contact list?", Decode(dialog));                    // the selected count and the destination, before confirming
-        Assert.Contains("data-snapshot-count>2<", dialog);
+        Assert.Contains($"Send 2 unit record(s) to the {label} contact list?", Decode(dialog));                    // the selected count and the destination, before confirming
+        Assert.Contains("data-snapshot-count>2<", dialog); Assert.Contains("<dt>Unit records</dt>", dialog);
+        Assert.DoesNotContain("customer(s)", Decode(dialog));
+        Assert.Contains("data-confirm-table", dialog); Assert.Contains("confirm-table", dialog);                     // only the list of unit records scrolls
+        Assert.DoesNotContain("table-scroll", dialog);                                                               // no second scroll area (no sideways scrolling)
+        Assert.Contains("data-confirm-hint", dialog); Assert.Contains("Confirm is unavailable until you tick the box", Decode(dialog));   // why Confirm waits for the acknowledgement
+        Assert.Contains("Confirm: send 2 unit record(s) to Genesys", Decode(dialog));
         Assert.Contains("data-snapshot-total>AED 1,500.00<", dialog);                                           // the filtered amount
         Assert.Contains("Manual (any time; no send date or schedule)", Decode(dialog));
         Assert.Contains("data-snapshot-stage>Current month reminder - day 14<", dialog);                        // the campaign purpose
