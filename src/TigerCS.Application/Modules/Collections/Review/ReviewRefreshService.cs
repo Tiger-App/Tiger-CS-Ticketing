@@ -55,7 +55,7 @@ public sealed class ReviewRefreshService(
     {
         gate ??= SourceGate();
         return new(asOf, readAtUtc, SourceLabel, sourceOptions.Currency, gate.Reconciled, campaignOptions.LegalNoticeExportEnabled, campaignOptions.LegalCaseDispatchApproved,
-            reviewOptions.FloatNoiseTolerance, sourceOptions.SourceStatusMap, crm, PolicyStart, gate.HeldUnitKeys());
+            reviewOptions.FloatNoiseTolerance, sourceOptions.SourceStatusMap, crm, PolicyStart, gate.HeldUnitKeys(), SpecialCaseUnits.From(sourceOptions));
     }
 
     /// <summary>The first due date the stage policy looks at: the configured PACT start date, the Campaigns preview's eligibility scope.</summary>
