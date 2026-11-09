@@ -400,6 +400,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<ReceivablesSnapshotOptions>>().Value);
         services.AddScoped<RcvReceivablesSource>();
         services.AddScoped<IPactReceivablesSource>(sp => sp.GetRequiredService<RcvReceivablesSource>());
+        services.AddScoped<IUnitFloorDirectory>(sp => sp.GetRequiredService<RcvReceivablesSource>());
         services.AddScoped<ICollectionsTowerCatalog, SqlCollectionsTowerCatalog>();
         // Monthly tower -> collector assignments, Collections ticket routing and the Collections assignment history.
         services.AddScoped<ICollectionsTowerAssignmentRepository, CollectionsTowerAssignmentRepository>();

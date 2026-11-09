@@ -20,13 +20,14 @@ const PAGE = `<!doctype html><html><body>
 <form method="post" action="/Collections/Campaigns?handler=Confirm" class="panel review-confirm" data-confirm-form
       data-return-url="${RETURN_URL}" data-history-url="/Collections/Campaigns" data-send-status-url="/Collections/Campaigns?handler=Send&dispatch=" data-send-details-url="/Collections/Campaigns?dispatch="
       data-poll-first-ms="5" data-poll-every-ms="5" data-poll-max-ms="400" data-request-timeout-ms="80">
-  <h2 id="manualConfirmTitle">Send 2 customer(s) to the Follow Up contact list?</h2>
+  <h2 id="manualConfirmTitle">Send 2 unit record(s) to the Follow Up contact list?</h2>
   <div class="review-confirm__status" data-confirm-status data-confirm-state="idle" hidden tabindex="-1">
     <span class="confirm-spinner" data-confirm-spinner aria-hidden="true" hidden></span>
     <div class="review-confirm__status-text"><p data-confirm-title></p><p data-confirm-detail></p><p data-confirm-actions></p></div>
   </div>
   <div class="review-confirm__body" data-confirm-body>
-    <table><tbody><tr><td>Customer A</td></tr><tr><td>Customer B</td></tr></tbody></table>
+    <div class="review-confirm__summary"><dl class="review-snapshot review-snapshot--compact"><dt>Unit records</dt><dd data-snapshot-count>2</dd></dl></div>
+    <div class="review-confirm__table" data-confirm-table tabindex="0" role="region" aria-label="Unit records to be sent"><table class="table confirm-table"><tbody><tr><td>Customer A</td></tr><tr><td>Customer B</td></tr></tbody></table></div>
     <button type="submit" formaction="/Collections/Campaigns?handler=Approve" name="contactPage" value="2" formnovalidate data-paging>More contacts</button>
   </div>
   <div class="review-confirm__footer" data-confirm-footer>
@@ -37,8 +38,11 @@ const PAGE = `<!doctype html><html><body>
     <input type="hidden" name="selectionMode" value="SelectedUnits" /><input type="hidden" name="unitKeys" value="a,b" />
     <input type="hidden" name="expectedCount" value="2" /><input type="hidden" name="expectedFingerprint" value="FP" /><input type="hidden" name="idempotencyKey" value="key-1" />
     <label><input type="checkbox" name="ackCampaign" value="true" required checked /> I understand</label>
-    <button class="btn btn-primary" type="submit" data-confirm-button>Confirm: send 2 customer(s) to Genesys</button>
+    <p class="review-confirm__hint" id="confirmAckHint" data-confirm-hint role="status">Confirm is unavailable until you tick the box above.</p>
+    <div class="review-confirm__actions">
+    <button class="btn btn-primary" type="submit" data-confirm-button aria-describedby="confirmAckHint">Confirm: send 2 unit record(s) to Genesys</button>
     <a class="btn" href="${RETURN_URL}" data-confirm-cancel>Cancel</a>
+    </div>
   </div>
 </form></dialog></body></html>`;
 
@@ -51,8 +55,8 @@ const SEND = (over = {}) => ({ status: 'Queued', phase: 'Queued', active: true, 
 const ACCEPTED = { ok: true, dispatchId: 'd1d1d1d1-0000-0000-0000-000000000001', status: 'Queued', approvedCount: 2, unknown: false, retry: false, outcome: 'Accepted' };
 
 /** `handler(url, options)` answers each request; confirm posts and status polls are recorded separately. */
-function boot(handler, { withApprove = true, selection = null } = {}) {
-    const dom = new JSDOM(PAGE, { url: 'https://tiger.test/Collections/Campaigns', runScripts: 'outside-only', pretendToBeVisual: true });
+function boot(handler, { withApprove = true, selection = null, acknowledged = true } = {}) {
+    const dom = new JSDOM(acknowledged ? PAGE : PAGE.replace('required checked', 'required'), { url: 'https://tiger.test/Collections/Campaigns', runScripts: 'outside-only', pretendToBeVisual: true });
     const { window } = dom; const { document } = window; windows.push(window);
     if (selection) window.sessionStorage.setItem('collections-campaign-selection', JSON.stringify(selection));
     const confirms = [], polls = [], events = [];
@@ -363,4 +367,47 @@ test('without the dialog script the plain post still protects against a double s
     button.click(); button.click();
     assert.equal(posts, 1); assert.equal(button.disabled, true); assert.equal(button.textContent, 'Sending…');
     assert.equal(window.sessionStorage.getItem('collections-campaign-selection'), '[]');
+});
+
+// ---------------------------------------------------------------- the acknowledgement
+
+test('Confirm is disabled, with its reason shown, until the acknowledgement is ticked', async () => {
+    const t = boot(() => Promise.resolve(json({ ok: false, message: 'x', retry: false, unknown: false })), { acknowledged: false });
+    assert.equal(t.button.disabled, true, 'not available before the acknowledgement');
+    assert.equal(t.q('[data-confirm-hint]').hidden, false, 'the reason is visible');
+    assert.equal(t.button.getAttribute('aria-describedby'), 'confirmAckHint', 'and tied to the button for screen readers');
+    assert.match(t.q('[data-confirm-hint]').textContent, /tick the box/);
+    const ack = t.q('input[name="ackCampaign"]');
+    ack.checked = true; ack.dispatchEvent(new t.window.Event('change', { bubbles: true }));
+    assert.equal(t.button.disabled, false, 'ticking the box enables Confirm');
+    assert.equal(t.q('[data-confirm-hint]').hidden, true, 'the reason goes away');
+    ack.checked = false; ack.dispatchEvent(new t.window.Event('change', { bubbles: true }));
+    assert.equal(t.button.disabled, true, 'unticking disables it again');
+    assert.equal(t.q('[data-confirm-hint]').hidden, false);
+    assert.equal(t.confirms.length, 0, 'nothing was sent while it was disabled');
+});
+
+test('an unticked acknowledgement sends nothing, even on a click or Enter; once ticked it sends exactly once', async () => {
+    const t = boot(() => Promise.resolve(json(ACCEPTED)), { acknowledged: false });
+    t.button.click();
+    t.form.dispatchEvent(new t.window.Event('submit', { bubbles: true, cancelable: true }));
+    // A forced submit (Enter, script) with the box unticked must not reach the server.
+    await t.wait(30);
+    assert.equal(t.confirms.length, 0);
+    const ack = t.q('input[name="ackCampaign"]');
+    ack.checked = true; ack.dispatchEvent(new t.window.Event('change', { bubbles: true }));
+    t.button.click(); t.button.click();
+    await t.until(() => t.confirms.length >= 1, 'the request');
+    await t.wait(30);
+    assert.equal(t.confirms.length, 1, 'once, however many presses');
+    assert.equal(t.fields(t.confirms[0].options).ackCampaign, 'true');
+});
+
+test('the dialog says unit records, and the list of unit records is the one scrolling region', async () => {
+    const t = boot(() => Promise.resolve(json({ ok: false, message: 'x', retry: false, unknown: false })));
+    assert.match(t.q('#manualConfirmTitle').textContent, /unit record\(s\)/);
+    assert.doesNotMatch(t.document.body.textContent, /customer\(s\)/);
+    assert.equal(t.document.querySelectorAll('[data-confirm-table]').length, 1);
+    assert.equal(t.document.querySelectorAll('.table-scroll').length, 0, 'no second scroll area');
+    assert.ok(t.q('[data-confirm-footer] [data-confirm-button]'), 'the actions live in the footer');
 });

@@ -109,6 +109,39 @@ public sealed class PactReceivablesEndpointTests
         Assert.Equal("127 - Faradis", Assert.Single(towers!).Label);
     }
 
+    private sealed class Directory : IUnitFloorDirectory
+    {
+        public int Reads { get; private set; }
+        public IReadOnlyList<int> LastTowers { get; private set; } = [];
+        public Task<IReadOnlyList<string>> ListUnitCodesAsync(IReadOnlyList<int> towerIds, CancellationToken cancellationToken)
+        {
+            Reads++; LastTowers = towerIds;
+            return Task.FromResult<IReadOnlyList<string>>(["TP127-101", "TP127-102", "TP127-1921", "TP127-P12"]);
+        }
+    }
+
+    [Fact]
+    public async Task FloorsEndpoint_IsAuthorizedForFinancialReaders_AndDeniedToReportingUsers()
+    {
+        var directory = new Directory();
+        using var factory = new TigerCsApiFactory
+        {
+            ExtraConfiguration = new() { ["Collections:Enabled"] = "true", ["CollectionsSource:PactReceivables:Enabled"] = "true" },
+            ExtraServices = services => services.AddScoped<IUnitFloorDirectory>(_ => directory)
+        };
+        using var anonymous = factory.CreateClient();
+        Assert.Equal(HttpStatusCode.Unauthorized, (await anonymous.GetAsync("/api/collections/receivables/floors")).StatusCode);
+        using var reporter = await Client(factory, Roles.ReportingUser);
+        Assert.Equal(HttpStatusCode.Forbidden, (await reporter.GetAsync("/api/collections/receivables/floors")).StatusCode);
+        Assert.Equal(0, directory.Reads);
+        using var admin = await Client(factory, Roles.SystemAdministrator);
+        var floors = await (await admin.GetAsync("/api/collections/receivables/floors?towerIds=3&towerIds=1")).Content.ReadFromJsonAsync<CollectionsFloorsDto>();
+        Assert.Equal([1, 19], floors!.Floors.Select(f => f.Floor).ToArray());            // the parking unit has no floor
+        Assert.Equal(2, floors.Floors.Single(f => f.Floor == 1).UnitCount);
+        Assert.Equal([1, 3], directory.LastTowers.ToArray());
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.GetAsync("/api/collections/receivables/floors?towerIds=0")).StatusCode);   // an invalid tower is refused, not widened
+    }
+
     [Fact]
     public async Task TowerAndDatesReachTheSource_AndAnUnknownTowerIsABadRequest()
     {

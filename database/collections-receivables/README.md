@@ -5,7 +5,7 @@ Full design, semantics, schedule, deployment order and verification: [`docs/Coll
 
 ## Execution order (before the application is deployed)
 
-`V001` -> `V003` -> `V010` -> `V011` -> **`R001`** -> **`V012`** -> **`V013`** -> **`V014`** -> **`R002` -> `R003` -> `R004`** -> `migration/M01` (backup) ... deploy the application ... verify ... `migration/M02` (cleanup).
+`V001` -> `V003` -> `V010` -> `V011` -> **`R001`** -> **`V012`** -> **`V013`** -> **`V014`** -> **`V015`** -> **`R002` -> `R003` -> `R004`** -> `migration/M01` (backup) ... deploy the application ... verify ... `migration/M02` (cleanup).
 (V001, V003, V010, V011 are usually already deployed; re-running them is harmless. V010 no longer needs the old snapshot objects. **V012 is new and must be deployed BEFORE R004** - R004 reads `fn_Collections_TowerNames` and the new CRM columns - and AFTER R001 - V012 reads the snapshot tables.)
 
 | Script | Purpose |
@@ -19,6 +19,7 @@ Full design, semantics, schedule, deployment order and verification: [`docs/Coll
 | `tools/review_crm_project_map.sql` | Preview (default, read-only) of every CRM project: Mapped / ReadyToPromote / Ambiguous / Unresolved, with the evidence; `@Apply = 1` inserts only ReadyToPromote rows (idempotent). |
 | `V014__sync_collections_towers.sql` | `dbo.usp_CollectionsRcv_SyncTowers @Apply`: adds the towers the current snapshot (lines + unit directory) holds to `dbo.CollectionsTowers` (idempotent, no duplicates, never deletes or overwrites a real name; name from the single CRM project name, else the number). The application runs it after every successful refresh. Creates the procedure only - changes no data. |
 | `tools/backfill_collections_towers.sql` | **Dry run by default** (`@Apply = 0`): first population of an empty/incomplete `CollectionsTowers` through the V014 procedure, with before/after and consistency reports. |
+| `V015__fn_CollectionsUnitFloor.sql` | `dbo.fn_CollectionsUnitFloor(@UnitCode)`: the apartment floor derived from the unit number (3-4 digit apartment number DIV 100; anything that is not a recognisable apartment is NULL). A function only - no table, column or data change. Used by `usp_CollectionsRcv_GetUnits @Floors` (the Floor filter of the Receivables page). Deploy before R004; **R004 is re-run for the optional `@Floors` parameter** (a request without a Floor filter never sends it). Mirrors `TigerCS.Domain CollectionsUnitFloor` (unit-tested). |
 | `R001__create_tables.sql` | **New snapshot:** `CollectionsRcvRun`, `CollectionsRcvCompany`, `CollectionsRcvLine`. |
 | `R002__usp_CollectionsRcv_Refresh.sql` | `usp_CollectionsRcv_Refresh @CompanyId` (PACT -> temp table -> validated atomic publish, per-company lock), `usp_CollectionsRcv_ReapDeadRuns`, `usp_CollectionsRcv_NoteClientAbort`. |
 | `R003__usp_CollectionsRcv_GetStatus.sql` | Per-company state for the pages (closes orphaned attempts first; `IsLoading` is true only while that company's refresh really runs). |

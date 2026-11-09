@@ -51,6 +51,7 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
     public List<PactInstalmentRowDto> Rows { get; } = [];
     /// <summary>The tower catalogue the fake API serves (null = the two default towers 7 and 8).</summary>
     public List<CollectionsTowerDto>? TowerCatalogue { get; set; }
+    public List<CollectionsFloorDto>? Floors { get; set; }
     /// <summary>What GET api/collections/tower-assignments answers (null = an empty month the viewer may manage).</summary>
     public TigerCS.Application.Modules.Collections.TowerAssignments.TowerAssignmentMonthDto? TowerMonth { get; set; }
 
@@ -79,6 +80,8 @@ internal sealed class FakeCollectionsApi : HttpMessageHandler
         {
             case "/api/collections/receivables/towers":
                 return Json(TowerCatalogue ?? [new(7, "124", "Tower 124", 4, true), new(8, "127", "Faradis", 32, true)]);
+            case "/api/collections/receivables/floors":
+                return Json(new CollectionsFloorsDto(Floors ?? [new(0, "Ground floor", 4), new(1, "Floor 1", 10), new(2, "Floor 2", 10), new(19, "Floor 19", 3)], q.GetValues("towerIds")?.Select(int.Parse).ToList() ?? []));
             case "/api/collections/tower-assignments":
                 return Json(TowerMonth ?? new TigerCS.Application.Modules.Collections.TowerAssignments.TowerAssignmentMonthDto(2026, 11, true, [], [], [], 0));
             case "/api/collections/tower-assignments/history":

@@ -1,0 +1,44 @@
+@using TigerCS.Application.Modules.Collections.Dto
+@using TigerCS.Web.Pages.Collections
+@model FloorMultiPickerModel
+@* Multi-select Floor filter, the same control as the Project / Tower picker (same markup, classes and keyboard behaviour; collections-tower-multi.js drives both). Works without JavaScript (a scrollable checkbox list in
+   a <details>); with JavaScript the list is reloaded from FloorsUrl whenever the towers change. Nothing ticked = "All Floors" = no filtering. The checkboxes are named "floor", so the filter form, its URLs and the hidden
+   fields of the send / export forms carry the selection. Floors are derived from the apartment number; units that are not recognisable apartments never appear here. *@
+@{
+    var known = Model.Floors.Select(f => f.Floor).ToHashSet();
+    var unknown = Model.SelectedFloors.Where(id => !known.Contains(id)).ToList();
+    var selectedCount = Model.SelectedFloors.Count;
+}
+<div class="field-group tower-multi floor-multi" data-tower-multi data-field-name="floor" data-all-text="@Model.AllText" data-noun="floors" data-all-selected-text="All floors selected" data-floors-url="@Model.FloorsUrl">
+    <label class="field-label" id="@(Model.Id)-label">@Model.Label</label>
+    <details class="tower-multi__box">
+        <summary class="field-select tower-multi__summary" aria-labelledby="@(Model.Id)-label" aria-haspopup="listbox" data-tower-summary>@(selectedCount == 0 ? Model.AllText : selectedCount == 1 ? CollectionsDisplayFloor(Model.SelectedFloors[0], Model.Floors) : $"{selectedCount} floors selected")</summary>
+        <div class="tower-multi__panel">
+            <div class="tower-multi__searchbox">
+                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
+                <input type="search" class="tower-multi__search" placeholder="Search floors" autocomplete="off" aria-label="Search floors" data-tower-search />
+            </div>
+            <div class="tower-multi__actions">
+                <span class="tower-multi__count" aria-live="polite" data-tower-count></span>
+                <button type="button" class="tower-multi__action" data-tower-all>Select all</button>
+                <button type="button" class="tower-multi__action" data-tower-clear>Clear all</button>
+            </div>
+            <ul class="tower-multi__list" role="group" aria-label="Floors" data-tower-list>
+                @foreach (var floor in Model.Floors)
+                {
+                    <li data-tower-item data-label="@floor.Label.ToLowerInvariant() @floor.Floor" data-display="@floor.Label"><label><input type="checkbox" name="floor" value="@floor.Floor" checked="@Model.SelectedFloors.Contains(floor.Floor)" /> <span class="tower-multi__code">@floor.Label</span><span class="tower-multi__name">@floor.UnitCount @(floor.UnitCount == 1 ? "unit" : "units")</span></label></li>
+                }
+                @foreach (var id in unknown)
+                {
+                    <li data-tower-item data-label="floor @id" data-display="@TigerCS.Domain.Modules.Collections.CollectionsUnitFloor.Label(id)"><label><input type="checkbox" name="floor" value="@id" checked="checked" /> <span class="tower-multi__code">@TigerCS.Domain.Modules.Collections.CollectionsUnitFloor.Label(id)</span><span class="tower-multi__name">Not in the list</span></label></li>
+                }
+                <li class="tower-multi__empty" data-tower-empty hidden>No matching floor</li>
+            </ul>
+        </div>
+    </details>
+    <span class="receivables-meta" role="status" data-floor-note hidden="@(!Model.LoadFailed)">@(Model.LoadFailed ? "The floor list could not be loaded; only \"" + Model.AllText + "\" is available. Retry the page." : "")</span>
+</div>
+@functions {
+    private static string CollectionsDisplayFloor(int floor, IReadOnlyList<CollectionsFloorDto> floors) =>
+        floors.FirstOrDefault(f => f.Floor == floor)?.Label ?? TigerCS.Domain.Modules.Collections.CollectionsUnitFloor.Label(floor);
+}

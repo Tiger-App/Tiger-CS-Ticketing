@@ -17,7 +17,7 @@ namespace TigerCS.Api.Controllers;
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class CollectionsCampaignsController(CollectionsCampaignAppService service) : ControllerBase
 {
-    /// <summary>Preview one communication stage, per unit, using current remaining balances from PACT companies 4 and 32. Only instalments due before the end of the current Dubai month are listed (Overdue: before the first day of the month, Due: inside it); <c>minTotal</c> keeps units whose Due + Overdue is greater than it (omit for no minimum). <c>paymentStatus</c> is Due, Overdue or Both (default): a single status keeps only that status' instalments in the figures; preview, counts and both CSV exports share it.</summary>
+    /// <summary>Preview one communication stage, per unit, using current remaining balances from PACT companies 4 and 32. Only instalments due before the end of the current Dubai month are listed (Overdue: before the first day of the month, Due: inside it); <c>minTotal</c> keeps units whose Due + Overdue is greater than it (omit for no minimum). <c>floors</c> (repeat the parameter; 0 = ground floor; omit for all floors) keeps only apartments on those floors, derived from the unit number; <c>paymentStatus</c> is Due, Overdue or Both (default): a single status keeps only that status' instalments in the figures; preview, counts and both CSV exports share it.</summary>
     [HttpGet("preview")]
     [RequirePermission(Permissions.CampaignsView)]
     [ProducesResponseType<CollectionsCampaignPreviewDto>(StatusCodes.Status200OK)]
@@ -29,12 +29,12 @@ public sealed class CollectionsCampaignsController(CollectionsCampaignAppService
         [FromQuery] int pageSize = 25, CancellationToken cancellationToken = default,
         [FromQuery] DateOnly? dateFrom = null, [FromQuery] DateOnly? dateTo = null, [FromQuery] int? towerId = null,
         [FromQuery] decimal? minTotal = null, [FromQuery] string? paymentStatus = null, [FromQuery] int[]? towerIds = null,
-        [FromQuery] string? sendingMode = null)
+        [FromQuery] string? sendingMode = null, [FromQuery] int[]? floors = null)
     {
         var caller = Caller();
         if (caller is null) return Unauthorized();
         return Result(await service.PreviewAsync(caller, stage, businessDate, companyId, search, page, pageSize,
-            cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds, sendingMode: sendingMode));
+            cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds, sendingMode: sendingMode, floors: floors));
     }
 
     /// <summary>Export the full filtered list. Review mode is for internal review; Genesys mode refuses any unresolved row,
@@ -49,11 +49,11 @@ public sealed class CollectionsCampaignsController(CollectionsCampaignAppService
         [FromQuery] DateOnly? businessDate, [FromQuery] int? companyId, [FromQuery] string? search,
         CancellationToken cancellationToken = default, [FromQuery] DateOnly? dateFrom = null, [FromQuery] DateOnly? dateTo = null,
         [FromQuery] int? towerId = null, [FromQuery] decimal? minTotal = null, [FromQuery] string? paymentStatus = null, [FromQuery] int[]? towerIds = null,
-        [FromQuery] string? sendingMode = null)
+        [FromQuery] string? sendingMode = null, [FromQuery] int[]? floors = null)
     {
         var caller = Caller();
         if (caller is null) return Unauthorized();
-        return Result(await service.ExportAsync(caller, stage, mode, businessDate, companyId, search, cancellationToken, dateFrom, dateTo, towerId, minTotal, paymentStatus, towerIds, sendingMode));
+        return Result(await service.ExportAsync(caller, stage, mode, businessDate, companyId, search, cancellationToken, dateFrom, dateTo, towerId, minTotal, paymentStatus, towerIds, sendingMode, floors));
     }
 
     private CollectionsCaller? Caller() => Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id)

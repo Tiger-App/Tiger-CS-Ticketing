@@ -94,6 +94,8 @@
                         <label class="field-label" for="campaignMin">Minimum Total (AED)</label>
                         <input class="field-input" type="number" id="campaignMin" name="minTotal" min="0" step="any" inputmode="decimal" value="@Model.MinTotalText" data-min-total />
                     </div>
+                    @* Floor: apartment floors of the chosen towers (derived from the unit number). All Floors (nothing ticked) = no filtering. The list reloads when the towers change (collections-tower-multi.js). *@
+                    <partial name="_FloorMultiPicker" model="@(new FloorMultiPickerModel("campaignFloor", Model.FloorOptions, Model.FloorIds, "/Collections/Campaigns", Model.FloorsFailed))" />
                 </div>
             </details>
             <span class="receivables-loading" role="status" hidden>Loading customers…</span>

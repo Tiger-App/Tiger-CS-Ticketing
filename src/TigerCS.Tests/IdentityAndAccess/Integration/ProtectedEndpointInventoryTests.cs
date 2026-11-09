@@ -100,6 +100,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["GET /api/collections/receivables/customers"] = nameof(Collections.Integration.PactReceivablesEndpointTests.SystemAdministratorCanReadThroughCentralOverride_WithNoCustomerTicket),
         ["GET /api/collections/receivables/instalments"] = nameof(Collections.Integration.PactReceivablesEndpointTests.InstalmentsEndpoint_IsAuthorizedForFinancialReaders_AndPassesEveryFilterToTheService),
         ["GET /api/collections/receivables/towers"] = nameof(Collections.Integration.PactReceivablesEndpointTests.TowersEndpoint_IsAuthorizedForFinancialReaders_AndDeniedToReportingUsers),
+        ["GET /api/collections/receivables/floors"] = nameof(Collections.Integration.PactReceivablesEndpointTests.FloorsEndpoint_IsAuthorizedForFinancialReaders_AndDeniedToReportingUsers),
         ["POST /api/collections/receivables/coverage/load"] = nameof(Collections.Integration.PactReceivablesEndpointTests.CoverageLoadEndpoint_StartsABackgroundLoad_OnlyForAuthorizedCallers_AndOnlyWhenNeeded),
         ["GET /api/collections/receivables/snapshot/status"] = nameof(Collections.Integration.ReconciliationEndpointTests.SnapshotStatusEndpoint_IsAuthorizedForFinancialReaders_AndReadsOnlyTheStatus),
         ["GET /api/collections/reconciliation"] = nameof(Collections.Integration.ReconciliationEndpointTests.ReconciliationEndpoints_AreAuthorized_ReadingStartsNothing_AndARunNeedsAnExplicitPost),

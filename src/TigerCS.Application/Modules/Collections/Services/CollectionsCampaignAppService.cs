@@ -27,7 +27,7 @@ public sealed class CollectionsCampaignAppService(
         CollectionsCaller caller, string? stage, DateOnly? businessDate = null, int? companyId = null,
         string? search = null, int page = 1, int pageSize = 25, bool forExport = false,
         CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null,
-        string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null)
+        string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null, IReadOnlyList<int>? floors = null)
     {
         var total = Stopwatch.StartNew();
         // Project / Tower filter: any number of local tower ids (the single towerId is kept for old callers). None = All projects. One tower keeps the
@@ -35,6 +35,10 @@ public sealed class CollectionsCampaignAppService(
         var towers = (towerIds ?? []).Concat(towerId is { } single ? new[] { single } : Array.Empty<int>()).Distinct().Order().ToList();
         towerId = towers.Count == 1 ? towers[0] : null;
         var multiTower = towers.Count > 1;
+        // Floor filter (apartment floors derived from the unit code, see CollectionsUnitFloor): none = All floors = no filtering. It only NARROWS the finished list of units, so a unit shows exactly the
+        // figures, flags and status it has without the filter, and the counts, totals, instalments, pages and both exports agree.
+        var floorList = CollectionsUnitFloor.Normalize(floors);
+        var floorSet = floorList.Count == 0 ? null : floorList.ToHashSet();
         var permissions = await authorization.ResolveAsync(caller, cancellationToken);
         if (!permissions.CanReadFinancials || (forExport && !permissions.CanSendReminders))
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.Forbidden);
@@ -50,10 +54,10 @@ public sealed class CollectionsCampaignAppService(
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.InvalidRequest, "Payment status must be Due, Overdue or Both.");
         if (!CollectionsEnums.TryParse<CollectionsCampaignStage>(stage, out var selected)
             || date.Year is < 2000 or > 2100 || companyId is not (null or 4 or 32)
-            || search?.Length > 200 || page < 1 || pageSize is < 1 or > 100 || towers.Any(t => t <= 0) || minTotal < 0 || minTotal > sourceOptions.MaxMinOutstandingAmount
+            || search?.Length > 200 || page < 1 || pageSize is < 1 or > 100 || towers.Any(t => t <= 0) || CollectionsUnitFloor.HasInvalid(floors) || minTotal < 0 || minTotal > sourceOptions.MaxMinOutstandingAmount
             || (long)(page - 1) * pageSize > int.MaxValue)
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.InvalidRequest,
-                "Choose a campaign stage, a date in 2000-2100, company 4 or 32, a minimum amount of 0 or more, page >= 1 and pageSize 1-100; search is limited to 200 characters.");
+                "Choose a campaign stage, a date in 2000-2100, company 4 or 32, a minimum amount of 0 or more, valid floors (0-99), page >= 1 and pageSize 1-100; search is limited to 200 characters.");
         // "Minimum Total": a unit is listed only when its Due + Overdue is GREATER than this (null = no minimum). It is applied to the unit's sum - never to single
         // instalments - before the counts, the pages and both CSV exports, so all of them agree.
         decimal? unitMinTotal = minTotal is { } requested ? decimal.Round(requested, 4) : null;
@@ -100,7 +104,7 @@ public sealed class CollectionsCampaignAppService(
             // page - or, for an export, the bounded full result - reaches the application. Otherwise (a source without that capability, or a
             // snapshot the engine cannot use) every instalment of the window is read and evaluated in memory, as before.
             // A single payment status is evaluated in memory (the reference implementation): an engine that does not know the filter must never answer for it.
-            if (source is IPactCampaignSource campaign && paymentFilter == CampaignPaymentFilter.Both && !multiTower)
+            if (source is IPactCampaignSource campaign && paymentFilter == CampaignPaymentFilter.Both && !multiTower && floorSet is null)
             {
                 var request = new PactCampaignRequest(from, to, min, stageFrom, stageToExclusive, CollectionsCampaignPolicy.Threshold(selected),
                     selected != CollectionsCampaignStage.LegalReferral, term, phoneDigits,
@@ -220,7 +224,7 @@ public sealed class CollectionsCampaignAppService(
             List<CampaignUnitFacts> facts;
             try
             {
-                facts = BuildFactsInMemory(snapshot!.Items, from, to, min, selected, date, term, phoneDigits, companyId, today, unitMinTotal, crmSet.Links, eligibleFrom, crmSet.Availability.Blocks, paymentFilter);
+                facts = BuildFactsInMemory(snapshot!.Items, from, to, min, selected, date, term, phoneDigits, companyId, today, unitMinTotal, crmSet.Links, eligibleFrom, crmSet.Availability.Blocks, paymentFilter, floorSet);
             }
             catch (OverflowException)
             {
@@ -259,7 +263,7 @@ public sealed class CollectionsCampaignAppService(
             from, to, CollectionsCampaignPolicy.RangeNotes(selected, date, eligibleFrom, to), towerId, snapshotStatus, min,
             new ServerTimingsDto(sourceMs, total.Elapsed.TotalMilliseconds - sourceMs, total.Elapsed.TotalMilliseconds), CrmContactStatusDto.From(crmSet.Availability), notEligible,
             CampaignPaymentFilters.Name(paymentFilter), eligibleTotal, eligibleOutstanding, PaymentStatusNote(paymentFilter, dateFrom, to, today), gate, towers.Count == 0 ? null : towers,
-            mode, previewOnly, campaignOptions.AutoSendingEnabled));
+            mode, previewOnly, campaignOptions.AutoSendingEnabled, floorList.Count == 0 ? null : floorList));
     }
 
     /// <summary>
@@ -317,7 +321,7 @@ public sealed class CollectionsCampaignAppService(
     internal List<CampaignUnitFacts> BuildFactsInMemory(IReadOnlyList<PactReceivableInstalment> items, DateOnly from, DateOnly to, decimal min,
         CollectionsCampaignStage selected, DateOnly date, string? term, string? phoneDigits, int? companyId, DateOnly? today = null, decimal? minTotal = null,
         IReadOnlyDictionary<(int CompanyId, string UnitKey), CrmUnitLink>? crmLinks = null, DateOnly? eligibleFrom = null, bool crmUnavailable = false,
-        CampaignPaymentFilter paymentFilter = CampaignPaymentFilter.Both)
+        CampaignPaymentFilter paymentFilter = CampaignPaymentFilter.Both, IReadOnlySet<int>? floors = null)
     {
         // READ scope = [from, to]; ELIGIBILITY scope = [eligibleFrom ?? from, to]. A unit is a candidate, and its stage amount and unit-level flags are decided, ONLY from its
         // eligibility rows - exactly as before the read scope was widened; the read scope adds nothing but the Due / Overdue / Total figures and the ordering date.
@@ -399,6 +403,8 @@ public sealed class CollectionsCampaignAppService(
                     all.Max(r => DateOnly.FromDateTime(r.DueDate)));
             }).OfType<CampaignUnitFacts>().ToList();
         if (companyId is { } company) facts = facts.Where(f => f.CompanyId == company).ToList();
+        // Floor: applied to the finished units (never to the instalments before grouping), so the flags of a unit - including the tenant-wide ones - are the same with and without the filter.
+        if (floors is { Count: > 0 }) facts = facts.Where(f => CollectionsUnitFloor.Matches(f.UnitCode, floors)).ToList();
         if (term is not null)
         {
             bool Match(string value) => value.Contains(term, StringComparison.OrdinalIgnoreCase);
@@ -412,7 +418,7 @@ public sealed class CollectionsCampaignAppService(
 
     public async Task<CollectionsResult<CollectionsCampaignExportDto>> ExportAsync(CollectionsCaller caller,
         string? stage, string? mode, DateOnly? businessDate = null, int? companyId = null, string? search = null,
-        CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null)
+        CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null, IReadOnlyList<int>? floors = null)
     {
         // No source read for an unauthorized export, including malformed requests.
         if (!(await authorization.ResolveAsync(caller, cancellationToken)).CanSendReminders)
@@ -420,7 +426,7 @@ public sealed class CollectionsCampaignAppService(
         if (mode is not ("review" or "genesys"))
             return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest, "Choose review or genesys export.");
         var result = await PreviewAsync(caller, stage, businessDate, companyId, search,
-            forExport: true, cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds, sendingMode: sendingMode);
+            forExport: true, cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds, sendingMode: sendingMode, floors: floors);
         if (!result.IsSuccess) return CollectionsResult<CollectionsCampaignExportDto>.Fail(result.Outcome, result.Detail);
         var report = result.Value!;
         // Freshness requirement (both export modes): the snapshot of every company in scope must be loaded and no older than
