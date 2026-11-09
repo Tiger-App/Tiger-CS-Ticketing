@@ -29,7 +29,19 @@ public sealed record CollectionsTowerOptionDto(int TowerId, string TowerCode, st
 public sealed record CollectionsTransferOptionsDto(
     IReadOnlyList<CollectionsTowerOptionDto> Towers, int? PreselectedTowerId, string? PreselectedUnitRef, string Status, string? Message, int? CollectionsDepartmentId = null);
 
-public enum CollectionsSelectionOutcome { Valid, Missing, Invalid, Unavailable }
+public enum CollectionsSelectionOutcome
+{
+    Valid,
+    Missing,
+    Invalid,
+    Unavailable,
+
+    /// <summary>
+    /// Nothing was selected and the ticket carries no verified tower and unit, where the caller allows that (a Transfer: the Tower is optional). No tower is
+    /// known, so the ticket goes to the Collections queue unassigned; it is never given to somebody by guesswork.
+    /// </summary>
+    NotProvided
+}
 
 /// <summary>A tower and unit proven to belong to the ticket's customer. <see cref="FromTicket"/>: it is the ticket's own recorded unit, so nothing new needs storing.</summary>
 public sealed record VerifiedCollectionsUnit(ResolvedTower Tower, string UnitRef, string UnitNumber, bool FromTicket);
@@ -73,13 +85,20 @@ public sealed class CollectionsTransferSelectionService(
     /// <param name="towerId">The selected tower (<c>CollectionsTowers.TowerId</c>), or null.</param>
     /// <param name="unitRef">The selected unit reference (<c>crm:3</c> / <c>pact:12</c>), or null.</param>
     /// <param name="cancellationToken">Cancellation.</param>
-    public async Task<CollectionsSelectionResult> CheckAsync(Ticket ticket, int? towerId, string? unitRef, CancellationToken cancellationToken = default)
+    /// <param name="towerOptional">
+    /// True for a Transfer: selecting nothing is allowed even when the ticket has no verified tower and unit (it then waits in the Collections queue). A
+    /// partial selection (a tower without a unit, or a unit without a tower) is still refused, because a unit cannot be verified without its tower. Reopen
+    /// keeps the mandatory rule.
+    /// </param>
+    public async Task<CollectionsSelectionResult> CheckAsync(
+        Ticket ticket, int? towerId, string? unitRef, CancellationToken cancellationToken = default, bool towerOptional = false)
     {
         var (options, status, message, own) = await BuildAsync(ticket, cancellationToken);
         if (towerId is null && string.IsNullOrWhiteSpace(unitRef))
         {
             // Nothing sent: acceptable only when the ticket already carries a verified tower and unit (an API caller, or the page's preselection untouched).
             if (own is not null) return new(CollectionsSelectionOutcome.Valid, own);
+            if (towerOptional) return new(CollectionsSelectionOutcome.NotProvided);
             return options.Count == 0 && message is not null
                 ? new(CollectionsSelectionOutcome.Missing, null, MissingMessage + " " + message)
                 : new(CollectionsSelectionOutcome.Missing, null, MissingMessage);
@@ -225,7 +244,7 @@ public sealed class CollectionsTransferSelectionService(
                 [.. g.Units.OrderBy(u => u.UnitNumber, StringComparer.OrdinalIgnoreCase)]))
             .ToList();
         if (options.Count == 0 && message is null)
-            message = "No verified tower and unit were found for this customer in CRM or PACT, so the ticket cannot be moved to Collections.";
+            message = "No verified tower and unit were found for this customer in CRM or PACT.";
         return (options, status, message, own);
     }
 

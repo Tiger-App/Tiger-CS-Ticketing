@@ -6,4 +6,5 @@ namespace TigerCS.Web.Models;
 /// <param name="TriggerSelector">The department select whose value decides whether the block shows.</param>
 /// <param name="CollectionsDepartmentIds">Comma-separated ids of the Collections department among the form's choices (empty = the form can never move a ticket there).</param>
 /// <param name="TicketId">The ticket whose customer's towers and units are offered.</param>
-public sealed record CollectionsTowerUnitFields(string Id, string Prefix, string TriggerSelector, string CollectionsDepartmentIds, long TicketId);
+/// <param name="Optional">True for Transfer: the Tower (and its Unit) may be left empty, and the ticket then goes to the Collections queue unassigned. Reopen keeps them mandatory.</param>
+public sealed record CollectionsTowerUnitFields(string Id, string Prefix, string TriggerSelector, string CollectionsDepartmentIds, long TicketId, bool Optional = false);
