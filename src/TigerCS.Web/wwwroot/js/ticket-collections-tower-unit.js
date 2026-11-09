@@ -1,8 +1,11 @@
-/* Ticket Details: the mandatory Tower + Unit of a move into Collections (Transfer and Reopen forms).
+/* Ticket Details: the Tower + Unit of a move into Collections (Transfer and Reopen forms).
    Shown only when the department select holds a Collections department. The customer's verified towers/units are fetched once, on first need. Tower first, then the units of
-   that tower; the ticket's own verified pair is preselected. Submitting without both is blocked here with a clear message; the Api enforces the same rule. */
+   that tower; the ticket's own verified pair is preselected. Reopen: submitting without both is blocked here with a clear message. Transfer (data-ct-optional): both may stay
+   empty and the ticket goes to the Collections queue unassigned; only a half selection is blocked. The Api enforces the same rules. */
 (() => {
     const MISSING = 'Select both a Tower and a Unit before transferring to Collections.';
+    const HALF = 'Select both a Tower and a Unit, or leave both empty to transfer the ticket to the Collections queue.';
+    const NO_TOWER = 'No verified tower was found for this customer. The ticket will be transferred to the Collections queue without an assignee, and can be assigned there.';
     document.addEventListener('DOMContentLoaded', () => document.querySelectorAll('[data-ct]').forEach(init));
 
     function init(root) {
@@ -13,6 +16,7 @@
         const hint = root.querySelector('[data-ct-hint]');
         const error = root.querySelector('[data-ct-error]');
         const form = root.closest('form');
+        const optional = root.hasAttribute('data-ct-optional');
         if (!trigger || !form || ids.length === 0) return;
         let data = null, loading = null;
 
@@ -39,7 +43,7 @@
             tower.textContent = '';
             const first = document.createElement('option');
             first.value = '';
-            first.textContent = 'Select a tower';
+            first.textContent = optional ? 'No tower (Collections queue)' : 'Select a tower';
             tower.appendChild(first);
             data.towers.forEach(t => {
                 const o = document.createElement('option');
@@ -62,7 +66,9 @@
                 .then(r => r.json()).then(d => { data = d; }).catch(() => { data = { towers: [], status: 'Error', message: 'The customer\'s units could not be loaded. Reload the page and try again.' }; });
             await loading;
             fillTowers();
-            hint.textContent = data.message || (data.towers.length ? 'Choose the tower first, then the unit this request is about.' : '');
+            hint.textContent = optional && data.towers.length === 0
+                ? (data.status === 'SourceUnavailable' && data.message ? data.message + ' ' : '') + NO_TOWER
+                : data.message || (data.towers.length ? 'Choose the tower first, then the unit this request is about.' + (optional ? ' Leave both empty to transfer to the Collections queue.' : '') : '');
         }
 
         function sync() {
@@ -79,6 +85,10 @@
         trigger.addEventListener('change', sync);
         form.addEventListener('submit', e => {
             if (!active()) return;
+            if (optional) {
+                if (tower.value && !unit.value) { e.preventDefault(); say(HALF); unit.focus(); }
+                return;
+            }
             if (!tower.value || !unit.value) { e.preventDefault(); say(MISSING); (tower.value ? unit : tower).focus(); }
         });
         sync();

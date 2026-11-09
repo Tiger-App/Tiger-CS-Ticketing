@@ -11,6 +11,110 @@ public sealed class FinancialReconcilerTests
     private static ReconLine L(string unit, string voucher, DateOnly due, decimal amount, string tenant = "T1", long unitId = 11) => new(tenant, unitId, unit, voucher, due, amount);
     private static ReconComparison Run(IEnumerable<ReconLine> snapshot, IEnumerable<ReconLine> source, decimal tolerance = 0.01m) => FinancialReconciler.Compare(snapshot, source, From, Through, Today, tolerance);
 
+    // ---------------------------------------------------------------- the AED 2.00 business tolerance (default)
+
+    private static ReconComparison RunDefault(IEnumerable<ReconLine> snapshot, IEnumerable<ReconLine> source) => FinancialReconciler.Compare(snapshot, source, From, Through, Today);
+
+    [Fact]
+    public void TheDefaultToleranceIsTwoDirhams()
+    {
+        Assert.Equal(2.00m, FinancialReconciler.DefaultTolerance);
+        Assert.Equal(2.00m, new TigerCS.Application.Modules.Collections.CollectionsCampaignOptions().ReconciliationToleranceAed);
+    }
+
+    [Theory]
+    [InlineData("1000.00", "1000.00", true)]     // 0.00
+    [InlineData("1000.00", "1001.99", true)]     // 1.99
+    [InlineData("1000.00", "1002.00", true)]     // 2.00 exactly: inclusive
+    [InlineData("1000.00", "1002.01", false)]    // 2.01
+    [InlineData("1002.00", "1000.00", true)]     // either side may be the larger one
+    [InlineData("1002.01", "1000.00", false)]
+    [InlineData("1000.00", "998.00", true)]
+    [InlineData("1000.00", "997.99", false)]
+    public void ADifferenceOfUpToTwoDirhamsIsEquivalent_AndMoreIsAMismatch_ForTheSameInstalment(string snapshotAmount, string pactAmount, bool equivalent)
+    {
+        var snapshot = decimal.Parse(snapshotAmount, System.Globalization.CultureInfo.InvariantCulture);
+        var pact = decimal.Parse(pactAmount, System.Globalization.CultureInfo.InvariantCulture);
+        var r = RunDefault([L("TP140-101", "V1", new(2026, 9, 5), snapshot)], [L("TP140-101", "V1", new(2026, 9, 5), pact)]);
+        Assert.Equal(equivalent, r.Matches);
+        if (equivalent) { Assert.Empty(r.Diffs); return; }
+        var instalment = Assert.Single(Assert.Single(r.Diffs).Instalments);
+        Assert.Equal(ReconDifferenceKinds.AmountMismatch, instalment.Kind);
+        Assert.Equal((snapshot, pact, snapshot - pact), (instalment.SnapshotAmount, instalment.SourceAmount, instalment.Difference));   // both amounts and the difference are reported
+    }
+
+    [Fact]
+    public void AMismatchReportsBothAmountsAndTheDifference_InTheUnitSummaryToo()
+    {
+        var r = RunDefault([L("TP140-101", "V1", new(2026, 9, 5), 1000m)], [L("TP140-101", "V1", new(2026, 9, 5), 1002.01m)]);
+        var unit = Assert.Single(r.Diffs);
+        Assert.Contains("1000.00", unit.Summary); Assert.Contains("1002.01", unit.Summary); Assert.Contains("-2.01", unit.Summary);
+        Assert.Equal(-2.01m, unit.TotalDifference);
+    }
+
+    [Theory]
+    [InlineData("1000.004", "1002.004", true)]   // 1000.00 vs 1002.00 after rounding: 2.00
+    [InlineData("1000.005", "1002.004", true)]   // 1000.01 vs 1002.00: 1.99
+    [InlineData("1000.004", "1002.005", false)]  // 1000.00 vs 1002.01: 2.01 (half away from zero, not banker's rounding)
+    public void AmountsAreRoundedToTwoDecimalsBeforeTheyAreCompared(string snapshotAmount, string pactAmount, bool equivalent)
+    {
+        var snapshot = decimal.Parse(snapshotAmount, System.Globalization.CultureInfo.InvariantCulture);
+        var pact = decimal.Parse(pactAmount, System.Globalization.CultureInfo.InvariantCulture);
+        Assert.Equal(equivalent, RunDefault([L("TP140-101", "V1", new(2026, 9, 5), snapshot)], [L("TP140-101", "V1", new(2026, 9, 5), pact)]).Matches);
+    }
+
+    [Fact]
+    public void TheAllowanceIsNotAddedUpAcrossInstalments_ManySmallDifferencesCannotHideABiggerOne()
+    {
+        // Each instalment is within AED 2.00 on its own, but together the unit is AED 4.50 away from PACT: that is a larger discrepancy and it is reported (the unit total gets the same single allowance).
+        var snapshot = new[] { L("TP140-101", "V1", new(2026, 8, 5), 1000m), L("TP140-101", "V2", new(2026, 9, 5), 1000m), L("TP140-101", "V3", new(2026, 10, 5), 1000m) };
+        var source = new[] { L("TP140-101", "V1", new(2026, 8, 5), 1001.5m), L("TP140-101", "V2", new(2026, 9, 5), 1001.5m), L("TP140-101", "V3", new(2026, 10, 5), 1001.5m) };
+        var r = RunDefault(snapshot, source);
+        Assert.False(r.Matches);
+        var unit = Assert.Single(r.Diffs);
+        Assert.Equal(-4.5m, unit.TotalDifference); Assert.Empty(unit.Instalments);       // none of them exceeds AED 2.00 alone
+        Assert.Contains("not added up", unit.Summary);
+        // Within the allowance as a whole: equivalent.
+        Assert.True(RunDefault(snapshot, [L("TP140-101", "V1", new(2026, 8, 5), 1000.5m), L("TP140-101", "V2", new(2026, 9, 5), 1000.5m), L("TP140-101", "V3", new(2026, 10, 5), 1000.5m)]).Matches);
+    }
+
+    [Fact]
+    public void OffsettingDifferencesCannotCancelEachOtherOut()
+    {
+        // +3.00 on one instalment and -3.00 on another: the unit total agrees, each instalment does not.
+        var r = RunDefault([L("TP140-101", "V1", new(2026, 8, 5), 1000m), L("TP140-101", "V2", new(2026, 9, 5), 1000m)],
+            [L("TP140-101", "V1", new(2026, 8, 5), 1003m), L("TP140-101", "V2", new(2026, 9, 5), 997m)]);
+        Assert.False(r.Matches);
+        Assert.Equal(2, Assert.Single(r.Diffs).Instalments.Count(i => i.Kind == ReconDifferenceKinds.AmountMismatch));
+    }
+
+    [Fact]
+    public void IdentityMismatchesAreNeverTolerated_WhateverTheAmount()
+    {
+        // The same small amount, but the instalment is missing on one side, or its due date differs, or it belongs to another unit.
+        Assert.False(RunDefault([L("TP140-101", "V1", new(2026, 9, 5), 1.50m)], []).Matches);
+        Assert.False(RunDefault([], [L("TP140-101", "V1", new(2026, 9, 5), 1.50m)]).Matches);
+        var dueDate = RunDefault([L("TP140-101", "V1", new(2026, 9, 5), 1000m)], [L("TP140-101", "V1", new(2026, 10, 5), 1000m)]);
+        Assert.False(dueDate.Matches); Assert.Equal(ReconDifferenceKinds.DueDateMismatch, Assert.Single(Assert.Single(dueDate.Diffs).Instalments).Kind);
+        Assert.False(RunDefault([L("TP140-101", "V1", new(2026, 9, 5), 1000m)], [L("TP140-102", "V1", new(2026, 9, 5), 1000m, unitId: 12)]).Matches);
+    }
+
+    [Fact]
+    public void InvalidAmountsStayOutsideTheComparison_NegativeAndZeroAreNotReceivables_AndNeverMatchAPositiveBalance()
+    {
+        // A negative or zero remaining amount is not a receivable on either side; a positive balance on one side against it is an instalment missing on the other, not an equivalence.
+        Assert.False(RunDefault([L("TP140-101", "V1", new(2026, 9, 5), -5m)], [L("TP140-101", "V1", new(2026, 9, 5), 1m)]).Matches);
+        Assert.False(RunDefault([L("TP140-101", "V1", new(2026, 9, 5), 0m)], [L("TP140-101", "V1", new(2026, 9, 5), 1m)]).Matches);
+    }
+
+    [Fact]
+    public void ASmallPositiveBalanceBelowHalfAFilsIsStillAReceivable_NotSettled()
+    {
+        // 0.004 is a positive remaining balance: it is compared (as 0.00 after rounding) and an instalment that exists on one side only is reported, never read as paid.
+        Assert.False(RunDefault([L("TP140-101", "V1", new(2026, 9, 5), 0.004m)], []).Matches);
+        Assert.True(RunDefault([L("TP140-101", "V1", new(2026, 9, 5), 0.004m)], [L("TP140-101", "V1", new(2026, 9, 5), 0.004m)]).Matches);
+    }
+
     [Fact]
     public void IdenticalSides_Match_AndCountEveryUnit()
     {

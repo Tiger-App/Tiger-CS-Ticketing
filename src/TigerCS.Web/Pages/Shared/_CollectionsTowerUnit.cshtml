@@ -1,20 +1,21 @@
 @model TigerCS.Web.Models.CollectionsTowerUnitFields
-@* Mandatory Tower + Unit when the chosen department is Collections. Hidden (and its selects disabled, so nothing is posted) for every other department.
-   The script loads the customer's verified towers and units (only when Collections is chosen), shows the unit list of the chosen tower, preselects the ticket's own
-   verified pair, and blocks the submit with a clear message when either is missing. The Api repeats the check, so a form without script is refused the same way. *@
+@* Tower + Unit when the chosen department is Collections. Hidden (and its selects disabled, so nothing is posted) for every other department.
+   The script loads the customer's verified towers and units (only when Collections is chosen), shows the unit list of the chosen tower and preselects the ticket's own
+   verified pair. Mandatory (Reopen): the submit is blocked with a clear message when either is missing. Optional (Transfer): both may stay empty, and the ticket then goes to
+   the Collections queue unassigned; only a half selection (a tower without a unit, or the reverse) is blocked. The Api repeats the check. *@
 @if (!string.IsNullOrEmpty(Model.CollectionsDepartmentIds))
 {
-    <div class="ct" hidden data-ct data-ct-trigger="@Model.TriggerSelector" data-ct-collections-ids="@Model.CollectionsDepartmentIds"
+    <div class="ct" hidden data-ct data-ct-trigger="@Model.TriggerSelector" data-ct-collections-ids="@Model.CollectionsDepartmentIds"@(Model.Optional ? " data-ct-optional" : "")
          data-ct-url="@Url.Page("TicketDetails", "CollectionsOptions", new { id = Model.TicketId })">
         <div class="field-group">
-            <label class="field-label" for="ct-tower-@Model.Id">Tower <span class="ct__req" aria-hidden="true">*</span></label>
-            <select class="field-select" id="ct-tower-@Model.Id" name="@(Model.Prefix).CollectionsTowerId" data-ct-tower disabled aria-required="true">
-                <option value="">Select a tower</option>
+            <label class="field-label" for="ct-tower-@Model.Id">Tower @if (Model.Optional) { <span class="field-optional">(optional)</span> } else { <span class="ct__req" aria-hidden="true">*</span> }</label>
+            <select class="field-select" id="ct-tower-@Model.Id" name="@(Model.Prefix).CollectionsTowerId" data-ct-tower disabled aria-required="@(Model.Optional ? "false" : "true")">
+                <option value="">@(Model.Optional ? "No tower (Collections queue)" : "Select a tower")</option>
             </select>
         </div>
         <div class="field-group">
-            <label class="field-label" for="ct-unit-@Model.Id">Unit <span class="ct__req" aria-hidden="true">*</span></label>
-            <select class="field-select" id="ct-unit-@Model.Id" name="@(Model.Prefix).CollectionsUnitRef" data-ct-unit disabled aria-required="true">
+            <label class="field-label" for="ct-unit-@Model.Id">Unit @if (Model.Optional) { <span class="field-optional">(optional)</span> } else { <span class="ct__req" aria-hidden="true">*</span> }</label>
+            <select class="field-select" id="ct-unit-@Model.Id" name="@(Model.Prefix).CollectionsUnitRef" data-ct-unit disabled aria-required="@(Model.Optional ? "false" : "true")">
                 <option value="">Select a tower first</option>
             </select>
         </div>

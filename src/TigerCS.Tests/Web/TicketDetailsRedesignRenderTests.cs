@@ -182,7 +182,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     }
 
     [Fact]
-    public async Task TransferAndReopenForms_CarryTheMandatoryTowerAndUnitBlock_OnlyForTheCollectionsDepartment()
+    public async Task TransferAndReopenForms_CarryTheTowerAndUnitBlock_OnlyForTheCollectionsDepartment_OptionalOnTransfer_MandatoryOnReopen()
     {
         var open = Dec(await Page(203, Roles.CsManager));
         var transfer = Section(open, "id=\"action-transfer\"", "</details>");
@@ -195,8 +195,20 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Matches(@"<div class=""ct"" hidden", transfer);                      // hidden (and its selects disabled) until Collections is chosen
         Assert.Contains("ticket-collections-tower-unit.js", open);
 
+        // Transfer: the Tower is optional, so nothing is starred and the first option says what leaving it empty does.
+        Assert.Contains("data-ct-optional", transfer);
+        Assert.Contains("(optional)", transfer);
+        Assert.Contains("No tower (Collections queue)", transfer);
+        Assert.DoesNotContain("ct__req", transfer);
+        Assert.DoesNotContain("aria-required=\"true\"", transfer);
+
+        // Reopen keeps the mandatory Tower and Unit.
         var reopen = Dec(await Page(209, Roles.CsManager));
-        Assert.Contains("name=\"Reopen.CollectionsTowerId\"", Section(reopen, "id=\"action-reopen\"", "</details>"));
+        var reopenForm = Section(reopen, "id=\"action-reopen\"", "</details>");
+        Assert.Contains("name=\"Reopen.CollectionsTowerId\"", reopenForm);
+        Assert.DoesNotContain("data-ct-optional", reopenForm);
+        Assert.Contains("ct__req", reopenForm);
+        Assert.Contains("aria-required=\"true\"", reopenForm);
     }
 
     [Fact]

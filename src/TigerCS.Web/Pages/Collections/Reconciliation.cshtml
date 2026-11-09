@@ -100,7 +100,7 @@
                                                 <td class="num">@d.SnapshotTotal.ToString("N2")<span class="receivables-meta"> (@d.SnapshotCount; due @d.SnapshotDue.ToString("N2"), overdue @d.SnapshotOverdue.ToString("N2"))</span></td>
                                                 <td class="num">@d.SourceTotal.ToString("N2")<span class="receivables-meta"> (@d.SourceCount; due @d.SourceDue.ToString("N2"), overdue @d.SourceOverdue.ToString("N2"))</span></td>
                                                 <td>@d.Summary</td>
-                                                <td>@foreach (var i in d.Instalments) { <div class="receivables-meta">@ReconciliationModel.KindText(i.Kind) @(i.Voucher.Length > 0 ? $"· voucher {i.Voucher}" : "") · snapshot @(i.SnapshotAmount?.ToString("N2") ?? "—")@(i.SnapshotDue is { } sd ? $" ({sd:yyyy-MM-dd})" : "") · PACT @(i.SourceAmount?.ToString("N2") ?? "—")@(i.SourceDue is { } pd ? $" ({pd:yyyy-MM-dd})" : "")@(i.CrossesDueOverdueBoundary ? " · Due on one side, Overdue on the other" : "")</div> }</td>
+                                                <td>@foreach (var i in d.Instalments) { <div class="receivables-meta">@ReconciliationModel.KindText(i.Kind) @(i.Voucher.Length > 0 ? $"· voucher {i.Voucher}" : "") · snapshot @(i.SnapshotAmount?.ToString("N2") ?? "—")@(i.SnapshotDue is { } sd ? $" ({sd:yyyy-MM-dd})" : "") · PACT @(i.SourceAmount?.ToString("N2") ?? "—")@(i.SourceDue is { } pd ? $" ({pd:yyyy-MM-dd})" : "")@(i.Difference is { } diff ? $" · difference {diff:N2}" : "")@(i.CrossesDueOverdueBoundary ? " · Due on one side, Overdue on the other" : "")</div> }</td>
                                             </tr>
                                         }
                                         </tbody>

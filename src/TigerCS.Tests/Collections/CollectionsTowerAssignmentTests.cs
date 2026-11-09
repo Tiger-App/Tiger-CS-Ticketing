@@ -240,16 +240,16 @@ public class CollectionsTowerAssignmentTests
         var unmappedProject = await f.CallCenterTicketAsync(crmProjectId: 999, owner: f.CsAgent);
 
         var allowed = await f.TransferToCollectionsAsync(noCollector);
-        var refused = await f.TransferToCollectionsAsync(unmappedProject);      // an unmapped project is not a verified tower: the transfer itself is refused
+        var unmapped = await f.TransferToCollectionsAsync(unmappedProject);     // an unmapped project is not a verified tower: the Tower is optional, so the ticket waits in the queue
 
         Assert.Equal(TicketMutationOutcome.Success, allowed.Outcome);
         Assert.Equal(f.Collections.DepartmentId, noCollector.CurrentDepartmentId);
         Assert.Null(noCollector.CurrentOwnerEmployeeId);                       // valid tower/unit, nobody holds it: allowed, left in the Collections queue
-        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, refused.Outcome);
-        Assert.Equal(f.CallCenter.DepartmentId, unmappedProject.CurrentDepartmentId);
-        Assert.Equal(f.CsAgent, unmappedProject.CurrentOwnerEmployeeId);
+        Assert.Equal(TicketMutationOutcome.Success, unmapped.Outcome);
+        Assert.Equal(f.Collections.DepartmentId, unmappedProject.CurrentDepartmentId);
+        Assert.Null(unmappedProject.CurrentOwnerEmployeeId);                   // released to the queue, never given to somebody by guesswork
         Assert.Empty(f.History.Entries);
-        Assert.Single(f.Audit.Entries, a => a.Action == "CollectionsAutoAssignSkipped");
+        Assert.Equal(2, f.Audit.Entries.Count(a => a.Action == "CollectionsAutoAssignSkipped"));
     }
 
     [Fact]
@@ -268,7 +268,7 @@ public class CollectionsTowerAssignmentTests
     }
 
     [Fact]
-    public async Task ATicketWithOnlyTypedOrPactText_CannotBeTransferred_AndKeepsItsDepartmentAndAssignee()
+    public async Task ATicketWithOnlyTypedOrPactText_CannotBeGivenAnUnverifiedTowerAndUnit_AndKeepsItsDepartmentAndAssignee()
     {
         var f = Fixture.Create();
         await f.ActivateAsync(f.Alice, 2026, 11, 1);
@@ -282,11 +282,11 @@ public class CollectionsTowerAssignmentTests
         pact.AssignTo(f.CsAgent);
         var saves = f.UnitOfWork.SaveChangesCallCount;
 
-        var typedResult = await f.TransferToCollectionsAsync(typed);
-        var typedWithIds = await f.TransferToCollectionsAsync(pact, towerId: 1, unitRef: "crm:3");   // PACT cannot be asked (no phone on record): nothing is verified
+        var typedWithIds = await f.TransferToCollectionsAsync(typed, towerId: 1, unitRef: "crm:3");  // typed text verifies nothing: a tower and unit named for it are refused
+        var pactWithIds = await f.TransferToCollectionsAsync(pact, towerId: 1, unitRef: "crm:3");    // PACT cannot be asked (no phone on record): nothing is verified
 
-        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, typedResult.Outcome);
-        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitUnavailable, typedWithIds.Outcome);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitInvalid, typedWithIds.Outcome);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitUnavailable, pactWithIds.Outcome);
         Assert.All(new[] { typed, pact }, t =>
         {
             Assert.Equal(f.CallCenter.DepartmentId, t.CurrentDepartmentId);
@@ -295,6 +295,148 @@ public class CollectionsTowerAssignmentTests
         Assert.Empty(f.History.Entries);
         Assert.Empty(f.TicketAssignments.Added);
         Assert.Equal(saves, f.UnitOfWork.SaveChangesCallCount);             // nothing was written
+    }
+
+    // ---- Transfer: the Tower is optional (the five scenarios) ----------------------------------------------------------------------------
+
+    [Fact]
+    public async Task Scenario1_ValidTower_IsAssignedAccordingToTheTowerMapping_WhetherChosenOrPreselected()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);                       // tower 140 -> Alice
+        await f.ActivateAsync(f.Bob, 2026, 11, 2);                         // tower 141 -> Bob
+        var preselected = await f.CallCenterTicketAsync(owner: f.CsAgent);               // the ticket's own verified pair is on tower 140
+        var chosen = await f.CallCenterTicketAsync(owner: f.CsAgent);
+
+        var untouched = await f.TransferToCollectionsAsync(preselected);                    // modal preselection left as it is
+        var picked = await f.TransferToCollectionsAsync(chosen, towerId: 1, unitRef: "crm:3");
+
+        Assert.All(new[] { untouched, picked }, r => Assert.Equal(TicketMutationOutcome.Success, r.Outcome));
+        Assert.Equal(f.Alice, preselected.CurrentOwnerEmployeeId);
+        Assert.Equal(f.Alice, chosen.CurrentOwnerEmployeeId);
+        Assert.Equal(2, f.Audit.Entries.Count(a => a.Action == "AutoAssign" && a.AfterValue!.Contains("Mode=CollectionsTower")));
+    }
+
+    [Fact]
+    public async Task Scenario2_UnknownTower_GoesToTheCollectionsQueueUnassigned_AndNeverToAGuessedEmployee()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);
+        await f.ActivateAsync(f.Bob, 2026, 11, 2);
+        var typed = Ticket.CreateUnverified(
+            "TG-MANUAL-0002", f.CallCenter.DepartmentId, 5, (byte)PriorityLevel.Medium, "Payment query", November, manualProjectName: "Tiger Tower 140", manualUnitNumber: "TP140-1001");
+        await f.Tickets.AddAsync(typed);
+        typed.AssignTo(f.CsAgent);
+        var (status, priority, sla) = (typed.TicketStatus, typed.PriorityId, typed.SlaState);
+
+        var result = await f.TransferToCollectionsAsync(typed);                             // no tower, no unit: nothing identifies one
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(f.Collections.DepartmentId, typed.CurrentDepartmentId);
+        Assert.Null(typed.CurrentOwnerEmployeeId);                                          // the queue: not Alice, not Bob, not the Call Center agent
+        Assert.DoesNotContain(f.TicketAssignments.Added, a => a.IsCurrent);
+        Assert.Empty(f.History.Entries);
+        Assert.Equal((status, priority, sla), (typed.TicketStatus, typed.PriorityId, typed.SlaState));
+        Assert.Null(await f.SelectionStore.GetAsync(typed.TicketId));                       // nothing invented was stored
+        Assert.Equal("Tiger Tower 140", typed.ManualProjectName);                           // what the ticket already carried is untouched
+        Assert.Equal("TP140-1001", typed.ManualUnitNumber);
+        Assert.Contains(f.Audit.Entries, a => a.Action == "Transfer");
+        Assert.Contains(f.Audit.Entries, a => a.Action == "CollectionsAutoAssignSkipped" && a.AfterValue!.Contains("ReleasedToCollectionsQueue"));
+        Assert.DoesNotContain(f.Audit.Entries, a => a.Action == "AutoAssign");
+    }
+
+    [Fact]
+    public async Task Scenario2b_UnknownTower_TheQueuedTicketCanBeAssignedLaterByACollectionsEmployee()
+    {
+        var f = Fixture.Create();
+        var typed = Ticket.CreateUnverified("TG-MANUAL-0003", f.CallCenter.DepartmentId, 5, (byte)PriorityLevel.Medium, "Payment query", November);
+        await f.Tickets.AddAsync(typed);
+        await f.TransferToCollectionsAsync(typed);
+        Assert.Null(typed.CurrentOwnerEmployeeId);
+
+        var later = await f.Assignments.AssignAsync(f.Alice, [Roles.DepartmentEmployee], typed.TicketId, new AssignTicketRequestDto(f.Bob, []));
+
+        Assert.Equal(TicketMutationOutcome.Success, later.Outcome);
+        Assert.Equal(f.Bob, typed.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task Scenario3_TowerWithoutAnAssignedEmployee_GoesToTheCollectionsQueueUnassigned_AndKeepsTheSelectedTowerAndUnit()
+    {
+        var f = Fixture.Create();                                                           // nobody holds any tower
+        var ticket = await f.CallCenterTicketAsync(crmProjectId: 80, owner: f.CsAgent);      // a valid tower (141) with no collector
+
+        var result = await f.TransferToCollectionsAsync(ticket, towerId: 2, unitRef: "crm:4");
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal((f.Collections.DepartmentId, (Guid?)null), (ticket.CurrentDepartmentId, ticket.CurrentOwnerEmployeeId));
+        Assert.Empty(f.History.Entries);
+        Assert.Contains(f.Audit.Entries, a => a.Action == "CollectionsAutoAssignSkipped" && a.AfterValue!.Contains("NoActiveAssignment"));
+        Assert.Contains(f.Audit.Entries, a => a.Action == "Transfer" && a.AfterValue!.Contains("CollectionsTower=141"));   // the chosen tower stays on the transfer record
+    }
+
+    [Fact]
+    public async Task Scenario4_OtherDepartments_TransferWithoutTowerOrUnit_AndIgnoreAnyTowerSent()
+    {
+        var f = Fixture.Create();
+        var plain = await f.CallCenterTicketAsync(owner: f.CsAgent);
+        var withStray = await f.CallCenterTicketAsync(owner: f.CsAgent);
+
+        var without = await f.Assignments.TransferAsync(f.Manager, [Roles.CsManager], plain.TicketId,
+            new TransferTicketRequestDto(f.Maintenance.DepartmentId, "Needs maintenance", []));
+        var stray = await f.Assignments.TransferAsync(f.Manager, [Roles.CsManager], withStray.TicketId,
+            new TransferTicketRequestDto(f.Maintenance.DepartmentId, "Needs maintenance", [], CollectionsTowerId: 1, CollectionsUnitRef: "crm:3"));
+
+        Assert.Equal(TicketMutationOutcome.Success, without.Outcome);
+        Assert.Equal(TicketMutationOutcome.Success, stray.Outcome);
+        Assert.Equal(f.Maintenance.DepartmentId, plain.CurrentDepartmentId);
+        Assert.Equal(f.Maintenance.DepartmentId, withStray.CurrentDepartmentId);
+        Assert.Null(await f.SelectionStore.GetAsync(withStray.TicketId));                   // a tower sent for another department is never stored
+        Assert.DoesNotContain(f.Audit.Entries, a => a.Action is "AutoAssign" or "CollectionsAutoAssignSkipped" && a.AfterValue!.Contains("Collections"));
+    }
+
+    [Fact]
+    public async Task Scenario5_ExistingTicketDataHistoryAndPermissions_AreUnchangedByTheOptionalTower()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);
+        var ticket = await f.CallCenterTicketAsync(owner: f.CsAgent);
+        var before = (ticket.CrmBuyerCustomerId, ticket.CrmBuyerProjectId, ticket.CrmBuyerUnitId, ticket.CrmBuyerUnitNumber, ticket.OriginatingDepartmentId, ticket.TicketNumber);
+
+        var result = await f.TransferToCollectionsAsync(ticket);
+        var entry = Assert.Single(f.History.Entries);
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(before, (ticket.CrmBuyerCustomerId, ticket.CrmBuyerProjectId, ticket.CrmBuyerUnitId, ticket.CrmBuyerUnitNumber, ticket.OriginatingDepartmentId, ticket.TicketNumber));
+        Assert.Equal((f.CsAgent, f.Alice, TicketAssignmentKind.Automatic), (entry.PreviousEmployeeId, entry.NewEmployeeId, entry.Kind));   // assignment history as before
+        Assert.Equal(("140", "1001"), (entry.TowerCode, entry.UnitNumber));
+        Assert.Contains(f.Audit.Entries, a => a.Action == "Transfer" && a.AfterValue!.Contains("Reason=Payment follow-up"));
+
+        // Permissions are unchanged: a user with no transfer right is still refused, whatever the Tower says, and nothing is written.
+        var other = await f.CallCenterTicketAsync(owner: f.CsAgent);
+        var saves = f.UnitOfWork.SaveChangesCallCount;
+        var forbidden = await f.Assignments.TransferAsync(f.Outsider, [Roles.DepartmentEmployee], other.TicketId,
+            new TransferTicketRequestDto(f.Collections.DepartmentId, "Payment follow-up", []));
+        Assert.Equal(TicketMutationOutcome.Forbidden, forbidden.Outcome);
+        Assert.Equal((f.CallCenter.DepartmentId, (Guid?)f.CsAgent), (other.CurrentDepartmentId, other.CurrentOwnerEmployeeId));
+        Assert.Equal(saves, f.UnitOfWork.SaveChangesCallCount);
+    }
+
+    [Fact]
+    public async Task ATowerWithoutAUnit_OrAnInventedUnit_IsStillRefused()
+    {
+        var f = Fixture.Create();
+        var ticket = await f.CallCenterTicketAsync(owner: f.CsAgent);
+        var typed = Ticket.CreateUnverified("TG-MANUAL-0004", f.CallCenter.DepartmentId, 5, (byte)PriorityLevel.Medium, "q", November);
+        await f.Tickets.AddAsync(typed);
+
+        var half = await f.TransferToCollectionsAsync(typed, towerId: 1);
+        var invented = await f.TransferToCollectionsAsync(typed, towerId: 1, unitRef: "crm:1");
+
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, half.Outcome);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitInvalid, invented.Outcome);
+        Assert.Equal(f.CallCenter.DepartmentId, typed.CurrentDepartmentId);
+        Assert.DoesNotContain(f.Audit.Entries, a => a.Action == "AutoAssign");               // neither a tower rule nor the Round Robin picked anyone for Collections
     }
 
     [Fact]
@@ -430,14 +572,16 @@ public class CollectionsTowerAssignmentTests
         var ticket = await PactTicketAsync(f, owner: f.CsAgent);
         var saves = f.UnitOfWork.SaveChangesCallCount;
 
-        var preselected = await f.TransferToCollectionsAsync(ticket);
         var chosen = await f.TransferToCollectionsAsync(ticket, towerId: 1, unitRef: "pact:U-9");
 
-        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, preselected.Outcome);
-        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitUnavailable, chosen.Outcome);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitUnavailable, chosen.Outcome);   // a unit PACT cannot confirm for this customer is refused
         Assert.Equal((f.CallCenter.DepartmentId, (Guid?)f.CsAgent), (ticket.CurrentDepartmentId, ticket.CurrentOwnerEmployeeId));
         Assert.Equal(saves, f.UnitOfWork.SaveChangesCallCount);
         Assert.Equal("The customer's units could not be read from PACT, so they cannot be verified.", (await f.Selection.GetOptionsAsync(ticket)).Message);
+
+        var withoutTower = await f.TransferToCollectionsAsync(ticket);                          // no tower named: the queue, unassigned
+        Assert.Equal(TicketMutationOutcome.Success, withoutTower.Outcome);
+        Assert.Equal((f.Collections.DepartmentId, (Guid?)null), (ticket.CurrentDepartmentId, ticket.CurrentOwnerEmployeeId));
     }
 
     [Fact]
@@ -451,9 +595,9 @@ public class CollectionsTowerAssignmentTests
         var result = await f.TransferToCollectionsAsync(ticket);
 
         Assert.Empty(options.Towers);
-        Assert.Contains("cannot be moved to Collections", options.Message);
-        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, result.Outcome);
-        Assert.Equal(f.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Contains("No verified tower and unit were found", options.Message);
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);                           // the Tower is optional: no verified tower, so the Collections queue
+        Assert.Equal((f.Collections.DepartmentId, (Guid?)null), (ticket.CurrentDepartmentId, ticket.CurrentOwnerEmployeeId));
     }
 
     [Fact]
@@ -471,6 +615,12 @@ public class CollectionsTowerAssignmentTests
         Assert.Null(intoCollectionsVerified.Refusal);
         Assert.Equal(1, intoCollectionsVerified.Unit!.Tower.TowerId);
         Assert.Equal(CollectionsTransferDecision.NotCollections, elsewhere);                                     // other departments never need a tower/unit
+
+        // A Transfer lets the Tower stay empty: allowed, with no unit to store; a half selection is still refused. Reopen keeps the mandatory rule above.
+        var optionalEmpty = await f.Guard.CheckAsync(unverified, f.Collections.DepartmentId, null, null, towerOptional: true);
+        var optionalHalf = await f.Guard.CheckAsync(unverified, f.Collections.DepartmentId, 1, null, towerOptional: true);
+        Assert.Equal(new CollectionsTransferDecision(null, null), optionalEmpty);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, optionalHalf.Refusal);
     }
 
     [Fact]

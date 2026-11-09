@@ -17,18 +17,23 @@ public sealed record CollectionsTransferDecision(VerifiedCollectionsUnit? Unit, 
 /// </summary>
 public sealed class CollectionsTransferGuard(CollectionsTeam team, CollectionsTransferSelectionService selection)
 {
+    /// <summary>
+    /// True for a Transfer: no Tower is needed. With nothing selected and no verified tower on the ticket the decision is "allowed, no unit", and the
+    /// routing then leaves the ticket in the Collections queue unassigned. A valid selection (or the ticket's own verified pair) is used exactly as before.
+    /// </summary>
     public async Task<CollectionsTransferDecision> CheckAsync(
-        Ticket ticket, int targetDepartmentId, int? towerId, string? unitRef, CancellationToken cancellationToken = default)
+        Ticket ticket, int targetDepartmentId, int? towerId, string? unitRef, CancellationToken cancellationToken = default, bool towerOptional = false)
     {
         if (!await team.IsCollectionsDepartmentAsync(targetDepartmentId, cancellationToken))
         {
             return CollectionsTransferDecision.NotCollections;
         }
 
-        var result = await selection.CheckAsync(ticket, towerId, unitRef, cancellationToken);
+        var result = await selection.CheckAsync(ticket, towerId, unitRef, cancellationToken, towerOptional);
         return result.Outcome switch
         {
             CollectionsSelectionOutcome.Valid => new(result.Unit, null),
+            CollectionsSelectionOutcome.NotProvided => new(null, null),
             CollectionsSelectionOutcome.Missing => new(null, TicketMutationOutcome.CollectionsTowerUnitRequired),
             CollectionsSelectionOutcome.Unavailable => new(null, TicketMutationOutcome.CollectionsTowerUnitUnavailable),
             _ => new(null, TicketMutationOutcome.CollectionsTowerUnitInvalid)
