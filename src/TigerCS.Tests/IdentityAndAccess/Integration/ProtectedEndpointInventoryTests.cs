@@ -123,6 +123,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["GET /api/collections/genesys-history/submissions"] = nameof(Collections.Integration.CollectionsGenesysHistoryEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryHistoryRoute_ThroughTheOverride),
         ["GET /api/collections/genesys-history/submissions/{submissionId:guid}"] = nameof(Collections.Integration.CollectionsGenesysHistoryEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryHistoryRoute_ThroughTheOverride),
         ["GET /api/collections/genesys-history/submissions/{submissionId:guid}/records"] = nameof(Collections.Integration.CollectionsGenesysHistoryEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryHistoryRoute_ThroughTheOverride),
+        ["POST /api/collections/genesys-history/sync"] = nameof(Collections.Integration.CollectionsGenesysHistoryEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryHistoryRoute_ThroughTheOverride),
         ["GET /api/collections/genesys-history/exports"] = nameof(Collections.Integration.CollectionsGenesysHistoryEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryHistoryRoute_ThroughTheOverride),
         ["GET /api/collections/review/runs/current"] = nameof(Collections.Integration.CollectionsReviewEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryReviewRoute_ThroughTheOverride),
         ["GET /api/collections/review/runs/{runId:long}"] = nameof(Collections.Integration.CollectionsReviewEndpointsTests.SystemAdministrator_IsAuthorizedOnEveryReviewRoute_ThroughTheOverride),

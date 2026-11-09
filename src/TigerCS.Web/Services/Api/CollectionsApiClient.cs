@@ -91,11 +91,15 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         var query = HttpUtility.ParseQueryString(string.Empty);
         void Add(string name, string? value) { if (!string.IsNullOrWhiteSpace(value)) query[name] = value; }
         Add("from", filter.From?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)); Add("to", filter.To?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
-        Add("stage", filter.Stage); Add("status", filter.Status); Add("mode", filter.Mode); Add("employeeId", filter.EmployeeId?.ToString("D")); Add("list", filter.List); Add("search", filter.Search);
+        Add("stage", filter.Stage); Add("status", filter.Status); Add("mode", filter.Mode); Add("employeeId", filter.EmployeeId?.ToString("D")); Add("list", filter.List); Add("search", filter.Search); Add("company", filter.Company?.ToString(CultureInfo.InvariantCulture));
         query["page"] = Id(page);
         query["pageSize"] = "25";
         return GetAsync<GenesysHistoryPageDto>($"{HistoryBase}/submissions?{query}", cancellationToken);
     }
+
+    /// <summary>Manual Sync from Genesys (read only towards Genesys; stores the confirmed result).</summary>
+    public Task<ApiResult<GenesysSyncResultDto>> SyncGenesysAsync(IReadOnlyList<Guid> submissionIds, bool force, CancellationToken cancellationToken) =>
+        PostAsync<object, GenesysSyncResultDto>($"{HistoryBase}/sync", new { submissionIds, force }, cancellationToken);
 
     public Task<ApiResult<GenesysSubmissionDetailDto>> GetGenesysSubmissionAsync(Guid submissionId, CancellationToken cancellationToken) =>
         GetAsync<GenesysSubmissionDetailDto>($"{HistoryBase}/submissions/{submissionId:D}", cancellationToken);

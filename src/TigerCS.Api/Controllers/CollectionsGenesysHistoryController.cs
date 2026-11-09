@@ -19,7 +19,7 @@ namespace TigerCS.Api.Controllers;
 [Route("api/collections/genesys-history")]
 [Tags(OpenApiTags.Collections)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
-public sealed class CollectionsGenesysHistoryController(GenesysHistoryService history) : ControllerBase
+public sealed class CollectionsGenesysHistoryController(GenesysHistoryService history, GenesysCampaignSyncService sync) : ControllerBase
 {
     /// <summary>Submissions, newest first, filtered and paged in the database, with summary figures for the filtered set and the filter options.</summary>
     [HttpGet("submissions")]
@@ -27,9 +27,9 @@ public sealed class CollectionsGenesysHistoryController(GenesysHistoryService hi
     [ProducesResponseType<GenesysHistoryPageDto>(StatusCodes.Status200OK)]
     public async Task<IActionResult> Submissions(
         [FromQuery] DateOnly? from, [FromQuery] DateOnly? to, [FromQuery] string? stage, [FromQuery] string? status, [FromQuery] string? mode,
-        [FromQuery] Guid? employeeId, [FromQuery] string? list, [FromQuery] string? search, [FromQuery] int page = 1, [FromQuery] int pageSize = GenesysHistoryService.DefaultPageSize, CancellationToken ct = default) =>
+        [FromQuery] Guid? employeeId, [FromQuery] string? list, [FromQuery] string? search, [FromQuery] int? company = null, [FromQuery] int page = 1, [FromQuery] int pageSize = GenesysHistoryService.DefaultPageSize, CancellationToken ct = default) =>
         Caller() is { } caller
-            ? Result(await history.ListAsync(caller, new GenesysHistoryFilter(from, to, stage, status, mode, employeeId, list, search), page, pageSize, ct))
+            ? Result(await history.ListAsync(caller, new GenesysHistoryFilter(from, to, stage, status, mode, employeeId, list, search, company), page, pageSize, ct))
             : Unauthorized();
 
     /// <summary>One submission: who approved it, its Genesys batches and their outcomes. "Uploaded" never means the customer was contacted.</summary>
@@ -55,6 +55,16 @@ public sealed class CollectionsGenesysHistoryController(GenesysHistoryService hi
         [FromQuery] int pageSize = GenesysHistoryService.DefaultPageSize, CancellationToken ct = default) =>
         Caller() is { } caller ? Result(await history.ExportsAsync(caller, from, to, page, pageSize, ct)) : Unauthorized();
 
+    /// <summary>
+    /// Manual "Sync from Genesys" for the given campaigns (at most 25). READ ONLY towards Genesys: it reads interactions and message statuses and stores the confirmed result locally; it uploads,
+    /// resends and changes nothing in Genesys, and there is no scheduled equivalent. Needs the send right (it spends Genesys API quota).
+    /// </summary>
+    [HttpPost("sync")]
+    [RequirePermission(Permissions.CollectionsView)]
+    [ProducesResponseType<GenesysSyncResultDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Sync([FromBody] GenesysSyncRequest request, CancellationToken ct) =>
+        Caller() is { } caller ? Result(await sync.SyncAsync(caller, request.SubmissionIds ?? [], request.Force, ct)) : Unauthorized();
+
     private CollectionsCaller? Caller() => Guid.TryParse(User.FindFirstValue(ClaimTypes.NameIdentifier), out var id)
         ? new(id, User.FindAll(ClaimTypes.Role).Select(c => c.Value).ToArray(),
             User.FindAll(TigerCsClaimTypes.DepartmentId).Select(c => int.TryParse(c.Value, out var d) ? d : (int?)null).OfType<int>().ToArray())
@@ -75,3 +85,7 @@ public sealed class CollectionsGenesysHistoryController(GenesysHistoryService hi
         return response;
     }
 }
+
+/// <param name="SubmissionIds">The campaigns (submission ids) to sync.</param>
+/// <param name="Force">True: read Genesys again even for a campaign whose contacts are all confirmed.</param>
+public sealed record GenesysSyncRequest(IReadOnlyList<Guid>? SubmissionIds, bool Force = false);

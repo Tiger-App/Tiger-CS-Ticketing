@@ -1,10 +1,10 @@
-@page "/Collections/CampaignHistory/{id:guid}"
+@page "/Collections/CampaignList/{id:guid}"
 @model TigerCS.Web.Pages.Collections.CampaignHistoryDetailsModel
 @using TigerCS.Application.Modules.Collections.History
 @using TigerCS.Web.Pages.Collections
 @using TigerCS.Web.Services.Api
 @{
-    ViewData["Title"] = "Genesys submission";
+    ViewData["Title"] = "Campaign details";
     ViewData["ActiveNav"] = "collections";
     Layout = "_Layout";
 }
@@ -13,10 +13,10 @@
 <div class="page receivables-workspace history-page">
     <div class="page-header">
         <div>
-            <p class="receivables-eyebrow"><a href="/Collections/CampaignHistory">Genesys Campaign History</a></p>
-            <h1 class="page-title">Submission details</h1>
+            <p class="receivables-eyebrow"><a href="/Collections/CampaignList">Campaign List</a></p>
+            <h1 class="page-title">Campaign details</h1>
         </div>
-        <div class="page-header__actions"><a class="btn" href="/Collections/CampaignHistory">Back to history</a></div>
+        <div class="page-header__actions"><a class="btn" href="/Collections/CampaignList">Back to Campaign List</a></div>
     </div>
 
     @if (Model.Detail is not { } detail)
@@ -53,6 +53,24 @@
             <p class="receivables-meta" data-call-outcome-note>@detail.CallOutcomeNote</p>
         </section>
 
+        @if (Model.SyncNotice is { } syncNotice) { <p class="receivables-notice" role="status" data-sync-notice>@syncNotice</p> }
+        @if (Model.SyncProblem is { } syncProblem) { <p class="receivables-notice receivables-notice--warning" role="alert" data-sync-problem>@syncProblem</p> }
+        <section class="panel campaign-sync" data-delivery-summary>
+            <div>
+                @if (s.Delivery is { Synced: true } dv)
+                {
+                    <strong>Delivery confirmed by Genesys</strong>
+                    <span class="receivables-meta">Contacts @s.ApprovedRecords.ToString("N0") · Sent @CampaignHistoryModel.Figure(dv.Sent) (of which Delivered @CampaignHistoryModel.Figure(dv.Delivered)) · Missed / Failed @CampaignHistoryModel.Figure(dv.Failed) · Pending / Unknown @CampaignHistoryModel.Figure(dv.Pending) · Not sent @dv.NotSent.ToString("N0") · Message attempts @dv.MessageAttempts.ToString("N0")</span>
+                }
+                else { <strong>Not synced from Genesys yet</strong><span class="receivables-meta">No delivery result is known for this campaign.</span> }
+                <span class="receivables-meta" data-last-synced>Last synced: @(s.Delivery?.LastSyncedAtUtc is { } syncedAt ? CollectionsDisplay.DubaiTime(syncedAt) : "never")@if (s.Delivery?.SyncOutcome is "Failed" or "Partial") { <text> · @s.Delivery.SyncOutcome: @s.Delivery.SyncError</text> }</span>
+            </div>
+            @if (detail.CanSync)
+            {
+                <form method="post" asp-page-handler="Sync" data-sync-form><input type="hidden" name="force" value="true" /><button class="btn btn-gold" type="submit" data-sync-button>Sync from Genesys</button></form>
+            }
+        </section>
+
         @if (detail.Batches.Count > 0)
         {
             <section class="panel history-batches" data-batches>
@@ -82,7 +100,7 @@
             </section>
         }
 
-        <form class="filter-bar history-filters" method="get" action="/Collections/CampaignHistory/@Model.Id.ToString("D")" data-record-filters>
+        <form class="filter-bar history-filters" method="get" action="/Collections/CampaignList/@Model.Id.ToString("D")" data-record-filters>
             <div class="field-group filter-bar__search">
                 <label class="field-label" for="rSearch">Search records</label>
                 <input class="field-input" type="search" id="rSearch" name="search" maxlength="100" value="@Model.Search" placeholder="Customer, unit, phone, email or contact id" />
@@ -97,7 +115,7 @@
                     }
                 </select>
             </div>
-            <div class="filter-bar__submit"><button class="btn btn-gold" type="submit">Apply</button><a class="btn btn-ghost" href="/Collections/CampaignHistory/@Model.Id.ToString("D")">Clear</a></div>
+            <div class="filter-bar__submit"><button class="btn btn-gold" type="submit">Apply</button><a class="btn btn-ghost" href="/Collections/CampaignList/@Model.Id.ToString("D")">Clear</a></div>
         </form>
 
         @if (Model.Records is not { } records)
@@ -112,7 +130,7 @@
         {
             <div class="receivables-table-wrap">
                 <table class="receivables-table history-table history-records" data-record-table>
-                    <thead><tr><th>Customer</th><th>CRM customer ID</th><th>Unit</th><th>Phone</th><th>Email</th><th>Reminder</th><th class="num">Amount due (AED)</th><th>Due date</th><th>Upload result</th><th>Submitted (Dubai)</th></tr></thead>
+                    <thead><tr><th>Customer</th><th>CRM customer ID</th><th>Unit</th><th>Mobile Number</th><th>Email</th><th>Reminder</th><th class="num">Amount due (AED)</th><th>Due date</th><th>Upload result</th><th>Message Status</th><th>Sent Time</th><th>Delivered Time</th><th>Failure Reason</th><th>Genesys Interaction ID</th></tr></thead>
                     <tbody>
                     @foreach (var r in records.Items)
                     {
@@ -131,7 +149,11 @@
                                 @if (r.Suppression is { } suppression) { <span class="receivables-meta">@suppression</span> }
                                 <span class="receivables-meta" data-call-outcome>@r.CallOutcome</span>
                             </td>
-                            <td>@(r.SubmittedAtUtc is null ? "—" : CollectionsDisplay.DubaiTime(r.SubmittedAtUtc))@if (r.UploadedAtUtc is { } uploadedAt) { <span class="receivables-meta">accepted @CollectionsDisplay.DubaiTime(uploadedAt)</span> }</td>
+                            <td data-message-status><span class="history-badge @(r.MessageStatus switch { "Delivered" => "history-badge--ok", "Failed" => "history-badge--bad", "Sent" => "history-badge--run", _ => "history-badge--idle" })">@(r.MessageStatus ?? "Not synced")</span>@if (r.MessageAttempts > 1) { <span class="receivables-meta">@r.MessageAttempts attempts</span> }</td>
+                            <td data-sent-time>@(r.SentAtUtc is null ? "—" : CollectionsDisplay.DubaiTime(r.SentAtUtc))</td>
+                            <td data-delivered-time>@(r.DeliveredAtUtc is null ? "—" : CollectionsDisplay.DubaiTime(r.DeliveredAtUtc))</td>
+                            <td data-failure-reason>@(string.IsNullOrWhiteSpace(r.FailureReason) ? "—" : r.FailureReason)</td>
+                            <td data-interaction-id>@if (r.InteractionId is { } interaction) { <code>@interaction</code> } else { <span>—</span> }</td>
                         </tr>
                     }
                     </tbody>

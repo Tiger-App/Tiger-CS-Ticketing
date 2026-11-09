@@ -53,7 +53,8 @@ public sealed class CollectionsGenesysHistoryEndpointsTests
         ["submissions"] = (await client.GetAsync($"{Base}/submissions")).StatusCode,
         ["submission"] = (await client.GetAsync($"{Base}/submissions/{AnySubmission}")).StatusCode,
         ["records"] = (await client.GetAsync($"{Base}/submissions/{AnySubmission}/records")).StatusCode,
-        ["exports"] = (await client.GetAsync($"{Base}/exports")).StatusCode
+        ["exports"] = (await client.GetAsync($"{Base}/exports")).StatusCode,
+        ["sync"] = (await client.PostAsJsonAsync($"{Base}/sync", new { submissionIds = new[] { AnySubmission } })).StatusCode
     };
 
     [Fact]
@@ -65,6 +66,7 @@ public sealed class CollectionsGenesysHistoryEndpointsTests
         Assert.All(results, r => Assert.True(r.Value is not (HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden), $"{r.Key}: {r.Value}"));
         Assert.Equal(HttpStatusCode.OK, results["submissions"]);
         Assert.Equal(HttpStatusCode.OK, results["exports"]);
+        Assert.Equal(HttpStatusCode.OK, results["sync"]);                                         // an unknown campaign is reported in the result, not as an error
         Assert.Equal(HttpStatusCode.NotFound, results["submission"]);
         Assert.Equal(HttpStatusCode.NotFound, results["records"]);
         var page = await client.GetFromJsonAsync<GenesysHistoryPageDto>($"{Base}/submissions");
@@ -93,6 +95,7 @@ public sealed class CollectionsGenesysHistoryEndpointsTests
         Assert.Equal(HttpStatusCode.OK, asAgent["submissions"]);
         Assert.Equal(HttpStatusCode.NotFound, asAgent["submission"]);
         Assert.Equal(HttpStatusCode.Forbidden, asAgent["exports"]);
+        Assert.Equal(HttpStatusCode.Forbidden, asAgent["sync"]);                                  // syncing spends Genesys API quota: the send right
         using var manager = await Client(factory, Roles.CsManager);
         Assert.Equal(HttpStatusCode.OK, (await CallEveryRouteAsync(manager))["exports"]);
         var shown = await agent.GetFromJsonAsync<GenesysHistoryPageDto>($"{Base}/submissions");

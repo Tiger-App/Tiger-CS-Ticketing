@@ -42,10 +42,14 @@ public sealed class GenesysHistoryStore(TigerCsDbContext db) : IGenesysHistorySt
             .ToListAsync(ct))
             .GroupBy(b => b.CollectionsDispatchId).ToDictionary(g => g.Key, g => (IReadOnlyList<SubmissionBatchRow>)g.Select(b => b.Row).ToList());
 
+        var companies = (await db.CollectionsDispatchItems.AsNoTracking().Where(i => ids.Contains(i.CollectionsDispatchId))
+            .Select(i => new { i.CollectionsDispatchId, i.CompanyId }).Distinct().ToListAsync(ct))
+            .GroupBy(t => t.CollectionsDispatchId).ToDictionary(g => g.Key, g => (IReadOnlyList<int>)g.Select(t => t.CompanyId).OrderBy(c => c).ToList());
+
         var items = page.Select(p => new SubmissionRow(
             p.CollectionsDispatchId, p.PublicId, p.InitiatedAtUtc, p.StartedAtUtc, p.CompletedAtUtc, p.Status, p.StatusReason, p.Phase, p.InitiatedByEmployeeId,
             p.ApprovedCount, p.ApprovedTotalsJson, p.ExcludedAtDispatchCount, counts.GetValueOrDefault(p.CollectionsDispatchId, SubmissionCounts.Empty),
-            types.GetValueOrDefault(p.CollectionsDispatchId, []), batches.GetValueOrDefault(p.CollectionsDispatchId, []))).ToList();
+            types.GetValueOrDefault(p.CollectionsDispatchId, []), batches.GetValueOrDefault(p.CollectionsDispatchId, []), companies.GetValueOrDefault(p.CollectionsDispatchId, []))).ToList();
 
         // The summary covers the whole filtered set: its dispatch status plus the same grouped counts, as narrow rows.
         var statuses = await filtered.Select(d => new { d.CollectionsDispatchId, d.Status }).ToListAsync(ct);
@@ -82,6 +86,7 @@ public sealed class GenesysHistoryStore(TigerCsDbContext db) : IGenesysHistorySt
         if (s.EmployeeId is { } employee) q = q.Where(d => d.InitiatedByEmployeeId == employee);
         if (s.Mode == "Auto") q = q.Where(d => d.InitiatedByEmployeeId == AutoActor);
         else if (s.Mode == "Manual") q = q.Where(d => d.InitiatedByEmployeeId != AutoActor);
+        if (s.CompanyId is { } company) q = q.Where(d => d.Items.Any(i => i.CompanyId == company));
         if (s.Stage is { } stage) q = q.Where(d => d.Items.Any(i => i.ReminderType == stage));
         if (s.ListId is { } list) q = q.Where(d => d.Batches.Any(b => b.ContactListId == list));
         if (!string.IsNullOrEmpty(s.Search))
@@ -138,7 +143,8 @@ public sealed class GenesysHistoryStore(TigerCsDbContext db) : IGenesysHistorySt
             .GroupBy(i => i.Phone).Where(g => g.Count() > 1).Select(g => g.Count()).ToListAsync(ct);
         var row = new SubmissionRow(id, d.PublicId, d.InitiatedAtUtc, d.StartedAtUtc, d.CompletedAtUtc, d.Status, d.StatusReason, d.Phase, d.InitiatedByEmployeeId, d.ApprovedCount,
             d.ApprovedTotalsJson, d.ExcludedAtDispatchCount, counts.GetValueOrDefault(id, SubmissionCounts.Empty), types,
-            batches.Select(b => new SubmissionBatchRow(b.ReminderType, b.ContactListId, b.GenesysCampaignId, b.RequestHash, b.Status, b.Error, b.StartedAtUtc)).ToList());
+            batches.Select(b => new SubmissionBatchRow(b.ReminderType, b.ContactListId, b.GenesysCampaignId, b.RequestHash, b.Status, b.Error, b.StartedAtUtc)).ToList(),
+            await db.CollectionsDispatchItems.AsNoTracking().Where(i => i.CollectionsDispatchId == id).Select(i => i.CompanyId).Distinct().OrderBy(c => c).ToListAsync(ct));
         return new(row, batches, shared.Sum());
     }
 

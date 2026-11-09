@@ -244,3 +244,47 @@ public class CollectionsGenesysBatch
     public DateTime? ReconciledAtUtc { get; set; }
     public string? ReconciliationNote { get; set; }
 }
+
+/// <summary>
+/// One message attempt Genesys reported for an uploaded contact, kept as last confirmed by a manual "Sync from Genesys". The natural key is the Genesys conversation + message id, so syncing
+/// the same data twice (or a retry that Genesys reports as a second delivery event for the same message) never creates a second row. A contact can have several rows (retries / re-sends):
+/// the contact-level outcome is derived from all of them, see <c>GenesysDeliveryRules</c>.
+/// </summary>
+public class CollectionsGenesysMessageResult
+{
+    public long CollectionsGenesysMessageResultId { get; set; }
+    public long CollectionsDispatchId { get; set; }
+    public long CollectionsDispatchItemId { get; set; }
+    public string GenesysConversationId { get; set; } = "";
+    public string GenesysMessageId { get; set; } = "";
+    /// <summary>The Genesys interaction id shown to the user (the conversation id).</summary>
+    public string? GenesysContactId { get; set; }
+    /// <summary>Queued, Sent, Delivered, Failed or Unknown: the message's last status as Genesys reported it.</summary>
+    public string Status { get; set; } = "";
+    public DateTime? SentAtUtc { get; set; }
+    public DateTime? DeliveredAtUtc { get; set; }
+    public string? FailureReason { get; set; }
+    public DateTime SyncedAtUtc { get; set; }
+}
+
+/// <summary>
+/// The persisted result of the last Sync from Genesys for one dispatch (campaign): when it ran, whether it completed, and the confirmed figures, so the Campaign List never calls Genesys
+/// to open. Contact counts and message-attempt counts are kept apart: <c>Sent</c> includes <c>Delivered</c>; <c>Sent + Failed + Pending + NotSent = Contacts</c>.
+/// </summary>
+public class CollectionsGenesysSyncState
+{
+    public long CollectionsDispatchId { get; set; }
+    public DateTime LastSyncedAtUtc { get; set; }
+    /// <summary>Completed, or Failed (the figures below are then those of the last completed sync, if any).</summary>
+    public string Outcome { get; set; } = "";
+    public string? Error { get; set; }
+    public int Contacts { get; set; }
+    public int Sent { get; set; }
+    public int Delivered { get; set; }
+    public int Failed { get; set; }
+    public int Pending { get; set; }
+    public int NotSent { get; set; }
+    public int MessageAttempts { get; set; }
+    public int ConversationsFound { get; set; }
+    public DateTime? LastCompletedAtUtc { get; set; }
+}

@@ -23,6 +23,7 @@ public sealed class CampaignHistoryDetailsModel(CollectionsApiClient api) : Page
     public async Task<IActionResult> OnGetAsync(CancellationToken ct)
     {
         PageNumber = Math.Max(1, PageNumber);
+        SyncNotice = TempData["SyncNotice"] as string; SyncProblem = TempData["SyncProblem"] as string;
         var detail = await api.GetGenesysSubmissionAsync(Id, ct);
         Outcome = detail.Outcome; Error = detail.Detail;
         if (!detail.IsSuccess) return detail.Outcome == ApiOutcome.NotFound ? NotFound() : Page();
@@ -33,12 +34,23 @@ public sealed class CampaignHistoryDetailsModel(CollectionsApiClient api) : Page
         return Page();
     }
 
+    public string? SyncNotice { get; private set; }
+    public string? SyncProblem { get; private set; }
+
+    public async Task<IActionResult> OnPostSyncAsync(bool force, CancellationToken ct)
+    {
+        var result = await api.SyncGenesysAsync([Id], force, ct);
+        if (result.IsSuccess && result.Value is { } r) { TempData["SyncNotice"] = $"Synced {r.Synced} from Genesys."; if (r.Problems.Count > 0) TempData["SyncProblem"] = string.Join(" ", r.Problems); }
+        else TempData["SyncProblem"] = result.Outcome == ApiOutcome.Forbidden ? "Your account does not have permission to sync from Genesys." : result.Detail ?? "The sync from Genesys could not be completed.";
+        return LocalRedirect($"/Collections/CampaignList/{Id:D}");
+    }
+
     public string PageUrl(int page)
     {
         var parts = new List<string>();
         if (!string.IsNullOrWhiteSpace(Result)) parts.Add("result=" + Uri.EscapeDataString(Result));
         if (!string.IsNullOrWhiteSpace(Search)) parts.Add("search=" + Uri.EscapeDataString(Search));
         if (page > 1) parts.Add("pageNumber=" + page);
-        return $"/Collections/CampaignHistory/{Id:D}" + (parts.Count == 0 ? "" : "?" + string.Join('&', parts));
+        return $"/Collections/CampaignList/{Id:D}" + (parts.Count == 0 ? "" : "?" + string.Join('&', parts));
     }
 }

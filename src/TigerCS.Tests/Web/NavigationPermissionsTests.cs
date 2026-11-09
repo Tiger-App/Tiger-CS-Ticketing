@@ -81,7 +81,7 @@ public sealed class NavigationPermissionsTests : IDisposable
         var nav = Nav(html);
 
         Assert.Equal(HttpStatusCode.OK, status);
-        Assert.DoesNotContain("href=\"/Collections/Receivables\"", nav, StringComparison.Ordinal);
+        Assert.DoesNotContain("href=\"/Collections/CampaignList\"", nav, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/Dashboard\"", nav, StringComparison.Ordinal);
         Assert.Contains("href=\"/Tickets\"", nav, StringComparison.Ordinal);
         Assert.Contains("href=\"/Customers\"", nav, StringComparison.Ordinal);
@@ -93,7 +93,7 @@ public sealed class NavigationPermissionsTests : IDisposable
     {
         var (_, agentHtml) = await GetAsync("/Tickets", Roles.CsAgent);
         var agent = Nav(agentHtml);
-        Assert.Contains("href=\"/Collections/Receivables\"", agent, StringComparison.Ordinal);
+        Assert.Contains("href=\"/Collections/CampaignList\"", agent, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/Reports/TeamPerformance\"", agent, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/Admin\"", agent, StringComparison.Ordinal);
 

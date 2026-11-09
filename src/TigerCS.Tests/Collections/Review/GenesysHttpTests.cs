@@ -593,4 +593,44 @@ public sealed class GenesysHttpTests
         var failed = await client.GetOrganizationAsync(CancellationToken.None);
         Assert.Equal((GenesysUploadOutcome.Rejected, 404), (failed.Outcome, failed.HttpStatus)); Assert.Contains("organization lookup (GET /api/v2/organizations/me at api.mypurecloud.de)", failed.Error);
     }
+
+    private const string CampaignId = "5b0d3b2e-3f55-4d36-9d5c-0b7f3a6f0a11";
+    private const string ConversationId = "0a1b2c3d-0000-4000-8000-0000000000aa";
+
+    [Fact]
+    public async Task CampaignInteractions_AreReadWithAnAnalyticsQueryFilteredToTheCampaign_AndOnlyRead()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.OK, $"{{\"conversations\":[{{\"conversationId\":\"{ConversationId}\",\"conversationStart\":\"2026-10-14T08:30:00.000Z\",\"participants\":[{{\"sessions\":[{{\"outboundCampaignId\":\"{CampaignId}\",\"outboundContactId\":\"contact-9\",\"outboundContactListId\":\"{ListId}\"}}]}}]}}]}}"));
+        var result = await client.GetCampaignConversationsAsync(CampaignId, Start, Start.AddDays(1), CancellationToken.None);
+        var conversation = Assert.Single(result.Conversations);
+        Assert.Equal((GenesysUploadOutcome.Accepted, true, ConversationId, "contact-9"), (result.Outcome, result.Complete, conversation.ConversationId, conversation.ContactId));
+        var (request, body) = Assert.Single(handler.Upload);
+        Assert.Equal((HttpMethod.Post, "https://api.mypurecloud.de/api/v2/analytics/conversations/details/query"), (request.Method, request.RequestUri!.ToString()));
+        Assert.Contains("\"dimension\":\"outboundCampaignId\"", body);
+        Assert.Contains(CampaignId, body);
+    }
+
+    [Fact]
+    public async Task ConversationMessages_MapStatusReasonAndNeverCountAMessageTwice()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        // The same message under two participants, plus a failed one with Genesys' own reason.
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.OK, "{\"participants\":[{\"purpose\":\"agent\",\"messages\":[{\"messageId\":\"m1\",\"messageTime\":\"2026-10-14T08:31:00.000Z\",\"messageStatus\":\"sent\"}]},{\"purpose\":\"external\",\"messages\":[{\"messageId\":\"m1\",\"messageTime\":\"2026-10-14T08:32:00.000Z\",\"messageStatus\":\"delivered\"},{\"messageId\":\"m2\",\"messageStatus\":\"failed\",\"errorInfo\":{\"code\":\"4001\",\"message\":\"Invalid destination number\"}}]}]}"));
+        var result = await client.GetConversationMessagesAsync(ConversationId, CancellationToken.None);
+        Assert.Equal(2, result.Messages.Count);
+        Assert.Equal("delivered", result.Messages.Single(m => m.MessageId == "m1").Status);
+        Assert.Equal("Invalid destination number", result.Messages.Single(m => m.MessageId == "m2").FailureReason);
+        Assert.Equal((HttpMethod.Get, $"https://api.mypurecloud.de/api/v2/conversations/messages/{ConversationId}"), (handler.Upload.Single().Request.Method, handler.Upload.Single().Request.RequestUri!.ToString()));
+    }
+
+    [Fact]
+    public async Task APermissionFailureOnTheInteractionsLookup_NamesThePermissionToGrant()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.Forbidden, "{\"code\":\"missing.permission\"}"));
+        var result = await client.GetCampaignConversationsAsync(CampaignId, Start, Start.AddDays(1), CancellationToken.None);
+        Assert.Equal(GenesysUploadOutcome.Rejected, result.Outcome);
+        Assert.Contains("analytics:conversationDetail:view", result.Error);
+    }
 }

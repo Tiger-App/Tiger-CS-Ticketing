@@ -171,8 +171,30 @@ public sealed record GenesysContactListInfo(GenesysUploadOutcome Outcome, int? H
 /// <summary>The organization the OAuth client belongs to (GET /api/v2/organizations/me): proves the token, the API region and which organization the configured contact list ids are looked up in.</summary>
 public sealed record GenesysOrganizationInfo(GenesysUploadOutcome Outcome, int? HttpStatus, string? Id, string? Name, string? Error);
 
+/// <summary>One outbound conversation (interaction) Genesys ran for a contact of a campaign. <c>ConversationId</c> is the Genesys interaction id.</summary>
+public sealed record GenesysCampaignConversation(string ConversationId, string? ContactId, string? ContactListId, DateTime? StartedAtUtc);
+
+/// <summary>Interactions of one campaign. <c>Complete</c> is false when the answer was cut short (too many pages): such a sync is never presented as complete.</summary>
+public sealed record GenesysCampaignConversationsResult(GenesysUploadOutcome Outcome, int? HttpStatus, IReadOnlyList<GenesysCampaignConversation> Conversations, bool Complete, string? Error);
+
+/// <summary>One message of a conversation with the status Genesys last reported. <c>Status</c> is the raw Genesys value (queued, sent, delivered, read, failed, ...), lower-cased.</summary>
+public sealed record GenesysMessageInfo(string MessageId, string Status, DateTime? MessageTimeUtc, string? FailureReason);
+
+public sealed record GenesysConversationMessagesResult(GenesysUploadOutcome Outcome, int? HttpStatus, IReadOnlyList<GenesysMessageInfo> Messages, string? Error);
+
 public interface IGenesysOutboundClient
 {
+    /// <summary>
+    /// READ ONLY. POST /api/v2/analytics/conversations/details/query filtered to one outbound campaign id: the interactions Genesys really ran for it in the interval. Needs the
+    /// <c>analytics:conversationDetail:view</c> permission. Never writes to Genesys.
+    /// </summary>
+    Task<GenesysCampaignConversationsResult> GetCampaignConversationsAsync(string campaignId, DateTime fromUtc, DateTime toUtc, CancellationToken ct) =>
+        Task.FromResult(new GenesysCampaignConversationsResult(GenesysUploadOutcome.Unknown, null, [], false, "This client cannot read campaign interactions."));
+
+    /// <summary>READ ONLY. GET /api/v2/conversations/messages/{conversationId}: each message of the interaction with its last delivery status (needs <c>conversation:message:view</c>).</summary>
+    Task<GenesysConversationMessagesResult> GetConversationMessagesAsync(string conversationId, CancellationToken ct) =>
+        Task.FromResult(new GenesysConversationMessagesResult(GenesysUploadOutcome.Unknown, null, [], "This client cannot read conversation messages."));
+
     /// <summary>GET /api/v2/organizations/me (read only): which organization and region the configured credentials reach.</summary>
     Task<GenesysOrganizationInfo> GetOrganizationAsync(CancellationToken ct) =>
         Task.FromResult(new GenesysOrganizationInfo(GenesysUploadOutcome.Unknown, null, null, null, "This client cannot read the organization."));

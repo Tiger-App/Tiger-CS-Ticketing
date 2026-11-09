@@ -165,6 +165,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "GET /api/collections/genesys-history/submissions/{submissionId}",
         "GET /api/collections/genesys-history/submissions/{submissionId}/records",
         "GET /api/collections/genesys-history/exports",
+        "POST /api/collections/genesys-history/sync",
         "GET /api/collections/review/runs/current",
         "GET /api/collections/review/runs/{runId}",
         "POST /api/collections/review/dispatches/{dispatchId}/cancel",

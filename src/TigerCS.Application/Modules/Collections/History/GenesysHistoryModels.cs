@@ -102,9 +102,10 @@ public static class GenesysUploadStateRules
 /// <param name="EmployeeId">The employee who approved the submission (an Auto submission has no employee: filter it with Mode).</param>
 /// <param name="List">A destination contact list: a reminder-type name (its configured list) or the list id.</param>
 /// <param name="Search">A unit code, customer name, or an exact Genesys contact / campaign id inside the submission.</param>
+/// <param name="Company">4 = Tiger Group Dubai, 32 = Tiger Group Sharjah.</param>
 public sealed record GenesysHistoryFilter(
     DateOnly? From = null, DateOnly? To = null, string? Stage = null, string? Status = null, string? Mode = null,
-    Guid? EmployeeId = null, string? List = null, string? Search = null);
+    Guid? EmployeeId = null, string? List = null, string? Search = null, int? Company = null);
 
 // ---------------------------------------------------------------- DTOs
 
@@ -115,7 +116,7 @@ public sealed record GenesysSubmissionDto(
     int UnitRecords, string FiguresBasis, decimal TotalAmount, string Currency, int OtherCurrencyRecords,
     string Status, string StatusLabel, string StatusExplanation, string? Error,
     string? GenesysReference, int UploadedRecords, int FailedRecords, int UnconfirmedRecords, int ExcludedRecords,
-    string CallOutcome);
+    string CallOutcome, IReadOnlyList<string>? Companies = null, GenesysDeliveryDto? Delivery = null, int ApprovedRecords = 0);
 
 public sealed record GenesysHistorySummaryDto(
     int Submissions, int Records, decimal TotalAmount, string Currency, int Uploaded, int NeedAttention, int Pending, IReadOnlyDictionary<string, int> ByStatus, int ConfirmedRecords = 0);
@@ -124,11 +125,11 @@ public sealed record GenesysFilterOptionDto(string Value, string Label);
 
 public sealed record GenesysHistoryOptionsDto(
     IReadOnlyList<GenesysFilterOptionDto> Stages, IReadOnlyList<GenesysFilterOptionDto> Lists, IReadOnlyList<GenesysFilterOptionDto> Statuses,
-    IReadOnlyList<GenesysFilterOptionDto> Modes, IReadOnlyList<GenesysFilterOptionDto> Employees);
+    IReadOnlyList<GenesysFilterOptionDto> Modes, IReadOnlyList<GenesysFilterOptionDto> Employees, IReadOnlyList<GenesysFilterOptionDto>? Companies = null);
 
 public sealed record GenesysHistoryPageDto(
     int Page, int PageSize, int TotalCount, IReadOnlyList<GenesysSubmissionDto> Items, GenesysHistorySummaryDto Summary, GenesysHistoryOptionsDto Options, string CallOutcomeNote,
-    bool CanSeeExportHistory);
+    bool CanSeeExportHistory, DateTime? LastSyncedAtUtc = null, bool CanSync = false);
 
 public sealed record GenesysBatchDetailDto(
     int Sequence, string ReminderType, string? StageName, string ContactListId, string? ContactListLabel, string Status, string StatusLabel,
@@ -137,12 +138,13 @@ public sealed record GenesysBatchDetailDto(
 
 public sealed record GenesysSubmissionDetailDto(
     GenesysSubmissionDto Submission, IReadOnlyList<GenesysBatchDetailDto> Batches, int ApprovedRecords, int ExcludedAtDispatch, int SharedPhoneRecords,
-    string? StatusReason, string? Phase, DateTime? StartedAtUtc, DateTime? CompletedAtUtc, bool CrmLinkAvailable, string CallOutcomeNote);
+    string? StatusReason, string? Phase, DateTime? StartedAtUtc, DateTime? CompletedAtUtc, bool CrmLinkAvailable, string CallOutcomeNote, bool CanSync = false);
 
 public sealed record GenesysSubmissionRecordDto(
     long RecordId, string CustomerName, int? CrmCustomerId, string UnitCode, string Phone, string Email, string ReminderType, string ReminderLabel,
     decimal Amount, string Currency, DateOnly DueDate, string Result, string ResultState, DateTime? UploadedAtUtc, DateTime? SubmittedAtUtc, string? GenesysContactId,
-    string? Error, bool SharedPhone, string? Suppression, string CallOutcome);
+    string? Error, bool SharedPhone, string? Suppression, string CallOutcome,
+    string? MessageStatus = null, DateTime? SentAtUtc = null, DateTime? DeliveredAtUtc = null, string? FailureReason = null, string? InteractionId = null, int MessageAttempts = 0);
 
 public sealed record GenesysRecordsPageDto(int Page, int PageSize, int TotalCount, IReadOnlyList<GenesysSubmissionRecordDto> Items, string CallOutcomeNote);
 

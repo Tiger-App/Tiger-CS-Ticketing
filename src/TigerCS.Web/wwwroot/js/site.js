@@ -51,7 +51,7 @@
     });
   });
 
-  // Toolbar popovers (Tickets Filters / Date): one open at a time, closed by
+  // Toolbar popovers (Tickets Date): one open at a time, closed by
   // Escape (focus returns to the toggle) or a click outside.
   var popovers = Array.prototype.slice.call(document.querySelectorAll("details[data-popover]"));
   popovers.forEach(function (pop) {
@@ -70,6 +70,71 @@
       pop.open = false;
       var summary = pop.querySelector("summary");
       if (summary) summary.focus();
+    });
+  });
+
+  // Drawers (Tickets Filters): any [data-drawer] element. Opened by
+  // [data-drawer-open="<id>"], closed by [data-drawer-close], the backdrop
+  // ([data-drawer-backdrop="<id>"]) or Escape. Focus moves into the drawer and
+  // is trapped there, then returns to the opener; the page behind does not
+  // scroll. [data-drawer-reset] clears every field in the drawer and submits
+  // the drawer's form. Values are never cleared on close, so reopening shows
+  // what is applied.
+  var DRAWER_FOCUSABLE = 'a[href], button:not([disabled]), input:not([disabled]):not([type=hidden]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  document.querySelectorAll("[data-drawer]").forEach(function (drawer) {
+    var backdrop = document.querySelector('[data-drawer-backdrop="' + drawer.id + '"]');
+    var openers = Array.prototype.slice.call(document.querySelectorAll('[data-drawer-open="' + drawer.id + '"]'));
+    var lastOpener = null, closeTimer = null;
+
+    function open(opener) {
+      if (drawer.classList.contains("is-open")) return;
+      clearTimeout(closeTimer);
+      lastOpener = opener || document.activeElement;
+      var gutter = window.innerWidth - document.documentElement.clientWidth;
+      drawer.hidden = false; if (backdrop) backdrop.hidden = false;
+      drawer.setAttribute("aria-hidden", "false");
+      void drawer.offsetWidth; // commit the closed state so the slide animates
+      drawer.classList.add("is-open"); if (backdrop) backdrop.classList.add("is-open");
+      document.documentElement.classList.add("drawer-open");
+      if (gutter > 0) document.documentElement.style.paddingInlineEnd = gutter + "px";
+      openers.forEach(function (o) { o.setAttribute("aria-expanded", "true"); });
+      var first = drawer.querySelector(".drawer__body " + DRAWER_FOCUSABLE) || drawer.querySelector("[data-drawer-close]");
+      if (first) first.focus();
+    }
+    function close(restoreFocus) {
+      if (!drawer.classList.contains("is-open")) return;
+      drawer.classList.remove("is-open"); if (backdrop) backdrop.classList.remove("is-open");
+      drawer.setAttribute("aria-hidden", "true");
+      openers.forEach(function (o) { o.setAttribute("aria-expanded", "false"); });
+      document.documentElement.classList.remove("drawer-open");
+      document.documentElement.style.paddingInlineEnd = "";
+      closeTimer = setTimeout(function () { drawer.hidden = true; if (backdrop) backdrop.hidden = true; }, 300);
+      if (restoreFocus !== false && lastOpener && lastOpener.focus) lastOpener.focus();
+    }
+
+    openers.forEach(function (o) { o.addEventListener("click", function () { open(o); }); });
+    drawer.querySelectorAll("[data-drawer-close]").forEach(function (b) { b.addEventListener("click", function () { close(); }); });
+    if (backdrop) backdrop.addEventListener("click", function () { close(); });
+    document.addEventListener("keydown", function (event) {
+      if (!drawer.classList.contains("is-open")) return;
+      if (event.key === "Escape") { event.preventDefault(); close(); return; }
+      if (event.key !== "Tab") return;
+      var items = Array.prototype.filter.call(drawer.querySelectorAll(DRAWER_FOCUSABLE), function (el) { return el.offsetParent !== null; });
+      if (!items.length) return;
+      var firstEl = items[0], lastEl = items[items.length - 1];
+      if (!drawer.contains(document.activeElement)) { event.preventDefault(); firstEl.focus(); }
+      else if (event.shiftKey && document.activeElement === firstEl) { event.preventDefault(); lastEl.focus(); }
+      else if (!event.shiftKey && document.activeElement === lastEl) { event.preventDefault(); firstEl.focus(); }
+    });
+    drawer.querySelectorAll("[data-drawer-reset]").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        drawer.querySelectorAll("select").forEach(function (el) { el.value = ""; });
+        drawer.querySelectorAll("input:not([type=hidden])").forEach(function (el) {
+          if (el.type === "checkbox" || el.type === "radio") el.checked = false; else el.value = "";
+        });
+        var form = btn.form || drawer.closest("form");
+        if (form) form.requestSubmit();
+      });
     });
   });
 

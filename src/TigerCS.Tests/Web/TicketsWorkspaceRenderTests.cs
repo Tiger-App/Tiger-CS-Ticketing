@@ -86,7 +86,7 @@ public sealed class TicketsWorkspaceRenderTests : IDisposable
         Assert.Contains(">Dashboard</a>", nav, StringComparison.Ordinal);
         Assert.Contains(">Customers</a>", nav, StringComparison.Ordinal);
         Assert.Contains("href=\"/Tickets\" aria-current=\"page\">Tickets</a>", nav, StringComparison.Ordinal);
-        Assert.Contains("href=\"/Collections/Receivables\">Collections</a>", nav, StringComparison.Ordinal);
+        Assert.Contains("href=\"/Collections/CampaignList\">Collections</a>", nav, StringComparison.Ordinal);
         foreach (var gone in new[] { ">Queue<", "Pending Interactions", "My Tickets", ">Closed<", "Administration" })
         {
             Assert.DoesNotContain(gone, nav, StringComparison.Ordinal);

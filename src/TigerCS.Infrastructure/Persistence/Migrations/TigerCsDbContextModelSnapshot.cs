@@ -886,6 +886,118 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("CollectionsGenesysBatches", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.Collections.Review.CollectionsGenesysMessageResult", b =>
+                {
+                    b.Property<long>("CollectionsGenesysMessageResultId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("CollectionsGenesysMessageResultId"));
+
+                    b.Property<long>("CollectionsDispatchId")
+                        .HasColumnType("bigint");
+
+                    b.Property<long>("CollectionsDispatchItemId")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("DeliveredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<string>("GenesysContactId")
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("GenesysConversationId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(64)");
+
+                    b.Property<string>("GenesysMessageId")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.Property<DateTime?>("SentAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<DateTime>("SyncedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("CollectionsGenesysMessageResultId");
+
+                    b.HasIndex("CollectionsDispatchId", "CollectionsDispatchItemId")
+                        .HasDatabaseName("IX_CollectionsGenesysMessageResults_Dispatch_Item");
+
+                    b.HasIndex("GenesysConversationId", "GenesysMessageId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_CollectionsGenesysMessageResults_Message");
+
+                    b.ToTable("CollectionsGenesysMessageResults", (string)null);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.Collections.Review.CollectionsGenesysSyncState", b =>
+                {
+                    b.Property<long>("CollectionsDispatchId")
+                        .HasColumnType("bigint");
+
+                    b.Property<int>("Contacts")
+                        .HasColumnType("int");
+
+                    b.Property<int>("ConversationsFound")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Delivered")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<int>("Failed")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime?>("LastCompletedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("LastSyncedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("MessageAttempts")
+                        .HasColumnType("int");
+
+                    b.Property<int>("NotSent")
+                        .HasColumnType("int");
+
+                    b.Property<string>("Outcome")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<int>("Pending")
+                        .HasColumnType("int");
+
+                    b.Property<int>("Sent")
+                        .HasColumnType("int");
+
+                    b.HasKey("CollectionsDispatchId");
+
+                    b.ToTable("CollectionsGenesysSyncStates", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.Collections.Review.CollectionsReviewRecord", b =>
                 {
                     b.Property<long>("CollectionsReviewRecordId")
