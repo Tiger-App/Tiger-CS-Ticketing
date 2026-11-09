@@ -36,8 +36,11 @@ public sealed class CollectionsCampaignOptions
     public int ReconciliationMaxAgeHours { get; set; } = 24;
     /// <summary>The snapshot must be this fresh (minutes since its publish) when a reconciliation runs, otherwise payments made since the refresh show up as differences.</summary>
     public int ReconciliationMaxSnapshotAgeMinutes { get; set; } = 30;
-    /// <summary>Largest difference (AED) in one instalment or unit that still counts as equal (rounding only).</summary>
-    public decimal ReconciliationToleranceAed { get; set; } = 0.01m;
+    /// <summary>
+    /// Largest difference (AED, inclusive) between the snapshot and PACT for ONE instalment (and, separately, for a unit's total) that still counts as financially equivalent. Business rule: 2.00.
+    /// A single allowance: it is never added up across instalments or units. Both sides are rounded to two decimals first (half away from zero).
+    /// </summary>
+    public decimal ReconciliationToleranceAed { get; set; } = 2.00m;
     /// <summary>How many differing units a run keeps in its diagnostics (the counts are always complete).</summary>
     public int ReconciliationMaxDifferences { get; set; } = 500;
     /// <summary>

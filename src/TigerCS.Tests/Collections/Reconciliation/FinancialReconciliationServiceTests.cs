@@ -99,6 +99,34 @@ public sealed class FinancialReconciliationServiceTests
 
     private static ReconciliationRunDto Latest(Harness h) => h.History.Latest()!;
 
+    // ------------------------------------------------------------ the AED 2.00 tolerance through the real run (one bulk PACT read per company, never one per customer)
+
+    [Theory]
+    [InlineData("1000.00", true)]
+    [InlineData("1001.99", true)]
+    [InlineData("1002.00", true)]
+    [InlineData("1002.01", false)]
+    public async Task TheRun_AcceptsADifferenceOfUpToTwoDirhams_AndReportsALargerOneWithBothAmounts(string pactAmount, bool passes)
+    {
+        var h = new Harness();
+        for (var i = 0; i < 25; i++) h.Both(Harness.Row(4, $"TP140-{200 + i}", $"V{i}", new(2026, 9, 5), 500m + i, 100 + i));      // many customers that agree
+        h.Snapshot.Rows.Add(Harness.Row(4, "TP140-101", "VX", new(2026, 9, 5), 1000m, 11));
+        h.Direct.Rows.Add(Harness.Row(4, "TP140-101", "VX", new(2026, 9, 5), decimal.Parse(pactAmount, System.Globalization.CultureInfo.InvariantCulture), 11));
+        h.Both(Harness.Row(32, "TP127-201", "V2", new(2026, 10, 5), 500m, 21));
+        Assert.True((await h.Service.StartAsync(Manager, null, CancellationToken.None)).IsSuccess);
+        var run = Latest(h);
+        var dubai = run.Companies.Single(c => c.CompanyId == 4);
+        Assert.Equal(passes ? ReconciliationStates.Passed : ReconciliationStates.Failed, dubai.Status);
+        if (!passes)
+        {
+            var unit = Assert.Single(dubai.Comparison!.Diffs);
+            var instalment = Assert.Single(unit.Instalments);
+            Assert.Equal((1000m, 1002.01m, -2.01m), (instalment.SnapshotAmount, instalment.SourceAmount, instalment.Difference));
+        }
+        Assert.Equal(ReconciliationStates.Passed, run.Companies.Single(c => c.CompanyId == 32).Status);   // the other company is never held back
+        Assert.Equal(2, h.Direct.Reads);                                                                    // one bulk read per company, whatever the number of customers
+    }
+
     // ------------------------------------------------------------ the window: due dates from ReconciliationStartDate (2014-01-01) to the end of the current month
 
     [Fact]
@@ -121,7 +149,7 @@ public sealed class FinancialReconciliationServiceTests
         var dubai = run.Companies.Single(c => c.CompanyId == 4);
         Assert.Equal((ReconciliationStates.Failed, 1), (dubai.Status, dubai.Comparison!.UnitsOnlyInSource));                 // the 2015 row is compared, not skipped
         Assert.Equal(ReconciliationStates.Passed, run.Companies.Single(c => c.CompanyId == 32).Status);
-        Assert.Equal(0.01m, run.Tolerance);
+        Assert.Equal(2.00m, run.Tolerance);                                                                          // the confirmed business tolerance: AED 2.00 per instalment
     }
 
     [Fact]
