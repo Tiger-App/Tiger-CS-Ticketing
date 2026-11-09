@@ -109,11 +109,8 @@ public sealed class GenesysOutboundHttpClient(HttpClient http, IGenesysTokenProv
 {
     private sealed record Raw(GenesysUploadOutcome Outcome, int? Status, string? Body, string? Error);
 
-    private static object DataOf(GenesysContactPayload c) => new Dictionary<string, string>
-    {
-        ["Phone"] = c.Phone, ["CustomerName"] = c.CustomerName, ["Email Address"] = c.EmailAddress,
-        ["ReminderType"] = c.ReminderType, ["AmountDue"] = c.AmountDue, ["DueDate"] = c.DueDate
-    };
+    // The contact's data object: the six Auto columns, or (a Manual payload) the eleven official Manual columns, with the e-mail under "Email". One definition for the file and the upload.
+    private static object DataOf(GenesysContactPayload c) => new Dictionary<string, string>(GenesysContactTemplate.ValuesOf(c));
 
     public async Task<GenesysUploadResult> UploadContactsAsync(string contactListId, IReadOnlyList<GenesysContactPayload> contacts, CancellationToken ct)
     {

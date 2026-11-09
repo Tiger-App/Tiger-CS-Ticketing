@@ -20,7 +20,8 @@ namespace TigerCS.Application.Modules.Collections.Review;
 /// <item><b>Rows.</b> <see cref="GenesysExportRows"/>: one row per customer unit, exactly the records Preview lists; a phone number is never a key (nothing is merged, added up, de-duplicated or left
 /// out because of it). A unit without a calculable amount or a callable number is left out and NAMED with its reason, never silently dropped and never guessed.
 /// Each row is built by <see cref="DispatchService.ToPayload"/>, the code that builds a real upload, and written with <see cref="GenesysContactTemplate.WriteCsv(IEnumerable{GenesysContactPayload}, IReadOnlyList{string})"/>:
-/// the six columns Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate, in that order and format. Nothing else about a customer is in the file.</item>
+/// the six Auto columns Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate - or, for the Manual list, the eleven official columns Phone, Email, CustomerName, ReminderType, AmountDue,
+/// UnitNumber, ProjectName, TowerName, DueDate, DueMonthAr, TenantId - in that order and format. A Manual file is the same payload a Manual send uploads. Nothing else about a customer is in the file.</item>
 /// <item><b>Columns.</b> When the Genesys integration can read the chosen list, its real columns are used and a list that lacks or misnames a template column refuses the export (an incompatibility
 /// is reported, never guessed around). When the list cannot be read (integration not configured, login refused, Genesys unreachable) the documented six-column template is used and the file, the
 /// notices and the audit entry say "Template not verified against Genesys".</item>
@@ -95,7 +96,7 @@ public sealed class GenesysExportService(
         var destination = manualExport ? CampaignReminderTypes.ManualListKey : type.ToString();
         var listLabel = manualExport ? CampaignReminderTypes.ManualListName : CampaignReminderTypes.DefaultLabel(type);
 
-        var schema = await ReadSchemaAsync(listId, listLabel, ct);
+        var schema = await ReadSchemaAsync(listId, listLabel, manualExport, ct);
         if (schema.Problem is not null) return CollectionsResult<GenesysExportDto>.Fail(CollectionsOutcome.InvalidRequest, schema.Problem);
 
         var rows = GenesysExportRows.Build(resolved.Candidates);
@@ -104,10 +105,10 @@ public sealed class GenesysExportService(
                 $"None of the {resolved.Candidates.Count:N0} matching customer(s) could be exported: {Summary(rows.Exclusions)}. Records: {Named(rows.ExcludedRecords)}. Nothing was exported.");
 
         // The rows are built by the upload's own code, so every value is exactly what an upload would send.
-        var payloads = rows.Rows.Select(r => DispatchService.ToPayload(Item(r), listId, genesys)).ToList();
+        var payloads = rows.Rows.Select(r => DispatchService.ToPayload(Item(r), listId, genesys, manualExport)).ToList();
         var csv = GenesysContactTemplate.WriteCsv(payloads, schema.Columns);
         // The file is checked against the template before it is released. This can only fail if a value broke a format rule.
-        var check = GenesysContactTemplate.Verify(csv, GenesysContactTemplate.ExpectedReminderTypes(genesys));
+        var check = GenesysContactTemplate.Verify(csv, GenesysContactTemplate.ExpectedReminderTypes(genesys), manualExport);
         if (!check.IsMatch || check.RowCount != payloads.Count)
         {
             logger.LogError("Genesys export failed its own template check ({Issues} issues).", check.Issues.Count);
@@ -163,7 +164,7 @@ public sealed class GenesysExportService(
         var labels = (schema.Verified ? "" : $" ({NotVerifiedLabel})") + (data.Verified ? "" : $" ({UnverifiedDataLabel})");
         var fileName = $"genesys-{type}-to-{destination}-{now:yyyyMMdd-HHmm}{labels}.csv";
         return CollectionsResult<GenesysExportDto>.Ok(new(fileName, csv, payloads.Count, CampaignReminderTypes.StageName(type), listLabel, listId, total, currency,
-            GenesysContactTemplate.Columns.Concat(schema.Columns.Where(c => !GenesysContactTemplate.Columns.Contains(c, StringComparer.Ordinal))).ToList(), schema.Verified, notices, hash,
+            (manualExport ? GenesysContactTemplate.ManualColumns : GenesysContactTemplate.Columns.Concat(schema.Columns.Where(c => !GenesysContactTemplate.Columns.Contains(c, StringComparer.Ordinal)))).ToList(), schema.Verified, notices, hash,
             repeat.Customers, repeat.Customers > 0 ? repeat.LastUtc : null, units.Count,
             rows.Exclusions.Select(e => new GenesysExportExclusionDto(e.Code, e.Units, e.Explanation)).ToList(), byStatus, data.Verified, data.Reasons, resolved.Skipped,
             rows.ExcludedRecords.Select(e => new GenesysExportExcludedRecordDto(e.CompanyId, e.TenantId, e.UnitCode, e.CustomerName, e.ReminderType, e.Code)).ToList()));
@@ -173,6 +174,8 @@ public sealed class GenesysExportService(
     private static CollectionsDispatchItem Item(GenesysExportRow row) => new()
     {
         RecordKey = row.First.RecordKey, ReminderType = row.ReminderType, CompanyId = row.First.CompanyId, TenantId = row.First.TenantId, UnitId = row.First.UnitId, UnitCode = row.First.UnitCode,
+        // The same values the approval freezes into a send item (DispatchService.Approve), so a Manual file and a Manual send carry identical project / tower text.
+        ProjectName = row.First.ProjectCode, TowerName = CollectionsTowerName.IsUsable(row.First.TowerName, row.First.TowerNumber) ? row.First.TowerName!.Trim() : "",
         CustomerName = row.CustomerName, Phone = row.Phone, Email = row.Email, Amount = row.Amount, Currency = row.Currency, DueDate = row.DueDate, VoiceEligible = true
     };
 
@@ -358,30 +361,31 @@ public sealed class GenesysExportService(
     /// export: a real incompatibility is reported, never guessed around. A list that could NOT be read (integration not configured, login refused, Genesys unreachable or answering with an error)
     /// does not stop a download-only file: the documented six-column template is used and the file is labelled "Template not verified against Genesys", with the reason.
     /// </summary>
-    private async Task<Schema> ReadSchemaAsync(string listId, string listLabel, CancellationToken ct)
+    private async Task<Schema> ReadSchemaAsync(string listId, string listLabel, bool manual, CancellationToken ct)
     {
         if (!genesys.Enabled || string.IsNullOrWhiteSpace(genesys.ClientId) || string.IsNullOrWhiteSpace(genesys.ClientSecret))
-            return Template($"the {listLabel} list's columns were not checked in Genesys because the integration is not configured here");
+            return Template($"the {listLabel} list's columns were not checked in Genesys because the integration is not configured here", manual);
         GenesysContactListInfo list;
         try { list = await client.GetContactListAsync(listId, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             logger.LogWarning("Genesys contact list read threw {ExceptionType}; the export uses the documented template.", ex.GetType().Name);
-            return Template($"the {listLabel} contact list could not be read in Genesys (the request failed)");
+            return Template($"the {listLabel} contact list could not be read in Genesys (the request failed)", manual);
         }
         if (list.Outcome != GenesysUploadOutcome.Accepted)
         {
             logger.LogWarning("Genesys contact list {ListId} could not be read ({Outcome}, HTTP {Status}); the export uses the documented template.", listId, list.Outcome, list.HttpStatus);
-            return Template($"the {listLabel} contact list could not be read in Genesys ({list.Error?.TrimEnd('.')})");
+            return Template($"the {listLabel} contact list could not be read in Genesys ({list.Error?.TrimEnd('.')})", manual);
         }
-        var check = GenesysContactTemplate.CheckHeader(list.Columns);
+        var check = GenesysContactTemplate.CheckHeader(list.Columns, manual);
         if (!check.Fits)
             return new([], false, null, $"The {listLabel} contact list does not match the template: " + string.Join("; ",
                 check.Missing.Where(m => !check.Misnamed.Any(n => n.StartsWith(m + " ", StringComparison.Ordinal))).Select(m => $"missing column {m}").Concat(check.Misnamed.Select(m => $"misnamed column {m}"))) + ". Nothing was exported.");
         return new(list.Columns, true, null, null);
     }
 
-    private static Schema Template(string why) =>
-        new(GenesysContactTemplate.Columns, false, $"{NotVerifiedLabel}: {why}, so its columns were not checked. The file uses the documented six-column template; check it against the list before importing.", null);
+    private static Schema Template(string why, bool manual) =>
+        new(GenesysContactTemplate.ColumnsFor(manual), false,
+            $"{NotVerifiedLabel}: {why}, so its columns were not checked. The file uses the documented {(manual ? "eleven" : "six")}-column template; check it against the list before importing.", null);
 }

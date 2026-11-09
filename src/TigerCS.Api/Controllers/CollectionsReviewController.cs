@@ -75,7 +75,7 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
         Caller() is { } caller ? Result(await query.SummarizeAsync(caller, request, ct)) : Unauthorized();
 
     /// <summary>
-    /// "Export for Genesys": every customer matching the filters (Manual or Auto, any status, any day) as a CSV in the format of the chosen Genesys contact list (six columns, exactly the values an
+    /// "Export for Genesys": every customer matching the filters (Manual or Auto, any status, any day) as a CSV in the format of the chosen Genesys contact list (Manual: the eleven official Manual columns; Auto: the six Auto columns; exactly the values an
     /// upload would send). Download only: it uploads nothing, queues nothing and marks nobody as sent; it is written to the audit trail, and a repeat is noted, never blocked. Needs the send right.
     /// </summary>
     [HttpPost("export/genesys")]
@@ -163,7 +163,7 @@ public sealed class CollectionsReviewController(ReviewQueryService query, Review
     public async Task<IActionResult> Dispatch(Guid dispatchId, CancellationToken ct) =>
         Caller() is { } caller ? Result(await dispatch.GetAsync(caller, dispatchId, ct)) : Unauthorized();
 
-    /// <summary>The contacts of one send exactly as uploaded (the six Genesys contact-list columns) as a CSV file, for comparison with the Genesys list.</summary>
+    /// <summary>The contacts of one send exactly as uploaded (the six Auto or the eleven Manual contact-list columns) as a CSV file, for comparison with the Genesys list.</summary>
     [HttpGet("dispatches/{dispatchId:guid}/contacts")]
     [RequirePermission(Permissions.CollectionsView)]
     [Produces("text/csv")]

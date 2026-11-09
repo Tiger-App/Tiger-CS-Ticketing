@@ -99,6 +99,8 @@ public class CollectionsDispatchItemConfiguration : IEntityTypeConfiguration<Col
         builder.Property(i => i.ReminderType).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(i => i.TenantId).HasMaxLength(50).IsRequired();
         builder.Property(i => i.UnitCode).HasMaxLength(60).IsRequired();
+        builder.Property(i => i.ProjectName).HasMaxLength(200).IsRequired().HasDefaultValue("");
+        builder.Property(i => i.TowerName).HasMaxLength(200).IsRequired().HasDefaultValue("");
         builder.Property(i => i.CustomerName).HasMaxLength(300).IsRequired();
         builder.Property(i => i.Phone).HasMaxLength(20).IsUnicode(false).IsRequired();
         builder.Property(i => i.Email).HasMaxLength(320).IsRequired();

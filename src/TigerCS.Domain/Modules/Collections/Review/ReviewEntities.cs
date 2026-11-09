@@ -170,6 +170,10 @@ public class CollectionsDispatchItem
     public string TenantId { get; set; } = "";
     public int? UnitId { get; set; }
     public string UnitCode { get; set; } = "";
+    /// <summary>The unit's project as the review record held it at approval (Manual contact list <c>ProjectName</c>). Empty on items approved before this column existed.</summary>
+    public string ProjectName { get; set; } = "";
+    /// <summary>The unit's real tower name at approval (Manual contact list <c>TowerName</c>); empty when the tower has none. Empty on items approved before this column existed.</summary>
+    public string TowerName { get; set; } = "";
     public string CustomerName { get; set; } = "";
     public string Phone { get; set; } = "";
     public string Email { get; set; } = "";

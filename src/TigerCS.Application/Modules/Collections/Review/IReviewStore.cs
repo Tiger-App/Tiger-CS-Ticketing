@@ -145,8 +145,20 @@ public enum GenesysUploadOutcome
     Unknown
 }
 
+/// <summary>The five extra values of a Manual contact (the official eleven-column template); null on every Auto payload, which stays the six-column shape.</summary>
+/// <param name="UnitNumber">The unit's number as the review data holds it (the PACT unit code the Manual page lists).</param>
+/// <param name="ProjectName">The unit's project as the review data holds it; empty when it holds none.</param>
+/// <param name="TowerName">The unit's tower name; empty when the tower has no real name (a number is never passed off as a name).</param>
+/// <param name="DueMonthAr">The Arabic name of the due date's month.</param>
+/// <param name="TenantId">The PACT tenant of the unit (never a CRM CustomerId).</param>
+public sealed record GenesysManualFields(string UnitNumber, string ProjectName, string TowerName, string DueMonthAr, string TenantId);
+
+/// <summary>
+/// One contact as uploaded. <c>EmailAddress</c> is sent as <c>Email Address</c> on Auto lists and as <c>Email</c> on the Manual list; <c>Manual</c> holds the Manual-only values and, when set, the
+/// payload is the eleven-column Manual contact.
+/// </summary>
 public sealed record GenesysContactPayload(string ContactListId, string Phone, string CustomerName, string EmailAddress,
-    string ReminderType, string AmountDue, string DueDate, bool Callable);
+    string ReminderType, string AmountDue, string DueDate, bool Callable, GenesysManualFields? Manual = null);
 
 public sealed record GenesysUploadResult(GenesysUploadOutcome Outcome, int? HttpStatus, IReadOnlyList<string> ContactIds, string? Error);
 
