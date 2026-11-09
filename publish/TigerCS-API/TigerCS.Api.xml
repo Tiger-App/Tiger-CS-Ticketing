@@ -432,12 +432,56 @@
             <param name="activeOnly">When true (the default), excludes deactivated channels — a new-ticket picker never offers those; false is for naming a channel a historical record references.</param>
             <response code="200">The channel directory.</response>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CollectionsCampaignsController.Preview(System.String,System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.String,System.Int32,System.Int32,System.Threading.CancellationToken,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.Nullable{System.Decimal},System.String,System.Int32[],System.String)">
-            <summary>Preview one communication stage, per unit, using current remaining balances from PACT companies 4 and 32. Only instalments due before the end of the current Dubai month are listed (Overdue: before the first day of the month, Due: inside it); <c>minTotal</c> keeps units whose Due + Overdue is greater than it (omit for no minimum). <c>paymentStatus</c> is Due, Overdue or Both (default): a single status keeps only that status' instalments in the figures; preview, counts and both CSV exports share it.</summary>
+        <member name="M:TigerCS.Api.Controllers.CollectionsCampaignsController.Preview(System.String,System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.String,System.Int32,System.Int32,System.Threading.CancellationToken,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.Nullable{System.Decimal},System.String,System.Int32[],System.String,System.Int32[])">
+            <summary>Preview one communication stage, per unit, using current remaining balances from PACT companies 4 and 32. Only instalments due before the end of the current Dubai month are listed (Overdue: before the first day of the month, Due: inside it); <c>minTotal</c> keeps units whose Due + Overdue is greater than it (omit for no minimum). <c>floors</c> (repeat the parameter; 0 = ground floor; omit for all floors) keeps only apartments on those floors, derived from the unit number; <c>paymentStatus</c> is Due, Overdue or Both (default): a single status keeps only that status' instalments in the figures; preview, counts and both CSV exports share it.</summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CollectionsCampaignsController.Export(System.String,System.String,System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.String,System.Threading.CancellationToken,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.Nullable{System.Decimal},System.String,System.Int32[],System.String)">
+        <member name="M:TigerCS.Api.Controllers.CollectionsCampaignsController.Export(System.String,System.String,System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.String,System.Threading.CancellationToken,System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Nullable{System.Int32},System.Nullable{System.Decimal},System.String,System.Int32[],System.String,System.Int32[])">
             <summary>Export the full filtered list. Review mode is for internal review; Genesys mode refuses any unresolved row,
             an unscheduled or non-current date, and internal legal referrals. CSV is returned in an internal JSON envelope.</summary>
+        </member>
+        <member name="T:TigerCS.Api.Controllers.CollectionsGenesysHistoryController">
+            <summary>
+            The Genesys Campaign History: every campaign submission from TigerCS to Genesys, its records and its outcome. READ ONLY: every route is a GET over data the approval and upload already
+            stored; none uploads, retries, resends, queues, refreshes or calls Genesys or the financial source. Internal routes called server-side by the Web application as the signed-in user.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsGenesysHistoryController.#ctor(TigerCS.Application.Modules.Collections.History.GenesysHistoryService,TigerCS.Application.Modules.Collections.History.GenesysCampaignSyncService)">
+            <summary>
+            The Genesys Campaign History: every campaign submission from TigerCS to Genesys, its records and its outcome. READ ONLY: every route is a GET over data the approval and upload already
+            stored; none uploads, retries, resends, queues, refreshes or calls Genesys or the financial source. Internal routes called server-side by the Web application as the signed-in user.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsGenesysHistoryController.Submissions(System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.String,System.String,System.String,System.Nullable{System.Guid},System.String,System.String,System.Nullable{System.Int32},System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>Submissions, newest first, filtered and paged in the database, with summary figures for the filtered set and the filter options.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsGenesysHistoryController.Submission(System.Guid,System.Threading.CancellationToken)">
+            <summary>One submission: who approved it, its Genesys batches and their outcomes. "Uploaded" never means the customer was contacted.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsGenesysHistoryController.Records(System.Guid,System.String,System.String,System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>The unit records of one submission, paged: one row per unit (a shared phone number is never merged).</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsGenesysHistoryController.Exports(System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>Downloaded "Export for Genesys" files, from the audit trail. Separate from submissions: a download is not an upload.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsGenesysHistoryController.Sync(TigerCS.Api.Controllers.GenesysSyncRequest,System.Threading.CancellationToken)">
+            <summary>
+            Manual "Sync from Genesys" for the given campaigns (at most 25). READ ONLY towards Genesys: it reads interactions and message statuses and stores the confirmed result locally; it uploads,
+            resends and changes nothing in Genesys, and there is no scheduled equivalent. Needs the send right (it spends Genesys API quota).
+            </summary>
+        </member>
+        <member name="T:TigerCS.Api.Controllers.GenesysSyncRequest">
+            <param name="SubmissionIds">The campaigns (submission ids) to sync.</param>
+            <param name="Force">True: read Genesys again even for a campaign whose contacts are all confirmed.</param>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.GenesysSyncRequest.#ctor(System.Collections.Generic.IReadOnlyList{System.Guid},System.Boolean)">
+            <param name="SubmissionIds">The campaigns (submission ids) to sync.</param>
+            <param name="Force">True: read Genesys again even for a campaign whose contacts are all confirmed.</param>
+        </member>
+        <member name="P:TigerCS.Api.Controllers.GenesysSyncRequest.SubmissionIds">
+            <summary>The campaigns (submission ids) to sync.</summary>
+        </member>
+        <member name="P:TigerCS.Api.Controllers.GenesysSyncRequest.Force">
+            <summary>True: read Genesys again even for a campaign whose contacts are all confirmed.</summary>
         </member>
         <member name="T:TigerCS.Api.Controllers.CollectionsReconciliationController">
             <summary>
@@ -467,7 +511,7 @@
             server-side by the Web application as the signed-in user.
             </summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.#ctor(TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.ReviewRefreshService,TigerCS.Application.Modules.Collections.Review.DispatchService,TigerCS.Application.Modules.Collections.Review.DispatchAdminReportService,TigerCS.Application.Modules.Collections.Review.GenesysExportService,TigerCS.Application.Modules.Collections.Review.ManualReviewExportService)">
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.#ctor(TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.ReviewRefreshService,TigerCS.Application.Modules.Collections.Review.DispatchService,TigerCS.Application.Modules.Collections.Review.DispatchAdminReportService,TigerCS.Application.Modules.Collections.Review.GenesysExportService,TigerCS.Application.Modules.Collections.Review.ManualReviewExportService,TigerCS.Application.Modules.Collections.Review.GenesysConnectionCheckService)">
             <summary>
             Collections review and approval: filtered stored records, explicit refresh jobs, approval of an exact list and upload to
             Genesys outbound contact lists. Reads never call the financial source; only the refresh job does. Internal routes called
@@ -511,6 +555,12 @@
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.DispatchReadiness(System.Threading.CancellationToken)">
             <summary>Whether this environment can send to Genesys and, if not, which settings are missing. Names settings only, never secrets.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.CheckGenesys(System.Threading.CancellationToken)">
+            <summary>
+            READ-ONLY check of the Genesys integration as configured here (region consistency, OAuth client and organization, every configured contact list). Uploads and changes nothing, never
+            contacts a customer, needs the send permission. A POST (it calls Genesys), never triggered by a page view.
+            </summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.Dispatches(System.Threading.CancellationToken)">
             <summary>The latest approved sends with their batch results.</summary>
@@ -2836,7 +2886,7 @@
             <param name="minAmount">Minimum outstanding amount: an instalment counts only when its remaining unpaid amount is &gt;= this value. Default 100.</param>
             <param name="cancellationToken">Request cancellation.</param>
         </member>
-        <member name="M:TigerCS.Api.Controllers.PactReceivablesController.Instalments(System.Nullable{System.Int32},System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.String,System.Nullable{System.Decimal},System.String,System.Int32,System.Int32,System.String,System.String,System.String,System.Nullable{System.Decimal},System.Threading.CancellationToken,System.Int32[])">
+        <member name="M:TigerCS.Api.Controllers.PactReceivablesController.Instalments(System.Nullable{System.Int32},System.Nullable{System.DateOnly},System.Nullable{System.DateOnly},System.String,System.Nullable{System.Decimal},System.String,System.Int32,System.Int32,System.String,System.String,System.String,System.Nullable{System.Decimal},System.Threading.CancellationToken,System.Int32[],System.Int32[])">
             <summary>
             Instalment-level list from the local snapshot (never PACT): tower, due-date range (any range or a whole month), payment status, minimum outstanding amount.
             Totals and paging are computed over exactly the filtered instalments.
@@ -2854,6 +2904,7 @@
             <param name="dueMonth">Optional <c>yyyy-MM</c>: narrow the list and its totals to instalments due in that month. The returned <c>months</c> overview ignores it and always covers every month of the other filters.</param>
             <param name="status">With <c>view=units</c> only: <c>all</c> (default), <c>overdue</c> or <c>due</c> - the units that have an instalment of that class. The unit view lists only instalments due before the end of the current Dubai month (Overdue: before the first day of the month, Due: any day inside it, even a coming one), so <c>dateTo</c> is capped at the month end; a month filter only narrows the window.</param>
             <param name="minTotal">With <c>view=units</c> only: keep units whose total (Due + Overdue) is GREATER than this value; omit for no minimum. <c>minAmount</c> is not applied per instalment in the unit view.</param>
+            <param name="floors">Optional apartment floors (repeat the parameter: <c>floors=1&amp;floors=2</c>, 0 = ground floor). The floor is derived from the unit number; a unit that is not a recognisable apartment never matches. Applied before totals and paging, together with every other filter. Omit for all floors.</param>
             <param name="cancellationToken">Request cancellation.</param>
         </member>
         <member name="M:TigerCS.Api.Controllers.PactReceivablesController.SnapshotStatus(System.Threading.CancellationToken)">
@@ -2864,6 +2915,13 @@
         </member>
         <member name="M:TigerCS.Api.Controllers.PactReceivablesController.Towers(System.Threading.CancellationToken)">
             <summary>Active towers (number and name) for the tower dropdown. Read from the local table; PACT is not contacted.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.PactReceivablesController.Floors(System.Int32[],System.Threading.CancellationToken)">
+            <summary>
+            Floors of the apartment units in the chosen towers (all towers when none is named), for the Floor dropdown. The floor is derived from the unit number (no floor column exists); units that are not
+            recognisable apartments are left out. Read from the local snapshot's unit directory; PACT is not contacted.
+            </summary>
+            <param name="towerIds">Optional local tower ids (repeat the parameter). Omit for all towers.</param>
         </member>
         <member name="M:TigerCS.Api.Controllers.PactReceivablesController.LoadCoverage(System.DateOnly,System.DateOnly,System.Nullable{System.Int32},System.Threading.CancellationToken)">
             <summary>
