@@ -1,6 +1,8 @@
 using TigerCS.Application.Modules.Collections;
 using TigerCS.Application.Modules.Collections.Abstractions;
 using TigerCS.Application.Modules.Collections.Review;
+using TigerCS.Application.Modules.Collections.Services;
+using TigerCS.Domain.Modules.Collections;
 using TigerCS.Domain.Modules.Collections.Review;
 
 namespace TigerCS.Tests.Collections.Review;
@@ -14,7 +16,7 @@ public sealed class AmountRoundingTests
     private static async Task<ReviewHarness> SeededAsync(params PactReceivableInstalment[] rows)
     {
         var h = new ReviewHarness();
-        h.Time.Advance(TimeSpan.FromDays(1)); h.Source.ReadAt = ReviewHarness.Now.AddDays(1);   // 15 Oct: no stage is scheduled, Manual sends anyway
+        // 14 Oct: Current Month is scheduled, so the stored record is a normal Ready candidate (Manual would send on any day).
         h.Source.Items.AddRange(rows);
         await h.RefreshAsync();
         return h;
@@ -51,7 +53,7 @@ public sealed class AmountRoundingTests
             await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
         }
         var upload = Assert.Single(h.Client.Calls);
-        Assert.Equal(["500.01", "99.99"], upload.Contacts.OrderBy(c => c.CustomerName, StringComparer.Ordinal).Select(c => c.AmountDue).Order(StringComparer.Ordinal).Reverse());
+        Assert.Equal(["500.01", "99.99"], upload.Contacts.Select(c => c.AmountDue).Order(StringComparer.Ordinal));
     }
 
     [Fact]
