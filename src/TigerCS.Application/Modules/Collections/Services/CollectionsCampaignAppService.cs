@@ -20,6 +20,8 @@ public sealed class CollectionsCampaignAppService(
     ILogger<CollectionsCampaignAppService> logger, CollectionsUnitLinkService? links = null,
     IFinancialReconciliationEvidence? reconciliation = null)
 {
+    private readonly SpecialCaseUnits special = SpecialCaseUnits.From(sourceOptions);
+
     /// <summary>First day the receivables history is read from when the user gives no From date (the snapshot window starts here).</summary>
     public static readonly DateOnly HistoryStart = new(2000, 1, 1);
 
@@ -333,6 +335,7 @@ public sealed class CollectionsCampaignAppService(
             .Select(r => MoneyNormalizer.Normalize(r.Amount, r.AmountIsFloatingPoint) is { IsResolved: true, Value: { } value } ? r with { Amount = value } : r)
             .Where(r => r.Amount > 0 && r.Amount >= min && DateOnly.FromDateTime(r.DueDate) >= from && DateOnly.FromDateTime(r.DueDate) <= to
                 && !r.UnitCode.Contains('*')    // a '*' in the unit code marks a cancelled apartment (e.g. 513*): excluded before any grouping
+                && !special.IsSpecial(r.UnitCode)   // a special case unit is handled outside the campaigns: never previewed (Receivables still lists it)
                 && r.UnitId is > 0 && r.UnitCode.Trim() is not ("" or "0"))   // units without a real number are never listed
             .ToList();
         if (rows.Any(r => r.CompanyId is not (4 or 32) || string.IsNullOrWhiteSpace(r.TenantId)))

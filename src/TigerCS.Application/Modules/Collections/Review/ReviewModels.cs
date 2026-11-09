@@ -20,7 +20,8 @@ public sealed record ReviewQuerySpec(
     DateOnly? DueFrom, DateOnly? DueTo, IReadOnlyList<ReviewPaymentStatus>? PaymentStatuses,
     decimal? MinRemaining, decimal? MaxRemaining, CampaignReminderType? ReminderType,
     ReviewValidationStatus? ValidationStatus, string? Reason, int? TowerId = null, IReadOnlyList<int>? TowerIds = null,
-    DateTime? ContactedSinceUtc = null, IReadOnlyList<int>? Floors = null);
+    DateTime? ContactedSinceUtc = null, IReadOnlyList<int>? Floors = null,
+    IReadOnlyCollection<string>? ExcludedUnitCodes = null);
 
 public sealed record ReviewRunDto(
     long RunId, string Status, string Phase, int ProgressPercent, DateOnly AsOfDate, int? CompanyId,

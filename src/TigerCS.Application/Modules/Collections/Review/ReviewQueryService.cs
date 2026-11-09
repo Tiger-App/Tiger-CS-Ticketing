@@ -13,8 +13,13 @@ namespace TigerCS.Application.Modules.Collections.Review;
 /// </summary>
 public sealed class ReviewQueryService(
     CollectionsOptions options, CollectionsReviewOptions reviewOptions, CollectionsAuthorizationService authorization,
-    CollectionsClock clock, IReviewStore store, ReceivablesSnapshotOptions? snapshotOptions = null, GenesysOutboundOptions? genesys = null)
+    CollectionsClock clock, IReviewStore store, ReceivablesSnapshotOptions? snapshotOptions = null, GenesysOutboundOptions? genesys = null, PactReceivablesOptions? sourceOptions = null)
 {
+    private readonly SpecialCaseUnits special = SpecialCaseUnits.From(sourceOptions);
+
+    /// <summary>Every read of the stored records excludes the special case units, server-side (Manual list and counts, Auto, approval, export, send resolution).</summary>
+    private ReviewQuerySpec Sx(ReviewQuerySpec spec) => special.Any ? spec with { ExcludedUnitCodes = special.StoredVariants } : spec;
+
     public const string UnpaidOrPartial = "UnpaidOrPartial";
     public const string ModeSelectedKeys = "SelectedKeys";
     public const string ModeAllMatching = "AllMatching";
@@ -83,11 +88,11 @@ public sealed class ReviewQueryService(
             if (ManualCoverageProblem(filter, run) is { } coverage) return CollectionsResult<ReviewPageDto>.Fail(CollectionsOutcome.InvalidRequest, coverage);
             return await QueryManualAsync(run, spec, filter!, stale, page, pageSize, applied, ct);
         }
-        var items = await store.QueryAsync(run.CollectionsReviewRunId, spec, stale, (page - 1) * pageSize, pageSize, ct);
+        var items = await store.QueryAsync(run.CollectionsReviewRunId, Sx(spec), stale, (page - 1) * pageSize, pageSize, ct);
         // Counts follow every filter except the validation-status choice itself, so the four tiles always add up.
-        var counts = await store.CountAsync(run.CollectionsReviewRunId, spec with { ValidationStatus = null }, stale, ct);
+        var counts = await store.CountAsync(run.CollectionsReviewRunId, Sx(spec with { ValidationStatus = null }), stale, ct);
         var unknown = await store.CountAsync(run.CollectionsReviewRunId,
-            spec with { ValidationStatus = null, PaymentStatuses = [ReviewPaymentStatus.Unknown] }, stale, ct);
+            Sx(spec with { ValidationStatus = null, PaymentStatuses = [ReviewPaymentStatus.Unknown] }), stale, ct);
         // A tower chosen on data read before towers were stored matches nothing: say so instead of looking like "this project has no customers" (and never fall back to all projects).
         var towerMissing = (spec.TowerId is not null || spec.TowerIds is not null) && items.TotalCount == 0 && !await store.RunHasTowerDataAsync(run.CollectionsReviewRunId, ct);
         return CollectionsResult<ReviewPageDto>.Ok(new(ToDto(run), counts with { UnknownPaymentStatus = unknown.Total }, page, pageSize,
@@ -150,7 +155,7 @@ public sealed class ReviewQueryService(
             if (keys.Count == 0) return new(run, [], 0, "Select at least one record.");
             if (keys.Count > max) return new(run, [], 0, $"At most {max} records can be approved at once.");
             var all = new ReviewQuerySpec(null, null, null, null, null, null, null, null, null, null, null, null, null);
-            views = await store.ResolveAsync(run.CollectionsReviewRunId, all, keys, stale, max, ct);
+            views = await store.ResolveAsync(run.CollectionsReviewRunId, Sx(all), keys, stale, max, ct);
             skipped = keys.Count - views.Count;
         }
         else if (string.Equals(request.Mode, ModeAllMatching, StringComparison.OrdinalIgnoreCase))
@@ -244,7 +249,7 @@ public sealed class ReviewQueryService(
         };
         // One more than the capacity is read: a list that does not fit in one pass is refused, never silently cut short.
         var capacity = Math.Max(1, reviewOptions.ManualListCapacity);
-        var views = await store.ResolveAsync(run.CollectionsReviewRunId, coarse, null, stale, capacity + 1, ct, units);
+        var views = await store.ResolveAsync(run.CollectionsReviewRunId, Sx(coarse), null, stale, capacity + 1, ct, units);
         if (views.Count > capacity)
             return new ManualCalc([], $"This Manual list has more customers than one pass can read ({capacity:N0} at most). Narrow the filters, for example by campaign type or tower.");
         var criteria = ManualCriteria(filter ?? new ReviewFilter());
@@ -387,7 +392,7 @@ public sealed class ReviewQueryService(
             if (manual.Problem is not null) return (Array.Empty<ReviewRecordView>(), manual.Problem);
             return (manual.Views.Where(v => ManualStatus(v, stale) == ReviewValidationStatus.Ready).Take(max + 1).ToList(), null);
         }
-        return (await store.ResolveAsync(run.CollectionsReviewRunId, spec with { ValidationStatus = ReviewValidationStatus.Ready }, null, stale, max, ct, units), null);
+        return (await store.ResolveAsync(run.CollectionsReviewRunId, Sx(spec with { ValidationStatus = ReviewValidationStatus.Ready }), null, stale, max, ct, units), null);
     }
 
     public static string Fingerprint(IEnumerable<CollectionsReviewRecord> records)
