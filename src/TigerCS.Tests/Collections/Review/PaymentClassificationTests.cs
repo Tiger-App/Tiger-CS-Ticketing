@@ -124,7 +124,7 @@ public sealed class PaymentClassificationTests
         Assert.Equal(new Dictionary<string, int> { ["Ready"] = 1, ["NeedsReview"] = 2 }, file.IncludedByStatus);
         Assert.False(file.DataVerified); Assert.Contains(file.UnverifiedReasons!, r => r.StartsWith("PaymentStatusUnknown:", StringComparison.Ordinal));
         // The amounts written are the source remainders, as they are.
-        var rows = GenesysContactTemplate.ParseCsv(file.Csv).Skip(1).ToDictionary(r => r[1], r => r[4]);
+        var rows = ManualGenesysFile.Records(file.Csv).ToDictionary(r => r["CustomerName"], r => r["AmountDue"]);
         Assert.Equal(("500.00", "400.00", "800.00"), (rows["Customer 1"], rows["Customer 2"], rows["Customer 3"]));
     }
 

@@ -112,9 +112,11 @@ public sealed class GenesysConnectionCheckService(
                 Add(name, "Failed", why);
                 continue;
             }
-            var fit = GenesysContactTemplate.CheckHeader(list.Columns);
+            // The dedicated Manual list is checked against its eleven official columns; every Auto list against the six.
+            var isManual = types.Contains(CampaignReminderTypes.ManualListKey);
+            var fit = GenesysContactTemplate.CheckHeader(list.Columns, isManual);
             Add(name, fit.Fits ? "Ok" : "Failed", fit.Fits
-                ? $"List {id} exists and carries the six template columns."
+                ? $"List {id} exists and carries the {(isManual ? "eleven" : "six")} template columns."
                 : $"List {id} exists but does not fit the template: {string.Join("; ", fit.Missing.Select(m => $"missing column {m}").Concat(fit.Misnamed.Select(m => $"misnamed column {m}")))}.");
         }
         return Done();
