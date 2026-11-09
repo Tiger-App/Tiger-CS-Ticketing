@@ -2,6 +2,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using TigerCS.Application.Modules.Collections.Review;
+using TigerCS.Domain.Modules.Collections;
 using TigerCS.Domain.Modules.Collections.Review;
 using TigerCS.Infrastructure.Persistence;
 
@@ -137,6 +138,36 @@ public class CollectionsGenesysBatchConfiguration : IEntityTypeConfiguration<Col
     }
 }
 
+public class CollectionsGenesysMessageResultConfiguration : IEntityTypeConfiguration<CollectionsGenesysMessageResult>
+{
+    public void Configure(EntityTypeBuilder<CollectionsGenesysMessageResult> builder)
+    {
+        builder.ToTable("CollectionsGenesysMessageResults");
+        builder.HasKey(r => r.CollectionsGenesysMessageResultId);
+        builder.Property(r => r.CollectionsGenesysMessageResultId).ValueGeneratedOnAdd();
+        builder.Property(r => r.GenesysConversationId).HasMaxLength(64).IsUnicode(false).IsRequired();
+        builder.Property(r => r.GenesysMessageId).HasMaxLength(128).IsUnicode(false).IsRequired();
+        builder.Property(r => r.GenesysContactId).HasMaxLength(64).IsUnicode(false);
+        builder.Property(r => r.Status).HasMaxLength(16).IsUnicode(false).IsRequired();
+        builder.Property(r => r.FailureReason).HasMaxLength(300);
+        // One row per Genesys message, whatever the number of syncs or delivery events.
+        builder.HasIndex(r => new { r.GenesysConversationId, r.GenesysMessageId }).IsUnique().HasDatabaseName("UX_CollectionsGenesysMessageResults_Message");
+        builder.HasIndex(r => new { r.CollectionsDispatchId, r.CollectionsDispatchItemId }).HasDatabaseName("IX_CollectionsGenesysMessageResults_Dispatch_Item");
+    }
+}
+
+public class CollectionsGenesysSyncStateConfiguration : IEntityTypeConfiguration<CollectionsGenesysSyncState>
+{
+    public void Configure(EntityTypeBuilder<CollectionsGenesysSyncState> builder)
+    {
+        builder.ToTable("CollectionsGenesysSyncStates");
+        builder.HasKey(s => s.CollectionsDispatchId);
+        builder.Property(s => s.CollectionsDispatchId).ValueGeneratedNever();
+        builder.Property(s => s.Outcome).HasMaxLength(16).IsUnicode(false).IsRequired();
+        builder.Property(s => s.Error).HasMaxLength(500);
+    }
+}
+
 /// <summary>
 /// Which database failures are worth a bounded retry, and how long to wait. Only connection-level failures (a dropped or timed-out link, a failed-over server, a deadlock victim) qualify;
 /// a constraint violation or any logic error is never retried. Callers retry ONLY writes that are safe to repeat.
@@ -245,6 +276,10 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
             .ExecuteUpdateAsync(s => s.SetProperty(r => r.Phase, phase).SetProperty(r => r.ProgressPercent, percent)
                 .SetProperty(r => r.SourceRowCount, r => sourceRows ?? r.SourceRowCount), token), ct);
 
+    public Task SetRunSourceReconciledAsync(long runId, bool reconciled, CancellationToken ct) =>
+        WriteWithRetryAsync("record the reconciliation state on the review refresh", token => db.CollectionsReviewRuns.Where(r => r.CollectionsReviewRunId == runId)
+            .ExecuteUpdateAsync(s => s.SetProperty(r => r.SourceReconciled, reconciled), token), ct);
+
     private static ReviewStorageException TransientFailure(string what, int attempts, Exception ex) => new(
         $"Could not {what}: the database connection was lost or timed out after {attempts} attempt(s)" + (ReviewWriteRetryPolicy.NumberOf(ex) is { } n ? $" (SQL error {n})" : "")
         + ". Nothing was published; the previous review data is still in use. Retry.", true, ReviewWriteRetryPolicy.NumberOf(ex), ex);
@@ -348,13 +383,31 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
         public bool Sent { get; set; }
     }
 
-    private IQueryable<CollectionsReviewRecord> Filtered(long runId, ReviewQuerySpec s)
+    /// <summary>
+    /// The unit codes of the run that sit on the chosen floors, or null when no floor is chosen (All floors). The floor is derived from the unit code (<see cref="CollectionsUnitFloor"/>; the review records
+    /// carry no floor column and none is added), so it cannot be a SQL predicate: the DISTINCT unit codes of the run (narrowed by company and tower first) are classified once and the main query then keeps
+    /// the records of exactly those codes. One cheap projection of strings, never a read of whole records.
+    /// </summary>
+    private async Task<IReadOnlyCollection<string>?> FloorUnitCodesAsync(long runId, ReviewQuerySpec s, CancellationToken ct)
+    {
+        if (s.Floors is not { Count: > 0 } floors) return null;
+        var wanted = floors.ToHashSet();
+        var q = db.CollectionsReviewRecords.AsNoTracking().Where(r => r.CollectionsReviewRunId == runId);
+        if (s.CompanyId is { } company) q = q.Where(r => r.CompanyId == company);
+        if (s.TowerId is { } tower) q = q.Where(r => r.TowerId == tower);
+        if (s.TowerIds is { Count: > 0 } towers) q = q.Where(r => r.TowerId != null && towers.Contains(r.TowerId.Value));
+        var codes = await q.Select(r => r.UnitCode).Distinct().ToListAsync(ct);
+        return codes.Where(code => CollectionsUnitFloor.Matches(code, wanted)).ToList();
+    }
+
+    private IQueryable<CollectionsReviewRecord> Filtered(long runId, ReviewQuerySpec s, IReadOnlyCollection<string>? floorUnitCodes = null)
     {
         var q = db.CollectionsReviewRecords.AsNoTracking().Where(r => r.CollectionsReviewRunId == runId);
         if (s.CompanyId is { } company) q = q.Where(r => r.CompanyId == company);
         if (s.Project is { } project) { var p = Like(project); q = q.Where(r => EF.Functions.Like(r.ProjectCode, p, "\\")); }
         if (s.TowerId is { } tower) q = q.Where(r => r.TowerId == tower);
         if (s.TowerIds is { Count: > 0 } towers) q = q.Where(r => r.TowerId != null && towers.Contains(r.TowerId.Value));
+        if (floorUnitCodes is not null) q = q.Where(r => floorUnitCodes.Contains(r.UnitCode));   // empty = no unit on the chosen floors = nobody
         if (s.Unit is { } unit) { var p = Like(unit); q = q.Where(r => EF.Functions.Like(r.UnitCode, p, "\\")); }
         if (s.CustomerText is { } text)
         {
@@ -405,7 +458,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
 
     public async Task<StoredPage> QueryAsync(long runId, ReviewQuerySpec spec, bool stale, int skip, int take, CancellationToken ct)
     {
-        var q = ByStatus(WithSent(Filtered(runId, spec), spec.ContactedSinceUtc), spec.ValidationStatus, stale);
+        var q = ByStatus(WithSent(Filtered(runId, spec, await FloorUnitCodesAsync(runId, spec, ct)), spec.ContactedSinceUtc), spec.ValidationStatus, stale);
         var total = await q.CountAsync(ct);
         var rows = await q.OrderBy(x => x.Record.CompanyId).ThenBy(x => x.Record.TenantId).ThenBy(x => x.Record.UnitCode)
             .ThenBy(x => x.Record.ReminderType).ThenBy(x => x.Record.CollectionsReviewRecordId).Skip(skip).Take(take).ToListAsync(ct);
@@ -417,7 +470,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
 
     public async Task<ReviewCountsDto> CountAsync(long runId, ReviewQuerySpec specWithoutStatus, bool stale, CancellationToken ct)
     {
-        var baseQuery = WithSent(Filtered(runId, specWithoutStatus with { ValidationStatus = null }), specWithoutStatus.ContactedSinceUtc);
+        var baseQuery = WithSent(Filtered(runId, specWithoutStatus with { ValidationStatus = null }, await FloorUnitCodesAsync(runId, specWithoutStatus, ct)), specWithoutStatus.ContactedSinceUtc);
         var ready = await ByStatus(baseQuery, ReviewValidationStatus.Ready, stale).CountAsync(ct);
         var review = await ByStatus(baseQuery, ReviewValidationStatus.NeedsReview, stale).CountAsync(ct);
         var excluded = await ByStatus(baseQuery, ReviewValidationStatus.Excluded, stale).CountAsync(ct);
@@ -428,7 +481,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
     public async Task<IReadOnlyList<ReviewRecordView>> ResolveAsync(long runId, ReviewQuerySpec spec, IReadOnlyCollection<string>? keys, bool stale, int max, CancellationToken ct,
         IReadOnlyCollection<string>? unitKeys = null)
     {
-        var q = Filtered(runId, spec);
+        var q = Filtered(runId, spec, await FloorUnitCodesAsync(runId, spec, ct));
         if (keys is not null) q = q.Where(r => keys.Contains(r.RecordKey));
         if (unitKeys is not null) q = q.Where(r => unitKeys.Contains(r.CompanyId.ToString() + "|" + r.TenantId + "|" + r.UnitCode));
         var rows = await ByStatus(WithSent(q, spec.ContactedSinceUtc), spec.ValidationStatus, stale).OrderBy(x => x.Record.RecordKey).Take(max + 1).ToListAsync(ct);

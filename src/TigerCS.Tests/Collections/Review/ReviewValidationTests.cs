@@ -30,12 +30,12 @@ public sealed class ReviewValidationTests
     }
 
     [Fact]
-    public void SourceReconciliationRequired_HasARealCause_AndIsNotSilentlyCleared()
+    public void AnUnreconciledSource_IsNotACustomerReason_TheRecordKeepsItsOwnStatus()
     {
-        // Cause: the reconciliation sign-off does not cover the configured procedure.
+        // Reconciliation is a property of the source: the run records it and the send refuses on it (ReconciliationGateTests). A sound customer stays Ready, never "Needs review" for it.
         var record = Single([ReviewHarness.Row(1)], context: Context(reconciled: false));
-        Assert.Equal(ReviewValidationStatus.NeedsReview, record.ValidationStatus);
-        Assert.Contains(ReviewReasons.SourceReconciliationRequired, Reasons(record));
+        Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
+        Assert.DoesNotContain(ReviewReasons.SourceReconciliationRequired, Reasons(record));
     }
 
     [Fact]
@@ -121,21 +121,31 @@ public sealed class ReviewValidationTests
     }
 
     [Fact]
-    public void UnknownPaymentStatusIsVisibleButNotReady()
+    public void APositiveRemainderWithoutAPlanAmount_IsUnpaidAndReady()
     {
-        // The deployed report has no plan amount, so Installment cannot be classed unpaid or partially paid.
+        // The deployed report returns the remaining amount and "Installment" only: the remainder is the source of truth, so the record is Unpaid and sendable.
         var row = ReviewHarness.Row(1) with { PlanAmount = null };
         var record = Single([row]);
+        Assert.Equal(ReviewPaymentStatus.Unpaid, record.PaymentStatus);
+        Assert.DoesNotContain(ReviewReasons.PaymentStatusUnknown, Reasons(record));
+        Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
+    }
+
+    [Fact]
+    public void AContradictedRemainder_IsUnknown_VisibleButNotReady()
+    {
+        // The source says Paid but a remainder is owed: contradictory, needs review, never sent.
+        var record = Single([ReviewHarness.Row(1, status: "Paid")]);
         Assert.Equal(ReviewPaymentStatus.Unknown, record.PaymentStatus);
-        Assert.Contains(ReviewReasons.PaymentStatusUnknown, Reasons(record));
+        Assert.Contains(ReviewReasons.ContradictoryPaymentStatus, Reasons(record));
         Assert.Equal(ReviewValidationStatus.NeedsReview, record.ValidationStatus);
     }
 
     [Fact]
-    public void PartiallyPaidIsRecognisedFromPlanAmount()
+    public void APartlyPaidRemainder_IsUnpaid_WithTheRemainingAmount()
     {
         var record = Single([ReviewHarness.Row(1, amount: 200m, plan: 500m)]);
-        Assert.Equal(ReviewPaymentStatus.PartiallyPaid, record.PaymentStatus);
+        Assert.Equal(ReviewPaymentStatus.Unpaid, record.PaymentStatus);
         Assert.Equal(200m, record.RemainingAmount);
         Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
     }
@@ -176,12 +186,12 @@ public sealed class ReviewValidationTests
         var records = ReviewRecordBuilder.Build([first, second], Context()).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(2, records.Count);
         Assert.Equal(new decimal?[] { 300m, 450m }, records.OrderBy(r => r.DueDate).Select(r => r.RemainingAmount));
-        // One customer, two units, one phone: held back (repeated calls), not merged and not resolved by choosing a unit.
-        Assert.All(records, r => { Assert.Equal(ReviewValidationStatus.Excluded, r.ValidationStatus); Assert.Contains(ReviewReasons.SharedPhoneMultipleUnits, Reasons(r)); });
+        // One customer, two units, one phone: two Ready records, each its own call (the confirmed per-unit decision); not merged and not resolved by choosing a unit.
+        Assert.All(records, r => { Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus); Assert.DoesNotContain(ReviewReasons.SharedPhoneMultipleUnits, Reasons(r)); });
     }
 
     [Fact]
-    public void ThePhoneSharedByTwoUnitsBlocksBoth_NothingIsMergedOrChosen()
+    public void ThePhoneSharedByTwoUnits_HoldsNeither_NothingIsMergedOrChosen()
     {
         var a = ReviewHarness.Row(1, mobile: "0500003001", amount: 300m);
         var b = ReviewHarness.Row(2, mobile: "0500003001", amount: 450m);
@@ -190,8 +200,8 @@ public sealed class ReviewValidationTests
         Assert.Equal(new decimal?[] { 300m, 450m }, records.OrderBy(r => r.RemainingAmount).Select(r => r.RemainingAmount));
         Assert.All(records, r =>
         {
-            Assert.Contains(ReviewReasons.SharedPhoneMultipleUnits, Reasons(r));
-            Assert.Equal(ReviewValidationStatus.Excluded, r.ValidationStatus);  // blocked pending the business decision; no acknowledgement can release it
+            Assert.DoesNotContain(ReviewReasons.SharedPhoneMultipleUnits, Reasons(r));
+            Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus);     // a repeated number alone never produces a hold
         });
     }
 
@@ -228,7 +238,7 @@ public sealed class ReviewValidationTests
         // V2: original (PlanAmount) 500 = paid (AllocatedAmount) 200 + remaining 300.
         var consistent = ReviewHarness.Row(1, amount: 300m, plan: 500m) with { AllocatedAmount = 200m };
         var ok = Single([consistent]);
-        Assert.Equal(ReviewPaymentStatus.PartiallyPaid, ok.PaymentStatus);
+        Assert.Equal(ReviewPaymentStatus.Unpaid, ok.PaymentStatus);
         Assert.Equal(ReviewValidationStatus.Ready, ok.ValidationStatus);
 
         // Nothing paid: Unpaid, derived from AllocatedAmount = 0, not from the due date.

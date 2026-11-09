@@ -70,7 +70,7 @@
         </div>
         @{
             var exportReason = Model.ExportGenesysBlockedReason;
-            var exportTip = exportReason ?? "Downloads the ticked (or all eligible) customers as a CSV in the format of the chosen Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), with the amounts shown here, for a manual import. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
+            var exportTip = exportReason ?? $"Downloads every customer matching the filters, held-back ones included (or only the ticked customers), as a CSV in the format of the {Model.ExportDestinationLabel} Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), with the amounts shown here, for a manual import. It does not depend on sending eligibility: unverified data is labelled on the file. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
             var approveReason = reason is null
                 ? "Only Ready customers can be sent. Nothing is sent until you confirm the exact count, amount and Genesys contact list."
                 : reason;
@@ -80,18 +80,14 @@
                 @foreach (var name in CampaignsModel.FilterFieldNames)
                 {
                     if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
+                    if (name == "floor") { foreach (var floor in Model.FloorIds) { <input type="hidden" name="floor" value="@floor" /> } continue; }
                     <input type="hidden" name="@name" value="@(name switch {
                         "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => "", "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
                         "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />
                 }
                 <input type="hidden" name="unitKeys" value="" data-selected-units />
-                @* The destination: an existing Genesys contact list that suits the campaign type (its own list first, which is the default). Kept with the approval for the audit trail. *@
-                <label class="campaign-approve__list">Contact list
-                    <select class="field-select" name="contactList" data-contact-list aria-describedby="tip-contact-list">
-                        @foreach (var choice in Model.ContactListChoices) { <option value="@choice" selected="@(Model.SelectedContactList == choice)">@CampaignsModel.ContactListLabel(choice)@(choice == Model.ContactListChoices[0] ? " (this campaign's list)" : "")</option> }
-                    </select>
-                    <partial name="_InfoTip" model="@(new InfoTipModel("tip-contact-list", "Contact list", "The existing Genesys list these customers are added to: this campaign's own list, or another reminder list that suits it. It is checked in Genesys before anything is uploaded: it must have the required columns and no other active campaign may dial it."))" />
-                </label>
+                @* The destination is fixed: every Manual send and export goes to the dedicated Manual contact list. Each record keeps its own ReminderType. *@
+                <input type="hidden" name="contactList" value="@Model.SelectedContactList" />
                 @if (counts.Ready > 0)
                 {
                     <div class="campaign-approve__modes">
@@ -115,7 +111,7 @@
                         <button class="btn" type="submit" asp-page-handler="ExportReview" aria-describedby="tip-export-review-manual" data-export-review-manual disabled="@(reviewReason is not null)">Export review CSV</button>
                         <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-review-manual", "Export review CSV", reviewReason ?? "Downloads every customer matching the filters, including the ones held back, with their status and the reason, for review. It is not a Genesys file and uploads nothing.", "data-export-review-reason"))" />
                     </span>
-                    <span class="campaign-tally" data-selected-summary aria-live="polite">@(counts.Ready > 0 ? "0 selected" : "No eligible customers")</span>
+                    <span class="campaign-tally" data-selected-summary aria-live="polite">@(counts.Ready > 0 ? "0 selected" : "Nothing to send; export available")</span>
                     @if (counts.Ready > 0) { <button class="btn" type="button" data-clear-selection>Clear ticks</button> }
                 </div>
             </form>

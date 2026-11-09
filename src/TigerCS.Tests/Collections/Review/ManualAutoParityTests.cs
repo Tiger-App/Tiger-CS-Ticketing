@@ -19,7 +19,7 @@ public sealed class ManualAutoParityTests
             new[] { FakeSnapshotSource.Healthy(4, now.AddMinutes(-5)), FakeSnapshotSource.Healthy(32, now.AddMinutes(-5)) }, new List<UnmatchedTowerDto>(), now, 90);
 
     /// <summary>
-    /// Three customers: one whose payment status the source cannot confirm (the deployed PACT procedures report "Installment" or nothing, so it is Unknown), one whose two instalments
+    /// Three customers: one whose remaining amount the source contradicts (a remainder above the original amount, so its status is Unknown), one whose two instalments
     /// are each below 100 but add up to 130, and one plain customer. The fake source honours the per-instalment minimum it is asked for, as PACT does.
     /// </summary>
     private static ReviewHarness Harness()
@@ -29,7 +29,7 @@ public sealed class ManualAutoParityTests
         h.Source.Snapshot = Status(ReviewHarness.Now);
         h.Source.Items.AddRange(
         [
-            ReviewHarness.Row(1, 500m, day: 20, status: ""),
+            ReviewHarness.Row(1, 500m, day: 20, status: "", plan: 400m) with { AllocatedAmount = 0m },
             ReviewHarness.Row(2, 60m, day: 10) with { VoucherNumber = "INV-2A" }, ReviewHarness.Row(2, 70m, day: 20) with { VoucherNumber = "INV-2B" },
             ReviewHarness.Row(3, 250.5m, day: 10)
         ]);
@@ -132,15 +132,19 @@ public sealed class ManualAutoParityTests
     }
 
     [Fact]
-    public async Task TheExportAndTheSend_UseTheManualPopulation_SoTheHeldBackCustomerIsNeverInAFile()
+    public async Task TheExportHoldsTheWholeManualPopulation_HeldBackCustomerIncludedAndSaidSo_WhileTheSendStillLeavesHimOut()
     {
         using var h = Harness();
         await h.RefreshAsync();
         using var scope = h.NewScope();
         var export = (await scope.Export.ExportAsync(h.Manager, new SelectionRequest(Manual(), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!;
         var rows = GenesysContactTemplate.ParseCsv(export.Csv);
-        Assert.Equal(2, export.RowCount);
-        Assert.DoesNotContain(rows.Skip(1), r => r[1] == "Customer 1");                                  // held back: unconfirmed payment status
+        Assert.Equal(3, export.RowCount);
+        Assert.Contains(rows.Skip(1), r => r[1] == "Customer 1" && r[4] == "500.00");                   // held back from sending (unconfirmed payment status), still in the file, as read
         Assert.Contains(rows.Skip(1), r => r[1] == "Customer 2" && r[4] == "130.00");
+        Assert.Equal(1, export.IncludedByStatus!["NeedsReview"]); Assert.False(export.DataVerified); Assert.Contains("PaymentStatusUnknown:1", export.UnverifiedReasons!);
+        // The send population is the Ready customers only: the same filters, without customer 1.
+        var send = (await scope.Query.SummarizeAsync(h.Manager, new SelectionRequest(Manual(), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!;
+        Assert.Equal(2, send.Count); Assert.DoesNotContain(send.Contacts, c => c.CustomerName == "Customer 1");
     }
 }

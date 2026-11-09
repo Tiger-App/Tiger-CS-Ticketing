@@ -26,6 +26,8 @@
     * TOWER NAMES come from dbo.fn_Collections_TowerNames (V012): CollectionsTowers when its name is a real name, else the single name CRM holds for that company's tower. NULL = no name known (the page shows the number).
     * TOWER FILTER (@TowerId / @TowerIds): none = every tower; otherwise a payment is kept when its (company, tower number) is ANY of the chosen towers (OR), decided on the payments BEFORE they are summed per apartment,
       so totals, counts and paging cover exactly the chosen towers and an apartment can never appear twice. One scan of the snapshot whatever the number of towers.
+    * FLOOR FILTER (@Floors): none = every floor; otherwise a payment is kept when the floor of its unit (dbo.fn_CollectionsUnitFloor: derived from the unit number, no floor column exists) is ANY of the chosen floors (OR),
+      decided on the payments BEFORE they are summed per apartment, together (AND) with the tower, status, window, search and Minimum Total filters. Not set = the query is exactly what it was.
     * Search: customer name, mobile, e-mail, customer id, tower number / name, apartment, voucher, project - PACT contact data AND the linked CRM contact.
   Result sets of usp_CollectionsRcv_GetUnits (a contract with RcvReceivablesSource):
     1 scope     ScopeValid, TowerId, CompanyId, TowerNumber, TowerName   (ScopeValid = 0: unknown tower or tower/company clash; nothing else is returned; TowerNumber / TowerName only when ONE tower is chosen)
@@ -47,7 +49,8 @@ CREATE OR ALTER PROCEDURE dbo.usp_CollectionsRcv_GetUnits
     @PageNumber  int           = 1,
     @PageSize    int           = 25,
     @Only        tinyint       = NULL,     -- NULL = all five result sets; 3, 4 or 5 = ONLY that one (so tools/verify_details_total.sql can INSERT ... EXEC it and compare the units with their payments)
-    @TowerIds    nvarchar(max) = NULL      -- comma-separated local tower ids (several towers, OR); combined with @TowerId; NULL / empty with @TowerId NULL = all towers
+    @TowerIds    nvarchar(max) = NULL,     -- comma-separated local tower ids (several towers, OR); combined with @TowerId; NULL / empty with @TowerId NULL = all towers
+    @Floors      nvarchar(max) = NULL      -- comma-separated apartment floors (OR; 0 = ground floor); NULL / empty = all floors. Needs V015 (dbo.fn_CollectionsUnitFloor). A unit that is not a recognisable apartment never matches.
 AS
 BEGIN
     SET NOCOUNT ON;
@@ -97,6 +100,12 @@ BEGIN
     END;
     IF @Only IS NULL EXEC dbo.usp_CollectionsRcv_GetStatus @CompanyId = @Scope;
 
+    -- The chosen floors as a set. A value that is not a whole floor number is ignored; if nothing valid is left the selection matches nothing (never silently "all floors").
+    DECLARE @FloorSet TABLE (FloorNo int NOT NULL PRIMARY KEY);
+    DECLARE @HasFloors bit = CASE WHEN NULLIF(LTRIM(RTRIM(@Floors)), N'') IS NOT NULL THEN 1 ELSE 0 END;
+    IF @HasFloors = 1
+        INSERT @FloorSet SELECT DISTINCT TRY_CONVERT(int, LTRIM(RTRIM(value))) FROM STRING_SPLIT(@Floors, N',') WHERE TRY_CONVERT(int, LTRIM(RTRIM(value))) BETWEEN 0 AND 99;
+
     DECLARE @Like nvarchar(420) = NULL;
     IF NULLIF(LTRIM(RTRIM(@Search)), N'') IS NOT NULL
         SET @Like = N'%' + REPLACE(REPLACE(REPLACE(REPLACE(LTRIM(RTRIM(@Search)), N'\', N'\\'), N'%', N'\%'), N'_', N'\_'), N'[', N'\[') + N'%';
@@ -131,6 +140,7 @@ BEGIN
        AND s.DueDate < @LastExclusive AND (@FromDate IS NULL OR s.DueDate >= @FromDate)
        AND (@Status = 'all' OR (@Status = 'due' AND s.DueDate >= @MonthStart) OR (@Status = 'overdue' AND s.DueDate < @MonthStart))
        AND s.Amount > 0 AND s.UnitId > 0 AND LTRIM(RTRIM(s.UnitCode)) NOT IN (N'', N'0') AND s.UnitCode NOT LIKE N'%*%'
+       AND (@HasFloors = 0 OR EXISTS (SELECT 1 FROM @FloorSet f WHERE f.FloorNo = dbo.fn_CollectionsUnitFloor(s.UnitCode)))   -- the chosen floors, before aggregation and paging
     OPTION (RECOMPILE);
 
     -- 2. One row per apartment.

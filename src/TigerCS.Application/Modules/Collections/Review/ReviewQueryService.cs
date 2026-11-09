@@ -200,8 +200,8 @@ public sealed class ReviewQueryService(
     {
         if (!CollectionsSendingModes.IsManual(filter?.SendingMode)) return null;
         if (spec.ReminderType is not { } type) return "Choose the campaign type to send.";
-        if (!CampaignReminderTypes.TryResolveManualDestination(type, filter?.ContactList, out _))
-            return $"A {CampaignReminderTypes.DefaultLabel(type)} campaign cannot be sent to that contact list. Choose {string.Join(", ", CampaignReminderTypes.ManualDestinations(type).Select(CampaignReminderTypes.DefaultLabel))}.";
+        if (!CampaignReminderTypes.IsManualList(filter?.ContactList))
+            return $"Manual sends and exports go to the dedicated {CampaignReminderTypes.ManualListName} contact list; a different contact list cannot be chosen.";
         var today = clock.BusinessDate;
         if (run.AsOfDate != today) return $"The review data was built for {run.AsOfDate:dd MMM yyyy}, not today ({today:dd MMM yyyy}). Refresh it, then approve.";
         return ManualCoverageProblem(filter, run);
@@ -234,9 +234,9 @@ public sealed class ReviewQueryService(
     private async Task<ManualCalc> ManualCalculatedAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, CancellationToken ct)
     {
         // The date range, Payment status and minimum are about instalments, not about the stage record's own fields: they are applied by the calculation, not by the stored-record query.
-        // The review list's own status filter (Unpaid / PartiallyPaid / Paid / Unknown) applies only when the person chose one. Its default, UnpaidOrPartial, would silently drop every
-        // record whose payment status the source cannot confirm (with the deployed PACT procedures that is every open balance), and a Manual list would then be empty while the Auto
-        // preview, which never reads that status, shows the same customers. Such a record is listed, held back with its exact reason (PaymentStatusUnknown), never hidden.
+        // The review list's own status filter (Unpaid / PartiallyPaid / Paid / Unknown) applies only when the person chose one. Its default, UnpaidOrPartial, would silently drop a
+        // record whose remaining amount could not be determined reliably (Unknown), and a Manual list would then differ from the Auto preview, which never reads that status. Such a
+        // record is listed, held back with its exact reason (PaymentStatusUnknown), never hidden.
         var coarse = spec with
         {
             DueFrom = null, DueTo = null, MinRemaining = null, MaxRemaining = null, ValidationStatus = null,
@@ -320,6 +320,64 @@ public sealed class ReviewQueryService(
         return CollectionsResult<ManualListDto>.Ok(new(ToDto(run), ManualShown(manual.Views, null, stale).Select(v => ToDto(v, stale, manual: true)).ToList()));
     }
 
+    // ---------------------------------------------------------------- export resolution (a file, never a send)
+
+    /// <summary>
+    /// One unit of an export: the stored record as a detached copy carrying the amount and earliest due date calculated from the filters (null when the instalments are ambiguous or
+    /// unreadable: no value is ever invented), the status the Manual page shows for it, and its exact reasons.
+    /// </summary>
+    public sealed record ExportCandidate(CollectionsReviewRecord Record, ReviewValidationStatus Status, IReadOnlyList<string> Reasons);
+
+    /// <param name="Run">The approval data the candidates come from (null only with <paramref name="Error"/>).</param>
+    /// <param name="Candidates">Every customer unit that matches the filters, whatever its status.</param>
+    /// <param name="Skipped">Ticked customers that match no record of the filters any more (paid, changed); never silently kept.</param>
+    /// <param name="Stale">The approval data is older than the freshness window.</param>
+    /// <param name="Error">Why the selection cannot be resolved at all (the filter is invalid, or the data cannot answer it).</param>
+    public sealed record ExportResolution(CollectionsReviewRun? Run, IReadOnlyList<ExportCandidate> Candidates, int Skipped, bool Stale, string? Error);
+
+    /// <summary>
+    /// The customers of "Export for Genesys": EVERY customer unit of the chosen campaign type that matches Tower, Payment status, From / To and Minimum Total, with the amount Preview shows
+    /// (<see cref="ManualCalculatedAsync"/>, the one Manual calculation), whatever its validation status. A file is not a send, so nothing that only a send needs is a condition here: no Ready
+    /// status, no reconciliation, no freshness, no build date, no schedule. Only what makes the amounts WRONG rather than unverified is refused: a From date the stored instalments do not cover,
+    /// a month filter, an unknown campaign type, a list that cannot be read in one pass, more customers than one file may hold. The send path (<see cref="ResolveAsync"/>) is untouched: it
+    /// still resolves Ready records only.
+    /// </summary>
+    public async Task<ExportResolution> ResolveForExportAsync(SelectionRequest request, CancellationToken ct)
+    {
+        var run = await store.GetCurrentRunAsync(ct);
+        if (run is null) return new(null, [], 0, false, "There is no approval data yet. Refresh the approval data, then export.");
+        // The population is the Manual one in both modes (financially matching customers, schedule or not); the mode the export was started from is kept by the caller for the audit only.
+        var filter = (request.Filter ?? new ReviewFilter()) with { SendingMode = CollectionsSendingModes.Manual };
+        var parsed = TryParse(filter);
+        if (parsed.Error is not null) return new(run, [], 0, false, parsed.Error);
+        var spec = parsed.Spec!;
+        if (spec.ReminderType is null) return new(run, [], 0, false, "Choose the campaign type to export.");
+        if (ManualCoverageProblem(filter, run) is { } coverage) return new(run, [], 0, false, coverage);
+        var stale = IsStale(run);
+
+        IReadOnlyCollection<string>? units = null;
+        if (string.Equals(request.Mode, ModeSelectedUnits, StringComparison.OrdinalIgnoreCase))
+        {
+            units = (request.UnitKeys ?? []).Where(k => !string.IsNullOrWhiteSpace(k)).Select(k => k.Trim()).ToHashSet(StringComparer.Ordinal);
+            if (units.Count == 0) return new(run, [], 0, stale, "Select at least one customer, or export all customers matching the filters.");
+        }
+        else if (!string.Equals(request.Mode, ModeAllMatching, StringComparison.OrdinalIgnoreCase))
+            return new(run, [], 0, stale, "A record-key list carries no Manual filter: an export is of all customers matching the filters (AllMatching) or of the ticked customers (SelectedUnits).");
+
+        var manual = await ManualCalculatedAsync(run, spec, filter, units, stale, ct);
+        if (manual.Problem is not null) return new(run, [], 0, stale, manual.Problem);
+        var views = manual.Views;
+        var max = Math.Max(1, reviewOptions.MaxSelection);
+        if (views.Count > max) return new(run, [], 0, stale, $"More than {max:N0} customers match. Narrow the filters (for example by tower or dates) and export in parts.");
+        var excluded = (request.ExcludedKeys ?? []).ToHashSet(StringComparer.Ordinal);
+        if (excluded.Count > 0) views = views.Where(v => !excluded.Contains(v.Record.RecordKey)).ToList();
+        var skipped = units is null ? 0 : units.Count(u => !views.Any(v => UnitKey(v.Record.CompanyId, v.Record.TenantId, v.Record.UnitCode) == u));
+        var candidates = views.OrderBy(v => v.Record.CompanyId).ThenBy(v => v.Record.TenantId, StringComparer.OrdinalIgnoreCase).ThenBy(v => v.Record.UnitCode, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(v => v.Record.RecordKey, StringComparer.Ordinal)
+            .Select(v => new ExportCandidate(v.Record, ManualStatus(v, stale), ManualReasons(v, stale))).ToList();
+        return new(run, candidates, skipped, stale, null);
+    }
+
     /// <summary>Ready records of the selection. In Manual mode these are the customers the person may send now (see <see cref="ManualCalculatedAsync"/>): schedule waived, amount from the filters.</summary>
     private async Task<(IReadOnlyList<ReviewRecordView> Views, string? Problem)> ResolveReadyAsync(CollectionsReviewRun run, ReviewQuerySpec spec, ReviewFilter? filter, IReadOnlyCollection<string>? units, bool stale, int max, CancellationToken ct)
     {
@@ -365,13 +423,12 @@ public sealed class ReviewQueryService(
             r.DueDate ?? default, sharedNumbers.Contains(r.Phone))).ToList();
         var notices = new List<string>();
         if (resolved.Skipped > 0) notices.Add($"{resolved.Skipped} record(s) were left out because they are not Ready now.");
-        if (shared.Records > 0) notices.Add($"{shared.Numbers} phone number(s) appear on {shared.Records} records; approving all of them means repeated calls to the same number. This must be acknowledged.");
+        if (shared.Records > 0) notices.Add($"{shared.Numbers} phone number(s) appear on {shared.Records} records (several units of one customer, or different customers on one number). Each unit is its own contact and receives its own call; nothing is merged.");
         if (records.Count > 0 && IsStale(resolved.Run!)) notices.Add("The review data is stale; refresh it before approving.");
         return new(resolved.Run!.CollectionsReviewRunId, records.Count, Fingerprint(records), TotalsByCurrency(records),
             records.GroupBy(r => r.ReminderType.ToString()).OrderBy(g => g.Key, StringComparer.Ordinal).ToDictionary(g => g.Key, g => g.Count()),
             shared.Records, shared.Numbers, page, size, contacts, notices, ContactLists(records, request.Filter), resolved.Run.SourceReconciled,
-            CollectionsSendingModes.IsManual(request.Filter?.SendingMode) && records.Select(r => r.ReminderType).Distinct().ToList() is [var only]
-                && CampaignReminderTypes.TryResolveManualDestination(only, request.Filter?.ContactList, out var chosen) ? chosen.ToString() : null);
+            CollectionsSendingModes.IsManual(request.Filter?.SendingMode) ? CampaignReminderTypes.ManualListKey : null);
     }
 
     /// <summary>The Genesys contact list each reminder type of the selection will be uploaded to (an unconfigured list is shown as such; confirming is then refused).</summary>
@@ -380,7 +437,8 @@ public sealed class ReviewQueryService(
         var lists = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var type in records.Select(r => r.ReminderType).Distinct().OrderBy(t => t.ToString(), StringComparer.Ordinal))
         {
-            try { lists[type.ToString()] = genesys is null ? "(not configured)" : CollectionsSendingModes.IsManual(filter?.SendingMode) && CampaignReminderTypes.TryResolveManualDestination(type, filter?.ContactList, out var destination) ? genesys.ContactListIdFor(destination) : genesys.ContactListIdFor(type); }
+            // Manual: every type goes to the one dedicated list; Auto: each stage's own list. A list that is not configured is shown as such (confirming is then refused, never redirected).
+            try { lists[type.ToString()] = genesys is null ? "(not configured)" : CollectionsSendingModes.IsManual(filter?.SendingMode) ? genesys.ManualContactListId : genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { lists[type.ToString()] = "(not configured)"; }
         }
         return lists;
@@ -411,6 +469,17 @@ public sealed class ReviewQueryService(
     private static ReviewRecordDto ToDto(ReviewRecordView v, bool stale, bool manual = false)
     {
         var r = v.Record;
+        var reasons = ReasonsOf(v, stale, manual);
+        return new(r.RecordKey, r.ReminderType.ToString(), r.CompanyId, r.CustomerName, r.Phone, r.Email, r.ProjectCode, r.UnitCode,
+            r.PaymentStatus.ToString(), r.RemainingAmount, r.Currency, r.DueDate, (manual ? ManualStatus(v, stale) : v.EffectiveStatus(stale)).ToString(),
+            reasons.Select(c => new ReviewReasonDto(c, (ReviewReasons.KindOf(c) ?? ReasonKind.NeedsReview).ToString(), ReviewReasons.Explain(c))).ToList(),
+            r.Source, r.SourceReadAtUtc, v.PreviousDispatchStatus, v.PreviousDispatchAtUtc, r.TowerNumber, r.TowerName, r.TenantId);
+    }
+
+    /// <summary>The reasons a record is shown with: the stored ones, minus the schedule in Manual, plus staleness and the contact-frequency hold, which are facts of the moment, not of the record.</summary>
+    private static List<string> ReasonsOf(ReviewRecordView v, bool stale, bool manual)
+    {
+        var r = v.Record;
         var reasons = ReviewRecordBuilder.Parse(r.Reasons).ToList();
         if (manual) reasons.Remove(ReviewReasons.OutsideSchedule);
         if (stale && (r.ValidationStatus == ReviewValidationStatus.Ready || (manual && IsManuallySendable(r))) && !reasons.Contains(ReviewReasons.StaleSource))
@@ -418,11 +487,11 @@ public sealed class ReviewQueryService(
         // Held back because the customer was already added to a Genesys list today by ANOTHER record (the contact-frequency limit); say so rather than "already sent".
         if (v.AlreadySent && v.PreviousDispatchStatus is null && !reasons.Contains(ReviewReasons.ContactedToday))
             reasons.Add(ReviewReasons.ContactedToday);
-        return new(r.RecordKey, r.ReminderType.ToString(), r.CompanyId, r.CustomerName, r.Phone, r.Email, r.ProjectCode, r.UnitCode,
-            r.PaymentStatus.ToString(), r.RemainingAmount, r.Currency, r.DueDate, (manual ? ManualStatus(v, stale) : v.EffectiveStatus(stale)).ToString(),
-            reasons.Select(c => new ReviewReasonDto(c, (ReviewReasons.KindOf(c) ?? ReasonKind.NeedsReview).ToString(), ReviewReasons.Explain(c))).ToList(),
-            r.Source, r.SourceReadAtUtc, v.PreviousDispatchStatus, v.PreviousDispatchAtUtc, r.TowerNumber, r.TowerName, r.TenantId);
+        return reasons;
     }
+
+    /// <summary>The reasons of a Manual row, exactly as the Manual page lists them.</summary>
+    private static IReadOnlyList<string> ManualReasons(ReviewRecordView v, bool stale) => ReasonsOf(v, stale, manual: true);
 
     public (ReviewQuerySpec? Spec, string? Error) TryParse(ReviewFilter f)
     {
@@ -431,6 +500,7 @@ public sealed class ReviewQueryService(
             return (null, "Year and month go together (2000-2100, 1-12).");
         if (f.DueFrom is { } from && f.DueTo is { } to && from > to) return (null, "The due-date range starts after it ends.");
         if (f.TowerId is <= 0 || f.TowerIds?.Any(t => t <= 0) == true) return (null, "Choose a valid project / tower.");
+        if (CollectionsUnitFloor.HasInvalid(f.Floors)) return (null, "Choose valid floors (0-99).");
         if (f.MinRemaining is < 0 || f.MaxRemaining is < 0 || (f.MinRemaining is { } lo && f.MaxRemaining is { } hi && lo > hi))
             return (null, "Minimum remaining must not exceed maximum remaining, and neither may be negative.");
         if (new[] { f.Project, f.Unit, f.Customer, f.Reason }.Any(v => v?.Length > 200)) return (null, "Text filters are limited to 200 characters.");
@@ -495,7 +565,8 @@ public sealed class ReviewQueryService(
         return (new ReviewQuerySpec(f.CompanyId, Blank(f.Project), Blank(f.Unit), Blank(customer), digits, dueFrom, dueTo, statuses,
             f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, towerSet is { Count: 1 } onlyTower ? onlyTower[0] : null, towerSet is { Count: > 1 } manyTowers ? manyTowers : null,
             // A Manual or Auto dispatch request carries the contact-frequency limit: a customer already added to a Genesys dispatch today is held back.
-            string.IsNullOrWhiteSpace(f.SendingMode) ? null : clock.BusinessDayStartUtc), null);
+            string.IsNullOrWhiteSpace(f.SendingMode) ? null : clock.BusinessDayStartUtc,
+            CollectionsUnitFloor.Normalize(f.Floors) is { Count: > 0 } floors ? floors : null), null);
     }
 
     /// <summary>The distinct tower ids of a filter (the single id and the list together); empty = All projects.</summary>

@@ -20,6 +20,11 @@ public sealed record ReviewReasonInfo(string Code, ReasonKind Kind, string Expla
 public static class ReviewReasons
 {
     public const string SourceReconciliationRequired = "SourceReconciliationRequired";
+    /// <summary>
+    /// The unit's remaining amounts in the snapshot differ from a fresh read of the PACT procedure, and a refresh of the snapshot did not resolve the difference (a synchronization or
+    /// mapping defect). Only this unit is held back; the reconciliation diagnostics list the instalments that differ.
+    /// </summary>
+    public const string SourceMismatchUnresolved = "SourceMismatchUnresolved";
     public const string AmountPrecisionNeedsReview = "AmountPrecisionNeedsReview";
     public const string NoValidContact = "NoValidContact";
     public const string PaymentStatusUnknown = "PaymentStatusUnknown";
@@ -38,9 +43,11 @@ public static class ReviewReasons
     /// because sending it on the manual date would call the same unit twice, or the same number for two units, on that day.
     /// </summary>
     public const string ManualReminderTypeOverlap = "ManualReminderTypeOverlap";
+    /// <summary>No longer produced (each unit is its own call, whatever its number); kept so review data stored before that decision still reads. A refresh clears it.</summary>
     public const string ManualSharedPhone = "ManualSharedPhone";
     public const string LegalNoticeReleaseRequired = "LegalNoticeReleaseRequired";
     public const string LegalCaseNotApproved = "LegalCaseNotApproved";
+    /// <summary>No longer produced (each unit is its own call, whatever its number); kept so review data stored before that decision still reads. A refresh clears it.</summary>
     public const string SharedPhoneMultipleUnits = "SharedPhoneMultipleUnits";
     public const string ReminderTypeOverlap = "ReminderTypeOverlap";
     public const string SourceAmountsInconsistent = "SourceAmountsInconsistent";
@@ -53,10 +60,11 @@ public static class ReviewReasons
 
     public static readonly IReadOnlyList<ReviewReasonInfo> All =
     [
-        new(SourceReconciliationRequired, ReasonKind.NeedsReview, "The financial source has not been reconciled with PACT accounts for this procedure yet, so its balances cannot be trusted for a send."),
+        new(SourceReconciliationRequired, ReasonKind.NeedsReview, "The financial source has not been reconciled with PACT accounts for this procedure yet, so its balances cannot be trusted for a send. This is a property of the source (one gate for every customer), not of this customer's data."),
+        new(SourceMismatchUnresolved, ReasonKind.NeedsReview, "This unit's remaining amounts in the snapshot differ from a fresh read of PACT, and refreshing the snapshot did not resolve the difference. That is a synchronization or mapping defect to investigate (see Financial reconciliation); only this unit is held back."),
         new(AmountPrecisionNeedsReview, ReasonKind.NeedsReview, "The source amount has more than two decimal places that are not simple rounding noise. The real balance must be confirmed in PACT; it was not rounded."),
         new(NoValidContact, ReasonKind.NeedsReview, "There is no valid phone number that the voice campaign can call (missing, wrong length, not a UAE/international number, or several numbers in one field)."),
-        new(PaymentStatusUnknown, ReasonKind.NeedsReview, "The source does not confirm whether this balance is unpaid or partially paid. It stays visible but cannot be sent."),
+        new(PaymentStatusUnknown, ReasonKind.NeedsReview, "The remaining amount of this balance cannot be determined reliably (missing, negative, or contradicted by the source's status or its original and paid amounts). It stays visible but cannot be sent."),
         new(StaleSource, ReasonKind.NeedsReview, "The financial data was read too long ago. Refresh the data before sending."),
         new(MissingUnitIdentity, ReasonKind.NeedsReview, "The record has no valid unit identity, so the balance cannot be tied to one apartment."),
         new(MissingCustomerIdentity, ReasonKind.NeedsReview, "The customer, company or name is missing on the source record."),
@@ -68,7 +76,7 @@ public static class ReviewReasons
         new(CurrencyNeedsReview, ReasonKind.NeedsReview, "The currency is not AED; amounts cannot be added or sent until reviewed."),
         new(OutsideSchedule, ReasonKind.Exclusion, "Today is not a scheduled send day for this reminder type. In Manual mode an authorized person can still send it today."),
         new(ManualReminderTypeOverlap, ReasonKind.ManualOnly, "Manual sending is held back: this unit already qualifies for another reminder type that is scheduled today, so it would be called twice."),
-        new(ManualSharedPhone, ReasonKind.ManualOnly, "Manual sending is held back: the same phone number is on several units that would be sent today, so it would be called once per record."),
+        new(ManualSharedPhone, ReasonKind.ManualOnly, "Stored before the per-unit calling decision: a phone number shared by several units no longer holds a record back (each unit is its own call). Refresh the approval data."),
         new(LegalNoticeReleaseRequired, ReasonKind.Exclusion, "Sending legal notices to customers has not been released (needs an approved legal workflow)."),
         new(LegalCaseNotApproved, ReasonKind.Exclusion, "Legal Case records are internal Legal referrals; calling customers for them needs an explicit business decision."),
         new(SourceAmountsInconsistent, ReasonKind.NeedsReview, "The source's original amount, paid amount and remaining amount do not add up (original must equal paid plus remaining)."),
@@ -77,7 +85,7 @@ public static class ReviewReasons
         new(ContactSourceConflict, ReasonKind.NeedsReview, "CRM and PACT give different phone numbers (or e-mails) for this unit. Two different people are never merged; CRM alone is shown and a person must confirm."),
         new(CrmUnavailable, ReasonKind.NeedsReview, "CRM contact data is switched on but could not be used (never loaded, too old, or unreadable), so the contact may be incomplete. This is a service problem, not a missing value in CRM; nothing is sent until it is back."),
         new(ContactedToday, ReasonKind.Exclusion, "This customer was already added to a Genesys contact list today. The contact-frequency limit is one contact per customer per day; try again tomorrow."),
-        new(SharedPhoneMultipleUnits, ReasonKind.Exclusion, "The same phone number is on several units (or several customers). Sending would call it once per record, and the business has not yet decided how to handle that, so these records are held back."),
+        new(SharedPhoneMultipleUnits, ReasonKind.Exclusion, "Stored before the per-unit calling decision: a phone number shared by several units no longer holds a record back (each unit is its own call). Refresh the approval data."),
         new(ReminderTypeOverlap, ReasonKind.Exclusion, "This unit qualifies for more than one reminder type today (for example Current Month and Legal Notice on day 14). Sending both would call twice on the same day, and the business has not yet decided which takes priority, so these records are held back.")
     ];
 

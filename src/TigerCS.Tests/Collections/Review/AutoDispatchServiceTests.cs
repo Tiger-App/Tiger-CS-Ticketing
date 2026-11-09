@@ -169,15 +169,15 @@ public sealed class AutoDispatchServiceTests
     // ------------------------------------------------------------ the safety rules apply exactly as for a person
 
     [Fact]
-    public async Task Reconciliation_Contacts_SharedPhones_AndLegalRestrictions_StillKeepCustomersOut()
+    public async Task Reconciliation_Contacts_AndLegalRestrictions_StillKeepCustomersOut_ASharedNumberDoesNot()
     {
         using var unreconciled = await SeededAsync(configure: h => h.Campaign.FinancialSourceValidated = false);
-        Assert.Equal("NothingReady", CurrentMonth(await RunAsync(unreconciled)).Outcome); Assert.Empty(unreconciled.Scheduler.Dispatches);
+        Assert.Equal("NotReconciled", CurrentMonth(await RunAsync(unreconciled)).Outcome); Assert.Empty(unreconciled.Scheduler.Dispatches);
 
         using var contacts = await SeededAsync(rows: [ReviewHarness.Row(1, mobile: "123"), ReviewHarness.Row(2, mobile: "971500000009"), ReviewHarness.Row(3, mobile: "971500000009"), ReviewHarness.Row(4)]);
         var result = CurrentMonth(await RunAsync(contacts));
-        Assert.Equal(("Dispatched", 1), (result.Outcome, result.Count));                              // only the customer with a valid, unshared number
-        Assert.Equal("Customer 4", (await DispatchesAsync(contacts)).Single().Items.Single().CustomerName);
+        Assert.Equal(("Dispatched", 3), (result.Outcome, result.Count));                              // the invalid number stays out; a shared number is one call per unit
+        Assert.Equal(["Customer 2", "Customer 3", "Customer 4"], (await DispatchesAsync(contacts)).Single().Items.Select(i => i.CustomerName).Order());
 
         // Legal notices are sent only once released, and an internal legal referral is never dispatched to a customer.
         var notice = ReviewHarness.Row(1, 2000m) with { DueDate = new DateTime(2026, 9, 10) };

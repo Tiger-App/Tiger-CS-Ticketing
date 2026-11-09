@@ -87,7 +87,6 @@ public sealed class CollectionsUnitPaymentSummaryAppService(
         if (linked.CrmCompanyAmbiguous) reasons.Add("CrmCompanyAmbiguous");
         // CRM linking is on but its data cannot be used: the contact is PACT-only and UNCONFIRMED - a service problem, not "CRM has no value".
         if (availability is { Blocks: true } && knownCrm is null) reasons.Add("CrmUnavailable");
-        if (linked.SourceConflict) reasons.Add("ContactSourceConflict");
 
         var (financial, detail, due, overdue, total, instalments, reason) = Financials(oneAccount, data, today, maxAgeMinutes, accounts.Count > 1);
         var companyStatus = data.Snapshot.Companies.FirstOrDefault(c => c.CompanyId == (oneAccount?.CompanyId ?? companyId));

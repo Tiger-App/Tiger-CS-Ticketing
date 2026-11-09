@@ -16,7 +16,7 @@
             <p class="receivables-eyebrow">Collections</p>
             <h1 class="page-title">Financial source: snapshot consistency and sign-off</h1>
         </div>
-        <div class="page-header__actions"><a class="btn" href="/Collections/Campaigns">Campaigns</a></div>
+        <div class="page-header__actions"><a class="btn" href="/Collections/Campaigns">Campaigns</a><a class="btn" href="/Collections/CampaignList" data-history-link>Campaign List</a></div>
     </div>
     @if (Model.Notice is { } notice) { <div class="receivables-notice" role="status" data-reconciliation-notice>@notice</div> }
     @if (Model.Overview is not { } overview)
@@ -34,6 +34,19 @@
                 @if (gate.EvidenceAtUtc is { } at) { <text> · Automated evidence: <strong>@CollectionsDisplay.DubaiTime(at)</strong></text> }
             </p>
             @if (gate.Warning is { } warning) { <p class="receivables-notice receivables-notice--warning" role="alert" data-gate-warning>@warning</p> }
+            @if (gate.Companies is { Count: > 0 } companies)
+            {
+                <ul class="reconciliation-companies" data-gate-companies>
+                    @foreach (var c in companies)
+                    {
+                        <li data-gate-company="@c.CompanyId" data-gate-company-code="@c.Code">
+                            <strong>@c.CompanyName: @ReconciliationModel.GateCodeText(c.Code).</strong> @c.Message
+                            @if (c.HeldUnits.Count > 0) { <span class="receivables-meta" data-held-units>Held back: @string.Join(", ", c.HeldUnits.Select(u => u.UnitCode))</span> }
+                        </li>
+                    }
+                </ul>
+                <p class="receivables-meta">Each company is decided on its own: a company whose check is missing, failed or superseded is closed; the other is not held back by it. After each successful snapshot refresh the check runs by itself for that company; when it finds differences the company's snapshot is refreshed from PACT once and compared again, and only units that still differ are held back.</p>
+            }
             <div class="reconciliation-basis" data-reconciliation-basis>
                 <p><strong>Two different things are checked here:</strong></p>
                 <ul>
@@ -52,13 +65,20 @@
         {
             <div class="panel" data-latest-run="@run.Status">
                 <h2 class="campaign-snapshot__title">Latest run: @ReconciliationModel.StateText(run.Status)</h2>
-                <p class="receivables-meta">Started @CollectionsDisplay.DubaiTime(run.StartedUtc)@(run.FinishedUtc is { } f ? $", finished {CollectionsDisplay.DubaiTime(f)}" : "") · due dates @run.From.ToString("yyyy-MM-dd") to @run.Through.ToString("yyyy-MM-dd") · tolerance AED @run.Tolerance.ToString("0.00###")</p>
+                <p class="receivables-meta" data-run-trigger="@run.Trigger">Started @CollectionsDisplay.DubaiTime(run.StartedUtc)@(run.FinishedUtc is { } f ? $", finished {CollectionsDisplay.DubaiTime(f)}" : "") · @ReconciliationModel.TriggerText(run.Trigger) · due dates @run.From.ToString("yyyy-MM-dd") to @run.Through.ToString("yyyy-MM-dd") · tolerance AED @run.Tolerance.ToString("0.00###")</p>
                 @foreach (var c in run.Companies)
                 {
                     <div class="reconciliation-company" data-company="@c.CompanyId" data-company-status="@c.Status">
                         <h3>@c.CompanyName: @ReconciliationModel.StateText(c.Status)</h3>
                         <p class="receivables-meta">@(c.SnapshotOrigin ?? ReconciliationBasis.SnapshotSide(c.CompanyId)) @ReconciliationBasis.SourceSide(c.CompanyId) Procedure @c.Procedure@(c.SnapshotSuccessUtc is { } s ? $" · snapshot published {CollectionsDisplay.DubaiTime(s)}" : "")</p>
                         @if (c.Message is { } message) { <p>@message</p> }
+                        @if (c.Recovery is { } rec)
+                        {
+                            <p class="receivables-meta" data-recovery="@(rec.Resolved ? "Resolved" : rec.Refreshed ? "Persistent" : "RefreshFailed")">
+                                @(rec.Reason == ReconciliationRecoveryReasons.StaleSnapshot ? "The snapshot was too old to compare" : $"The first comparison found {rec.MismatchedUnitsBefore:N0} differing unit(s)"); the company's snapshot was refreshed from PACT once (@rec.RefreshStatus@(rec.RefreshMessage is { } rm ? $": {rm}" : ""))@(rec.Refreshed ? (rec.Resolved ? " and the second comparison agrees: the differences were changes in PACT since the previous refresh." : " and the differences persist: a synchronization or mapping defect to investigate. Only the listed units are held back.") : "; the previous snapshot is still in use.")
+                                @if (rec.SnapshotBeforeUtc is { } sb) { <text>Snapshot before @CollectionsDisplay.DubaiTime(sb)</text> }@if (rec.SnapshotAfterUtc is { } sa) { <text>, after @CollectionsDisplay.DubaiTime(sa)</text> }
+                            </p>
+                        }
                         @if (c.Comparison is { } cmp)
                         {
                             <ul>

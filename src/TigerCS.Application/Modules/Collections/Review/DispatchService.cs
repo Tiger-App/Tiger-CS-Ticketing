@@ -85,16 +85,21 @@ public sealed class DispatchService(
         if (resolved.Error is not null) return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, resolved.Error);
         if (resolved.Records.Count == 0)
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, "No Ready records are selected.");
+        // The reconciliation gate: one decision about the SOURCE per company (sign-off, procedure, automated evidence), checked here as it stands NOW and again before the upload. A customer's
+        // own Ready status says the customer's data is sound; it never says the source is reconciled. A company that is not reconciled refuses its customers; it never holds the other company back.
+        if (ReviewRefreshService.ClosedMessage(balances.Gate(), resolved.Records.Select(r => r.CompanyId)) is { } closed)
+            return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, closed);
         var fingerprint = ReviewQueryService.Fingerprint(resolved.Records);
         if (resolved.Records.Count != request.ExpectedCount || !string.Equals(fingerprint, request.ExpectedFingerprint, StringComparison.OrdinalIgnoreCase))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
                 "The records, amounts or contacts changed since this list was shown. Review the current list and confirm again.");
         if (query.IsStale(resolved.Run!))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired, "The review data is stale. Refresh it and review again.");
-        // Defence in depth: such records are already held back as Excluded, so this can only happen through a stale or tampered list.
-        if (ReviewQueryService.SharedPhones(resolved.Records).Records > 0 || resolved.Records.Any(r => !IsVoiceEligible(r.Phone)))
+        // Defence in depth: such records are already held back, so this can only happen through a stale or tampered list. A number shared by several units is NOT refused: each unit is its own
+        // contact record and its own call (the confirmed business decision); the unit-level duplicate protections (record key, live-record index, contact-frequency per unit) stay in force.
+        if (resolved.Records.Any(r => !IsVoiceEligible(r.Phone)))
             return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.ReviewRequired,
-                "The list contains records that share a phone number or have no callable phone. Repeated calls are blocked pending a business decision; review the current list.");
+                "The list contains records without a callable phone number. Review the current list.");
         var types = resolved.Records.Select(r => r.ReminderType).Distinct().ToList();
         var manual = CollectionsSendingModes.IsManual(request.Selection.Filter?.SendingMode);
         if (manual && types.Count != 1)
@@ -104,9 +109,13 @@ public sealed class DispatchService(
         foreach (var type in types)
         {
             string listId;
-            try { listId = manual ? genesys.ManualContactListIdFor(type, request.Selection.Filter?.ContactList) : genesys.ContactListIdFor(type); }
+            if (manual && !CampaignReminderTypes.IsManualList(request.Selection.Filter?.ContactList))
+                return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest,
+                    $"Manual sends go to the dedicated {CampaignReminderTypes.ManualListName} contact list; a different contact list cannot be chosen.");
+            // Missing / invalid Manual id is a configuration error: it never falls back to another list.
+            try { listId = manual ? genesys.ManualContactListId : genesys.ContactListIdFor(type); }
             catch (InvalidOperationException ex) { return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, ex.Message); }
-            if (await CheckDestinationAsync(type, listId, ct) is { } destinationProblem)
+            if (await CheckDestinationAsync(type, listId, manual, ct) is { } destinationProblem)
                 return CollectionsResult<DispatchDto>.Fail(CollectionsOutcome.InvalidRequest, destinationProblem);
         }
 
@@ -154,12 +163,14 @@ public sealed class DispatchService(
     /// the intended consumer of its own list and is not interference. Anything that cannot be checked is refused.</item>
     /// </list>
     /// </summary>
-    private async Task<string?> CheckDestinationAsync(CampaignReminderType type, string listId, CancellationToken ct)
+    private async Task<string?> CheckDestinationAsync(CampaignReminderType type, string listId, bool manualList, CancellationToken ct)
     {
         // The list's own label, and the one campaign that is meant to dial it: the type's stage campaign, but only when the list IS that type's own list.
+        // The dedicated Manual list is labelled by its own name; its intended consumer is a campaign of that same name (assumption, documented).
         var owner = Enum.GetValues<CampaignReminderType>().FirstOrDefault(t => string.Equals(genesys.ContactListIds.GetValueOrDefault(t.ToString()), listId, StringComparison.OrdinalIgnoreCase), type);
-        var label = CampaignReminderTypes.DefaultLabel(owner);
-        var intended = string.Equals(owner.ToString(), type.ToString(), StringComparison.Ordinal) ? CampaignReminderTypes.StageName(type) : null;
+        var label = manualList ? CampaignReminderTypes.ManualListName : CampaignReminderTypes.DefaultLabel(owner);
+        var intended = manualList ? CampaignReminderTypes.ManualListName
+            : string.Equals(owner.ToString(), type.ToString(), StringComparison.Ordinal) ? CampaignReminderTypes.StageName(type) : null;
         GenesysContactListInfo list;
         try { list = await client.GetContactListAsync(listId, ct); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -169,7 +180,7 @@ public sealed class DispatchService(
             return $"The {label} contact list could not be checked in Genesys. Nothing was uploaded.";
         }
         if (list.Outcome != GenesysUploadOutcome.Accepted)
-            return $"The {label} contact list could not be checked in Genesys ({list.Error}). Nothing was uploaded.";
+            return $"The {label} contact list could not be checked in Genesys ({list.Error}){ListConfigurationHint(manualList ? CampaignReminderTypes.ManualListKey : owner.ToString(), listId, list.HttpStatus)} Nothing was uploaded.";
         var missing = GenesysContactTemplate.Columns.Where(c => !list.Columns.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
         if (missing.Count > 0)
             return $"The {label} contact list does not have the required column(s): {string.Join(", ", missing)}. Nothing was uploaded.";
@@ -190,6 +201,17 @@ public sealed class DispatchService(
             return $"The Genesys campaign \"{string.Join("\", \"", active.Select(c => c.Name))}\" is active and dials the {label} contact list, so these customers would be dialled at once. Switch it off in Genesys, or choose the other list. Nothing was uploaded.";
         return null;
     }
+
+    /// <summary>
+    /// What to correct when Genesys answers a contact list read with 404 or 403: the exact configuration key and id (identifiers, not secrets), so nobody has to guess which of the five lists or which
+    /// setting is wrong. The send is never redirected to another list: it stops, and the list stays whatever is configured.
+    /// </summary>
+    internal static string ListConfigurationHint(string owner, string listId, int? httpStatus) => httpStatus switch
+    {
+        404 => $" Check Collections:GenesysOutbound:ContactListIds:{owner} (list id {listId}): that list must exist in the organization of the OAuth client, in the region of Collections:GenesysOutbound:ApiBaseUrl / LoginBaseUrl.",
+        403 => " The OAuth client needs permission to view outbound contact lists (outbound:contactList:view).",
+        _ => ""
+    };
 
     /// <summary>
     /// The filter kept with the approval. A Manual approval stores its EFFECTIVE minimum (the review default when none was given) so that the revalidation before the upload and the paid-after-upload
@@ -225,6 +247,8 @@ public sealed class DispatchService(
             try { _ = genesys.ContactListIdFor(type); }
             catch (InvalidOperationException) { blockers.Add($"No valid Genesys contact list id is configured for {type} (Collections:GenesysOutbound:ContactListIds:{type})."); }
         }
+        try { _ = genesys.ManualContactListId; }
+        catch (InvalidOperationException ex) { blockers.Add(ex.Message); }
         return CollectionsResult<DispatchReadinessDto>.Ok(new(blockers.Count == 0, blockers, permissions.CanSendReminders));
     }
 
@@ -355,7 +379,10 @@ public sealed class DispatchService(
             return false;
         }
 
+        // The reconciliation gate again, with the configuration as it is NOW: a sign-off withdrawn or evidence expired since the approval stops the upload.
         var companies = items.Select(i => i.CompanyId).Distinct().Order().ToList();
+        if (ReviewRefreshService.ClosedMessage(balances.Gate(), companies) is { } closedNow)
+            return await StopAsync(dispatch, DispatchStatus.ReviewRequired, closedNow + " Nothing was sent.", ct);
         await store.SetDispatchPhaseAsync(dispatch.CollectionsDispatchId, $"Checking current balances (company {string.Join(" and ", companies)}); this can take several minutes", ct);
         CurrentBalanceReader.Result read;
         try
@@ -369,6 +396,9 @@ public sealed class DispatchService(
         // The lease may have been lost between the last heartbeat and now; do not write on someone else's dispatch.
         if (!await store.RenewLeaseAsync(dispatch.CollectionsDispatchId, owner, clock.UtcNow, LeaseTtl, ct)) throw new LeaseLostException();
         await store.SetRevalidationMsAsync(dispatch.CollectionsDispatchId, read.ElapsedMs, ct);
+        // ... and once more bound to the snapshot publish the balances were just read from: a refresh between the approval and now that has not been checked yet is not sent on.
+        if (ReviewRefreshService.ClosedMessage(read.Gate, companies) is { } closedForPublish)
+            return await StopAsync(dispatch, DispatchStatus.ReviewRequired, closedForPublish + " Nothing was sent.", ct);
         var current = read.ByAsOfDate[asOf];
 
         var settled = new List<CollectionsDispatchItem>(cancelledItems);
@@ -456,7 +486,14 @@ public sealed class DispatchService(
         // The destination list of each type: its own, or (Manual) the one the person chose at approval, which is kept in the stored filter.
         var manualSend = ManualFilters.FromStored(dispatch.FilterJson) is not null;
         var chosenList = ManualFilters.StoredContactList(dispatch.FilterJson);
-        string ListFor(CampaignReminderType type) => manualSend ? genesys.ManualContactListIdFor(type, chosenList) : genesys.ContactListIdFor(type);
+        string ListFor(CampaignReminderType type) => manualSend ? genesys.ManualContactListId : genesys.ContactListIdFor(type);
+        // An approval created before the dedicated list existed may carry another stored list: it is stopped, never rerouted.
+        if (manualSend && !CampaignReminderTypes.IsManualList(chosenList))
+        {
+            await store.UpdateItemsAsync(all, ct);
+            return await StopAsync(dispatch, DispatchStatus.Failed,
+                $"This approval was made for a different contact list. Manual sends go to the {CampaignReminderTypes.ManualListName} list only. Nothing was uploaded; approve again.", ct);
+        }
         try { foreach (var type in items.Select(i => i.ReminderType).Distinct()) _ = ListFor(type); }
         catch (InvalidOperationException ex)
         {
@@ -541,11 +578,17 @@ public sealed class DispatchService(
     /// therefore run one at a time per campaign name inside this process (the second waits, then finds the first one's campaign and reuses it). Several API instances would need
     /// Genesys's own unique-name rule as the backstop - it refuses a second campaign with the same name, which the batch then reports as not created.
     /// </summary>
+    private bool IsManualList(string listId)
+    {
+        try { return string.Equals(listId, genesys.ManualContactListId, StringComparison.OrdinalIgnoreCase); }
+        catch (InvalidOperationException) { return false; }
+    }
+
     private async Task<bool> EnsureCampaignAsync(CollectionsDispatch dispatch, CollectionsGenesysBatch batch, CancellationToken ct)
     {
         // Right before the upload the destination is checked again: the list must still fit the upload and no OTHER active campaign may dial it. Anything that cannot be verified fails the batch with
         // nothing uploaded.
-        var checkProblem = await CheckDestinationAsync(batch.ReminderType, batch.ContactListId, ct);
+        var checkProblem = await CheckDestinationAsync(batch.ReminderType, batch.ContactListId, IsManualList(batch.ContactListId), ct);
         if (checkProblem is not null)
         {
             logger.LogWarning("Dispatch {DispatchId} batch {BatchId}: the destination contact list failed its check before the upload.", dispatch.CollectionsDispatchId, batch.CollectionsGenesysBatchId);
@@ -692,6 +735,9 @@ public sealed class DispatchService(
         contactListId, item.Phone, item.CustomerName, item.Email, settings.LabelFor(item.ReminderType),
         MoneyNormalizer.Format(item.Amount), item.DueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         Callable: item.VoiceEligible && IsVoiceEligible(item.Phone));
+
+    /// <summary>Why nothing is approved or sent while the financial source is not reconciled.</summary>
+    public const string NotReconciledMessage = "The financial source is not reconciled (no valid sign-off and snapshot-consistency evidence for the PACT procedure in use), so nothing can be approved or sent. Reconcile it first.";
 
     /// <summary>A callable contact needs a valid international (E.164) number.</summary>
     public static bool IsVoiceEligible(string? phone) => !string.IsNullOrEmpty(phone) && System.Text.RegularExpressions.Regex.IsMatch(phone, @"^\+[1-9]\d{7,14}$");

@@ -17,7 +17,8 @@ namespace TigerCS.Application.Modules.Collections.Review;
 public sealed record ReviewBuildContext(
     DateOnly AsOfDate, DateTime SourceReadAtUtc, string SourceLabel, string Currency, bool SourceReconciled,
     bool LegalNoticeReleased, bool LegalCaseApproved, decimal FloatTolerance,
-    IReadOnlyDictionary<string, string> StatusMap, CrmLinkSet? Crm = null, DateOnly? PolicyStart = null);
+    IReadOnlyDictionary<string, string> StatusMap, CrmLinkSet? Crm = null, DateOnly? PolicyStart = null,
+    IReadOnlySet<(int CompanyId, string TenantId, long UnitId)>? HeldUnits = null);
 
 public sealed record ReviewBuildResult(IReadOnlyList<CollectionsReviewRecord> Records, int FloatNormalizedRows, int SettledRows, int CancelledRows = 0);
 
@@ -67,8 +68,10 @@ public static class ReviewRecordBuilder
             var linked = crm.Link(unit.Key.CompanyId, unit.Key.Code,
                 new SourceContact(first.FullName.Trim(), PhoneNormalizer.Normalize(first.Mobile).E164, NormalizeEmail(first.Email)));
             var email = linked.Email;
-            var contactConflict = unitRows.Select(r => (r.Row.FullName.Trim(), Phone: PhoneNormalizer.Normalize(r.Row.Mobile).E164,
-                Email: NormalizeEmail(r.Row.Email), r.Row.ProjectCode)).Distinct().Count() > 1;
+            // PACT rows that disagree on name / phone / e-mail only matter when CRM does not supply the contact: for a uniquely identified CRM customer the CRM contact is used.
+            var crmSupplies = linked.CrmStatus == CrmLinkStatus.Single;
+            var contactConflict = unitRows.Select(r => crmSupplies ? ("", "", "", r.Row.ProjectCode) : (r.Row.FullName.Trim(), PhoneNormalizer.Normalize(r.Row.Mobile).E164,
+                NormalizeEmail(r.Row.Email), r.Row.ProjectCode)).Distinct().Count() > 1;
 
             // The customer's unpaid instalments, ALL of them, stored on every stage record: a Manual send calculates its amount from them and the person's filters, like the preview's
             // Due / Overdue / Total columns. The stage policy itself looks only from the configured start date on, exactly as the preview decides who is a candidate.
@@ -96,7 +99,8 @@ public static class ReviewRecordBuilder
                 var unresolved = unitRows.Any(r => !r.Money.IsResolved);
                 if (unresolved) reasons.Add(ReviewReasons.AmountPrecisionNeedsReview);
 
-                var statuses = stageRows.Select(r => PaymentStatusRules.Derive(r.Row.SourceStatus, r.Amount, r.Row.PlanAmount, context.StatusMap, r.Row.AllocatedAmount)).ToList();
+                // Payment status follows the verified remaining amount (0 = Paid, more = Unpaid); only a missing, invalid or contradicted remainder is Unknown and holds the record.
+                var statuses = stageRows.Select(r => PaymentStatusRules.Derive(r.Row.SourceStatus, r.Amount, r.Row.PlanAmount, r.Row.AllocatedAmount)).ToList();
                 if (stageRows.Any(r => r.Row is { PlanAmount: { } plan, AllocatedAmount: { } paid } && !PaymentStatusRules.AmountsAddUp(plan, paid, r.Money.Raw)))
                     reasons.Add(ReviewReasons.SourceAmountsInconsistent);
                 if (statuses.Contains(ReviewPaymentStatus.Paid) || stageRows.Any(r => string.Equals(r.Row.SourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase)))
@@ -112,11 +116,13 @@ public static class ReviewRecordBuilder
                 if (contactConflict) reasons.Add(ReviewReasons.ConflictingContactDetails);
                 if (ambiguousTenants.Contains((unit.Key.CompanyId, unit.Key.Tenant))) reasons.Add(ReviewReasons.UnitAllocationNeedsReview);
                 if (!context.Currency.Equals("AED", StringComparison.Ordinal)) reasons.Add(ReviewReasons.CurrencyNeedsReview);
-                if (!context.SourceReconciled) reasons.Add(ReviewReasons.SourceReconciliationRequired);
+                // Reconciliation is a property of the SOURCE, not of the customer: the run records it (CollectionsReviewRun.SourceReconciled) and the send refuses on it as one gate per company.
+                // It is never stamped on each record, so a customer's own status says what is wrong with the customer's data, and nothing else. The one exception IS the customer's data:
+                // a unit whose snapshot amounts differ persistently from PACT after a refresh is held back on its own (SourceGate.HeldUnits), while every other unit stays as it is.
+                if (context.HeldUnits is { Count: > 0 } held && held.Contains((unit.Key.CompanyId, unit.Key.Tenant, (long)(unit.Key.UnitId ?? 0)))) reasons.Add(ReviewReasons.SourceMismatchUnresolved);
                 if (linked.Phone.Length == 0) reasons.Add(ReviewReasons.NoValidContact);
                 if (linked.CrmCustomerAmbiguous) reasons.Add(ReviewReasons.CrmCustomerAmbiguous);
                 if (linked.CrmCompanyAmbiguous) reasons.Add(ReviewReasons.CrmCompanyAmbiguous);
-                if (linked.SourceConflict) reasons.Add(ReviewReasons.ContactSourceConflict);
                 if (crm.Availability.Blocks) reasons.Add(ReviewReasons.CrmUnavailable);
 
                 if (!CollectionsCampaignPolicy.ScheduledDates(stage, context.AsOfDate).Contains(context.AsOfDate))
@@ -165,9 +171,11 @@ public static class ReviewRecordBuilder
     }
 
     /// <summary>
-    /// Repeated calls are blocked, not merged and not silently prioritised, until the business decides the policy. Among records that could
-    /// be sent today (outside-schedule records are not candidates, so a unit's Follow Up on day 28 does not collide with its Current Month on day 14):
-    /// a unit with several reminder types gets <c>ReminderTypeOverlap</c>; a phone number used by several units gets <c>SharedPhoneMultipleUnits</c>.
+    /// Repeated calls to ONE UNIT are blocked, not merged and not silently prioritised, until the business decides the policy. Among records that could be sent today (outside-schedule
+    /// records are not candidates, so a unit's Follow Up on day 28 does not collide with its Current Month on day 14) a unit with several reminder types gets <c>ReminderTypeOverlap</c>.
+    /// A phone number is NOT a unit: by the confirmed business decision every property unit is its own contact record and receives its own call, even when several units (of one customer
+    /// or of different customers) share a number. A repeated number alone therefore never holds a record back (<c>SharedPhoneMultipleUnits</c> and <c>ManualSharedPhone</c> are no longer
+    /// produced; they remain defined for review data stored before the decision).
     /// </summary>
     private static void MarkRepeatedCalls(List<CollectionsReviewRecord> records)
     {
@@ -178,8 +186,6 @@ public static class ReviewRecordBuilder
 
         foreach (var group in candidates.GroupBy(Unit).Where(g => g.Count() > 1))
             foreach (var record in group) Flag(record, ReviewReasons.ReminderTypeOverlap);
-        foreach (var group in candidates.Where(r => r.Phone.Length > 0).GroupBy(r => r.Phone).Where(g => g.Select(Unit).Distinct().Count() > 1))
-            foreach (var record in group) Flag(record, ReviewReasons.SharedPhoneMultipleUnits);
 
         foreach (var (record, reasons) in flagged)
         {
@@ -191,9 +197,9 @@ public static class ReviewRecordBuilder
     }
 
     /// <summary>
-    /// For a record whose ONLY reason is <c>OutsideSchedule</c>, works out what the repeated-call rules would say if an authorized person sent that reminder type manually today, and
-    /// stores it as a marker (the record's status does not change: in Auto mode it is outside the schedule either way). The would-be send set is the records scheduled today plus the
-    /// outside-schedule records of the SAME reminder type, so manual sending never skips the duplicate-call protection that scheduled records get.
+    /// For a record whose ONLY reason is <c>OutsideSchedule</c>, works out what the repeated-call rule would say if an authorized person sent that reminder type manually today, and
+    /// stores it as a marker (the record's status does not change: in Auto mode it is outside the schedule either way): the unit is already scheduled today under another reminder type
+    /// (<c>ManualReminderTypeOverlap</c>), so manual sending never skips the one-call-per-unit protection that scheduled records get. A shared number is not a marker (see <see cref="MarkRepeatedCalls"/>).
     /// </summary>
     private static void MarkManualRepeatedCalls(List<CollectionsReviewRecord> records, List<CollectionsReviewRecord> candidates)
     {
@@ -202,21 +208,8 @@ public static class ReviewRecordBuilder
         var manual = records.Where(OnlyOutsideSchedule).ToList();
         if (manual.Count == 0) return;
         var candidateUnits = candidates.Select(Unit).ToHashSet();
-        var candidatePhoneUnits = candidates.Where(r => r.Phone.Length > 0).GroupBy(r => r.Phone).ToDictionary(g => g.Key, g => g.Select(Unit).ToHashSet());
-        var sameTypePhoneUnits = manual.Where(r => r.Phone.Length > 0).GroupBy(r => (r.ReminderType, r.Phone)).ToDictionary(g => g.Key, g => g.Select(Unit).ToHashSet());
         foreach (var record in manual)
-        {
-            var markers = new List<string>();
-            if (candidateUnits.Contains(Unit(record))) markers.Add(ReviewReasons.ManualReminderTypeOverlap);
-            if (record.Phone.Length > 0)
-            {
-                var others = new HashSet<(int, string, int?, string)>(sameTypePhoneUnits[(record.ReminderType, record.Phone)]);
-                if (candidatePhoneUnits.TryGetValue(record.Phone, out var scheduled)) others.UnionWith(scheduled);
-                others.Remove(Unit(record));
-                if (others.Count > 0) markers.Add(ReviewReasons.ManualSharedPhone);
-            }
-            if (markers.Count > 0) record.Reasons = Serialize(Parse(record.Reasons).Concat(markers));
-        }
+            if (candidateUnits.Contains(Unit(record))) record.Reasons = Serialize(Parse(record.Reasons).Append(ReviewReasons.ManualReminderTypeOverlap));
     }
 
     /// <summary>

@@ -2,12 +2,13 @@ using Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using TigerCS.Application.Modules.Collections.Abstractions;
+using TigerCS.Application.Modules.Collections.Reconciliation;
 using TigerCS.Application.Modules.Collections.Services;
 
 namespace TigerCS.Infrastructure.BackgroundJobs;
 
 /// <summary>Retry of ONE company (4 or 32) over the standard window, e.g. after its scheduled refresh failed.</summary>
-public sealed class CollectionsReceivablesCompanyRetryJob(IReceivablesRefresher refresher, ILogger<CollectionsReceivablesCompanyRetryJob> logger)
+public sealed class CollectionsReceivablesCompanyRetryJob(IReceivablesRefresher refresher, ILogger<CollectionsReceivablesCompanyRetryJob> logger, IPostRefreshReconciliation? reconciliation = null)
 {
     [AutomaticRetry(Attempts = 0)]
     public async Task RunAsync(int companyId, CancellationToken cancellationToken)
@@ -18,6 +19,7 @@ public sealed class CollectionsReceivablesCompanyRetryJob(IReceivablesRefresher 
             logger.LogWarning("Receivables retry company {CompanyId} FAILED (error {ErrorNumber}): {ErrorMessage}", company.CompanyId, company.ErrorNumber, company.ErrorMessage);
         if (result.Status is "PartialFailure" or "Failed")
             throw new InvalidOperationException($"Receivables retry for company {companyId} {result.Status}; the previous snapshot is unchanged.");
+        await CollectionsReceivablesRefreshJob.ReconcileAfterAsync(reconciliation, result, companyId, logger, cancellationToken);
     }
 }
 
@@ -62,6 +64,7 @@ public sealed class InProcessReceivablesRangeLoader(IServiceScopeFactory scopes,
                 logger.LogInformation("Receivables retry for company {CompanyId}: {Status}.", companyId, result.Status);
                 foreach (var company in result.Companies.Where(c => c.Status == "Failed"))
                     logger.LogWarning("Receivables retry company {CompanyId} FAILED (error {ErrorNumber}): {ErrorMessage}", company.CompanyId, company.ErrorNumber, company.ErrorMessage);
+                await CollectionsReceivablesRefreshJob.ReconcileAfterAsync(scope.ServiceProvider.GetService<IPostRefreshReconciliation>(), result, companyId, logger, CancellationToken.None);
             }
             catch (Exception ex) { logger.LogError(ex, "Receivables retry for company {CompanyId} failed.", companyId); }
         }, CancellationToken.None);

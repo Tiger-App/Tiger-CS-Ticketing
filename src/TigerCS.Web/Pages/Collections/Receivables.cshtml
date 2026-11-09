@@ -14,7 +14,7 @@
             <p class="receivables-eyebrow">Collections</p>
             <h1 class="page-title">Receivables</h1>
         </div>
-        <div class="page-header__actions"><a class="btn" href="/Collections/Campaigns">Campaigns</a></div>
+        <div class="page-header__actions"><a class="btn" href="/Collections/Campaigns">Campaigns</a><a class="btn" href="/Collections/CampaignList" data-history-link>Campaign List</a></div>
     </div>
 
     <form class="filter-bar" method="get" action="/Collections/Receivables" data-receivables-filter data-results-form>
@@ -50,6 +50,7 @@
             <label class="field-label" for="receivableMin">Minimum Total (AED)</label>
             <input class="field-input" type="number" id="receivableMin" name="minTotal" min="0" step="any" inputmode="decimal" value="@Model.MinTotalText" data-min-total />
         </div>
+        <partial name="_FloorMultiPicker" model="@(new FloorMultiPickerModel("receivableFloor", Model.FloorOptions, Model.FloorIds, "/Collections/Receivables", Model.FloorsFailed))" />
         <div class="filter-bar__submit">
             <button class="btn btn-gold" type="submit">Apply</button>
             <a class="btn btn-ghost" href="/Collections/Receivables">Clear</a>

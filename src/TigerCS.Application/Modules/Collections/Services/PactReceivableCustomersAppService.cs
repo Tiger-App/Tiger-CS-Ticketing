@@ -14,7 +14,8 @@ public sealed class PactReceivableCustomersAppService(
     IPactReceivablesSource source,
     ILogger<PactReceivableCustomersAppService> logger,
     ICollectionsTowerCatalog? towerCatalog = null,
-    IReceivablesRangeLoader? rangeLoader = null)
+    IReceivablesRangeLoader? rangeLoader = null,
+    IUnitFloorDirectory? floorDirectory = null)
 {
     /// <summary>
     /// Asks for a background load of a due-date range the snapshot does not cover. Needs the same permission as reading the list;
@@ -85,6 +86,34 @@ public sealed class PactReceivableCustomersAppService(
         catch (PactReceivablesSourceException ex)
         {
             return CollectionsResult<IReadOnlyList<CollectionsTowerDto>>.Fail(CollectionsOutcome.FinanceUnavailable, ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// The floors of the apartment units of the chosen towers (every tower when none is named), for the Floor dropdown. Same authorization as the list. A unit that is not a recognisable apartment
+    /// (see <see cref="CollectionsUnitFloor"/>) contributes nothing. Read from the local snapshot's unit directory; never from PACT.
+    /// </summary>
+    public async Task<CollectionsResult<CollectionsFloorsDto>> ListFloorsAsync(CollectionsCaller caller, IReadOnlyList<int>? towerIds, CancellationToken cancellationToken = default)
+    {
+        if (!(await authorization.ResolveAsync(caller, cancellationToken)).CanReadFinancials)
+            return CollectionsResult<CollectionsFloorsDto>.Fail(CollectionsOutcome.Forbidden);
+        if (!collectionsOptions.Enabled || !sourceOptions.Enabled || floorDirectory is null)
+            return CollectionsResult<CollectionsFloorsDto>.Fail(CollectionsOutcome.Disabled);
+        var towers = (towerIds ?? []).Distinct().Order().ToList();
+        if (towers.Any(id => id <= 0) || towers.Count > PactInstalmentsAppService.MaxTowers)
+            return CollectionsResult<CollectionsFloorsDto>.Fail(CollectionsOutcome.InvalidRequest, "The selected towers are not valid. Choose towers from the list.");
+        try
+        {
+            var codes = await floorDirectory.ListUnitCodesAsync(towers, cancellationToken);
+            var floors = codes.Select(c => c.Trim()).Distinct(StringComparer.OrdinalIgnoreCase)
+                .Select(code => CollectionsUnitFloor.Parse(code)).OfType<int>()
+                .GroupBy(floor => floor).OrderBy(g => g.Key)
+                .Select(g => new CollectionsFloorDto(g.Key, CollectionsUnitFloor.Label(g.Key), g.Count())).ToList();
+            return CollectionsResult<CollectionsFloorsDto>.Ok(new(floors, towers));
+        }
+        catch (PactReceivablesSourceException ex)
+        {
+            return CollectionsResult<CollectionsFloorsDto>.Fail(CollectionsOutcome.FinanceUnavailable, ex.Message);
         }
     }
 
@@ -287,24 +316,18 @@ public sealed class PactReceivableCustomersAppService(
     }
 
     /// <summary>
-    /// Verified meaning of the report's <c>Status</c>: the procedures emit <c>Paid</c> when the remaining Amount is zero
-    /// and <c>Installment</c> otherwise. <c>Installment</c> does not distinguish unpaid from partially paid, so it is never
-    /// mapped (not even by configuration) and stays Unknown. Paid with a positive remainder is contradictory: Unknown.
-    /// Payment status is never derived from the due date or the amount.
+    /// Payment status from the verified remaining amount: 0 = Paid, more = Unpaid, missing or negative = Unknown. The report's <c>Status</c> only ever contradicts it: <c>Paid</c> (or a value
+    /// mapped to Paid) with a remainder owed is Unknown. A mapping may refine a positive remainder to PartiallyPaid for display; it never decides paid or unpaid, and a due date never does.
     /// </summary>
-    public static string PaymentStatus(string? source, decimal remaining, IReadOnlyDictionary<string, string> map)
+    public static string PaymentStatus(string? source, decimal? remaining, IReadOnlyDictionary<string, string> map)
     {
-        var value = source?.Trim();
-        if (string.IsNullOrEmpty(value) || value.Equals("Installment", StringComparison.OrdinalIgnoreCase)) return "Unknown";
-        if (value.Equals("Paid", StringComparison.OrdinalIgnoreCase)) return remaining <= 0 ? "Paid" : "Unknown";
-        if (!map.TryGetValue(value, out var mapped)) return "Unknown";
-        return mapped.Trim().ToLowerInvariant() switch
-        {
-            "unpaid" => "Unpaid",
-            "partiallypaid" => "PartiallyPaid",
-            "paid" when remaining <= 0 => "Paid",
-            _ => "Unknown"
-        };
+        if (remaining is not { } amount || amount < 0) return "Unknown";
+        var value = source?.Trim() ?? "";
+        var mapped = map.TryGetValue(value, out var m) ? m.Trim().ToLowerInvariant() : null;
+        var saysPaid = value.Equals("Paid", StringComparison.OrdinalIgnoreCase) || mapped == "paid";
+        if (amount == 0) return "Paid";
+        if (saysPaid) return "Unknown";                                                              // contradictory: the source says Paid but a remainder is owed
+        return mapped == "partiallypaid" ? "PartiallyPaid" : "Unpaid";
     }
 
     private static PactReceivableCustomerDto Map(List<PactReceivableInstalment> rows, DateOnly today, DateOnly periodStart,

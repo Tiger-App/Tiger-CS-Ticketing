@@ -43,6 +43,11 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
     public IReadOnlyList<int>? EffectiveTowerIds => TowerSelection.Effective(TowerIds, Towers);
     private int? SingleTowerId => EffectiveTowerIds is { Count: 1 } one ? one[0] : null;
     private IReadOnlyList<int>? ManyTowerIds => EffectiveTowerIds is { Count: > 1 } many ? many : null;
+    /// <summary>The chosen apartment floors (repeated <c>floor</c> values; derived from the unit number). Empty = All Floors = no filtering.</summary>
+    public IReadOnlyList<int> FloorIds { get; private set; } = [];
+    public IReadOnlyList<CollectionsFloorDto> FloorOptions { get; private set; } = [];
+    public bool FloorsFailed { get; private set; }
+    private IReadOnlyList<int>? FloorFilter => FloorIds.Count == 0 ? null : FloorIds;
     /// <summary>Month and year of the instalments' DUE date; both empty = All months (historic overdue plus the whole current month). Narrows the results only: Due / Overdue stay classified against the current month.</summary>
     public int? Month { get; private set; }
     public int? Year { get; private set; }
@@ -79,7 +84,18 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
         var towers = await api.GetTowersAsync(cancellationToken);
         Towers = towers.IsSuccess && towers.Value is { } list ? list : [];
         TowersFailed = !towers.IsSuccess;
+        var floors = await api.GetFloorsAsync(TowerIds, cancellationToken);
+        FloorOptions = floors.IsSuccess && floors.Value is { } floorList ? floorList.Floors : [];
+        FloorsFailed = !floors.IsSuccess;
         if (RenderFull) await LoadReportAsync(cancellationToken);
+    }
+
+    /// <summary>JSON for the Floor dropdown: the floors of the towers in the query (<c>towerId</c>, repeated); the browser reloads it whenever the towers change.</summary>
+    public async Task<IActionResult> OnGetFloorsAsync(CancellationToken cancellationToken)
+    {
+        var floors = await api.GetFloorsAsync(TowerSelection.Parse(Request.Query["towerId"]), cancellationToken);
+        Response.Headers.CacheControl = "no-store";
+        return new JsonResult(FloorSelection.Payload(floors.IsSuccess ? floors.Value : null, !floors.IsSuccess));
     }
 
     /// <summary>The results area only (HTML fragment).</summary>
@@ -106,6 +122,7 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
     private void Bind(string? status, string? search, int? month, int? year, int page, string? load)
     {
         TowerIds = TowerSelection.Parse(Request.Query["towerId"]);
+        FloorIds = FloorSelection.Parse(Request.Query["floor"]);
         Status = StatusOptions.Any(o => o.Value == status?.Trim().ToLowerInvariant()) ? status!.Trim().ToLowerInvariant() : "all";
         Search = search?.Trim();
         MinTotal = ParseMinTotal(Request.Query);
@@ -137,7 +154,7 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
             if (!CollectionsDueMonth.IsInScope(first, today)) { NothingDueYet = true; return; }
             (from, to) = (first, CollectionsDueMonth.ClampTo(last, today));
         }
-        var result = await api.GetInstalmentsAsync(SingleTowerId, from, to, "outstanding", null, Search, PageNumber, cancellationToken, "units", null, Status == "all" ? null : Status, MinTotal, ManyTowerIds);
+        var result = await api.GetInstalmentsAsync(SingleTowerId, from, to, "outstanding", null, Search, PageNumber, cancellationToken, "units", null, Status == "all" ? null : Status, MinTotal, ManyTowerIds, FloorFilter);
         Outcome = result.Outcome;
         Error = result.Detail;
         Report = result.IsSuccess ? result.Value : null;
@@ -147,6 +164,7 @@ public sealed class ReceivablesModel(CollectionsApiClient api) : PageModel
     public string Query(int? page = null)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
+        foreach (var floor in FloorIds) query.Add("floor", floor.ToString(CultureInfo.InvariantCulture));   // the Floor picker's own name: the selection survives paging and the other filters
         foreach (var tower in TowerIds) query.Add("towerId", tower.ToString(CultureInfo.InvariantCulture));   // the picker's own name: the selection survives status / month / year / minimum / search / page changes
         if (Status != "all") query["status"] = Status;
         if (!string.IsNullOrWhiteSpace(Search)) query["search"] = Search;
@@ -208,7 +226,6 @@ public sealed record UnitLine(string Customer, string Phone, string Email, strin
             var notes = new List<string>();
             if (linked.CrmCustomerAmbiguous) notes.Add("Several CRM customers: needs review");
             if (linked.CrmCompanyAmbiguous) notes.Add("CRM sale cannot be tied to one company: needs review");
-            if (linked.SourceConflict) notes.Add("CRM and PACT contacts differ: needs review");
             // A CRM SERVICE problem is not "CRM has no value": when CRM linking is on but unusable, the contact below is PACT-only and unconfirmed.
             if (report.Crm is { Blocks: true }) notes.Add("CRM unavailable: contact unconfirmed, needs review");
             else if (!linked.HasContact) notes.Add(NoContactNote(report.Crm?.State, crmStatus));

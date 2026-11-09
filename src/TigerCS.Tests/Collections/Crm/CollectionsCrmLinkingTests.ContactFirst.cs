@@ -81,7 +81,7 @@ public sealed partial class CollectionsCrmLinkingTests
     }
 
     [Fact]
-    public async Task PactCompletesOnlyTheFieldCrmLacks_AndOnlyWhenNothingContradictsCrm()
+    public async Task PactCompletesOnlyTheFieldCrmLacks_AndNeverOverridesCrm()
     {
         var r = new Rig(); r.Store.CompanyOfTower["115"] = 4;
         r.Source.Items.Add(Tp115Row(mobile: "971500003001", email: "mohammad.m.abdulhamid@gmail.com"));
@@ -90,15 +90,15 @@ public sealed partial class CollectionsCrmLinkingTests
         Assert.Equal(("Mohammad Mousa Abdul Hamid", "+971500003001", "mohammad.m.abdulhamid@gmail.com"), (unit.CustomerName, unit.Phone, unit.Email));   // the mobile alone comes from PACT
         Assert.DoesNotContain("ContactSourceConflict", unit.Reason);
 
-        // CRM lacks the mobile and PACT's e-mail is a DIFFERENT one: nothing confirms it is the same person - PACT is not mixed in and the unit needs review.
+        // CRM lacks the mobile and PACT's e-mail is a DIFFERENT one: CRM's e-mail wins, PACT's mobile fills the gap, and nothing is held for review.
         var r2 = new Rig(); r2.Store.CompanyOfTower["115"] = 4;
         r2.Source.Items.Add(Tp115Row(mobile: "971500003001", email: "someone.else@example.test"));
         r2.Owners(Tp115(mobile: null));
         var conflict = Assert.Single((await Preview(r2)).Items);
-        Assert.Contains("ContactSourceConflict", conflict.Reason);
-        Assert.Equal("", conflict.Phone);
+        Assert.DoesNotContain("ContactSourceConflict", conflict.Reason);
+        Assert.Equal("+971500003001", conflict.Phone);
         Assert.Equal("mohammad.m.abdulhamid@gmail.com", conflict.Email);
-        Assert.Equal("NeedsReview", conflict.Status);
+        Assert.DoesNotContain("NeedsReview", conflict.Status);
     }
 
     [Fact]
@@ -207,15 +207,15 @@ public sealed partial class CollectionsCrmLinkingTests
     // ---- identity, ambiguity, companies ----
 
     [Fact]
-    public async Task ConflictingIdentity_IsNeedsReview_AndNoPersonIsPicked()
+    public async Task DifferentCrmAndPactPhones_CrmWins_AndTheUnitIsNotHeldForIt()
     {
         var r = new Rig(); r.Store.CompanyOfTower["115"] = 4;
         r.Source.Items.Add(Tp115Row(mobile: "971500003001"));
         r.Owners(Tp115(mobile: "+966508650505"));      // CRM and PACT hold different phones
         var unit = Assert.Single((await Preview(r)).Items);
-        Assert.Contains("ContactSourceConflict", unit.Reason);
-        Assert.Equal("+966508650505", unit.Phone);     // CRM alone; PACT's number is not mixed in
-        Assert.Equal("NeedsReview", unit.Status);
+        Assert.DoesNotContain("ContactSourceConflict", unit.Reason);
+        Assert.Equal("+966508650505", unit.Phone);     // CRM is the authoritative contact source
+        Assert.DoesNotContain("NeedsReview", unit.Status);
     }
 
     [Fact]

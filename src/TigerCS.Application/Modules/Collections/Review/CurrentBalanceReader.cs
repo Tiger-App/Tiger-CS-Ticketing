@@ -21,7 +21,15 @@ namespace TigerCS.Application.Modules.Collections.Review;
 public sealed class CurrentBalanceReader(PactReceivablesOptions sourceOptions, IPactReceivablesSource source, ReviewRefreshService refresh,
     ILogger<CurrentBalanceReader> logger)
 {
-    public sealed record Result(IReadOnlyDictionary<DateOnly, IReadOnlyDictionary<string, CollectionsReviewRecord>> ByAsOfDate, long ElapsedMs, int SourceRows);
+    /// <summary>The rebuilt records per as-of date, and <c>Gate</c>: the source gate as it stands for the snapshots just read (evidence bound to their publish time), per company.</summary>
+    public sealed record Result(IReadOnlyDictionary<DateOnly, IReadOnlyDictionary<string, CollectionsReviewRecord>> ByAsOfDate, long ElapsedMs, int SourceRows,
+        TigerCS.Application.Modules.Collections.Reconciliation.SourceGateDto Gate);
+
+    /// <summary>Whether the financial source is reconciled for both companies right now (the one gate definition the refresh uses).</summary>
+    public bool SourceReconciled => refresh.SourceReconciled;
+
+    /// <summary>The gate right now, per company (before any balance is read; the read itself binds it to the snapshot publish).</summary>
+    public TigerCS.Application.Modules.Collections.Reconciliation.SourceGateDto Gate() => refresh.SourceGate();
 
     public async Task<Result> ReadAsync(IReadOnlyCollection<int> companies, IReadOnlyCollection<DateOnly> asOfDates, CancellationToken ct)
     {
@@ -44,18 +52,23 @@ public sealed class CurrentBalanceReader(PactReceivablesOptions sourceOptions, I
         // The contacts are re-linked NOW from the current CRM owner data (one bulk read) - the contact stored at approval time is never trusted. If CRM cannot be used, every
         // record comes back CrmUnavailable (needs review), the comparison below sees a change, and nothing is sent.
         var crm = await refresh.ReadCrmAsync(snapshots.SelectMany(s => s.Items), budget.Token);
+        // The gate for exactly these publishes: evidence taken against an older publish of a company does not cover the balances just read, and the units a reconciled company holds
+        // back are stamped on the rebuilt records, so a held unit shows up as a changed record and is not sent.
+        var published = new Dictionary<int, DateTime?>();
+        foreach (var snapshot in snapshots) foreach (var (company, at) in ReviewRefreshService.PublishedUtc(snapshot) ?? new Dictionary<int, DateTime?>()) published[company] = at;
+        var gate = refresh.SourceGate(published);
         var byDate = new Dictionary<DateOnly, IReadOnlyDictionary<string, CollectionsReviewRecord>>();
         foreach (var asOf in asOfDates.Distinct())
         {
             var map = new Dictionary<string, CollectionsReviewRecord>(StringComparer.Ordinal);
             foreach (var snapshot in snapshots)
-                foreach (var record in ReviewRecordBuilder.Build(snapshot.Items, refresh.Context(asOf, snapshot.ReadAtUtc, crm)).Records)
+                foreach (var record in ReviewRecordBuilder.Build(snapshot.Items, refresh.Context(asOf, snapshot.ReadAtUtc, crm, gate)).Records)
                     map[record.RecordKey] = record;
             byDate[asOf] = map;
         }
         var rows = snapshots.Sum(s => s.Items.Count);
         var elapsed = (long)Stopwatch.GetElapsedTime(started).TotalMilliseconds;
         logger.LogInformation("Current balances read for {Companies} company(ies): {Rows} source rows in {ElapsedMs} ms.", companies.Count, rows, elapsed);
-        return new Result(byDate, elapsed, rows);
+        return new Result(byDate, elapsed, rows, gate);
     }
 }

@@ -142,6 +142,29 @@ public sealed class GenesysHttpTests
             Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
     }
 
+    [Theory]
+    [InlineData("{\"error\":\"invalid_client\",\"description\":\"client authentication failed\"}", "HTTP 400, invalid_client")]
+    [InlineData("{\"error\":\"unsupported_grant_type\"}", "HTTP 400, unsupported_grant_type")]
+    [InlineData("{\"error\":\"<script>alert(1)</script>\"}", "HTTP 400).")]
+    [InlineData("not json", "HTTP 400).")]
+    [InlineData("", "HTTP 400).")]
+    public async Task ARefusedTokenRequest_NamesTheOAuthErrorCode_AndNothingElseFromTheBody(string body, string expected)
+    {
+        var log = new CapturingLogger<GenesysTokenProvider>();
+        var tokens = new GenesysTokenProvider(new HttpClient(new BadRequestTokenHandler(body)), Options(), TimeProvider.System, log);
+        var ex = await Assert.ThrowsAsync<GenesysAuthenticationException>(() => tokens.GetTokenAsync(CancellationToken.None));
+        Assert.Contains(expected, ex.Message);
+        Assert.DoesNotContain("client authentication failed", ex.Message); Assert.DoesNotContain("<script>", ex.Message);
+        Assert.DoesNotContain(ClientSecret, ex.Message + string.Join('\n', log.Lines));
+        Assert.Contains(log.Lines, l => l.Contains("HTTP 400"));
+    }
+
+    private sealed class BadRequestTokenHandler(string body) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(Json(HttpStatusCode.BadRequest, body));
+    }
+
     // ------------------------------------------------------------ request shape
 
     [Fact]
@@ -462,5 +485,152 @@ public sealed class GenesysHttpTests
         var (client, _, handler, _, _, _) = Build();
         await Assert.ThrowsAsync<InvalidOperationException>(() => client.SetNotCallableAsync(ListId, "abc", Contact(1, "3a91c06e-47ab-4a5e-a720-004bd5cf5bba"), CancellationToken.None));
         Assert.Empty(handler.Requests);
+    }
+
+    // ------------------------------------------------------------ diagnostics of a rejected request: what failed, where, with which status, never a secret
+
+    private const string NotFoundBody = "{\"message\":\"The contact list could not be found.\",\"code\":\"bridge.entity.not.found\",\"status\":404,\"contextId\":\"0b1c2d3e-0000-4000-8000-000000000001\",\"details\":[],\"errors\":[]}";
+
+    [Fact]
+    public async Task A404OnTheContactListRead_NamesTheOperation_TheEndpoint_TheHost_TheStatus_AndGenesysOwnCode_WithoutSecrets()
+    {
+        var (client, _, handler, _, _, clientLog) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.NotFound, NotFoundBody));
+        var result = await client.GetContactListAsync(ListId, CancellationToken.None);
+        Assert.Equal((GenesysUploadOutcome.Rejected, 404), (result.Outcome, result.HttpStatus));
+        var error = result.Error!;
+        Assert.Contains("rejected the contact list lookup (GET /api/v2/outbound/contactlists/{contactListId} at api.mypurecloud.de)", error);
+        Assert.Contains("HTTP 404 Not Found", error); Assert.Contains("code bridge.entity.not.found", error); Assert.Contains("correlation id 0b1c2d3e-0000-4000-8000-000000000001", error);
+        Assert.Contains("organization this OAuth client belongs to", error); Assert.Contains("ApiBaseUrl and LoginBaseUrl", error); Assert.EndsWith("Nothing was changed.", error);
+        Assert.DoesNotContain(ListId, error);                                                   // the endpoint is a template, never a concrete id
+        Assert.DoesNotContain("could not be found", error);                                     // Genesys' free text is not copied
+        foreach (var secret in new[] { ClientId, ClientSecret, "token-1", "Bearer" })
+        {
+            Assert.DoesNotContain(secret, error);
+            Assert.All(clientLog.Lines, l => Assert.DoesNotContain(secret, l));
+        }
+        Assert.Contains(clientLog.Lines, l => l.Contains("contact list lookup answered HTTP 404") && l.Contains("api.mypurecloud.de") && l.Contains("bridge.entity.not.found"));
+        Assert.Single(handler.Upload);                                                          // one GET, no second attempt, no write
+        Assert.Equal(HttpMethod.Get, handler.Upload.Single().Request.Method);
+    }
+
+    [Fact]
+    public async Task APermissionRefusal_NamesThePermissionTheOperationNeeds()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.Forbidden, "{\"code\":\"missing.permissions\"}"));
+        var read = await client.GetContactListAsync(ListId, CancellationToken.None);
+        Assert.Contains("HTTP 403 Forbidden", read.Error); Assert.Contains("code missing.permissions", read.Error); Assert.Contains("outbound:contactList:view", read.Error);
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.Forbidden, "{}"));
+        var upload = await client.UploadContactsAsync(ListId, [Contact(1)], CancellationToken.None);
+        Assert.Equal(GenesysUploadOutcome.Rejected, upload.Outcome);
+        Assert.Contains("rejected the upload (POST /api/v2/outbound/contactlists/{contactListId}/contacts at api.mypurecloud.de)", upload.Error); Assert.Contains("outbound:contact:add", upload.Error);
+        Assert.DoesNotContain(ListId, upload.Error);
+    }
+
+    [Fact]
+    public async Task TheEndpointTemplate_NeverCarriesAContactIdACampaignNameOrAQueryString()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.Forbidden, "{}"));
+        var campaigns = await client.FindCampaignsByNameAsync("Confidential Campaign Name", CancellationToken.None);
+        Assert.Contains("(GET /api/v2/outbound/campaigns at api.mypurecloud.de)", campaigns.Error); Assert.DoesNotContain("Confidential", campaigns.Error); Assert.DoesNotContain("?", campaigns.Error);
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.BadRequest, "{}"));
+        var suppress = await client.SetNotCallableAsync(ListId, "c-123", Contact(1), CancellationToken.None);
+        Assert.Contains("(PUT /api/v2/outbound/contactlists/{contactListId}/contacts/{contactId} at api.mypurecloud.de)", suppress.Error); Assert.DoesNotContain("c-123", suppress.Error);
+        Assert.Equal("/api/v2/outbound/contactlists/{contactListId}/contacts", GenesysClientTemplate($"api/v2/outbound/contactlists/{ListId}/contacts?x=1"));
+    }
+
+    private static string GenesysClientTemplate(string path) => (string)typeof(GenesysOutboundHttpClient).GetMethod("PathTemplate", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static)!.Invoke(null, [path])!;
+
+    [Theory]
+    [InlineData("{\"code\":\"<script>alert(1)</script>\",\"contextId\":\"not-a-guid\"}")]
+    [InlineData("not json at all")]
+    [InlineData("")]
+    [InlineData("[1,2,3]")]
+    public async Task AnUnreadableOrHostileErrorBody_ContributesNothing_ButTheStatusAndTheOperationStillShow(string body)
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.NotFound, body));
+        var result = await client.GetContactListAsync(ListId, CancellationToken.None);
+        Assert.StartsWith("Genesys rejected the contact list lookup (GET /api/v2/outbound/contactlists/{contactListId} at api.mypurecloud.de): HTTP 404 Not Found.", result.Error);
+        Assert.DoesNotContain("script", result.Error); Assert.DoesNotContain("code ", result.Error); Assert.DoesNotContain("correlation", result.Error);
+    }
+
+    [Fact]
+    public async Task TheHostInTheMessageIsTheConfiguredApiHost_SoAWrongRegionIsVisible()
+    {
+        var options = Options(); options.ApiBaseUrl = "https://api.mec1.pure.cloud";
+        var (client, _, handler, _, _, _) = Build(options);
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.NotFound, "{}"));
+        var result = await client.GetContactListAsync(ListId, CancellationToken.None);
+        Assert.Contains("at api.mec1.pure.cloud)", result.Error);
+        Assert.Equal("api.mec1.pure.cloud", handler.Upload.Single().Request.RequestUri!.Host);
+    }
+
+    [Fact]
+    public async Task AServerErrorKeepsItsUnknownOutcome_AndNamesTheOperation()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.ServiceUnavailable, "{}"));
+        var result = await client.GetContactListAsync(ListId, CancellationToken.None);
+        Assert.Equal((GenesysUploadOutcome.Unknown, 503), (result.Outcome, result.HttpStatus));
+        Assert.Contains("HTTP 503 to the contact list lookup (GET /api/v2/outbound/contactlists/{contactListId} at api.mypurecloud.de)", result.Error);
+        handler.Responses.Enqueue(_ => Json((HttpStatusCode)429, "{}"));
+        Assert.Equal("Genesys rate limit reached; nothing was changed.", (await client.GetContactListAsync(ListId, CancellationToken.None)).Error);
+    }
+
+    [Fact]
+    public async Task TheOrganizationRead_IsAGet_ReturnsTheOrganization_AndFailsWithItsOwnOperationName()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.OK, "{\"id\":\"1f2e3d4c-0000-4000-8000-000000000009\",\"name\":\"Tiger Group\",\"domain\":\"tiger.example\"}"));
+        var org = await client.GetOrganizationAsync(CancellationToken.None);
+        Assert.Equal((GenesysUploadOutcome.Accepted, "1f2e3d4c-0000-4000-8000-000000000009", "Tiger Group"), (org.Outcome, org.Id, org.Name));
+        var (request, body) = Assert.Single(handler.Upload);
+        Assert.Equal((HttpMethod.Get, "https://api.mypurecloud.de/api/v2/organizations/me", ""), (request.Method, request.RequestUri!.ToString(), body));
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.NotFound, "{}"));
+        var failed = await client.GetOrganizationAsync(CancellationToken.None);
+        Assert.Equal((GenesysUploadOutcome.Rejected, 404), (failed.Outcome, failed.HttpStatus)); Assert.Contains("organization lookup (GET /api/v2/organizations/me at api.mypurecloud.de)", failed.Error);
+    }
+
+    private const string CampaignId = "5b0d3b2e-3f55-4d36-9d5c-0b7f3a6f0a11";
+    private const string ConversationId = "0a1b2c3d-0000-4000-8000-0000000000aa";
+
+    [Fact]
+    public async Task CampaignInteractions_AreReadWithAnAnalyticsQueryFilteredToTheCampaign_AndOnlyRead()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.OK, $"{{\"conversations\":[{{\"conversationId\":\"{ConversationId}\",\"conversationStart\":\"2026-10-14T08:30:00.000Z\",\"participants\":[{{\"sessions\":[{{\"outboundCampaignId\":\"{CampaignId}\",\"outboundContactId\":\"contact-9\",\"outboundContactListId\":\"{ListId}\"}}]}}]}}]}}"));
+        var result = await client.GetCampaignConversationsAsync(CampaignId, Start, Start.AddDays(1), CancellationToken.None);
+        var conversation = Assert.Single(result.Conversations);
+        Assert.Equal((GenesysUploadOutcome.Accepted, true, ConversationId, "contact-9"), (result.Outcome, result.Complete, conversation.ConversationId, conversation.ContactId));
+        var (request, body) = Assert.Single(handler.Upload);
+        Assert.Equal((HttpMethod.Post, "https://api.mypurecloud.de/api/v2/analytics/conversations/details/query"), (request.Method, request.RequestUri!.ToString()));
+        Assert.Contains("\"dimension\":\"outboundCampaignId\"", body);
+        Assert.Contains(CampaignId, body);
+    }
+
+    [Fact]
+    public async Task ConversationMessages_MapStatusReasonAndNeverCountAMessageTwice()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        // The same message under two participants, plus a failed one with Genesys' own reason.
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.OK, "{\"participants\":[{\"purpose\":\"agent\",\"messages\":[{\"messageId\":\"m1\",\"messageTime\":\"2026-10-14T08:31:00.000Z\",\"messageStatus\":\"sent\"}]},{\"purpose\":\"external\",\"messages\":[{\"messageId\":\"m1\",\"messageTime\":\"2026-10-14T08:32:00.000Z\",\"messageStatus\":\"delivered\"},{\"messageId\":\"m2\",\"messageStatus\":\"failed\",\"errorInfo\":{\"code\":\"4001\",\"message\":\"Invalid destination number\"}}]}]}"));
+        var result = await client.GetConversationMessagesAsync(ConversationId, CancellationToken.None);
+        Assert.Equal(2, result.Messages.Count);
+        Assert.Equal("delivered", result.Messages.Single(m => m.MessageId == "m1").Status);
+        Assert.Equal("Invalid destination number", result.Messages.Single(m => m.MessageId == "m2").FailureReason);
+        Assert.Equal((HttpMethod.Get, $"https://api.mypurecloud.de/api/v2/conversations/messages/{ConversationId}"), (handler.Upload.Single().Request.Method, handler.Upload.Single().Request.RequestUri!.ToString()));
+    }
+
+    [Fact]
+    public async Task APermissionFailureOnTheInteractionsLookup_NamesThePermissionToGrant()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.Forbidden, "{\"code\":\"missing.permission\"}"));
+        var result = await client.GetCampaignConversationsAsync(CampaignId, Start, Start.AddDays(1), CancellationToken.None);
+        Assert.Equal(GenesysUploadOutcome.Rejected, result.Outcome);
+        Assert.Contains("analytics:conversationDetail:view", result.Error);
     }
 }

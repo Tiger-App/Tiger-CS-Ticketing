@@ -50,6 +50,7 @@ public enum CollectionsCampaignFlags
     /// <summary>More than one distinct CRM customer holds an eligible (Sold / Contract, not cancelled) sale of the unit: the customer cannot be chosen automatically.</summary>
     CrmCustomerAmbiguous = 128,
     /// <summary>CRM and PACT give different phone numbers (or, without a phone to confirm, different e-mails) for the unit: two people are never merged.</summary>
+    /// <summary>Retired: CRM contact data wins over PACT, so differing contacts no longer raise a flag. The bit stays reserved.</summary>
     ContactSourceConflict = 256,
     /// <summary>The CRM sale of the unit cannot be tied to one company (both companies hold the same unit key): nobody is chosen and the unit needs review.</summary>
     CrmCompanyAmbiguous = 512,

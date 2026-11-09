@@ -50,9 +50,52 @@ normalized so the first UAT run confirms or corrects it.
 | `AmountPrecisionNeedsReview` | The check was `amount != Round(amount, 2)` on a value converted from a **float** column. A settled instalment can come out as 1E-12 (a "positive balance" with a precision flag), and float arithmetic leaves noise on others. | The reader records whether the column is floating point. Float values within AED 0.0001 of a fils amount are snapped (a remainder that snaps to 0 is a settled instalment, not a receivable). **Anything else with more than two decimals stays flagged**, is never rounded for display, carries no quoted amount (`RemainingAmount = null`) and keeps the raw source value. |
 | `NoValidContact` | The phone normalizer only accepted `+…`, `00…`, `05…` (10 chars) and `971…` (12 chars), and counted an **email** as a valid contact although the campaign is voice. Rejected: `501234567` (leading zero lost), `971 0 50…`, numbers with `.` `/` `\`, `04…` landlines, `(0)`. | New `PhoneNormalizer` repairs those UAE forms, accepts valid international numbers, and **never guesses** between two different numbers in one field. A voice campaign needs a callable phone; an email alone no longer qualifies. |
 
+## Payment classification (the remaining-amount rule)
+
+The verified **remaining amount** PACT returns for an instalment is the source of truth, in the Receivables list, the Campaign preview, the Manual and Auto eligibility, the send and
+the Genesys export alike (`PaymentStatusRules.Derive`, `CollectionsPaymentFilters.Classify`, `PactReceivableCustomersAppService.PaymentStatus`):
+
+| Remaining amount | Status | Campaign eligibility |
+|---|---|---|
+| `0` | Paid (`FullyPaid` in Receivables) | not a receivable: never a record, never in an amount |
+| `> 0` | Unpaid (Receivables refines to `PartiallyPaid` only when the V2 original and paid amounts are present and consistent) | eligible on this rule; every other rule still applies |
+| NULL, negative, or contradicted by the source (Status `Paid` with a remainder owed; a V2 original / paid / remaining that do not add up or a remainder above the original) | Unknown: **Needs Review** (`PaymentStatusUnknown`, with `ContradictoryPaymentStatus` or `SourceAmountsInconsistent` when that is the cause) | held back, visible with the reason |
+
+Unpaid and partly paid are no longer told apart for eligibility; the report's own `Status` text and any configured text mapping never decide the status, and neither does the due
+date. Due / Overdue stay a classification of the instalment's due date against the current Dubai month (`CollectionsDueMonth`).
+
 ## Validation rules (stored reasons)
 
-Needs review: `SourceReconciliationRequired`, `AmountPrecisionNeedsReview`, `NoValidContact`, `PaymentStatusUnknown`, `StaleSource`,
+Financial reconciliation is a **separate gate of the source**, not a customer reason: `SourceGate` decides it (sign-off `FinancialSourceValidated`, the procedure, the
+snapshot-consistency evidence) **per company**, the run records whether the companies it covers are reconciled (`CollectionsReviewRun.SourceReconciled`), and the send refuses the customers of a
+closed company at approval (`DispatchService`), again right before the upload (revalidation, bound to the snapshot publish the balances were just read from) and in the Auto dispatcher
+(`NotReconciled`; the reconciled company is dispatched on its own). A customer whose own data is sound is **Ready** on the page while the gate is closed; the page and the summary say the source is
+not reconciled, once. `SourceReconciliationRequired` is kept as the code of that gate (the Genesys export's unverified-data label); it is no longer stored on records.
+
+### PACT is the source, the snapshot its synchronized copy
+
+PACT is authoritative; `dbo.CollectionsRcvLine` is a copy refreshed from `p4/p32AccountReceivables` (every two hours, at start-up, on Retry: a full replace per company, published atomically
+only when the result is complete, of the right company and not an implausible shrink; a failed or partial attempt keeps the previous publish, so an instalment PACT no longer returns is retired
+only by a successful complete refresh). A difference between the two is therefore a **synchronization to repair**, not a reason to stop Collections:
+
+1. **The check follows the data.** After each successful refresh of a company its snapshot-consistency check runs by itself, in the same job (`Collections:Campaigns:ReconcileAfterRefresh`,
+   default true; `IPostRefreshReconciliation`). Evidence is bound to the publish it compared: a company republished after its last check is `Superseded` (gate code `EvidenceSuperseded`,
+   closed) until the new publish is checked. Nothing older is silently reused.
+2. **One controlled refresh, then compare again.** When a check finds differences (new instalments in PACT, changed remaining amounts, moved due dates, instalments no longer returned, new or
+   missing units, payments that reduce a remainder to zero), or the snapshot is older than `ReconciliationMaxSnapshotAgeMinutes`, that company is refreshed from PACT once
+   (`ReconciliationRecoveryRefresh`, default true; trigger source `Reconciliation`, which never starts another check) and compared again. The exact differences of the first comparison are
+   kept on the run (`Recovery.ComparisonBefore`) and logged. A difference that was only the time since the previous refresh is **Recovered** (the run passes).
+3. **A persistent difference is a defect, held per unit.** Differences confirmed after a successful refresh are a synchronization or mapping defect to investigate: the run is `Failed` with
+   `PersistentAfterRefresh`, the company's gate is `ReconciledWithHeldUnits`, and only the listed units are held back (`SourceMismatchUnresolved`, Needs review, stamped on their records by the
+   refresh and by the revalidation). Every other unit of that company, and the other company, stay Ready and sendable. Only when the differing units could not all be listed
+   (`ReconciliationMaxDifferences`) or the recovery refresh itself failed does the company stay closed (`EvidenceFailed`). Never more than one refresh per company per run; a failed refresh is
+   not retried by the check (the next scheduled refresh is the retry).
+4. **Receivables, the Campaign preview and Export for Genesys** keep using the latest published snapshot; freshness (`SnapshotStatusDto`) and the gate per company are shown. The export
+   labels unverified data; it never blocks.
+5. **Send to Genesys** uses no stale or unverified amount: a closed company is refused, a held unit is Needs review, a publish after the approval that has not been checked stops the upload
+   (`ReviewRequired`), and the revalidation compares every approved record with the current snapshot. Sign-off (`FinancialSourceValidated`) and `AutoSendingEnabled` are never set by a check.
+
+Needs review: `AmountPrecisionNeedsReview`, `NoValidContact`, `PaymentStatusUnknown`, `StaleSource`,
 `MissingUnitIdentity`, `MissingCustomerIdentity`, `UnitAllocationNeedsReview`, `AmbiguousInstalments`, `DuplicateSourceRecord`,
 `ConflictingContactDetails`, `ContradictoryPaymentStatus`, `CurrencyNeedsReview`. Excluded: `OutsideSchedule`, `LegalNoticeReleaseRequired`,
 `LegalCaseNotApproved`. Warning (does not block): `SharedPhoneMultipleUnits`. *Already Sent* comes from the dispatch table (a live record in a
@@ -72,14 +115,60 @@ pending, uploaded or unconfirmed dispatch).
 ## Multiple units / instalments per customer
 
 One record per **unit × reminder type**; instalments inside a unit are summed only when no date is ambiguous; balances of different units are never
-merged. If the same phone appears on several records that can be sent today, each is flagged and they are held back (Excluded) and cannot be approved.
-**Missing business decision:** one call per unit (what is implemented), one consolidated call, or a priority (e.g. Legal Notice over Current Month, which
-are both scheduled on day 14). Until decided, such records are blocked; no acknowledgement releases them.
+merged. **Confirmed business decision: every property unit is its own Genesys contact record and receives its own call, even when several units share a
+phone number** (one customer with three units on one number = three records and three calls; two customers on one number = both records kept). A phone
+number is never an identifier: records are never merged, consolidated, prioritised or held back because numbers match. The unit-level protections are what
+prevent genuine duplicates: the record key (company, tenant, unit id, unit code, campaign cycle), the filtered unique index over live dispatch items, the
+contact-frequency limit per unit and business day, and the idempotency key of a dispatch. The only repeated-call hold left is per **unit**: a unit that
+qualifies for two reminder types scheduled on the same day (`ReminderTypeOverlap`, e.g. Legal Notice and Current Month on day 14) stays held until the
+business decides the priority. `SharedPhoneMultipleUnits` / `ManualSharedPhone` are no longer produced; review data stored before the decision still shows
+them until it is refreshed.
+
+**Genesys side (UAT):** the upload sends one contact per unit with the same `Phone` value; the six-column list template has no unit column, so the rows
+differ only by name, amount and date. Genesys Cloud assigns each uploaded contact its own contact id, and the Collections lists were created without a
+contact-id column, so repeated numbers are not rejected by the upload. Whether the campaign then *dials* each of them is decided in Genesys, not here:
+check the campaign's contact-list filters, contact sort, callable-time set, and any "do not contact" or duplicate-suppression rules on the list, and the
+outbound "maximum attempts per contact / per number" settings. UAT step: upload three rows for one number to the test list and confirm three contacts
+(three ids) and three attempts in the campaign's contact history before enabling live dispatch.
 
 ## Genesys
 
 * Token: `POST {LoginBaseUrl}/oauth/token`, `Authorization: Basic base64(ClientId:ClientSecret)`, `grant_type=client_credentials`, server-side only,
-  cached until `expires_in − 60 s`, one shared request for concurrent callers, invalidated on `401` (one retry). Secrets/tokens are never logged or put in errors.
+  cached until `expires_in − 60 s`, one shared request for concurrent callers, invalidated on `401` (one retry). Secrets/tokens are never logged or put in errors; a refused token
+  request names only the OAuth `error` code (`HTTP 400, invalid_client`), nothing else from the body.
+* **"The Genesys login service refused the credentials (HTTP 400)."** The login service answered the token request with 400, so no API call was made (the contact list could not be
+  read; a send is refused, an Export for Genesys falls back to the documented template and is labelled). Genesys Cloud answers 400 to a *well-formed* request it cannot honour, so the
+  cause is configuration, in this order of likelihood: (1) `invalid_client`: the client id / secret pair is not an OAuth client of the org that `LoginBaseUrl` belongs to. Check the **region**:
+  the default is Frankfurt (`login.mypurecloud.de` / `api.mypurecloud.de`); a client created in another region's org (for example `login.mypurecloud.ie` or the Middle East region
+  `login.mec1.pure.cloud` / `api.mec1.pure.cloud`) is unknown there. The two settings must name the same region as the org that owns the contact lists. (2) `invalid_client` with the
+  right region: the secret was not supplied as configured (user-secrets / environment variable `Collections__GenesysOutbound__ClientSecret`, trailing newline or quotes from a copy,
+  or a secret that was regenerated in Genesys), or the client is not of grant type **Client Credentials** (a Code Authorization or Implicit client cannot use this flow).
+  (3) `unsupported_grant_type` / `invalid_request`: a proxy rewrote the form body. Verify from the API host with `curl -u "<client-id>:<client-secret>" -d grant_type=client_credentials
+  {LoginBaseUrl}/oauth/token` and read the `error` field; the application log line "Genesys token request was refused with HTTP 400 (<code>)" now carries the same code. The
+  client also needs the `outbound` permissions of the Collections lists; a missing permission shows as 403 on the API call, not as 400 on the token.
+* **"The <type> contact list could not be checked in Genesys (Genesys rejected the contact list lookup (GET /api/v2/outbound/contactlists/{contactListId} at <api host>): HTTP 404 Not Found ...)".**
+  The failing request is exactly that one: before anything is uploaded the send reads the destination list (`GET {ApiBaseUrl}/api/v2/outbound/contactlists/{id}`, read-only). The message names the operation, the endpoint
+  (ids shown as placeholders), the API host, the HTTP status and Genesys' own error code and correlation id (never a credential, token, body or customer value); for 404 / 403 the send message adds the exact setting
+  and id to correct. What each status means for this call:
+
+  | Status | Meaning | Correct |
+  | --- | --- | --- |
+  | 401 / "login service refused the credentials" | token not issued or not valid in this region | `ClientId` / `ClientSecret`, `LoginBaseUrl`, `ApiBaseUrl` (same region) |
+  | **404 Not Found** | the OAuth client is authenticated, but **no list with that id exists in the organization it belongs to** (wrong id, a list of another organization or region, or deleted) | `Collections:GenesysOutbound:ContactListIds:<Type>` (the message names which, with the id) |
+  | 403 Forbidden | the list exists but the client's role may not read it | give the OAuth client `outbound:contactList:view` (and `outbound:contact:add` for the upload) in Genesys Admin > Roles |
+  | 400 | the request itself was malformed (not expected for this call) | report with the correlation id |
+
+  A 404 on **every** list, with a successful login, means the ids belong to another organization than the OAuth client (typically ids copied from a different org, or a test-org client with production ids); a 404 on
+  **one** list means that one id is wrong. The defaults shipped in `appsettings.json` are "the lists supplied for this integration": they are only correct for the organization that owns those lists. A wrong
+  region normally fails earlier (the login at the wrong region answers 400 `invalid_client`, or the API answers 401), so 404 points at the ids or the organization, not at the region, once login works.
+  Nothing falls back to another list: the send stops, and no upload happens.
+
+  **Safe verification (read-only; nothing is uploaded, no customer is contacted, no switch is changed).** On the Campaigns page, when a send stops with a Genesys message, press **Check Genesys connection** (API:
+  `POST /api/collections/review/dispatches/genesys-check`, send permission). It reports, one line each: the enabled switch and that both secrets are configured (never their values); whether `LoginBaseUrl` and
+  `ApiBaseUrl` name the same region (`login.<region>` / `api.<region>`; for the Middle East that is `mec1.pure.cloud`, for Frankfurt `mypurecloud.de`); that the OAuth client authenticates and **which
+  organization it acts in** (`GET /api/v2/organizations/me`); and for every `ContactListIds:*` entry whether that id exists in that organization (404), is readable (403) and carries the six template columns.
+  Compare the organization name and the list ids with Genesys Admin > Outbound > Contact Lists. Correct the named value in the environment's configuration (environment variable
+  `Collections__GenesysOutbound__ContactListIds__FollowUp`, or the secret store), restart, and run the check again. Production settings are never changed by the application.
 * Upload: `POST {ApiBaseUrl}/api/v2/outbound/contactlists/{id}/contacts`; body `[ { "contactListId": "<same id>", "data": { "Phone", "CustomerName",
   "Email Address", "ReminderType", "AmountDue", "DueDate" }, "callable": true } ]`, all data values strings, `DueDate` `yyyy-MM-dd`. One request = one list, ≤ 1,000 contacts.
 
@@ -196,6 +285,9 @@ Non-secret keys are in `appsettings.json`; supply secrets by user-secrets/enviro
 | `Collections:Campaigns:ValidatedProcedureSuffix` | `""` | procedure the reconciliation covered |
 | `Collections:Campaigns:ReconciliationReference` | – | evidence reference |
 | `Collections:Campaigns:LegalNoticeExportEnabled` / `LegalCaseDispatchApproved` | `false` / `false` | see blocker 4 |
+| `Collections:Campaigns:ReconcileAfterRefresh` | `true` | run the company's snapshot-consistency check by itself right after each successful snapshot refresh (scheduled, start-up, Retry) |
+| `Collections:Campaigns:ReconciliationRecoveryRefresh` | `true` | when a check finds differences or the snapshot is too old, refresh that company from PACT once and compare again in the same run; a persisting difference holds only its units |
+| `Collections:Campaigns:ReconciliationStartDate` | `2014-01-01` | first due date of the snapshot-consistency check; the window ends at the end of the current month. Both sides (snapshot and a direct read of the same PACT procedure) are read for that window; it never reaches before the snapshot coverage (`ReceivablesSnapshot:SourceFromDate`, 2000-01-01). The Campaigns scope (`PactReceivables:StartDate`) and the Receivables filters are separate |
 | `Collections:Review:DefaultMinimumRemaining` | `100` | AED |
 | `Collections:Review:MaxSelection` | `20000` | one approval |
 | `Collections:Review:FloatNoiseTolerance` | `0.0001` | AED |
@@ -204,6 +296,7 @@ Non-secret keys are in `appsettings.json`; supply secrets by user-secrets/enviro
 | `Collections:GenesysOutbound:ClientId` | *secret* | `Collections__GenesysOutbound__ClientId=<client-id-placeholder>` |
 | `Collections:GenesysOutbound:ClientSecret` | *secret* | `Collections__GenesysOutbound__ClientSecret=<client-secret-placeholder>` |
 | `Collections:GenesysOutbound:ContactListIds:<ReminderType>` | table above | |
+| `Collections:GenesysOutbound:ContactListIds:Manual` | empty (must be set) | The dedicated "TigerCS Manual Collections" list: all Manual sends and exports. No default; must differ from the stage lists. |
 | `Collections:GenesysOutbound:ReminderTypeLabels:<ReminderType>` | – | optional text override |
 | `Collections:GenesysOutbound:BatchSize` | `1000` | clamped to 1–1000 |
 | `BackgroundJobs:Enabled` | `true` | with `false`, refresh and dispatch jobs stay *Queued* and are shown as such (cancel a queued dispatch to release its records) |
@@ -242,3 +335,37 @@ configured integration accounts, System Administrator override). Authorization r
 `dotnet build src/TigerCS.slnx -c Release` → 0 warnings, 0 errors. `dotnet test` → 3,931 passed, 0 failed (152 new: domain rules, validation, filters/paging,
 dispatch/authorization/duplicates/concurrency on a real SQLite database, Genesys HTTP/token behaviour against a mocked handler, page rendering, endpoint authorization).
 Not exercised: real PACT, real Genesys, SQL Server (the migration and filtered indexes were generated for SQL Server; tests run on SQLite).
+
+## UAT: PACT synchronization, reconciliation recovery and the per-company gate
+
+Environment: UAT with `BackgroundJobs:Enabled=true`, the linked server and the direct `PACTRPT` connection configured, `Collections:GenesysOutbound:LiveCustomerDispatchEnabled=false`
+(nothing is sent to a customer at any step), `AutoSendingEnabled=false`, `FinancialSourceValidated` as committed (false) for steps 1-6 and set to true (UAT only, with
+`ValidatedProcedureSuffix=""` and a `ReconciliationReference`) for steps 7-10. The checks read PACT; they never write to it.
+
+1. **The check follows the refresh.** Start the API; both companies load (`RefreshOnStartup`). Open `/Collections/Reconciliation`: within a few minutes of each company's refresh a run
+   "run by itself after the snapshot refresh" appears for that company, Passed, with "snapshot published" equal to the company's last refresh time on `/Collections/Receivables`.
+2. **Changed amount / paid instalment / new unit.** In UAT PACT (or by waiting for real payments) change the remaining amount of one instalment, settle another, and add one. Press *Dubai
+   only*. Expected: the latest run shows the company **Passed** with the recovery line "The first comparison found N differing unit(s); the company's snapshot was refreshed from PACT once
+   (Succeeded) and the second comparison agrees". Receivables shows the new amounts, the settled instalment is gone, the new unit is listed. Only one refresh attempt of that company is recorded
+   in `dbo.CollectionsRcvRun` with `TriggerSource = 'Reconciliation'`.
+3. **Persistent difference (mapping defect).** In the UAT database only, edit one published line in `dbo.CollectionsRcvLine` (change its Amount) AND make the UAT refresh procedure
+   reproduce it (or run the check while a known linked-server/direct discrepancy exists). Press *Dubai only*. Expected: the company is **Failed**, the recovery line says "the differences
+   persist: a synchronization or mapping defect to investigate", the unit is listed, and the gate panel shows Dubai as "Reconciled; some units held back" with that unit under *Held back*.
+   `dbo.CollectionsRcvRun` shows exactly one `Reconciliation` attempt for the run (no retry loop).
+4. **Partial refresh failure.** Make the UAT linked server unavailable for one company (or lower `RefreshCommandTimeoutSeconds` to 5 for the test) and press *Run (both companies)*.
+   Expected: the affected company shows "could not be refreshed ... the previous snapshot is still in use", its previous snapshot is still served on Receivables (same last-success time,
+   same rows), the other company's result is unaffected.
+5. **Stale snapshot.** Stop the API for longer than `ReconciliationMaxSnapshotAgeMinutes`, start it with `RefreshOnStartup=false`, press *Dubai only*. Expected: no "minutes old" error; the
+   recovery line says the snapshot was too old and was refreshed first, then Passed.
+6. **Gate without sign-off.** With `FinancialSourceValidated=false`, Campaigns Manual mode shows every clean customer **Ready** and the status strip says the source is not reconciled
+   (SignOffMissing); *Approve & Send* is blocked by that gate alone. Export for Genesys still downloads, labelled "Financial data not verified".
+7. **Per-company gate.** Set `FinancialSourceValidated=true` (UAT only). With both companies Passed, Manual mode's summary says the source is reconciled. Make Sharjah's direct read fail
+   (wrong `PACTRPT` password for one run) and run *Sharjah only*: the gate shows Sharjah "Not reconciled" and Dubai "Reconciled". A Manual list filtered to Dubai is accepted at approval
+   (no upload happens: live dispatch is off); a list containing Sharjah is refused with "not reconciled for Tiger Group Sharjah" and names Dubai as still sendable.
+8. **Held unit.** With step 3's persistent difference in place and the sign-off set, refresh the approval data. Expected: that unit is **Needs review** with reason "Snapshot differs from PACT
+   after a refresh (investigate)"; every other unit of the company is Ready; `Counts.Ready` excludes only that unit.
+9. **Refresh between approval and send.** Approve a Manual list (dispatch stays queued because live dispatch is off; or, with the Genesys sandbox, allow it to execute). Press *Retry* on the
+   company on Receivables so a new publish happens before the dispatch executes, and stop the after-refresh check from passing (step 7's failure). Expected: the dispatch ends
+   **ReviewRequired** with "not reconciled for ... republished ... has not been checked yet"; nothing was uploaded.
+10. **Nothing auto-enabled.** After every step above, `Collections:Campaigns:FinancialSourceValidated` and `AutoSendingEnabled` are exactly what was configured; no run changed them
+    (they are configuration only). The six Genesys CSV columns are unchanged (`GenesysContactTemplate`).

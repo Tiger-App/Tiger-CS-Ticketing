@@ -1,0 +1,171 @@
+@page "/Collections/CampaignList/{id:guid}"
+@model TigerCS.Web.Pages.Collections.CampaignHistoryDetailsModel
+@using TigerCS.Application.Modules.Collections.History
+@using TigerCS.Web.Pages.Collections
+@using TigerCS.Web.Services.Api
+@{
+    ViewData["Title"] = "Campaign details";
+    ViewData["ActiveNav"] = "collections";
+    Layout = "_Layout";
+}
+<link rel="stylesheet" href="~/css/collections-snapshot.css" asp-append-version="true" />
+<link rel="stylesheet" href="~/css/collections-history.css" asp-append-version="true" />
+<div class="page receivables-workspace history-page">
+    <div class="page-header">
+        <div>
+            <p class="receivables-eyebrow"><a href="/Collections/CampaignList">Campaign List</a></p>
+            <h1 class="page-title">Campaign details</h1>
+        </div>
+        <div class="page-header__actions"><a class="btn" href="/Collections/CampaignList">Back to Campaign List</a></div>
+    </div>
+
+    @if (Model.Detail is not { } detail)
+    {
+        <div class="panel"><div class="error-state" role="alert" data-history-error><p>@CampaignHistoryModel.ProblemText(Model.Outcome, Model.Error)</p></div></div>
+    }
+    else
+    {
+        var s = detail.Submission;
+        <section class="panel history-facts" data-submission-header>
+            <div class="history-facts__status">
+                <span class="history-badge @CampaignHistoryModel.BadgeClass(s.Status)" data-status-badge>@s.StatusLabel</span>
+                <span data-status-explanation>@s.StatusExplanation</span>
+            </div>
+            @if (s.Error is { Length: > 0 } error && s.Status is not GenesysUploadStates.Uploaded)
+            {
+                <p class="receivables-notice receivables-notice--warning" role="alert" data-submission-error>@error</p>
+            }
+            <dl class="history-facts__grid">
+                <div><dt>@(s.SubmittedAtUtc is null ? "Approved (not submitted)" : "Submitted")</dt><dd data-submitted-at>@CollectionsDisplay.DubaiTime(s.SubmittedAtUtc ?? s.ApprovedAtUtc)</dd></div>
+                @if (s.SubmittedAtUtc is not null) { <div><dt>Approved</dt><dd>@CollectionsDisplay.DubaiTime(s.ApprovedAtUtc)</dd></div> }
+                @if (detail.CompletedAtUtc is { } completed) { <div><dt>Finished</dt><dd>@CollectionsDisplay.DubaiTime(completed)</dd></div> }
+                <div><dt>Campaign stage</dt><dd>@s.StageName <span class="receivables-meta">@s.ReminderLabel</span></dd></div>
+                <div><dt>Mode</dt><dd>@s.Mode</dd></div>
+                <div><dt>Submitted by</dt><dd>@s.SubmittedByName</dd></div>
+                <div><dt>Destination list</dt><dd>@(s.ContactListLabel ?? "—")</dd></div>
+                <div><dt>@(s.FiguresBasis == "Approved" ? "Approved records" : "Unit records submitted")</dt><dd data-records>@s.UnitRecords.ToString("N0")</dd></div>
+                <div><dt>@(s.FiguresBasis == "Approved" ? "Approved amount (AED)" : "Submitted amount (AED)")</dt><dd data-amount>@CampaignHistoryModel.Money(s.TotalAmount)</dd></div>
+                <div><dt>Uploaded / failed / unconfirmed</dt><dd>@s.UploadedRecords / @s.FailedRecords / @s.UnconfirmedRecords</dd></div>
+                @if (detail.ExcludedAtDispatch > 0 || s.ExcludedRecords > 0) { <div><dt>Left out before upload</dt><dd>@s.ExcludedRecords (paid, changed or not callable)</dd></div> }
+                @if (detail.SharedPhoneRecords > 0) { <div><dt>Records sharing a phone number</dt><dd data-shared-phones>@detail.SharedPhoneRecords.ToString("N0") (each unit is its own record)</dd></div> }
+                <div><dt>Genesys reference</dt><dd>@if (s.GenesysReference is { } reference) { <code>@reference</code> } else { <span class="receivables-meta">Not provided by Genesys</span> }</dd></div>
+            </dl>
+            <p class="receivables-meta" data-call-outcome-note>@detail.CallOutcomeNote</p>
+        </section>
+
+        @if (Model.SyncNotice is { } syncNotice) { <p class="receivables-notice" role="status" data-sync-notice>@syncNotice</p> }
+        @if (Model.SyncProblem is { } syncProblem) { <p class="receivables-notice receivables-notice--warning" role="alert" data-sync-problem>@syncProblem</p> }
+        <section class="panel campaign-sync" data-delivery-summary>
+            <div>
+                @if (s.Delivery is { Synced: true } dv)
+                {
+                    <strong>Delivery confirmed by Genesys</strong>
+                    <span class="receivables-meta">Contacts @s.ApprovedRecords.ToString("N0") · Sent @CampaignHistoryModel.Figure(dv.Sent) (of which Delivered @CampaignHistoryModel.Figure(dv.Delivered)) · Missed / Failed @CampaignHistoryModel.Figure(dv.Failed) · Pending / Unknown @CampaignHistoryModel.Figure(dv.Pending) · Not sent @dv.NotSent.ToString("N0") · Message attempts @dv.MessageAttempts.ToString("N0")</span>
+                }
+                else { <strong>Not synced from Genesys yet</strong><span class="receivables-meta">No delivery result is known for this campaign.</span> }
+                <span class="receivables-meta" data-last-synced>Last synced: @(s.Delivery?.LastSyncedAtUtc is { } syncedAt ? CollectionsDisplay.DubaiTime(syncedAt) : "never")@if (s.Delivery?.SyncOutcome is "Failed" or "Partial") { <text> · @s.Delivery.SyncOutcome: @s.Delivery.SyncError</text> }</span>
+            </div>
+            @if (detail.CanSync)
+            {
+                <form method="post" asp-page-handler="Sync" data-sync-form><input type="hidden" name="force" value="true" /><button class="btn btn-gold" type="submit" data-sync-button>Sync from Genesys</button></form>
+            }
+        </section>
+
+        @if (detail.Batches.Count > 0)
+        {
+            <section class="panel history-batches" data-batches>
+                <h2 class="history-h2">Genesys requests</h2>
+                <div class="receivables-table-wrap">
+                    <table class="receivables-table history-table">
+                        <thead><tr><th>#</th><th>List</th><th>Genesys campaign</th><th class="num">Contacts</th><th class="num">Returned</th><th>Result</th><th>HTTP</th><th>Started (Dubai)</th><th>Finished (Dubai)</th><th>Note</th></tr></thead>
+                        <tbody>
+                        @foreach (var b in detail.Batches)
+                        {
+                            <tr data-batch="@b.Sequence">
+                                <td>@b.Sequence</td>
+                                <td>@(b.ContactListLabel ?? b.ContactListId)</td>
+                                <td>@(b.GenesysCampaignName ?? "—")@if (b.GenesysCampaignId is { } campaignId) { <span class="receivables-meta"><code>@campaignId</code></span> }</td>
+                                <td class="num">@b.Contacts.ToString("N0")</td>
+                                <td class="num">@(b.ReturnedContacts?.ToString("N0") ?? "—")</td>
+                                <td><span class="history-badge @(b.Status switch { "Uploaded" => "history-badge--ok", "Failed" => "history-badge--bad", "UnknownOutcome" => "history-badge--warn", "Pending" or "Submitting" => "history-badge--run", _ => "history-badge--idle" })">@b.StatusLabel</span></td>
+                                <td>@(b.HttpStatus?.ToString() ?? "—")</td>
+                                <td>@(b.StartedAtUtc is null ? "—" : CollectionsDisplay.DubaiTime(b.StartedAtUtc))</td>
+                                <td>@(b.CompletedAtUtc is null ? "—" : CollectionsDisplay.DubaiTime(b.CompletedAtUtc))</td>
+                                <td>@if (b.Error is { Length: > 0 } batchError) { <span data-batch-error>@batchError</span> }@if (b.ReconciliationNote is { Length: > 0 } note) { <span class="receivables-meta">Checked in Genesys: @note</span> }</td>
+                            </tr>
+                        }
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        }
+
+        <form class="filter-bar history-filters" method="get" action="/Collections/CampaignList/@Model.Id.ToString("D")" data-record-filters>
+            <div class="field-group filter-bar__search">
+                <label class="field-label" for="rSearch">Search records</label>
+                <input class="field-input" type="search" id="rSearch" name="search" maxlength="100" value="@Model.Search" placeholder="Customer, unit, phone, email or contact id" />
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="rResult">Upload result</label>
+                <select class="field-select" id="rResult" name="result">
+                    <option value="">All results</option>
+                    @foreach (var (value, label) in new[] { ("Uploaded", "Uploaded"), ("Failed", "Failed"), ("Unknown", "Unknown"), ("NotSent", "Not sent / excluded") })
+                    {
+                        <option value="@value" selected="@(string.Equals(Model.Result, value, StringComparison.OrdinalIgnoreCase))">@label</option>
+                    }
+                </select>
+            </div>
+            <div class="filter-bar__submit"><button class="btn btn-gold" type="submit">Apply</button><a class="btn btn-ghost" href="/Collections/CampaignList/@Model.Id.ToString("D")">Clear</a></div>
+        </form>
+
+        @if (Model.Records is not { } records)
+        {
+            <div class="panel"><div class="error-state" role="alert" data-history-error><p>@CampaignHistoryModel.ProblemText(Model.Outcome, Model.Error)</p></div></div>
+        }
+        else if (records.Items.Count == 0)
+        {
+            <div class="empty-state" data-history-empty><p class="empty-state__title">No records match these filters.</p></div>
+        }
+        else
+        {
+            <div class="receivables-table-wrap">
+                <table class="receivables-table history-table history-records" data-record-table>
+                    <thead><tr><th>Customer</th><th>CRM customer ID</th><th>Unit</th><th>Mobile Number</th><th>Email</th><th>Reminder</th><th class="num">Amount due (AED)</th><th>Due date</th><th>Upload result</th><th>Message Status</th><th>Sent Time</th><th>Delivered Time</th><th>Failure Reason</th><th>Genesys Interaction ID</th></tr></thead>
+                    <tbody>
+                    @foreach (var r in records.Items)
+                    {
+                        <tr data-record="@r.RecordId" data-result="@r.ResultState" class="@(r.SharedPhone ? "history-shared-phone" : "")">
+                            <td>@r.CustomerName</td>
+                            <td data-crm-id>@(r.CrmCustomerId?.ToString() ?? "—")</td>
+                            <td class="history-nowrap">@r.UnitCode</td>
+                            <td class="history-nowrap" data-phone>@r.Phone@if (r.SharedPhone) { <span class="receivables-tag" title="Another unit in this submission uses the same phone number. Each unit is its own record.">Shared phone</span> }</td>
+                            <td>@(string.IsNullOrWhiteSpace(r.Email) ? "—" : r.Email)</td>
+                            <td>@r.ReminderLabel</td>
+                            <td class="num">@CampaignHistoryModel.Money(r.Amount)@if (r.Currency != "AED") { <span class="receivables-meta">@r.Currency</span> }</td>
+                            <td>@r.DueDate.ToString("dd MMM yyyy")</td>
+                            <td>
+                                <span class="history-badge @(r.ResultState switch { "uploaded" => "history-badge--ok", "failed" => "history-badge--bad", "unknown" => "history-badge--warn", "pending" => "history-badge--run", _ => "history-badge--idle" })" data-record-result>@r.Result</span>
+                                @if (r.Error is { Length: > 0 } recordError) { <span class="receivables-meta" data-record-error>@recordError</span> }
+                                @if (r.Suppression is { } suppression) { <span class="receivables-meta">@suppression</span> }
+                                <span class="receivables-meta" data-call-outcome>@r.CallOutcome</span>
+                            </td>
+                            <td data-message-status><span class="history-badge @(r.MessageStatus switch { "Delivered" => "history-badge--ok", "Failed" => "history-badge--bad", "Sent" => "history-badge--run", _ => "history-badge--idle" })">@(r.MessageStatus ?? "Not synced")</span>@if (r.MessageAttempts > 1) { <span class="receivables-meta">@r.MessageAttempts attempts</span> }</td>
+                            <td data-sent-time>@(r.SentAtUtc is null ? "—" : CollectionsDisplay.DubaiTime(r.SentAtUtc))</td>
+                            <td data-delivered-time>@(r.DeliveredAtUtc is null ? "—" : CollectionsDisplay.DubaiTime(r.DeliveredAtUtc))</td>
+                            <td data-failure-reason>@(string.IsNullOrWhiteSpace(r.FailureReason) ? "—" : r.FailureReason)</td>
+                            <td data-interaction-id>@if (r.InteractionId is { } interaction) { <code>@interaction</code> } else { <span>—</span> }</td>
+                        </tr>
+                    }
+                    </tbody>
+                </table>
+            </div>
+            <div class="receivables-pagination">
+                <span>Page @records.Page of @Model.TotalPages · @records.TotalCount record(s)</span>
+                <div>
+                    @if (records.Page > 1) { <a class="btn btn-sm" href="@Model.PageUrl(records.Page - 1)">Previous</a> }
+                    @if (records.Page < Model.TotalPages) { <a class="btn btn-sm" href="@Model.PageUrl(records.Page + 1)">Next</a> }
+                </div>
+            </div>
+        }
+    }
+</div>

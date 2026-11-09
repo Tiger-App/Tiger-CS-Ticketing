@@ -27,7 +27,7 @@ public sealed class PactInstalmentsAppService(
     public async Task<CollectionsResult<PactInstalmentsPageDto>> ListAsync(
         CollectionsCaller caller, int? towerId = null, DateOnly? dateFrom = null, DateOnly? dateTo = null, string? paymentStatus = null,
         decimal? minAmount = null, string? search = null, int page = 1, int pageSize = 25, CancellationToken cancellationToken = default,
-        string? view = null, string? dueMonth = null, string? unitStatusFilter = null, decimal? minTotal = null, IReadOnlyList<int>? towerIds = null)
+        string? view = null, string? dueMonth = null, string? unitStatusFilter = null, decimal? minTotal = null, IReadOnlyList<int>? towerIds = null, IReadOnlyList<int>? floors = null)
     {
         var total = Stopwatch.StartNew();
         if (!(await authorization.ResolveAsync(caller, cancellationToken)).CanReadFinancials)
@@ -39,6 +39,10 @@ public sealed class PactInstalmentsAppService(
         var towers = (towerIds ?? []).Concat(towerId is { } single ? new[] { single } : Array.Empty<int>()).Distinct().Order().ToList();
         if (towers.Any(id => id <= 0) || towers.Count > MaxTowers)
             return CollectionsResult<PactInstalmentsPageDto>.Fail(CollectionsOutcome.InvalidRequest, "The selected towers are not valid. Choose towers from the list.");
+        if (CollectionsUnitFloor.HasInvalid(floors))
+            return CollectionsResult<PactInstalmentsPageDto>.Fail(CollectionsOutcome.InvalidRequest, "The selected floors are not valid. Choose floors from the list.");
+        var floorList = CollectionsUnitFloor.Normalize(floors);
+        IReadOnlyList<int>? chosenFloors = floorList.Count == 0 ? null : floorList;   // null = All floors: nothing is sent, nothing changes
         towerId = towers.Count == 1 ? towers[0] : null;
         IReadOnlyList<int>? manyTowers = towers.Count > 1 ? towers : null;
         if (!CollectionsPaymentFilters.TryParse(paymentStatus, out var filter)
@@ -107,7 +111,7 @@ public sealed class PactInstalmentsAppService(
         {
             // By unit classifies every instalment against the current Dubai MONTH of today (Overdue: before its first day, Due: inside it); the other view keeps the month rule.
             var overview = new PactInstalmentsRequest(from, to, byUnit ? today : monthStart, min, CollectionsPaymentFilters.ToWire(filter),
-                string.IsNullOrEmpty(term) ? null : term, digits, 1, pageSize, null, towerId, unitStatus, byUnit, unitMinTotal, manyTowers);
+                string.IsNullOrEmpty(term) ? null : term, digits, 1, pageSize, null, towerId, unitStatus, byUnit, unitMinTotal, manyTowers, chosenFloors);
             // The list (and its totals) use the window narrowed to the selected month; Overdue is still "due before the current month" for every row.
             var request = overview;
             if (monthFrom is { } mf && monthTo is { } mt)
@@ -151,11 +155,12 @@ public sealed class PactInstalmentsAppService(
         var status = result.Snapshot;
         // The CRM side of the units' contacts (the by-unit page links them): a CRM service problem is reported, never shown as units without a CRM mobile.
         var crm = byUnit && links is not null ? CrmContactStatusDto.From(await links.GetAvailabilityAsync(cancellationToken)) : null;
-        var views = new PaymentViewAvailabilityDto(true, status.BreakdownAvailable, status.BreakdownAvailable, status.PaidRetained, status.PaidRetained, status.UnclassifiedRows);
+        // Unpaid is any positive remainder (the remaining-amount rule), so it is always available; Partially paid is a refinement that needs the source's original and paid amounts.
+        var views = new PaymentViewAvailabilityDto(true, true, status.BreakdownAvailable, status.PaidRetained, status.PaidRetained, status.UnclassifiedRows);
         if (result.Unavailable)
             return CollectionsResult<PactInstalmentsPageDto>.Fail(CollectionsOutcome.InvalidRequest, filter is CollectionsPaymentFilter.FullyPaid or CollectionsPaymentFilter.All
                 ? "Fully paid instalments are not in the loaded data yet, so Fully paid and All cannot be shown. Reload the data to retain them."
-                : "The source does not return the original and paid amounts, so Unpaid and Partially paid cannot be told apart. Use Outstanding.");
+                : "The source does not return the original and paid amounts, so Partially paid cannot be told apart from Unpaid. Use Unpaid or Outstanding.");
 
         var notes = new List<string>(PactReceivableCustomersAppService.WindowNotes(from, to, monthStart, monthEnd))
         {
@@ -164,11 +169,11 @@ public sealed class PactInstalmentsAppService(
         if (!minApplies) notes.Add("The minimum outstanding amount is not applied to Fully paid and All, so paid rows are never hidden.");
         else notes.Add($"Only instalments whose remaining unpaid amount is at least {min:0.##} {sourceOptions.Currency} are listed and counted.");
         if (filter == CollectionsPaymentFilter.Outstanding && status.UnclassifiedRows > 0)
-            notes.Add($"{status.UnclassifiedRows:N0} instalment(s) show \"Needs verification\": the source does not say whether they are unpaid or partially paid.");
+            notes.Add($"{status.UnclassifiedRows:N0} instalment(s) show \"Needs verification\": their remaining amount is missing, invalid or contradicted by the source.");
 
         return CollectionsResult<PactInstalmentsPageDto>.Ok(new PactInstalmentsPageDto(today, monthStart, monthEnd, from, to, towerId,
             CollectionsPaymentFilters.ToWire(filter), min, minApplies, sourceOptions.Currency, result.Totals, page, pageSize, result.Rows, status, views, notes,
             result.ReadAtUtc, new ServerTimingsDto(result.SqlMs, total.Elapsed.TotalMilliseconds - result.SqlMs, total.Elapsed.TotalMilliseconds),
-            byUnit ? "units" : "instalments", units, months, string.IsNullOrWhiteSpace(dueMonth) ? null : dueMonth, crm, manyTowers));
+            byUnit ? "units" : "instalments", units, months, string.IsNullOrWhiteSpace(dueMonth) ? null : dueMonth, crm, manyTowers, chosenFloors));
     }
 }

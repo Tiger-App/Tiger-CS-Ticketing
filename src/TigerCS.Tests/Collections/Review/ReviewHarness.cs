@@ -47,11 +47,22 @@ public sealed class FakeGenesysClient : IGenesysOutboundClient
     public List<string> CampaignChecks { get; } = [];
     public Queue<GenesysUploadOutcome> ListCheckScript { get; } = new();
 
+    /// <summary>A scripted answer for one contact list (for example Rejected with HTTP 404 or 403); takes precedence over <see cref="ListColumns"/>.</summary>
+    public Dictionary<string, GenesysContactListInfo> ListAnswers { get; } = new(StringComparer.OrdinalIgnoreCase);
+    /// <summary>The organization the fake OAuth client belongs to (null = the default test organization).</summary>
+    public GenesysOrganizationInfo? Organization { get; set; }
+    public int OrganizationChecks { get; private set; }
+    public Task<GenesysOrganizationInfo> GetOrganizationAsync(CancellationToken ct)
+    {
+        lock (_gate) { OrganizationChecks++; return Task.FromResult(Organization ?? new GenesysOrganizationInfo(GenesysUploadOutcome.Accepted, 200, "org-1", "Tiger Test Org", null)); }
+    }
+
     public Task<GenesysContactListInfo> GetContactListAsync(string contactListId, CancellationToken ct)
     {
         lock (_gate)
         {
             ListChecks.Add(contactListId);
+            if (ListAnswers.TryGetValue(contactListId, out var answer)) return Task.FromResult(answer);
             var outcome = ListCheckScript.Count > 0 ? ListCheckScript.Dequeue() : GenesysUploadOutcome.Accepted;
             if (outcome != GenesysUploadOutcome.Accepted) return Task.FromResult(new GenesysContactListInfo(outcome, null, [], "Genesys could not be reached."));
             return Task.FromResult(new GenesysContactListInfo(outcome, 200, ListColumns.TryGetValue(contactListId, out var columns) ? columns : ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], null));
@@ -259,8 +270,18 @@ internal sealed class ReviewHarness : IDisposable
     public CollectionsOptions Options { get; } = new() { Enabled = true };
     public PactReceivablesOptions Sql { get; } = new() { Enabled = true };
     public CollectionsCampaignOptions Campaign { get; } = new() { FinancialSourceValidated = true, LegalNoticeExportEnabled = true };
+    /// <summary>The automated reconciliation evidence the gate consults (null = sign-off only, as most tests want; set a history to test the per-company gate and held units).</summary>
+    public TigerCS.Application.Modules.Collections.Reconciliation.ReconciliationHistory? Evidence { get; set; }
     public CollectionsReviewOptions Review { get; } = new();
-    public GenesysOutboundOptions Genesys { get; } = new() { Enabled = true, LiveCustomerDispatchEnabled = true, SuppressionEnabled = true, LeaseHeartbeatSeconds = 0.02 };
+    /// <summary>The dedicated Manual list id used by the tests (a made-up GUID; nothing is ever sent to Genesys).</summary>
+    public const string ManualListId = "11111111-2222-4333-8444-555555555555";
+    public GenesysOutboundOptions Genesys { get; } = NewGenesys();
+    private static GenesysOutboundOptions NewGenesys()
+    {
+        var options = new GenesysOutboundOptions { Enabled = true, LiveCustomerDispatchEnabled = true, SuppressionEnabled = true, LeaseHeartbeatSeconds = 0.02 };
+        options.ContactListIds["Manual"] = ManualListId;
+        return options;
+    }
     /// <summary>The shared CRM link service (null = CRM linking off: contacts are PACT's, as before).</summary>
     public TigerCS.Application.Modules.Collections.Services.CollectionsUnitLinkService? Links { get; set; }
     public FakeGenesysClient Client { get; } = new();
@@ -327,7 +348,7 @@ internal sealed class ReviewHarness : IDisposable
             var auth = new CollectionsAuthorizationService(h.Options, new FakeDepartmentRepository());
             Query = new ReviewQueryService(h.Options, h.Review, auth, clock, Store, null, h.Genesys);
             Refresh = new ReviewRefreshService(h.Options, h.Campaign, h.Sql, h.Review, auth, clock, h.Source, Store, h.Scheduler, Query,
-                NullLogger<ReviewRefreshService>.Instance, h.Links);
+                NullLogger<ReviewRefreshService>.Instance, h.Links, h.Evidence);
             var balances = new CurrentBalanceReader(h.Sql, h.Source, Refresh, NullLogger<CurrentBalanceReader>.Instance);
             Dispatch = new DispatchService(h.Options, h.Genesys, auth, clock, Store, h.Scheduler, client ?? h.Client, Query, balances,
                 NullLogger<DispatchService>.Instance);

@@ -400,6 +400,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddSingleton(sp => sp.GetRequiredService<IOptions<ReceivablesSnapshotOptions>>().Value);
         services.AddScoped<RcvReceivablesSource>();
         services.AddScoped<IPactReceivablesSource>(sp => sp.GetRequiredService<RcvReceivablesSource>());
+        services.AddScoped<IUnitFloorDirectory>(sp => sp.GetRequiredService<RcvReceivablesSource>());
         services.AddScoped<ICollectionsTowerCatalog, SqlCollectionsTowerCatalog>();
         // Monthly tower -> collector assignments, Collections ticket routing and the Collections assignment history.
         services.AddScoped<ICollectionsTowerAssignmentRepository, CollectionsTowerAssignmentRepository>();
@@ -440,6 +441,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<TigerCS.Application.Modules.Collections.Reconciliation.IReconciliationSource, PactDirectReconciliationSource>();
         services.AddSingleton<TigerCS.Application.Modules.Collections.Reconciliation.IReconciliationLauncher, InProcessReconciliationLauncher>();
         services.AddScoped<TigerCS.Application.Modules.Collections.Reconciliation.FinancialReconciliationService>();
+        // The check that follows each successful snapshot refresh of a company (the refresh jobs call it; the service also refreshes a company once when a check finds differences).
+        services.AddScoped<TigerCS.Application.Modules.Collections.Reconciliation.IPostRefreshReconciliation>(sp => sp.GetRequiredService<TigerCS.Application.Modules.Collections.Reconciliation.FinancialReconciliationService>());
         services.AddScoped<CollectionsCampaignAppService>();
         // Review and approval workflow: stored review data, explicit refresh/dispatch jobs, Genesys outbound upload.
         services.Configure<CollectionsReviewOptions>(configuration.GetSection(CollectionsReviewOptions.SectionName));
@@ -453,10 +456,17 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<CurrentBalanceReader>();
         services.AddScoped<DispatchService>();
         services.AddScoped<GenesysExportService>();
+        services.AddScoped<GenesysConnectionCheckService>();
         services.AddScoped<ManualReviewExportService>();
         services.AddScoped<AutoDispatchService>();
         services.AddScoped<DispatchAdminReportService>();
         services.AddScoped<SuppressionService>();
+        // Genesys Campaign History: read-only over the dispatch / batch / item / audit data the approval and upload already persist.
+        services.AddScoped<TigerCS.Application.Modules.Collections.History.IGenesysHistoryStore, GenesysHistoryStore>();
+        services.AddScoped<TigerCS.Application.Modules.Collections.History.GenesysHistoryService>();
+        // Manual Sync from Genesys: reads delivery results from Genesys on demand and persists them. No scheduled job.
+        services.AddScoped<TigerCS.Application.Modules.Collections.History.IGenesysDeliveryStore, GenesysDeliveryStore>();
+        services.AddScoped<TigerCS.Application.Modules.Collections.History.GenesysCampaignSyncService>();
         services.AddScoped<CollectionsAccountQueryAppService>();
         services.AddScoped<ICollectionsCustomerProfiles, CustomerDirectoryCollectionsProfiles>();
         services.AddScoped(sp => sp.GetRequiredService<IOptions<CollectionsEdsmOptions>>().Value);

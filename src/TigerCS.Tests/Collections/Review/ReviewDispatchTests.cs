@@ -79,7 +79,7 @@ public sealed class ReviewDispatchTests
     public async Task NotReadyRecordsCanNeverBeSelected_EvenByKey()
     {
         using var h = new ReviewHarness();
-        h.Source.Items.AddRange([ReviewHarness.Row(1), ReviewHarness.Row(2, mobile: ""), ReviewHarness.Row(3) with { PlanAmount = null }]);
+        h.Source.Items.AddRange([ReviewHarness.Row(1), ReviewHarness.Row(2, mobile: ""), ReviewHarness.Row(3, status: "Paid")]);          // a remainder the source contradicts (status Paid): unknown, never sendable
         await h.RefreshAsync();
         using var scope = h.NewScope();
         var page = (await scope.Query.QueryAsync(h.Manager, new ReviewFilter(ReminderType: "CurrentMonth", PaymentStatus: "All"), 1, 25, CancellationToken.None)).Value!;
@@ -141,33 +141,21 @@ public sealed class ReviewDispatchTests
     }
 
     [Fact]
-    public async Task MultipleUnitsOnOnePhone_AreBlockedNotAcknowledged_NeverMergedAndNeverSent()
+    public async Task MultipleUnitsOnOnePhone_AreSeparateRecords_EachSentOnItsOwn_NeverMerged()
     {
         using var h = new ReviewHarness();
         h.Source.Items.AddRange([ReviewHarness.Row(1, 300m, mobile: "0500003001"), ReviewHarness.Row(2, 450m, mobile: "0500003001"), ReviewHarness.Row(3)]);
         await h.RefreshAsync();
         var (summary, confirm) = await h.PrepareAsync();
-        Assert.Equal(1, summary.Count);                        // only the unit with its own phone can be selected
-        Assert.Equal("Customer 3", summary.Contacts.Single().CustomerName);
+        Assert.Equal(3, summary.Count);                                                    // every unit, the two on one number included
+        Assert.Equal([300m, 450m, 500m], summary.Contacts.Select(c => c.Amount).Order());  // not merged into 750
+        Assert.Equal((2, 1), (summary.SharedPhoneRecordCount, summary.SharedPhoneNumberCount));
+        Assert.Contains(summary.Notices, n => n.Contains("Each unit is its own contact"));
         using var scope = h.NewScope();
-        var page = (await scope.Query.QueryAsync(h.Manager, new ReviewFilter(ReminderType: "CurrentMonth", ValidationStatus: "Excluded"), 1, 25, CancellationToken.None)).Value!;
-        Assert.Equal(["Customer 1", "Customer 2"], page.Items.Select(i => i.CustomerName).Order());
-        Assert.All(page.Items, i => Assert.Contains(i.Reasons, r => r.Code == ReviewReasons.SharedPhoneMultipleUnits));
-        Assert.Equal([300m, 450m], page.Items.Select(i => i.RemainingAmount!.Value).Order());   // not merged into 750
-
-        // Selecting them by key anyway yields nothing, and a hand-built request carrying them is refused.
-        var blocked = page.Items.Select(i => i.RecordKey).ToList();
-        Assert.Empty((await scope.Query.ResolveAsync(new SelectionRequest(null, ReviewQueryService.ModeSelectedKeys, blocked), CancellationToken.None)).Records);
-
         var overlaps = (await scope.Query.OverlapsAsync(h.Manager, 1, 25, CancellationToken.None)).Value!;
-        var group = Assert.Single(overlaps.Groups);
-        Assert.Equal("+971500003001", group.Phone);
-        Assert.Equal(2, group.CustomerCount);
-        Assert.Equal(2, group.UnitCount);
-        Assert.True(group.SharedAcrossUnits);
-        Assert.Contains(group.Rows, r => r.CustomerName == "Customer 1" && r.RemainingAmount == 300m);
-        Assert.Equal(CollectionsOutcome.Accepted, (await ConfirmAsync(h, confirm)).Outcome);   // the clean record is unaffected
-        Assert.Single(await ItemsAsync(h));
+        Assert.Empty(overlaps.Groups);                                                     // a shared number is not an overlap any more
+        Assert.Equal(CollectionsOutcome.Accepted, (await ConfirmAsync(h, confirm)).Outcome);
+        Assert.Equal(3, (await ItemsAsync(h)).Count);
     }
 
     [Fact]

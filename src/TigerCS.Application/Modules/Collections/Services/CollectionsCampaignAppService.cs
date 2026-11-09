@@ -27,7 +27,7 @@ public sealed class CollectionsCampaignAppService(
         CollectionsCaller caller, string? stage, DateOnly? businessDate = null, int? companyId = null,
         string? search = null, int page = 1, int pageSize = 25, bool forExport = false,
         CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null,
-        string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null)
+        string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null, IReadOnlyList<int>? floors = null)
     {
         var total = Stopwatch.StartNew();
         // Project / Tower filter: any number of local tower ids (the single towerId is kept for old callers). None = All projects. One tower keeps the
@@ -35,6 +35,10 @@ public sealed class CollectionsCampaignAppService(
         var towers = (towerIds ?? []).Concat(towerId is { } single ? new[] { single } : Array.Empty<int>()).Distinct().Order().ToList();
         towerId = towers.Count == 1 ? towers[0] : null;
         var multiTower = towers.Count > 1;
+        // Floor filter (apartment floors derived from the unit code, see CollectionsUnitFloor): none = All floors = no filtering. It only NARROWS the finished list of units, so a unit shows exactly the
+        // figures, flags and status it has without the filter, and the counts, totals, instalments, pages and both exports agree.
+        var floorList = CollectionsUnitFloor.Normalize(floors);
+        var floorSet = floorList.Count == 0 ? null : floorList.ToHashSet();
         var permissions = await authorization.ResolveAsync(caller, cancellationToken);
         if (!permissions.CanReadFinancials || (forExport && !permissions.CanSendReminders))
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.Forbidden);
@@ -50,10 +54,10 @@ public sealed class CollectionsCampaignAppService(
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.InvalidRequest, "Payment status must be Due, Overdue or Both.");
         if (!CollectionsEnums.TryParse<CollectionsCampaignStage>(stage, out var selected)
             || date.Year is < 2000 or > 2100 || companyId is not (null or 4 or 32)
-            || search?.Length > 200 || page < 1 || pageSize is < 1 or > 100 || towers.Any(t => t <= 0) || minTotal < 0 || minTotal > sourceOptions.MaxMinOutstandingAmount
+            || search?.Length > 200 || page < 1 || pageSize is < 1 or > 100 || towers.Any(t => t <= 0) || CollectionsUnitFloor.HasInvalid(floors) || minTotal < 0 || minTotal > sourceOptions.MaxMinOutstandingAmount
             || (long)(page - 1) * pageSize > int.MaxValue)
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.InvalidRequest,
-                "Choose a campaign stage, a date in 2000-2100, company 4 or 32, a minimum amount of 0 or more, page >= 1 and pageSize 1-100; search is limited to 200 characters.");
+                "Choose a campaign stage, a date in 2000-2100, company 4 or 32, a minimum amount of 0 or more, valid floors (0-99), page >= 1 and pageSize 1-100; search is limited to 200 characters.");
         // "Minimum Total": a unit is listed only when its Due + Overdue is GREATER than this (null = no minimum). It is applied to the unit's sum - never to single
         // instalments - before the counts, the pages and both CSV exports, so all of them agree.
         decimal? unitMinTotal = minTotal is { } requested ? decimal.Round(requested, 4) : null;
@@ -100,7 +104,7 @@ public sealed class CollectionsCampaignAppService(
             // page - or, for an export, the bounded full result - reaches the application. Otherwise (a source without that capability, or a
             // snapshot the engine cannot use) every instalment of the window is read and evaluated in memory, as before.
             // A single payment status is evaluated in memory (the reference implementation): an engine that does not know the filter must never answer for it.
-            if (source is IPactCampaignSource campaign && paymentFilter == CampaignPaymentFilter.Both && !multiTower)
+            if (source is IPactCampaignSource campaign && paymentFilter == CampaignPaymentFilter.Both && !multiTower && floorSet is null)
             {
                 var request = new PactCampaignRequest(from, to, min, stageFrom, stageToExclusive, CollectionsCampaignPolicy.Threshold(selected),
                     selected != CollectionsCampaignStage.LegalReferral, term, phoneDigits,
@@ -180,9 +184,14 @@ public sealed class CollectionsCampaignAppService(
             ? status.IsFresh
             : readAtUtc.Kind == DateTimeKind.Utc && !clock.IsStale(readAtUtc) && readAtUtc <= clock.UtcNow.AddMinutes(1);
         var coverageIncomplete = snapshotStatus is { RangeCovered: false };
+        // The gate per company (one company's missing evidence never holds the other back) and the units a reconciled company holds back one by one.
+        var heldUnits = gate.HeldUnitKeys();
+        var scopeReconciled = companyId is { } scopedCompany ? gate.IsOpen(scopedCompany) : gate.Reconciled;
         CollectionsCampaignContactDto ToContact(CampaignUnitFacts f)
         {
-            var (unitStatus, reasons) = Compose(f.Flags | (int)crmUnavailableFlag, fresh, coverageIncomplete, gate.Reconciled, selected, date, dates);
+            var (unitStatus, reasons) = Compose(f.Flags | (int)crmUnavailableFlag, fresh, coverageIncomplete, gate.IsOpen(f.CompanyId), selected, date, dates);
+            if (heldUnits.Count > 0 && heldUnits.Contains((f.CompanyId, f.TenantId.Trim(), (long)(f.UnitId ?? 0))) && unitStatus is "Ready" or "PreviewOnly" or "NeedsReview")
+            { unitStatus = "NeedsReview"; reasons = [.. reasons.Where(r => r != "OutsideSchedule"), "SourceMismatchUnresolved"]; }
             var identity = $"{f.CompanyId}:{f.TenantId}:{f.UnitId}:{f.UnitCode}:{cycle}";
             var id = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity)));
             return new CollectionsCampaignContactDto(id, $"ext:Pact:{f.TenantId}", f.CompanyId, f.TenantId, f.FullName, f.Phone, f.Email,
@@ -203,7 +212,7 @@ public sealed class CollectionsCampaignAppService(
                     "The export exceeds the row limit. Filter by company or customer; no partial file was created.");
             // Every unit-level reason makes a unit NeedsReview whatever the global gates are; a unit without one gets the status a hypothetical clean
             // unit would get, so Ready / NeedsReview counts are exact over the whole filtered set without materialising it.
-            var cleanStatus = Compose((int)crmUnavailableFlag, fresh, coverageIncomplete, gate.Reconciled, selected, date, dates).Status;
+            var cleanStatus = Compose((int)crmUnavailableFlag, fresh, coverageIncomplete, scopeReconciled, selected, date, dates).Status;
             count = sqlPage.Total;
             ready = cleanStatus == "Ready" ? sqlPage.Clean : 0;
             review = sqlPage.Review + (cleanStatus == "NeedsReview" ? sqlPage.Clean : 0);
@@ -215,7 +224,7 @@ public sealed class CollectionsCampaignAppService(
             List<CampaignUnitFacts> facts;
             try
             {
-                facts = BuildFactsInMemory(snapshot!.Items, from, to, min, selected, date, term, phoneDigits, companyId, today, unitMinTotal, crmSet.Links, eligibleFrom, crmSet.Availability.Blocks, paymentFilter);
+                facts = BuildFactsInMemory(snapshot!.Items, from, to, min, selected, date, term, phoneDigits, companyId, today, unitMinTotal, crmSet.Links, eligibleFrom, crmSet.Availability.Blocks, paymentFilter, floorSet);
             }
             catch (OverflowException)
             {
@@ -249,12 +258,12 @@ public sealed class CollectionsCampaignAppService(
         }
         return CollectionsResult<CollectionsCampaignPreviewDto>.Ok(new(date, clock.BusinessDate, readAtUtc,
             "PACT receivables (companies 4 and 32)", selected.ToString(), cycle, dates, dates.Contains(date),
-            gate.Reconciled, sqlPage is null && snapshot!.LegacyExclusionsApplied, permissions.CanSendReminders,
+            scopeReconciled, sqlPage is null && snapshot!.LegacyExclusionsApplied, permissions.CanSendReminders,
             count, ready, review, page, pageSize, items,
             from, to, CollectionsCampaignPolicy.RangeNotes(selected, date, eligibleFrom, to), towerId, snapshotStatus, min,
             new ServerTimingsDto(sourceMs, total.Elapsed.TotalMilliseconds - sourceMs, total.Elapsed.TotalMilliseconds), CrmContactStatusDto.From(crmSet.Availability), notEligible,
             CampaignPaymentFilters.Name(paymentFilter), eligibleTotal, eligibleOutstanding, PaymentStatusNote(paymentFilter, dateFrom, to, today), gate, towers.Count == 0 ? null : towers,
-            mode, previewOnly, campaignOptions.AutoSendingEnabled));
+            mode, previewOnly, campaignOptions.AutoSendingEnabled, floorList.Count == 0 ? null : floorList));
     }
 
     /// <summary>
@@ -289,10 +298,10 @@ public sealed class CollectionsCampaignAppService(
         if (sourceOptions.Currency != "AED") reasons.Add("CurrencyNeedsReview");
         if (!fresh) reasons.Add("StaleSource");
         if (coverageIncomplete) reasons.Add("CoverageIncomplete");
-        if (!sourceReconciled) reasons.Add("SourceReconciliationRequired");
+        // The reconciliation gate is company-wide (FinancialSourceValidated / SourceGate), never a per-unit reason: a unit's own status says what is wrong with the unit. The one per-unit
+        // case is the unit's own data: a unit whose snapshot differs persistently from PACT is marked SourceMismatchUnresolved by the caller.
         if (Has(CollectionsCampaignFlags.NoValidContact)) reasons.Add("NoValidContact");
         if (Has(CollectionsCampaignFlags.CrmCustomerAmbiguous)) reasons.Add("CrmCustomerAmbiguous");
-        if (Has(CollectionsCampaignFlags.ContactSourceConflict)) reasons.Add("ContactSourceConflict");
         if (Has(CollectionsCampaignFlags.CrmCompanyAmbiguous)) reasons.Add("CrmCompanyAmbiguous");
         if (Has(CollectionsCampaignFlags.CrmUnavailable)) reasons.Add("CrmUnavailable");
         var status = reasons.Count > 0 ? "NeedsReview" : "Ready";
@@ -312,7 +321,7 @@ public sealed class CollectionsCampaignAppService(
     internal List<CampaignUnitFacts> BuildFactsInMemory(IReadOnlyList<PactReceivableInstalment> items, DateOnly from, DateOnly to, decimal min,
         CollectionsCampaignStage selected, DateOnly date, string? term, string? phoneDigits, int? companyId, DateOnly? today = null, decimal? minTotal = null,
         IReadOnlyDictionary<(int CompanyId, string UnitKey), CrmUnitLink>? crmLinks = null, DateOnly? eligibleFrom = null, bool crmUnavailable = false,
-        CampaignPaymentFilter paymentFilter = CampaignPaymentFilter.Both)
+        CampaignPaymentFilter paymentFilter = CampaignPaymentFilter.Both, IReadOnlySet<int>? floors = null)
     {
         // READ scope = [from, to]; ELIGIBILITY scope = [eligibleFrom ?? from, to]. A unit is a candidate, and its stage amount and unit-level flags are decided, ONLY from its
         // eligibility rows - exactly as before the read scope was widened; the read scope adds nothing but the Due / Overdue / Total figures and the ordering date.
@@ -380,8 +389,8 @@ public sealed class CollectionsCampaignAppService(
                 if (amount.Amount is { } value && value != decimal.Round(value, 2)) flags |= CollectionsCampaignFlags.AmountPrecisionNeedsReview;
                 if (key.UnitId is not > 0 || string.IsNullOrWhiteSpace(key.Code) || key.Code == "0")
                     flags |= CollectionsCampaignFlags.MissingUnitIdentity;
-                if (basis.Select(r => (r.FullName.Trim(), Phone: CollectionsContactNormalizer.NormalizePhone(r.Mobile),
-                        Email: CollectionsContactNormalizer.NormalizeEmail(r.Email), r.ProjectCode)).Distinct().Count() > 1)
+                if (basis.Select(r => linked.CrmStatus == CrmLinkStatus.Single ? ("", "", "", r.ProjectCode) : (r.FullName.Trim(), CollectionsContactNormalizer.NormalizePhone(r.Mobile),
+                        CollectionsContactNormalizer.NormalizeEmail(r.Email), r.ProjectCode)).Distinct().Count() > 1)
                     flags |= CollectionsCampaignFlags.ConflictingContactDetails;
                 if (ambiguousTenants.Contains((key.CompanyId, key.Tenant))) flags |= CollectionsCampaignFlags.UnitAllocationNeedsReview;
                 if (basis.Any(r => string.Equals(r.SourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase)))
@@ -394,6 +403,8 @@ public sealed class CollectionsCampaignAppService(
                     all.Max(r => DateOnly.FromDateTime(r.DueDate)));
             }).OfType<CampaignUnitFacts>().ToList();
         if (companyId is { } company) facts = facts.Where(f => f.CompanyId == company).ToList();
+        // Floor: applied to the finished units (never to the instalments before grouping), so the flags of a unit - including the tenant-wide ones - are the same with and without the filter.
+        if (floors is { Count: > 0 }) facts = facts.Where(f => CollectionsUnitFloor.Matches(f.UnitCode, floors)).ToList();
         if (term is not null)
         {
             bool Match(string value) => value.Contains(term, StringComparison.OrdinalIgnoreCase);
@@ -407,7 +418,7 @@ public sealed class CollectionsCampaignAppService(
 
     public async Task<CollectionsResult<CollectionsCampaignExportDto>> ExportAsync(CollectionsCaller caller,
         string? stage, string? mode, DateOnly? businessDate = null, int? companyId = null, string? search = null,
-        CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null)
+        CancellationToken cancellationToken = default, DateOnly? dateFrom = null, DateOnly? dateTo = null, int? towerId = null, decimal? minTotal = null, string? paymentStatus = null, IReadOnlyList<int>? towerIds = null, string? sendingMode = null, IReadOnlyList<int>? floors = null)
     {
         // No source read for an unauthorized export, including malformed requests.
         if (!(await authorization.ResolveAsync(caller, cancellationToken)).CanSendReminders)
@@ -415,7 +426,7 @@ public sealed class CollectionsCampaignAppService(
         if (mode is not ("review" or "genesys"))
             return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest, "Choose review or genesys export.");
         var result = await PreviewAsync(caller, stage, businessDate, companyId, search,
-            forExport: true, cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds, sendingMode: sendingMode);
+            forExport: true, cancellationToken: cancellationToken, dateFrom: dateFrom, dateTo: dateTo, towerId: towerId, minTotal: minTotal, paymentStatus: paymentStatus, towerIds: towerIds, sendingMode: sendingMode, floors: floors);
         if (!result.IsSuccess) return CollectionsResult<CollectionsCampaignExportDto>.Fail(result.Outcome, result.Detail);
         var report = result.Value!;
         // Freshness requirement (both export modes): the snapshot of every company in scope must be loaded and no older than
@@ -428,6 +439,9 @@ public sealed class CollectionsCampaignAppService(
         {
             // The Genesys file carries ONLY ready units; units the stage rule does not make eligible stay in the review file with their balances but are never sent. Any unit that is eligible
             // yet not ready (needs review, preview only, internal) blocks the file: the list must be reviewed first.
+            if (!report.FinancialSourceValidated)
+                return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest,
+                    "The financial source is not reconciled, so no Genesys file is made from the preview. " + (report.SourceGate?.Message ?? ""));
             if (report.Stage == nameof(CollectionsCampaignStage.LegalReferral) || report.BusinessDate != report.LiveBusinessDate || !report.IsScheduledDate
                 || report.Items.Any(c => c.Status is not ("Ready" or "NotEligible")) || !report.Items.Any(c => c.Status == "Ready"))
                 return CollectionsResult<CollectionsCampaignExportDto>.Fail(CollectionsOutcome.InvalidRequest,

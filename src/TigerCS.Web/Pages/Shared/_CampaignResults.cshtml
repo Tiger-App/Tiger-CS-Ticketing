@@ -60,15 +60,15 @@ else if (Model.Report is { } report)
                 @if (Model.CampaignName is { } campaignName) { <span>Campaign <strong data-campaign-name>@campaignName</strong></span> }
                 <span>Payment <strong>@(report.PaymentStatus == "Both" ? "Due and Overdue" : report.PaymentStatus)</strong></span>
             </p>
-            @if (blockedCount > 0 || report.PreviewOnlyCount > 0)
+            @{ var gateReasons = Model.NotReadyGateReasons(); }
+            @if (blockedCount > 0 || report.PreviewOnlyCount > 0 || gateReasons.Count > 0)
             {
                 @* The blockers are safety information: the report-wide gates (financial data, reconciliation, CRM, timing) and the per-customer reasons are all listed, in a small panel that expands on demand.
-                   A reconciliation blocker is also always visible in the status strip, and the Approve & Send tooltip gives the exact reason for the button. *@
-                var gateReasons = Model.NotReadyGateReasons();
+                   A gate (for example the reconciliation) blocks every customer at once and is never written against a customer; it is also visible in the status strip and in the Approve & Send tooltip. *@
                 var customerReasons = Model.NotReadyCustomerReasons();
                 <details class="campaign-blockers" data-not-ready-reasons>
                     <summary>Why sending is blocked <span class="campaign-blockers__count">@(gateReasons.Count + customerReasons.Count)</span></summary>
-                    <p class="receivables-meta">@(report.ReadyCount == 0 ? "No customer is" : "Some customers are not") Ready to send:</p>
+                    <p class="receivables-meta">@(gateReasons.Count > 0 ? "No customer can be sent while a gate is closed:" : report.ReadyCount == 0 ? "No customer is Ready to send:" : "Some customers are not Ready to send:")</p>
                     <ul class="campaign-blockers__list">
                         @foreach (var reason in gateReasons.Concat(customerReasons)) { <li data-not-ready-reason>@reason</li> }
                     </ul>
@@ -89,11 +89,11 @@ else if (Model.Report is { } report)
                     <partial name="_InfoTip" model="@(new InfoTipModel("tip-export-review-reason", "Why Export review CSV is unavailable", exportProblem, "data-export-review-reason"))" />
                 </span>
             }
-            @* Export for Genesys: the same audited, template-checked file as in Manual, of every financially eligible customer of these filters, schedule or not. It uploads nothing and
+            @* Export for Genesys: the same audited file as in Manual, of every customer matching these filters, schedule or not, held-back ones included. It uploads nothing and
                marks nobody as sent; Auto's sending readiness and scheduler are untouched. *@
             @{
                 var genesysReason = Model.ExportGenesysBlockedReason;
-                var genesysTip = genesysReason ?? "Downloads every financially eligible customer of these filters, on any day, as a CSV in the format of the campaign's Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate) for a manual import. Customers held back by financial, contact, identity, legal or duplicate rules are left out. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
+                var genesysTip = genesysReason ?? $"Downloads every customer matching these filters, on any day and held-back ones included, as a CSV in the format of the {Model.ExportDestinationLabel} Genesys contact list (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate) for a manual import, with the Due / Overdue amounts of the filters. It does not depend on sending eligibility: unverified data is labelled on the file. It uploads nothing and does not mark anyone as sent. Each export is recorded in the audit trail.";
             }
             @if (genesysReason is null)
             {
@@ -101,6 +101,7 @@ else if (Model.Report is { } report)
                     @foreach (var name in CampaignsModel.FilterFieldNames)
                     {
                         if (name == "towerId") { foreach (var towerId in Model.TowerIds) { <input type="hidden" name="towerId" value="@towerId" /> } continue; }
+                        if (name == "floor") { foreach (var floor in Model.FloorIds) { <input type="hidden" name="floor" value="@floor" /> } continue; }
                         <input type="hidden" name="@name" value="@(name switch {
                             "stage" => Model.Stage, "sendingMode" => Model.SendingMode, "businessDate" => "", "dateFrom" => Model.DateFrom?.ToString("yyyy-MM-dd"), "dateTo" => Model.DateTo?.ToString("yyyy-MM-dd"),
                             "minTotal" => Model.MinTotalText, "paymentStatus" => Model.PaymentStatus, _ => Model.Search })" />

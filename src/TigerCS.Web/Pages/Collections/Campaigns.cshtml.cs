@@ -26,6 +26,12 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public string PaymentStatus { get; private set; } = "Both";
     /// <summary>The chosen towers (local ids, repeated <c>towerId</c> query values). Empty = All projects, which is also the default.</summary>
     public IReadOnlyList<int> TowerIds { get; private set; } = [];
+    /// <summary>The chosen apartment floors (repeated <c>floor</c> query values; derived from the unit number). Empty = All Floors, which is also the default and means no filtering.</summary>
+    public IReadOnlyList<int> FloorIds { get; private set; } = [];
+    /// <summary>The floors offered for the chosen towers (the page shell only).</summary>
+    public IReadOnlyList<CollectionsFloorDto> FloorOptions { get; private set; } = [];
+    public bool FloorsFailed { get; private set; }
+    private IReadOnlyList<int>? FloorFilter => FloorIds.Count == 0 ? null : FloorIds;
     /// <summary>Minimum Total (AED): a unit is listed only when its Due + Overdue is greater than this. Default 100; null (cleared) = every unit that has a Due or Overdue amount.</summary>
     public decimal? MinTotal { get; private set; } = ReceivablesModel.DefaultMinTotal;
     public string MinTotalText => MinTotal?.ToString("0.####", CultureInfo.InvariantCulture) ?? "";
@@ -42,21 +48,13 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>Manual: the stored review records of the chosen campaign type that match the filters, with the amount calculated from the filters and their exact validation reasons.</summary>
     public ReviewPageDto? ManualPage { get; private set; }
     public int ManualTotalPages => ManualPage is null ? 1 : Math.Max(1, (int)Math.Ceiling(ManualPage.TotalCount / (double)ManualPage.PageSize));
-    /// <summary>Manual: the existing Genesys contact list the person chose (a campaign type name); empty = the campaign type\'s own list.</summary>
-    public string ContactList { get; private set; } = "";
-
     /// <summary>The campaign type the chosen stage stands for.</summary>
     public TigerCS.Domain.Modules.Collections.Review.CampaignReminderType ManualType =>
         CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage) ? TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.FromStage(stage) : TigerCS.Domain.Modules.Collections.Review.CampaignReminderType.Overdue;
 
-    /// <summary>The existing contact lists that suit the chosen campaign type; the first is its own list and the default.</summary>
-    public IReadOnlyList<string> ContactListChoices => TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualDestinations(ManualType).Select(t => t.ToString()).ToList();
+    /// <summary>Manual sends and exports always go to the dedicated Manual list; there is nothing to choose.</summary>
+    public string SelectedContactList => TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualListKey;
 
-    /// <summary>The list that is selected: the person\'s choice when it suits the campaign type, otherwise the type\'s own list.</summary>
-    public string SelectedContactList => ContactListChoices.Contains(ContactList, StringComparer.Ordinal) ? ContactList : ContactListChoices[0];
-
-    private static string ParseContactList(string? raw) =>
-        Enum.GetValues<TigerCS.Domain.Modules.Collections.Review.CampaignReminderType>().Select(t => t.ToString()).FirstOrDefault(n => string.Equals(n, raw?.Replace(" ", "").Trim(), StringComparison.OrdinalIgnoreCase)) ?? "";
     public int TotalPages => Report is null ? 1 : Math.Max(1, (int)Math.Ceiling(Report.TotalCount / (double)Report.PageSize));
     /// <summary>Distinct, valid tower ids from repeated <c>towerId</c> values; blanks and junk are ignored (an empty result means All projects).</summary>
     public static IReadOnlyList<int> ParseTowerIds(Microsoft.Extensions.Primitives.StringValues values) => TowerSelection.Parse(values);
@@ -80,10 +78,16 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         var towers = await api.GetTowersAsync(cancellationToken);
         Towers = towers.IsSuccess && towers.Value is { } list ? list : [];
         TowersFailed = !towers.IsSuccess;
+        await LoadFloorOptionsAsync(cancellationToken);
         if (RenderFull) await LoadReportAsync(cancellationToken);
         await LoadApprovalStateAsync(cancellationToken);
         if (TempData["ApprovalError"] is string error) ApprovalError = error;
         if (TempData["ApprovalNotice"] is string notice) ApprovalNotice = notice;
+        if (TempData["GenesysCheck"] is string checkJson)
+        {
+            try { GenesysCheck = System.Text.Json.JsonSerializer.Deserialize<GenesysConnectionCheckDto>(checkJson); }
+            catch (System.Text.Json.JsonException) { /* an unreadable result is simply not shown */ }
+        }
     }
 
     /// <summary>The results area only (HTML fragment): summary, snapshot status, table, pagination and export links.</summary>
@@ -101,6 +105,22 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         return Partial("_CampaignResults", this);
     }
 
+    /// <summary>The floors of the apartments in the chosen towers (all towers when none), for the Floor dropdown; a failure leaves the dropdown on "All Floors" and says so.</summary>
+    private async Task LoadFloorOptionsAsync(CancellationToken cancellationToken)
+    {
+        var floors = await api.GetFloorsAsync(TowerIds, cancellationToken);
+        FloorOptions = floors.IsSuccess && floors.Value is { } value ? value.Floors : [];
+        FloorsFailed = !floors.IsSuccess;
+    }
+
+    /// <summary>JSON for the Floor dropdown: the floors of the towers in the query (<c>towerId</c>, repeated). The browser reloads it whenever the towers change.</summary>
+    public async Task<IActionResult> OnGetFloorsAsync(CancellationToken cancellationToken)
+    {
+        var floors = await api.GetFloorsAsync(TowerSelection.Parse(Request.Query["towerId"]), cancellationToken);
+        Response.Headers.CacheControl = "no-store";
+        return new JsonResult(FloorSelection.Payload(floors.IsSuccess ? floors.Value : null, !floors.IsSuccess));
+    }
+
     /// <summary>The results / export / approval requests do not render the picker: load the tower list only when several towers are chosen, so "every tower chosen" still means All projects.</summary>
     private async Task EnsureTowersAsync(CancellationToken cancellationToken)
     {
@@ -116,7 +136,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         // Instalments due from the next month on are neither Due nor Overdue and never listed: a period that starts there has nothing to ask the API for.
         if (DateFrom is { } start && !CollectionsDueMonth.IsInScope(start, CollectionsDisplay.DubaiToday())) { NothingDueYet = true; return; }
         await EnsureTowersAsync(cancellationToken);
-        var result = await api.GetCampaignPreviewAsync(Stage, BusinessDate, null, Search, PageNumber, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode);
+        var result = await api.GetCampaignPreviewAsync(Stage, BusinessDate, null, Search, PageNumber, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode, FloorFilter);
         Outcome = result.Outcome;
         Report = result.IsSuccess ? result.Value : null;
         Error = result.Detail;
@@ -158,7 +178,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (!ModelState.IsValid) { Outcome = ApiOutcome.ValidationError; Error = "Choose valid filters and retry."; return Page(); }
         // Same stage, preview date, tower, dates, minimum amount and search as the preview: the file contains exactly the previewed units.
         await EnsureTowersAsync(cancellationToken);
-        var result = await api.GetCampaignExportAsync(Stage, mode, BusinessDate, null, Search, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode);
+        var result = await api.GetCampaignExportAsync(Stage, mode, BusinessDate, null, Search, cancellationToken, DateFrom, DateTo, SingleTowerId, MinTotal, PaymentStatus, ManyTowerIds, SendingMode, FloorFilter);
         if (result.IsSuccess && result.Value is { } file)
         {
             // Review export: the simplified employee workbook. Genesys export: the unchanged machine CSV.
@@ -176,10 +196,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     private void SetFilters(string stage, DateOnly? date, string? search, int page, DateOnly? from, DateOnly? to, int? month, int? year, string? load, string? paymentStatus, string? sendingMode = null)
     {
         SendingMode = CollectionsSendingModes.TryParse(sendingMode, out var parsedMode) ? parsedMode : CollectionsSendingModes.Auto;
-        ContactList = ParseContactList(Request.Query["contactList"]);
         PaymentStatus = CampaignPaymentFilters.TryParse(paymentStatus, out var payment) ? CampaignPaymentFilters.Name(payment) : paymentStatus!.Trim();
         RequestedBusinessDate = date; RequestedDateTo = to;   // what the person asked for; BusinessDate / DateTo are later filled with the report's own defaults
-        Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
+        Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); FloorIds = FloorSelection.Parse(Request.Query["floor"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
         MinTotal = ReceivablesModel.ParseMinTotal(Request.Query);
         LoadNotice = CollectionsDisplay.NoticeText(load) is { Length: > 0 } text ? text : null;
         // Month / Year are no longer controls; an old bookmark that still carries them keeps working as its whole-month range.
@@ -226,7 +245,8 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         || (RequestedDateTo is { } requestedTo && requestedTo != (RequestedBusinessDate ?? CollectionsDisplay.DubaiToday()))
         || !PaymentStatus.Equals("Both", StringComparison.OrdinalIgnoreCase)
         || (RequestedBusinessDate is { } requestedDate && requestedDate != CollectionsDisplay.DubaiToday())
-        || MinTotal != ReceivablesModel.DefaultMinTotal;
+        || MinTotal != ReceivablesModel.DefaultMinTotal
+        || FloorIds.Count > 0;
 
     /// <summary>Environment settings that stop any send to Genesys (switched off, missing credentials or contact lists); empty when configured or when it could not be read.</summary>
     public IReadOnlyList<string> DispatchBlockers { get; private set; } = [];
@@ -261,16 +281,15 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
 
     /// <summary>
     /// Why Send to Genesys is unavailable in Manual (null = available). Checked in the order a person can act on: data, reconciliation, configuration,
-    /// freshness, then whether any customer is eligible. The API enforces every gate again at confirmation; this only names which one applies.
+    /// freshness, then whether any customer is eligible. The API enforces every gate again at confirmation; this only names which one applies. None of these gates applies to the file export.
     /// </summary>
-    /// <param name="forExport">The file export uploads nothing, so the settings that only a send needs (background jobs, Genesys credentials, the live-dispatch switch) do not block it.</param>
-    public string? ManualBlockedReason(bool forExport = false)
+    public string? ManualBlockedReason()
     {
         if (ManualPage is not { } page) return "Preview customers first.";
         if (!CanSend) return "Your account does not have permission to approve and send campaigns (Collections send permission required).";
         if (page.Run is not { } run) return "There is no approval data yet. Refresh the approval data, then preview again.";
         if (!run.SourceReconciled) return "The financial source is not reconciled, so nothing can be approved or sent.";
-        if (!forExport && DispatchBlockers.Count > 0) return "Sending to Genesys is not configured in this environment. " + string.Join(" ", DispatchBlockers);
+        if (DispatchBlockers.Count > 0) return "Sending to Genesys is not configured in this environment. " + string.Join(" ", DispatchBlockers);
         if (run.IsStale || run.Status != "Completed") return "The approval data is stale or still being prepared. Refresh the approval data, then preview again.";
         if (run.AsOfDate != CollectionsDisplay.DubaiToday()) return $"The approval data was built for {run.AsOfDate:dd MMM yyyy}, not today. Refresh the approval data, then preview again.";
         if (page.Counts.Ready == 0)
@@ -286,40 +305,61 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         : page.Counts.Total == 0 ? "No customers match these filters."
         : null;
 
-    /// <summary>Why Export for Genesys is unavailable (null = available): the same data and permission rules as sending, without the sending-only settings.</summary>
-    public string? ExportGenesysBlockedReason => IsManual ? ManualBlockedReason(forExport: true) : AutoExportBlockedReason();
+    /// <summary>
+    /// Why Export for Genesys is unavailable (null = available). A file is not a send: it needs the permission, approval data and matching customers, and nothing else. Reconciliation, freshness,
+    /// the build date, the schedule, Genesys configuration, background jobs and the Ready count never block it; what is unverified is labelled on the file instead.
+    /// </summary>
+    public string? ExportGenesysBlockedReason => IsManual ? ManualExportBlockedReason() : AutoExportBlockedReason();
+
+    private string? ManualExportBlockedReason() =>
+        ManualPage is not { } page ? "Preview customers first."
+        : !CanSend ? "Your account does not have permission to export campaign lists (Collections send permission required)."
+        : page.Run is null ? "There is no approval data yet. Refresh the approval data, then export."
+        : page.Counts.Total == 0 ? "No customers match these filters, so there is nothing to export."
+        : null;
+
+    private string? AutoExportBlockedReason() =>
+        Report is not { } report ? "Preview customers first."
+        : !report.CanExportReview ? "Your account does not have permission to export campaign lists (Collections send permission required)."
+        : Run is null ? "There is no approval data yet. Refresh the approval data, then export."
+        : report.TotalCount == 0 ? "No customers match these filters, so there is nothing to export."
+        : null;
+
+    /// <summary>On the Auto page the refresh button is offered beside the export when the approval data is missing, stale, or built on another day: a refresh is advised, never required.</summary>
+    public bool AutoExportNeedsRefresh => !IsManual && Report is { CanExportReview: true } && (Run is null || Run.IsStale || Run.Status != "Completed" || Run.AsOfDate != CollectionsDisplay.DubaiToday());
+
+    /// <summary>The destination list of the export, as the page shows it: the chosen list in Manual, the campaign's own list in Auto.</summary>
+    public string ExportDestinationLabel => ContactListLabel(IsManual ? SelectedContactList : ManualType.ToString());
 
     /// <summary>
-    /// Why Export for Genesys is unavailable on the Auto page (null = available). The file holds the financially eligible customers of the filters whatever the schedule says, so it needs the
-    /// same approval data a Manual list needs (built today, reconciled, not stale) and the send permission; never the scheduled date, the live-dispatch switch or background jobs.
+    /// What the person must know about a file they just downloaded, shown on the next page view: the count, the destination, what was left out and why, what was combined, what is unverified, and
+    /// whether any customer was exported before. The API's notices are shown as they are.
     /// </summary>
-    private string? AutoExportBlockedReason()
+    public static string ExportNotice(GenesysExportDto file)
     {
-        if (Report is not { } report) return "Preview customers first.";
-        if (!report.CanExportReview) return "Your account does not have permission to export campaign lists (Collections send permission required).";
-        // The preview's own data rules, as for the review export: a stale or partly loaded snapshot and an unreconciled source block every file of this page.
-        if (report.Snapshot is { IsReady: false } snapshot) return ExportDataProblem(snapshot);
-        if (!report.FinancialSourceValidated) return "The financial source is not reconciled, so nothing can be exported.";
-        if (Run is not { } run) return "There is no approval data yet. Refresh the approval data, then export.";
-        if (!run.SourceReconciled) return "The financial source is not reconciled, so nothing can be exported.";
-        if (run.IsStale || run.Status != "Completed") return "The approval data is stale or still being prepared. Refresh the approval data, then export.";
-        if (run.AsOfDate != CollectionsDisplay.DubaiToday()) return $"The approval data was built for {run.AsOfDate:dd MMM yyyy}, not today. Refresh the approval data, then export.";
-        return null;
+        var text = new StringBuilder();
+        text.Append(CultureInfo.InvariantCulture, $"Exported {file.RowCount:N0} row(s)");
+        if (file.UnitCount > file.RowCount) text.Append(CultureInfo.InvariantCulture, $" ({file.UnitCount:N0} customer units)");
+        text.Append(CultureInfo.InvariantCulture, $" for the {file.ContactList} list to {file.FileName} ({file.Currency} {file.TotalAmount:N2}).");
+        if (file.ExcludedUnits > 0)
+            text.Append(CultureInfo.InvariantCulture, $" Left out: {file.ExcludedUnits:N0} unit(s)")
+                .Append(file.ExcludedRecords is { Count: > 0 } named ? $" ({string.Join(", ", named.Take(20).Select(r => $"{r.UnitCode}: {r.Code}"))}{(named.Count > 20 ? ", ..." : "")})." : ".");
+        if (!file.DataVerified) text.Append(CultureInfo.InvariantCulture, $" {GenesysExportService.UnverifiedDataLabel}.");
+        foreach (var note in file.Notices.Where(n => n.Length > 0)) text.Append(' ').Append(note);
+        return text.ToString();
     }
-
-    /// <summary>On the Auto page the export is blocked by the approval data alone (missing, stale, or built on another day): the refresh button is then offered beside it.</summary>
-    public bool AutoExportNeedsRefresh => !IsManual && Report is { CanExportReview: true } && (Run is null || Run.IsStale || Run.Status != "Completed" || Run.AsOfDate != CollectionsDisplay.DubaiToday());
 
     /// <summary>What a person can do about a Manual hold: the review workflow behind each exact reason.</summary>
     public static string ManualAdvice(string code) => code switch
     {
-        "SharedPhoneMultipleUnits" or "ManualSharedPhone" => "Review: the same number is on several customers. Confirm the right owner in CRM, correct the contact, refresh the approval data and preview again.",
+        "SharedPhoneMultipleUnits" or "ManualSharedPhone" => "This hold comes from approval data built before the per-unit calling decision; refresh the approval data and preview again.",
         "ReminderTypeOverlap" or "ManualReminderTypeOverlap" => "This customer is also in another campaign that is scheduled today. Send that campaign (Auto does it on its date), or send this one on another day.",
         "ContactedToday" => "Contact-frequency limit: one contact per customer per day. Try again tomorrow.",
         "LegalNoticeReleaseRequired" => "Legal notices have not been released for customers. Nothing is sent until Legal releases them.",
         "LegalCaseNotApproved" => "An internal Legal referral is never sent to a customer.",
         "StaleSource" or "SourceReconciliationRequired" => "Refresh the approval data once the financial source is current and reconciled.",
-        "PaymentStatusUnknown" => "The financial source does not say whether this balance is unpaid or partially paid (the deployed PACT report cannot tell them apart). The customer stays listed but cannot be sent by either mode until the source confirms the status; this is a data rule, not the schedule.",
+        "SourceMismatchUnresolved" => "This unit's snapshot differs from PACT even after a refresh (a synchronization or mapping defect). Investigate it on the Financial reconciliation page; other customers are not held back by it.",
+        "PaymentStatusUnknown" => "The remaining amount of this balance cannot be determined reliably: it is missing or negative, or the source contradicts it (Status Paid with a remainder owed, or original and paid amounts that do not add up). Confirm the balance in PACT, refresh the approval data and preview again; this is a data rule, not the schedule.",
         "NoValidContact" or "CrmCustomerAmbiguous" or "CrmCompanyAmbiguous" or "ContactSourceConflict" or "CrmUnavailable" or "ConflictingContactDetails" =>
             "Review: fix the customer's contact in CRM or PACT, refresh the approval data and preview again.",
         _ => "Review: resolve the data problem at its source, refresh the approval data and preview again."
@@ -395,6 +435,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "StaleSource" => "Financial data is older than the allowed age",
         "CoverageIncomplete" => "The selected dates are not fully loaded",
         "SourceReconciliationRequired" => "Financial source not reconciled",
+        "SourceMismatchUnresolved" => "Snapshot differs from PACT after a refresh (investigate)",
         "NoValidContact" => "No valid mobile or email in CRM or PACT",
         "CrmCustomerAmbiguous" => "Several CRM customers match",
         "CrmCompanyAmbiguous" => "CRM sale cannot be tied to one company",
@@ -410,13 +451,13 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "UnitAllocationNeedsReview" => "Unit allocation needs review",
         "ContradictoryPaymentStatus" => "Contradictory payment status",
         "CurrencyNeedsReview" => "Currency needs review",
-        "SharedPhoneMultipleUnits" => "Phone number shared by several customers",
+        "SharedPhoneMultipleUnits" => "Phone number shared (old approval data; refresh)",
         "ManualReminderTypeOverlap" => "Also in another campaign scheduled today",
-        "ManualSharedPhone" => "Phone number shared by several customers",
+        "ManualSharedPhone" => "Phone number shared (old approval data; refresh)",
         "ReminderTypeOverlap" => "Also in another campaign scheduled today",
         "LegalCaseNotApproved" => "Internal legal referral: never sent to a customer",
         "ContactedToday" => "Already contacted today (frequency limit)",
-        "PaymentStatusUnknown" => "Payment status unknown",
+        "PaymentStatusUnknown" => "Remaining amount cannot be determined reliably",
         "MissingCustomerIdentity" => "Customer identity missing",
         "DuplicateSourceRecord" => "Duplicate source record",
         "SourceAmountsInconsistent" => "Source amounts inconsistent",
@@ -450,9 +491,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public string SelectionMode { get; private set; } = ReviewQueryService.ModeSelectedUnits;
     public string UnitKeys { get; private set; } = "";
     public int ContactPage { get; private set; } = 1;
-    public static IReadOnlyList<string> FilterFieldNames => ["stage", "sendingMode", "businessDate", "dateFrom", "dateTo", "towerId", "minTotal", "paymentStatus", "search"];
+    public static IReadOnlyList<string> FilterFieldNames => ["stage", "sendingMode", "businessDate", "dateFrom", "dateTo", "towerId", "floor", "minTotal", "paymentStatus", "search"];
     /// <summary>The Manual destination travels with the approval (it is part of the audited filter), but is not a customer filter.</summary>
-    public static string ContactListLabel(string name) => name switch { "CurrentMonth" => "Current Month", "FollowUp" => "Follow Up", _ => name };
+    public static string ContactListLabel(string name) => name switch { "CurrentMonth" => "Current Month", "FollowUp" => "Follow Up", "Manual" => TigerCS.Domain.Modules.Collections.Review.CampaignReminderTypes.ManualListName, _ => name };
 
     /// <summary>Progress / failure of the approval-data refresh and the latest sends, shown above the list. Never throws: a missing piece just hides its panel.</summary>
     private async Task LoadApprovalStateAsync(CancellationToken ct)
@@ -497,9 +538,59 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public async Task<IActionResult> OnGetSendAsync(Guid dispatch, CancellationToken ct)
     {
         var result = await api.GetDispatchAsync(dispatch, ct);
+        // The counts are what the confirmation dialog reports once the send ends: only what Genesys accepted is "uploaded".
         return new JsonResult(result.IsSuccess && result.Value is { } d
-            ? new { d.Status, d.Phase, active = d.Status is "Queued" or "Revalidating" or "Sending" }
-            : new { Status = "Unknown", Phase = (string?)null, active = false });
+            ? new SendState(d.Status, d.Phase, d.Status is "Queued" or "Revalidating" or "Sending", d.ApprovedCount, d.UploadedCount, d.ExcludedCount, d.FailedCount, d.UnknownCount, d.StatusReason)
+            : new SendState("Unknown", null, false, 0, 0, 0, 0, 0, null));
+    }
+
+    /// <summary>The state of a send as the confirmation dialog polls it (camelCase in JSON).</summary>
+    public sealed record SendState(string Status, string? Phase, bool Active, int ApprovedCount, int UploadedCount, int ExcludedCount, int FailedCount, int UnknownCount, string? StatusReason);
+
+    /// <summary>The header the confirmation dialog sends so the answer is JSON for the dialog instead of a redirect or a re-rendered page. Without JavaScript the form posts normally.</summary>
+    public const string ConfirmAjaxHeader = "X-Requested-With", ConfirmAjaxValue = "tigercs-confirm";
+    private bool IsConfirmAjax => string.Equals(Request.Headers[ConfirmAjaxHeader].ToString(), ConfirmAjaxValue, StringComparison.Ordinal);
+
+    /// <summary>
+    /// The answer to a confirmation the dialog sent. <c>ok</c> only means the approval was ACCEPTED and queued: the upload happens afterwards and the dialog reports it from the send's own status.
+    /// A failure carries the backend's own message. <c>unknown</c> is an answer that does not say whether the approval was created (the API did not answer in time, was unreachable or sent
+    /// an unusable reply): the dialog then never retries and tells the person to check the recent sends first. <c>retry</c> is set only for a definite refusal that created nothing
+    /// (service unavailable / busy); the retry re-sends the same idempotency key, so even then it can never approve twice.
+    /// </summary>
+    public sealed record ConfirmAnswer(bool Ok, string? DispatchId, string? Status, int ApprovedCount, string? Message, bool Unknown, bool Retry, string Outcome);
+
+    public static ConfirmAnswer ConfirmAnswerOf(ApiResult<DispatchDto> result)
+    {
+        if (result.IsSuccess && result.Value is { } d) return new(true, d.DispatchId.ToString("D"), d.Status, d.ApprovedCount, null, false, false, "Accepted");
+        var unknown = result.Outcome is ApiOutcome.Unreachable or ApiOutcome.BadGateway or ApiOutcome.Unknown;
+        var message = unknown
+            ? "The Tiger CS API did not confirm the outcome (it did not answer in time, could not be reached or sent an unusable reply), so it is not known whether this send was approved."
+            : result.Outcome == ApiOutcome.Conflict ? result.Detail ?? "The list changed. Review the current list and confirm again." : Describe(result.Outcome, result.Detail);
+        return new(false, null, null, 0, message, unknown, result.Outcome is ApiOutcome.ServiceUnavailable or ApiOutcome.Locked, result.Outcome.ToString());
+    }
+
+    /// <summary>The result of the last read-only Genesys connection check (shown once, after the redirect back to the same preview).</summary>
+    public GenesysConnectionCheckDto? GenesysCheck { get; private set; }
+
+    /// <summary>The check is offered where a send stopped because Genesys could not be checked (or is not configured), to people who may send.</summary>
+    public bool OffersGenesysCheck => CanSend && ApprovalError is { } error && error.Contains("Genesys", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// A read-only check of the Genesys integration (never an upload): region consistency, OAuth client and organization, every configured contact list. The result is carried to the page the person
+    /// came from (same campaign, filters and Manual mode) and shown there once.
+    /// </summary>
+    public async Task<IActionResult> OnPostCheckGenesysAsync(string? returnUrl, CancellationToken ct)
+    {
+        var target = !string.IsNullOrEmpty(returnUrl) && Url.IsLocalUrl(returnUrl) ? returnUrl : "/Collections/Campaigns";
+        var result = await api.CheckGenesysConnectionAsync(ct);
+        if (result.IsSuccess && result.Value is { } check)
+        {
+            // TempData travels in a cookie: keep the lines short.
+            string Short(string text) => text.Length > 400 ? text[..400] + "…" : text;
+            TempData["GenesysCheck"] = System.Text.Json.JsonSerializer.Serialize(check with { Lines = check.Lines.Select(l => l with { Detail = Short(l.Detail) }).ToList() });
+        }
+        else TempData["ApprovalError"] = Describe(result.Outcome, result.Detail);
+        return LocalRedirect(target);
     }
 
     public async Task<IActionResult> OnPostRefreshApprovalAsync(string? returnUrl, CancellationToken ct)
@@ -534,6 +625,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         SelectionMode = string.Equals(selectionMode, ReviewQueryService.ModeAllMatching, StringComparison.OrdinalIgnoreCase) ? ReviewQueryService.ModeAllMatching : ReviewQueryService.ModeSelectedUnits;
         UnitKeys = unitKeys ?? "";
         ContactPage = Math.Max(1, contactPage);
+        // The list the person was looking at stays on the page behind the dialog (same filters, same mode): the dialog is shown over it, not instead of it.
+        RenderFull = true;
+        await LoadReportAsync(ct);
         await LoadApprovalStateAsync(ct);
 
         // The approval data is a stored, validated copy of the financial snapshot. Missing, failed or stale data starts a visible refresh instead of approving from a guess.
@@ -553,34 +647,28 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     }
 
     /// <summary>
-    /// "Export for Genesys": the file the selected (or all eligible) customers would be uploaded as, in the format of the chosen contact list, for a manual import. Read only; recorded in the audit
-    /// trail by the API. The file is served as UTF-8 with a byte-order mark, like the other CSV downloads of this page, so that names in Arabic open correctly in a spreadsheet.
+    /// "Export for Genesys": the download-only file of every customer matching the filters (Manual: the ticked customers when any are ticked), in the format of the destination contact list, for a
+    /// manual import. It needs no selection and no approval; it uploads nothing and marks no one as sent; the API records it in the audit trail. The file is served as UTF-8 with a byte-order mark,
+    /// like the other CSV downloads of this page, so that names in Arabic open correctly in a spreadsheet. A refused export returns to the same mode, filters and list with the exact reason.
     /// </summary>
-    public async Task<IActionResult> OnPostExportGenesysAsync(string? selectionMode, string? unitKeys, bool confirmRepeat = false, int? expectedRepeats = null, CancellationToken ct = default)
+    public async Task<IActionResult> OnPostExportGenesysAsync(string? selectionMode, string? unitKeys, CancellationToken ct = default)
     {
         SetFiltersFromForm();
         await EnsureTowersAsync(ct);
-        // Both modes export. Auto has no ticks, so its file holds every financially eligible customer of the filters; Manual exports the ticked customers, or all eligible. Neither sends anything.
-        SelectionMode = !IsManual || string.Equals(selectionMode, ReviewQueryService.ModeAllMatching, StringComparison.OrdinalIgnoreCase) ? ReviewQueryService.ModeAllMatching : ReviewQueryService.ModeSelectedUnits;
-        UnitKeys = IsManual ? unitKeys ?? "" : "";
-        var result = await api.ExportForGenesysAsync(BuildSelection(), ct, confirmRepeat, expectedRepeats);
+        // Both modes export the same population and neither sends. Auto has no ticks. In Manual, ticked customers narrow the file; nothing ticked means every matching customer.
+        var ticked = IsManual && string.Equals(selectionMode, ReviewQueryService.ModeSelectedUnits, StringComparison.OrdinalIgnoreCase) && !string.IsNullOrWhiteSpace(unitKeys);
+        SelectionMode = ticked ? ReviewQueryService.ModeSelectedUnits : ReviewQueryService.ModeAllMatching;
+        UnitKeys = ticked ? unitKeys! : "";
+        var result = await api.ExportForGenesysAsync(BuildSelection(), ct);
         if (result.IsSuccess && result.Value is { } file)
         {
-            // The file is a download, so what the person must know about it is also shown on the next page view: a file not checked against the Genesys list, and a confirmed repeat.
-            var notes = file.Notices.Where(n => n.Length > 0).ToList();
-            if (notes.Count > 0) TempData["ApprovalNotice"] = $"Exported {file.RowCount:N0} customer(s) to {file.FileName}. " + string.Join(" ", notes);
+            // The file is a download, so what the person must know about it (count, exclusions, unverified data, repeats, an unchecked template) is shown on the next page view.
+            TempData["ApprovalNotice"] = ExportNotice(file);
             return File(Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(file.Csv)).ToArray(), "text/csv; charset=utf-8", file.FileName);
         }
-        await LoadApprovalStateAsync(ct);
-        // Customers who were exported before: nothing is made until the person confirms; the warning carries its own confirm button (same selection and filters).
-        if (result.Outcome == ApiOutcome.Conflict && result.ProblemType?.EndsWith("/RepeatExport", StringComparison.Ordinal) == true)
-        {
-            RepeatExportWarning = result.Detail;
-            RepeatExportCount = RepeatCountOf(result.Detail);
-            return Page();
-        }
-        ApprovalError = Describe(result.Outcome, result.Detail);
-        return Page();
+        // Back to the very same list: the mode, every filter and the chosen contact list travel in the URL, so a refused export never resets the page.
+        TempData["ApprovalError"] = Describe(result.Outcome, result.Detail);
+        return LocalRedirect(PageUrl(1));
     }
 
     /// <summary>The Manual "Export review CSV": the filtered list with status and reasons. Not a Genesys file; it needs the same data and permission rules as the Genesys export.</summary>
@@ -597,19 +685,6 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         return Page();
     }
 
-    /// <summary>Set when the Genesys export found customers who were exported before: the text names how many and when, and the page offers "Export again".</summary>
-    public string? RepeatExportWarning { get; private set; }
-
-    /// <summary>How many repeated customers the warning shows: the "Export again" confirmation carries it, so a repeat that appears later is shown again first.</summary>
-    public int? RepeatExportCount { get; private set; }
-
-    /// <summary>The leading count of the export warning ("N of the M customers ..."), written by the API's RepeatExport message.</summary>
-    private static int? RepeatCountOf(string? warning)
-    {
-        var match = System.Text.RegularExpressions.Regex.Match(warning ?? "", @"^([\d,]+) of the ");
-        return match.Success && int.TryParse(match.Groups[1].Value.Replace(",", ""), System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n) ? n : null;
-    }
-
     /// <summary>A person sends only in Manual. Auto campaigns are dispatched by the scheduled Auto dispatcher (while AutoSendingEnabled is on), never from this page.</summary>
     private async Task<IActionResult> AutoModeRefusedAsync(CancellationToken ct)
     {
@@ -623,13 +698,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         var result = await api.SummarizeSelectionAsync(BuildSelection(), ct);
         if (!result.IsSuccess) { ApprovalError = Describe(result.Outcome, result.Detail); return; }
         var summary = result.Value!;
-        if (summary.Count == 0)
-        {
-            ApprovalError = !summary.SourceReconciled
-                ? "The financial source has not been reconciled against PACT for the configured procedure, so nothing can be sent."
-                : "None of the selected customers is Ready to send now (needs review, paid, or already sent).";
-            return;
-        }
+        // The reconciliation gate is decided once, for the source: no confirmation dialog is shown while it is not passed, whatever the customers' own status.
+        if (!summary.SourceReconciled) { ApprovalError = "The financial source has not been reconciled against PACT for the configured procedure, so nothing can be sent."; return; }
+        if (summary.Count == 0) { ApprovalError = "None of the selected customers is Ready to send now (needs review, paid, or already sent)."; return; }
         Summary = summary;
         var overlaps = await api.GetOverlapsAsync(1, ct);
         if (overlaps.IsSuccess) Overlaps = overlaps.Value;
@@ -640,11 +711,15 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     {
         SetFiltersFromForm();
         await EnsureTowersAsync(ct);
-        if (!IsManual) return await AutoModeRefusedAsync(ct);
+        if (!IsManual)
+            return IsConfirmAjax
+                ? new JsonResult(new ConfirmAnswer(false, null, null, 0, "Sending to Genesys by a person is Manual only. Choose Manual to send.", false, false, "InvalidRequest"))
+                : await AutoModeRefusedAsync(ct);
         SelectionMode = string.Equals(selectionMode, ReviewQueryService.ModeAllMatching, StringComparison.OrdinalIgnoreCase) ? ReviewQueryService.ModeAllMatching : ReviewQueryService.ModeSelectedUnits;
         UnitKeys = unitKeys ?? "";
         var request = new ConfirmDispatchRequest(BuildSelection(), expectedCount, expectedFingerprint ?? "", idempotencyKey ?? "", ackCampaign);
         var result = await api.ConfirmDispatchAsync(request, ct);
+        if (IsConfirmAjax) return new JsonResult(ConfirmAnswerOf(result));
         if (result.IsSuccess) return Redirect($"/Collections/Campaigns?dispatch={result.Value!.DispatchId:D}");
         await LoadApprovalStateAsync(ct);
         ApprovalError = result.Outcome == ApiOutcome.Conflict ? (result.Detail ?? "The list changed. Review the current list and confirm again.") : Describe(result.Outcome, result.Detail);
@@ -686,9 +761,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         PaymentStatus = CampaignPaymentFilters.TryParse(Get("paymentStatus"), out var payment) ? CampaignPaymentFilters.Name(payment) : "Both";
         Stage = Get("stage") is { Length: > 0 } st ? st : "OverdueReminder";
         SendingMode = CollectionsSendingModes.TryParse(Get("sendingMode"), out var postedMode) ? postedMode : CollectionsSendingModes.Auto;
-        ContactList = ParseContactList(Get("contactList"));
         BusinessDate = Date("businessDate"); DateFrom = Date("dateFrom"); DateTo = Date("dateTo");
         TowerIds = ParseTowerIds(form is not null && form.TryGetValue("towerId", out var towerValues) ? towerValues : default);
+        FloorIds = FloorSelection.Parse(form is not null && form.TryGetValue("floor", out var floorValues) ? floorValues : default);
         Search = Get("search")?.Trim();
         MinTotal = ParseMinTotalText(form?.ContainsKey("minTotal") == true, Get("minTotal"));
     }
@@ -769,6 +844,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         foreach (var tower in TowerIds) query.Add("towerId", tower.ToString(CultureInfo.InvariantCulture));
+        foreach (var floor in FloorIds) query.Add("floor", floor.ToString(CultureInfo.InvariantCulture));
         query["minTotal"] = MinTotalText;
         query["paymentStatus"] = PaymentStatus;
         if (!string.IsNullOrWhiteSpace(Search)) query["search"] = Search;
@@ -784,6 +860,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (DateFrom is { } from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateTo is { } to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         foreach (var tower in TowerIds) query.Add("towerId", tower.ToString(CultureInfo.InvariantCulture));
+        foreach (var floor in FloorIds) query.Add("floor", floor.ToString(CultureInfo.InvariantCulture));
         query["minTotal"] = MinTotalText;
         query["paymentStatus"] = PaymentStatus;
         if (!string.IsNullOrWhiteSpace(Search)) query["search"] = Search;
@@ -805,10 +882,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         if (IsManual)
             return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo, MinRemaining: MinTotal ?? 0m, ReminderType: reminderType,
                 DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds, SendingMode: CollectionsSendingModes.Manual,
-                ContactList: ContactList.Length > 0 ? SelectedContactList : null);
+                ContactList: IsManual ? SelectedContactList : null, Floors: FloorFilter);
         return new ReviewFilter(Customer: string.IsNullOrWhiteSpace(Search) ? null : Search, DueFrom: DateFrom, DueTo: DateTo,
             MinRemaining: MinTotal ?? 0m, ReminderType: reminderType, DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds,
-            SendingMode: SendingMode);
+            SendingMode: SendingMode, Floors: FloorFilter);
     }
 
     /// <summary>The stage's display name = the Genesys campaign name used when this list is sent.</summary>
