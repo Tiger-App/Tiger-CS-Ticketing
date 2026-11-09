@@ -50,6 +50,7 @@
             <label class="field-label" for="receivableMin">Minimum Total (AED)</label>
             <input class="field-input" type="number" id="receivableMin" name="minTotal" min="0" step="any" inputmode="decimal" value="@Model.MinTotalText" data-min-total />
         </div>
+        <partial name="_FloorMultiPicker" model="@(new FloorMultiPickerModel("receivableFloor", Model.FloorOptions, Model.FloorIds, "/Collections/Receivables", Model.FloorsFailed))" />
         <div class="filter-bar__submit">
             <button class="btn btn-gold" type="submit">Apply</button>
             <a class="btn btn-ghost" href="/Collections/Receivables">Clear</a>

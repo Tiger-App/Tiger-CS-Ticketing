@@ -141,6 +141,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "GET /api/collections/receivables/customers",
         "GET /api/collections/receivables/instalments",
         "GET /api/collections/receivables/towers",
+        "GET /api/collections/receivables/floors",
         "POST /api/collections/receivables/coverage/load",
         "GET /api/collections/receivables/snapshot/status",
         "GET /api/collections/reconciliation",

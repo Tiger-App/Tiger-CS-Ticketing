@@ -17,7 +17,7 @@ namespace TigerCS.Infrastructure.Modules.Collections;
 /// </summary>
 public sealed class RcvReceivablesSource(
     IConfiguration configuration, ReceivablesSnapshotOptions options, PactReceivablesOptions pactOptions,
-    TimeProvider timeProvider, ILogger<RcvReceivablesSource> logger, ISnapshotSchedule? schedule = null) : IPactReceivablesSource, IPactInstalmentUnitSource, IUnitReceivablesSource, ISnapshotStatusSource
+    TimeProvider timeProvider, ILogger<RcvReceivablesSource> logger, ISnapshotSchedule? schedule = null) : IPactReceivablesSource, IPactInstalmentUnitSource, IUnitReceivablesSource, ISnapshotStatusSource, IUnitFloorDirectory
 {
     public Task<PactReceivablesSnapshot> ReadAsync(DateOnly throughDate, CancellationToken cancellationToken) =>
         ReadAsync(new PactReceivablesRequest(null, throughDate), cancellationToken);
@@ -109,6 +109,10 @@ public sealed class RcvReceivablesSource(
             // Several towers travel as ONE comma-separated parameter (OR in the procedure, before aggregation and paging). Only sent when used, so one tower or all towers never depend on it.
             if (request.TowerIds is { Count: > 0 } towerIds)
                 command.Parameters.Add("@TowerIds", SqlDbType.NVarChar, -1).Value = string.Join(',', towerIds.Select(id => id.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+            // Floors (apartment floors derived from the unit code, dbo.fn_CollectionsUnitFloor, V015) travel the same way: one comma-separated parameter, ONLY when floors are chosen, so a request without a Floor
+            // filter is byte-for-byte what it was and never depends on the procedure that understands it.
+            if (request.Floors is { Count: > 0 } floors)
+                command.Parameters.Add("@Floors", SqlDbType.NVarChar, -1).Value = string.Join(',', floors.Select(floor => floor.ToString(System.Globalization.CultureInfo.InvariantCulture)));
             command.Parameters.Add("@FromDate", SqlDbType.Date).Value = request.From.ToDateTime(TimeOnly.MinValue);
             command.Parameters.Add("@ToDate", SqlDbType.Date).Value = request.To.ToDateTime(TimeOnly.MinValue);
             command.Parameters.Add("@Status", SqlDbType.VarChar, 10).Value = request.Status ?? "all";
@@ -278,6 +282,69 @@ public sealed class RcvReceivablesSource(
     {
         if (towers.Count == 0) return rows.ToList();
         return rows.Select(r => r.TowerId is null && r.TowerNumber is { } number && towers.TryGetValue((r.CompanyId, number.Trim()), out var id) ? r with { TowerId = id } : r).ToList();
+    }
+
+    /// <summary>
+    /// The distinct unit codes of the chosen towers (every tower when none), for the Floor dropdown. Read from the unit directory of each company's CURRENT run (<c>CollectionsRcvAccountUnit</c>, indexed by
+    /// company and unit code, so a tower is a prefix seek); when the directory holds nothing for the scope the published payment lines of the same run are used instead. Cancelled ('*') codes never count.
+    /// One short read of strings; no aggregation, no PACT call.
+    /// </summary>
+    public async Task<IReadOnlyList<string>> ListUnitCodesAsync(IReadOnlyList<int> towerIds, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await using var connection = await OpenAsync(cancellationToken);
+            var scope = new List<(int Company, string Number)>();
+            if (towerIds.Count > 0)
+            {
+                var towers = new Dictionary<int, (int Company, string Number)>();
+                await using (var lookup = new SqlCommand("SELECT TowerId, CompanyId, LTRIM(RTRIM(CONVERT(nvarchar(20), TowerNumber))) FROM dbo.CollectionsTowers", connection)
+                { CommandTimeout = Math.Clamp(options.ReadCommandTimeoutSeconds, 1, 600) })
+                await using (var reader = await lookup.ExecuteReaderAsync(cancellationToken))
+                    while (await reader.ReadAsync(cancellationToken))
+                        if (!reader.IsDBNull(2) && reader.GetString(2).Length > 0) towers[reader.GetInt32(0)] = (reader.GetInt32(1), reader.GetString(2));
+                // A tower the table does not know contributes nothing (the dropdown then simply has fewer floors); the data reads themselves still refuse an unknown tower.
+                foreach (var id in towerIds) if (towers.TryGetValue(id, out var tower)) scope.Add(tower);
+                if (scope.Count == 0) return [];
+            }
+            var codes = await ReadUnitCodesAsync(connection, directory: true, scope, cancellationToken);
+            if (codes.Count == 0) codes = await ReadUnitCodesAsync(connection, directory: false, scope, cancellationToken);
+            return codes;
+        }
+        catch (SqlException ex)
+        {
+            logger.LogWarning("Floor list read failed (SQL error {SqlNumber}).", ex.Number);
+            throw new PactReceivablesSourceException("The units of the selected towers could not be read.");
+        }
+    }
+
+    private async Task<List<string>> ReadUnitCodesAsync(SqlConnection connection, bool directory, IReadOnlyList<(int Company, string Number)> scope, CancellationToken cancellationToken)
+    {
+        var table = directory ? "dbo.CollectionsRcvAccountUnit" : "dbo.CollectionsRcvLine";
+        var sql = new System.Text.StringBuilder(
+            $"SELECT DISTINCT a.UnitCode FROM dbo.CollectionsRcvCompany c JOIN {table} a ON a.CompanyId = c.CompanyId AND a.RunId = c.CurrentRunId " +
+            "WHERE c.CurrentRunId IS NOT NULL AND a.UnitId > 0 AND LTRIM(RTRIM(a.UnitCode)) NOT IN (N'', N'0') AND a.UnitCode NOT LIKE N'%*%'" + (directory ? " AND a.IsCancelled = 0" : " AND a.Amount > 0"));
+        await using var command = new SqlCommand { Connection = connection, CommandTimeout = Math.Clamp(options.ReadCommandTimeoutSeconds, 1, 600) };
+        if (scope.Count > 0)
+        {
+            // A tower is a prefix of the unit code ("TP140-%" or "140-%"), which the (CompanyId, UnitCode) index of the directory seeks.
+            sql.Append(" AND (");
+            for (var i = 0; i < scope.Count; i++)
+            {
+                var number = scope[i].Number.Replace("\\", "\\\\").Replace("%", "\\%").Replace("_", "\\_").Replace("[", "\\[");
+                if (i > 0) sql.Append(" OR ");
+                sql.Append($"(a.CompanyId = @c{i} AND (a.UnitCode LIKE @tp{i} ESCAPE N'\\' OR a.UnitCode LIKE @n{i} ESCAPE N'\\'))");
+                command.Parameters.Add($"@c{i}", SqlDbType.Int).Value = scope[i].Company;
+                command.Parameters.Add($"@tp{i}", SqlDbType.NVarChar, 60).Value = $"TP{number}-%";
+                command.Parameters.Add($"@n{i}", SqlDbType.NVarChar, 60).Value = $"{number}-%";
+            }
+            sql.Append(')');
+        }
+        command.CommandText = sql.ToString();
+        var codes = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        while (await reader.ReadAsync(cancellationToken)) codes.Add(reader.GetString(0));
+        return codes;
     }
 
     private async Task<SqlConnection> OpenAsync(CancellationToken cancellationToken)

@@ -2,14 +2,15 @@ using TigerCS.Domain.Modules.Collections.Review;
 
 namespace TigerCS.Application.Modules.Collections.Review;
 
-/// <summary>The review filters as sent by the API. Everything optional; blank means "no restriction".</summary>
+/// <summary>The review filters as sent by the API. Everything optional; blank means "no restriction". <c>Floors</c>: the chosen apartment floors (derived from the unit code, <see cref="TigerCS.Domain.Modules.Collections.CollectionsUnitFloor"/>); null / empty = All floors. It is part of the filter a dispatch stores, so an approval, its revalidation and the paid-after-upload check resolve the same customers.</summary>
 public sealed record ReviewFilter(
     int? CompanyId = null, string? Project = null, string? Unit = null, string? Customer = null,
     int? Year = null, int? Month = null, DateOnly? DueFrom = null, DateOnly? DueTo = null,
     string? PaymentStatus = null, decimal? MinRemaining = null, decimal? MaxRemaining = null,
     string? ReminderType = null, string? ValidationStatus = null, string? Reason = null,
     string? DueStatus = null, int? TowerId = null, IReadOnlyList<int>? TowerIds = null,
-    string? SendingMode = null, string? ContactList = null);
+    string? SendingMode = null, string? ContactList = null,
+    IReadOnlyList<int>? Floors = null);
 
 /// <summary>
 /// The normalized, validated filter the store understands. <see cref="PaymentStatuses"/> is null for "All".
@@ -19,7 +20,7 @@ public sealed record ReviewQuerySpec(
     DateOnly? DueFrom, DateOnly? DueTo, IReadOnlyList<ReviewPaymentStatus>? PaymentStatuses,
     decimal? MinRemaining, decimal? MaxRemaining, CampaignReminderType? ReminderType,
     ReviewValidationStatus? ValidationStatus, string? Reason, int? TowerId = null, IReadOnlyList<int>? TowerIds = null,
-    DateTime? ContactedSinceUtc = null);
+    DateTime? ContactedSinceUtc = null, IReadOnlyList<int>? Floors = null);
 
 public sealed record ReviewRunDto(
     long RunId, string Status, string Phase, int ProgressPercent, DateOnly AsOfDate, int? CompanyId,
