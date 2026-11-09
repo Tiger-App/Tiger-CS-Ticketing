@@ -45,7 +45,8 @@ public sealed class CustomerHistoryAppService(
     TicketQueryAppService ticketQueryAppService,
     ReopenPolicy reopenPolicy,
     TimeProvider timeProvider,
-    ICustomerContactDetailRepository? contactDetailRepository = null)
+    ICustomerContactDetailRepository? contactDetailRepository = null,
+    TigerCS.Application.Modules.Notifications.Services.CustomerContactResolver? contactResolver = null)
 {
     /// <summary>The New Ticket preview's default page size — a "reasonable latest-ticket limit", never the customer's unbounded history.</summary>
     public const int DefaultLimit = 5;
@@ -140,24 +141,31 @@ public sealed class CustomerHistoryAppService(
         CancellationToken cancellationToken = default)
     {
         var result = await GetForTicketCoreAsync(callerEmployeeId, callerRoles, ticketId, limit, cancellationToken);
-        if (result is not { Outcome: CustomerHistoryOutcome.Success, Response: { } history } || contactDetailRepository is null)
+        if (result is not { Outcome: CustomerHistoryOutcome.Success, Response: { } history })
         {
             return result;
         }
 
         // The name/e-mail an agent typed in for this ticket's phone (New Ticket manual entry, Customer Details edit). Looked up by
         // the canonical form of the intake phone — the one fact every ticket carries — after the visibility check above.
-        var intake = await intakeRecordRepository.GetByLinkedTicketIdAsync(ticketId, cancellationToken);
-        var phoneKey = CustomerPhoneNumber.Normalize(intake?.PhoneNumber ?? history.PhoneNumberSnapshot);
-        if (phoneKey.Length == 0)
+        if (contactDetailRepository is not null)
         {
-            return result;
+            var intake = await intakeRecordRepository.GetByLinkedTicketIdAsync(ticketId, cancellationToken);
+            var phoneKey = CustomerPhoneNumber.Normalize(intake?.PhoneNumber ?? history.PhoneNumberSnapshot);
+            if (phoneKey.Length > 0
+                && (await contactDetailRepository.ListByPhoneKeysAsync([phoneKey], cancellationToken)).GetValueOrDefault(phoneKey) is { } manual)
+            {
+                history = history with { ManualCustomerName = manual.Name, ManualCustomerEmail = manual.Email };
+            }
         }
 
-        var manual = (await contactDetailRepository.ListByPhoneKeysAsync([phoneKey], cancellationToken)).GetValueOrDefault(phoneKey);
-        return manual is null
-            ? result
-            : CustomerHistoryResult.Success(history with { ManualCustomerName = manual.Name, ManualCustomerEmail = manual.Email });
+        // The address lifecycle emails go to, from the same resolver the notification handlers use, so the page and the emails agree.
+        if (contactResolver is not null && await ticketRepository.GetByIdAsync(ticketId, cancellationToken) is { } ticket)
+        {
+            history = history with { CustomerEmail = (await contactResolver.ResolveAsync(ticket, cancellationToken)).EmailAddress };
+        }
+
+        return CustomerHistoryResult.Success(history);
     }
 
     private async Task<CustomerHistoryResult> GetForTicketCoreAsync(

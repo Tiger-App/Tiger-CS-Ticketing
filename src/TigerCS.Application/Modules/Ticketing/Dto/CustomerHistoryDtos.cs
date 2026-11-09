@@ -25,6 +25,7 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// <param name="ExternalCustomerId">The source's own customer identifier this history was queried for, when <paramref name="VerificationType"/> is "ExternalVerified"; otherwise null.</param>
 /// <param name="ManualCustomerName">The name an agent entered or corrected by hand for this ticket's phone (ticket-anchored read only), or null. When present it is the name the Web shows; it never changes the verification state.</param>
 /// <param name="ManualCustomerEmail">The e-mail an agent entered for this ticket's phone, or null.</param>
+/// <param name="CustomerEmail">The customer's email as the notification resolver reads it (CRM contact, Genesys, external snapshot, then the agent-entered one) — the address lifecycle emails are sent to — or null when the ticket has no valid one. Ticket-anchored read only.</param>
 /// <param name="CustomerKey">The Customers directory key of this customer (crm:{id}, ext:{source}:{id} or phone:{number}) — the Customer Profile the Web links to; null when the anchor ticket has no customer identity.</param>
 public sealed record CustomerHistoryDto(
     string VerificationType,
@@ -39,7 +40,8 @@ public sealed record CustomerHistoryDto(
     string? ExternalCustomerId = null,
     string? CustomerKey = null,
     string? ManualCustomerName = null,
-    string? ManualCustomerEmail = null);
+    string? ManualCustomerEmail = null,
+    string? CustomerEmail = null);
 
 /// <summary>One row of a customer's ticket history — fields drawn from the Ticket aggregate alone, no other lookup performed per row.</summary>
 /// <param name="TicketId">The ticket — links to <c>GET /api/tickets/{ticketId}</c> / the Ticket Details page.</param>
