@@ -20,6 +20,11 @@ public sealed class GenesysExportTests
 {
     private const string CurrentMonthList = "79e5ae74-ea6e-4941-b76d-45ddf487d8d1", FollowUpList = "3a91c06e-47ab-4a5e-a720-004bd5cf5bba", ManualList = ReviewHarness.ManualListId;
     private static readonly string[] Template = ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"];
+    /// <summary>The official eleven-column Manual template: the Manual export is written in it.</summary>
+    private static readonly string[] ManualTemplate = ["Phone", "Email", "CustomerName", "ReminderType", "AmountDue", "UnitNumber", "ProjectName", "TowerName", "DueDate", "DueMonthAr", "TenantId"];
+
+    /// <summary>One cell of a Manual file row, by its column name (never by position).</summary>
+    private static string Cell(IReadOnlyList<string> row, string column) => row[Array.IndexOf(ManualTemplate, column)];
 
     /// <summary>Customer 1 owes 5,000 due 20 Oct (Due) and 8,000 due 10 Aug (Overdue); customer 2 owes 500 due 20 Oct.</summary>
     private static PactReceivableInstalment[] Rows() =>
@@ -70,9 +75,9 @@ public sealed class GenesysExportTests
         using var h = await SeededAsync();
         var dto = (await ExportAsync(h, All(Manual()))).Value!;
         var rows = Parse(dto);
-        Assert.Equal(Template, rows[0]); Assert.Equal(2, dto.RowCount); Assert.Equal(3, rows.Count); Assert.All(rows, r => Assert.Equal(6, r.Count));
-        Assert.Equal(Template, dto.Columns);
-        var check = GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys));
+        Assert.Equal(ManualTemplate, rows[0]); Assert.Equal(2, dto.RowCount); Assert.Equal(3, rows.Count); Assert.All(rows, r => Assert.Equal(11, r.Count));
+        Assert.Equal(ManualTemplate, dto.Columns);
+        var check = GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys), manual: true);
         Assert.True(check.IsMatch, string.Join("; ", check.Issues.Select(i => i.Message))); Assert.Empty(check.UnexpectedColumns);
         Assert.Equal(["Current Month"], check.ReminderTypeValues);
 
@@ -83,10 +88,10 @@ public sealed class GenesysExportTests
             Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
             await scope.Dispatch.ExecuteAsync(h.Scheduler.Dispatches.Single(), CancellationToken.None);
         }
-        var uploaded = h.Client.Calls.Single().Contacts.OrderBy(c => c.Phone).Select(c => new[] { c.Phone, c.CustomerName, c.EmailAddress, c.ReminderType, c.AmountDue, c.DueDate }).ToList();
+        var uploaded = h.Client.Calls.Single().Contacts.OrderBy(c => c.Phone).Select(c => ManualTemplate.Select(column => GenesysContactTemplate.ValuesOf(c)[column]).ToArray()).ToList();
         var exported = rows.Skip(1).OrderBy(r => r[0]).Select(r => r.ToArray()).ToList();
         Assert.Equal(uploaded, exported);
-        Assert.Matches(@"^\+[1-9]\d{7,14}$", rows[1][0]); Assert.Matches(@"^\d+\.\d{2}$", rows[1][4]); Assert.Matches(@"^\d{4}-\d{2}-\d{2}$", rows[1][5]);
+        Assert.Matches(@"^\+[1-9]\d{7,14}$", rows[1][0]); Assert.Matches(@"^\d+\.\d{2}$", Cell(rows[1], "AmountDue")); Assert.Matches(@"^\d{4}-\d{2}-\d{2}$", Cell(rows[1], "DueDate"));
     }
 
     [Fact]
@@ -95,8 +100,9 @@ public sealed class GenesysExportTests
         using var h = await SeededAsync();
         var dto = (await ExportAsync(h, All(Manual()))).Value!;
         var header = Parse(dto)[0];
-        Assert.DoesNotContain(header, c => c is "TenantId" or "UnitCode" or "CompanyId" or "RecordKey" or "ProjectCode");
-        foreach (var secret in new[] { "T0001", "TP140-1", "RK", h.Manager.EmployeeId.ToString() }) Assert.DoesNotContain(secret, dto.Csv);
+        // The eleven official columns carry the unit and the PACT tenant (they are in the template); nothing else about a customer is in the file.
+        Assert.DoesNotContain(header, c => c is "UnitCode" or "CompanyId" or "RecordKey" or "ProjectCode" or "CustomerId");
+        foreach (var secret in new[] { "RK", h.Manager.EmployeeId.ToString() }) Assert.DoesNotContain(secret, dto.Csv);
     }
 
     [Fact]
@@ -104,7 +110,7 @@ public sealed class GenesysExportTests
     {
         using var h = await SeededAsync(null, ReviewHarness.Row(1, name: "=HYPERLINK(\"x\")"), ReviewHarness.Row(2, name: "+Ali"));
         var dto = (await ExportAsync(h, All(Manual()))).Value!;
-        var names = Parse(dto).Skip(1).Select(r => r[1]).Order().ToList();
+        var names = Parse(dto).Skip(1).Select(r => Cell(r, "CustomerName")).Order().ToList();
         Assert.Contains("'=HYPERLINK(\"x\")", names); Assert.Contains("'+Ali", names);                 // = and a leading + are neutralized in a name; the phone keeps its own +
         Assert.All(Parse(dto).Skip(1), r => Assert.StartsWith("+", r[0]));
     }
@@ -132,10 +138,10 @@ public sealed class GenesysExportTests
             return;
         }
         var row = Assert.Single(Parse(result.Value!).Skip(1));
-        Assert.Equal(MoneyNormalizer.Format(preview.Items.Single().RemainingAmount!.Value), row[4]);   // exactly the amount Preview shows
-        Assert.Equal(MoneyNormalizer.Format(expectedCustomer1.Value), row[4]);
+        Assert.Equal(MoneyNormalizer.Format(preview.Items.Single().RemainingAmount!.Value), Cell(row, "AmountDue"));   // exactly the amount Preview shows
+        Assert.Equal(MoneyNormalizer.Format(expectedCustomer1.Value), Cell(row, "AmountDue"));
         Assert.Equal(preview.ReadyTotalAmount, result.Value!.TotalAmount);
-        Assert.Equal(preview.Items.Single().DueDate!.Value.ToString("yyyy-MM-dd"), row[5]);
+        Assert.Equal(preview.Items.Single().DueDate!.Value.ToString("yyyy-MM-dd"), Cell(row, "DueDate"));
     }
 
     [Fact]
@@ -163,7 +169,7 @@ public sealed class GenesysExportTests
 
         var one = new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedUnits, null, null, 1, 50, [ReviewQueryService.UnitKey(4, "T0001", "TP140-1")]);
         var ticked = (await ExportAsync(h, one)).Value!;                                               // only the ticked one
-        Assert.Equal(1, ticked.RowCount); Assert.Equal("Customer 1", Parse(ticked)[1][1]); Assert.Equal(0, ticked.ExcludedUnits);
+        Assert.Equal(1, ticked.RowCount); Assert.Equal("Customer 1", Cell(Parse(ticked)[1], "CustomerName")); Assert.Equal(0, ticked.ExcludedUnits);
         var shared = new SelectionRequest(Manual(), ReviewQueryService.ModeSelectedUnits, null, null, 1, 50, [ReviewQueryService.UnitKey(4, "T0003", "TP140-3"), ReviewQueryService.UnitKey(4, "T0004", "TP140-4")]);
         Assert.Equal(2, (await ExportAsync(h, shared)).Value!.RowCount);                                // both ticked customers, one row each
         var excluding = (await ExportAsync(h, All(Manual()) with { ExcludedKeys = [await KeyOf(h, "TP140-2")] })).Value!;
@@ -216,7 +222,10 @@ public sealed class GenesysExportTests
         // Started from the Auto page, the export holds the same customers as from Manual: the schedule is never a condition of a file, and nothing is sent.
         var auto = (await ExportAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto", MinRemaining: 0m)))).Value!;
         var manual = (await ExportAsync(h, All(Manual()))).Value!;
-        Assert.Equal(manual.Csv, auto.Csv); Assert.Equal(manual.TotalAmount, auto.TotalAmount);
+        // Same customers and amounts; the file's shape follows the list: Auto keeps its six columns, Manual is the eleven-column Manual template.
+        Assert.Equal(Template, Parse(auto)[0]); Assert.Equal(ManualTemplate, Parse(manual)[0]);
+        Assert.Equal(Parse(auto).Skip(1).Select(r => (r[0], r[1], r[4], r[5])), Parse(manual).Skip(1).Select(r => (Cell(r, "Phone"), Cell(r, "CustomerName"), Cell(r, "AmountDue"), Cell(r, "DueDate"))));
+        Assert.Equal(manual.TotalAmount, auto.TotalAmount);
         Assert.Equal(CollectionsOutcome.InvalidRequest, (await ExportAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Nonsense")))).Outcome);
         Assert.Equal(CollectionsOutcome.InvalidRequest, (await ExportAsync(h, All(new ReviewFilter(SendingMode: "Manual")))).Outcome);          // no campaign type
         h.Time.Advance(TimeSpan.FromDays(1));                                                         // the data was built yesterday and is stale
@@ -290,30 +299,41 @@ public sealed class GenesysExportTests
         using var h = await WithGenesysAsync();
         var dto = (await ExportAsync(h, All(Manual(type)))).Value!;
         Assert.True(dto.SchemaVerified); Assert.Empty(dto.Notices); Assert.Contains(ManualList, h.Client.ListChecks);
-        Assert.Equal(Template, Parse(dto)[0]);
+        Assert.Equal(ManualTemplate, Parse(dto)[0]);
     }
 
     [Fact]
-    public async Task ExtraColumnsOfTheList_AreKeptEmpty_InTheListsOwnOrder_AfterTheSixTemplateColumns()
+    public async Task ExtraColumnsOfTheAutoList_AreKeptEmpty_InTheListsOwnOrder_AfterTheSixTemplateColumns()
     {
-        using var h = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = ["DueDate", "Notes", "Phone", "AmountDue", "CustomerName", "Email Address", "Region", "ReminderType"]);
-        var dto = (await ExportAsync(h, All(Manual()))).Value!;
+        using var h = await WithGenesysAsync(x => x.Client.ListColumns[CurrentMonthList] = ["DueDate", "Notes", "Phone", "AmountDue", "CustomerName", "Email Address", "Region", "ReminderType"]);
+        var dto = (await ExportAsync(h, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto", MinRemaining: 0m)))).Value!;
         Assert.Equal([.. Template, "Notes", "Region"], Parse(dto)[0]);
         Assert.All(Parse(dto).Skip(1), r => { Assert.Equal(8, r.Count); Assert.Equal("", r[6]); Assert.Equal("", r[7]); Assert.NotEqual("", r[0]); });
         Assert.True(GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys)).IsMatch);
     }
 
     [Fact]
+    public async Task ExtraColumnsOfTheManualList_AreNotAdded_TheFileIsExactlyTheElevenColumnsASendUploads()
+    {
+        using var h = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = [.. ManualTemplate, "Notes", "Region"]);
+        var dto = (await ExportAsync(h, All(Manual()))).Value!;
+        Assert.True(dto.SchemaVerified);
+        Assert.Equal(ManualTemplate, Parse(dto)[0]); Assert.Equal(ManualTemplate, dto.Columns);
+        Assert.All(Parse(dto).Skip(1), r => Assert.Equal(11, r.Count));
+        Assert.True(GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys), manual: true).IsMatch);
+    }
+
+    [Fact]
     public async Task AListThatLacksOrMisnamesAColumn_RefusesTheExport_NamingTheColumn()
     {
         // A list that WAS read and really conflicts with the template is an incompatibility: reported, never guessed around.
-        using var missing = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = ["Phone", "CustomerName", "Email Address", "ReminderType", "DueDate"]);
+        using var missing = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = ManualTemplate.Where(c => c != "AmountDue").ToArray());
         var refused = await ExportAsync(missing, All(Manual()));
         Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("missing column AmountDue", refused.Detail); Assert.Contains("Nothing was exported", refused.Detail);
 
-        using var misnamed = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = ["Phone", "CustomerName", "EmailAddress", "ReminderType", "AmountDue", "DueDate"]);
+        using var misnamed = await WithGenesysAsync(x => x.Client.ListColumns[ManualList] = ManualTemplate.Select(c => c == "Email" ? "Email Address" : c).ToArray());   // Auto's name on the Manual list
         var wrong = await ExportAsync(misnamed, All(Manual("CurrentMonth")));
-        Assert.Equal(CollectionsOutcome.InvalidRequest, wrong.Outcome); Assert.Contains("misnamed column Email Address (found \"EmailAddress\")", wrong.Detail);
+        Assert.Equal(CollectionsOutcome.InvalidRequest, wrong.Outcome); Assert.Contains("misnamed column Email (found \"Email Address\")", wrong.Detail);
         Assert.True((await ExportAsync(misnamed, All(new ReviewFilter(ReminderType: "CurrentMonth", SendingMode: "Auto", MinRemaining: 0m)))).IsSuccess);   // the Auto stage list is fine
     }
 
@@ -323,7 +343,7 @@ public sealed class GenesysExportTests
         using var h = await WithGenesysAsync();
         h.Client.ListCheckScript.Enqueue(GenesysUploadOutcome.Unknown);
         var dto = (await ExportAsync(h, All(Manual()))).Value!;
-        Assert.False(dto.SchemaVerified); Assert.Equal(Template, Parse(dto)[0]); Assert.Equal(2, dto.RowCount);
+        Assert.False(dto.SchemaVerified); Assert.Equal(ManualTemplate, Parse(dto)[0]); Assert.Equal(2, dto.RowCount);
         Assert.StartsWith(GenesysExportService.NotVerifiedLabel, dto.Notices[0]);
         Assert.Contains("could not be read in Genesys (Genesys could not be reached)", dto.Notices[0]); Assert.Contains("check it against the list before importing", dto.Notices[0]);
         Assert.Contains($"({GenesysExportService.NotVerifiedLabel})", dto.FileName);
@@ -349,7 +369,7 @@ public sealed class GenesysExportTests
         var dto = (await ExportAsync(h, All(Manual()))).Value!;
         Assert.False(dto.SchemaVerified); Assert.Single(dto.Notices); Assert.Contains("were not checked in Genesys", dto.Notices[0]);
         Assert.Empty(h.Client.ListChecks);                                                            // no call to Genesys was made
-        Assert.Equal(Template, Parse(dto)[0]);
+        Assert.Equal(ManualTemplate, Parse(dto)[0]);
     }
 
     // ------------------------------------------------------------ read only, and audited

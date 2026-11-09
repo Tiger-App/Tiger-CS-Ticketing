@@ -212,8 +212,8 @@ public sealed class PerUnitCallsTests
         var dto = (await scope.Export.ExportAsync(h.Manager, new SelectionRequest(Manual(), ReviewQueryService.ModeAllMatching), CancellationToken.None)).Value!;
         var rows = GenesysContactTemplate.ParseCsv(dto.Csv);
         Assert.Equal(3, dto.RowCount); Assert.Empty(dto.Exclusions!);
-        Assert.Equal(["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], rows[0]);
-        Assert.Equal(["300.00", "450.00", "725.00"], rows.Skip(1).Select(r => r[4]).Order());
+        Assert.Equal(ManualGenesysFile.Template, rows[0]);
+        Assert.Equal(["300.00", "450.00", "725.00"], rows.Skip(1).Select(r => ManualGenesysFile.Cell(rows, r, "AmountDue")).Order());
         Assert.All(rows.Skip(1), r => Assert.Equal("+" + Phone, r[0]));
     }
 

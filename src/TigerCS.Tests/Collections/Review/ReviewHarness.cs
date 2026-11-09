@@ -41,7 +41,7 @@ public sealed class FakeGenesysClient : IGenesysOutboundClient
         }
     }
 
-    /// <summary>Column names per contact list id; a list that is not set has the six template columns. Set a list to a shorter array to test a list that does not fit.</summary>
+    /// <summary>Column names per contact list id; a list that is not set has its template columns (eleven for the Manual list, six for the Auto lists). Set a list to a shorter array to test a list that does not fit.</summary>
     public Dictionary<string, string[]> ListColumns { get; } = new(StringComparer.OrdinalIgnoreCase);
     public List<string> ListChecks { get; } = [];
     public List<string> CampaignChecks { get; } = [];
@@ -65,7 +65,9 @@ public sealed class FakeGenesysClient : IGenesysOutboundClient
             if (ListAnswers.TryGetValue(contactListId, out var answer)) return Task.FromResult(answer);
             var outcome = ListCheckScript.Count > 0 ? ListCheckScript.Dequeue() : GenesysUploadOutcome.Accepted;
             if (outcome != GenesysUploadOutcome.Accepted) return Task.FromResult(new GenesysContactListInfo(outcome, null, [], "Genesys could not be reached."));
-            return Task.FromResult(new GenesysContactListInfo(outcome, 200, ListColumns.TryGetValue(contactListId, out var columns) ? columns : ["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], null));
+            return Task.FromResult(new GenesysContactListInfo(outcome, 200, ListColumns.TryGetValue(contactListId, out var columns) ? columns
+                // A list that is not set has its template's columns: the eleven official ones for the Manual list, the six for every Auto list.
+                : GenesysContactTemplate.ColumnsFor(string.Equals(contactListId, ReviewHarness.ManualListId, StringComparison.OrdinalIgnoreCase)).ToArray(), null));
         }
     }
 
