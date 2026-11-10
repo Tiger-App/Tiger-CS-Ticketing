@@ -591,6 +591,31 @@ public sealed class TicketActionVisibilityTests
     }
 
     [Fact]
+    public void Transfer_any_ticket_shows_transfer_on_any_ticket_for_call_center_roles_only()
+    {
+        const string any = TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransferAny;
+
+        // A CS Agent / Supervisor outside the ticket's department and not its owner: no Transfer without the grant, Transfer with it.
+        foreach (var role in new[] { Roles.CsAgent, Roles.CsSupervisor })
+        {
+            var outside = Context(Stranger, [role], viewerDepartmentIds: [OtherDepartmentId]);
+            Assert.False(TicketActions.CanTransferTicket(outside));
+            Assert.True(TicketActions.CanTransferTicket(WithOverrides(outside, [any], [])));
+        }
+
+        // The grant is Call Center only, and never reaches a read-only viewer.
+        Assert.False(TicketActions.CanTransferTicket(WithOverrides(Context(Stranger, [Roles.DepartmentEmployee], viewerDepartmentIds: [OtherDepartmentId]), [any], [])));
+        Assert.False(TicketActions.CanTransferTicket(WithOverrides(Context(Stranger, [Roles.ChairmanCeo], viewerDepartmentIds: [OtherDepartmentId]), [any], [])));
+
+        // Denying Tickets.Transfer still wins; denying Transfer Any Ticket removes only the CS Manager's built-in reach.
+        var agent = Context(Stranger, [Roles.CsAgent], viewerDepartmentIds: [OtherDepartmentId]);
+        Assert.False(TicketActions.CanTransferTicket(WithOverrides(agent, [any], [TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransfer])));
+        var manager = Context(Stranger, [Roles.CsManager]);
+        Assert.True(TicketActions.CanTransferTicket(manager));
+        Assert.False(TicketActions.CanTransferTicket(WithOverrides(manager, [], [any])));
+    }
+
+    [Fact]
     public void A_read_only_viewer_never_gets_a_write_control_from_a_grant()
     {
         var ceo = WithOverrides(

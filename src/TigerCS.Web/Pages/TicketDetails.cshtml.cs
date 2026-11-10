@@ -406,10 +406,16 @@ public sealed class TicketDetailsModel(
         }
 
         CanAssign = CanAssignAcrossDepartments = CanChangeStatus = CanResolve = CanClose = CanEscalate = CanEscalateToLevel4 = false;
-        CanRequestDowngrade = CanDecideDowngrade = CanClassify = CanTransfer = CanReopen = false;
+        CanRequestDowngrade = CanDecideDowngrade = CanClassify = CanReopen = false;
         StatusTargets = [];
         DowngradeTargets = [];
-        TransferTargets = [];
+
+        // The one action a Transfer Any Ticket holder keeps on a ticket that is otherwise read-only for them: Transfer.
+        if (!(ticket.ViewerCanTransferAnyTicket && CanTransfer))
+        {
+            CanTransfer = false;
+            TransferTargets = [];
+        }
         ReopenTargets = [];
     }
 
@@ -1399,8 +1405,11 @@ public sealed class TicketDetailsModel(
     {
         // Permission mirrors the API's rule (CS Manager any ticket; CS Agent/Supervisor their own; Supervisor their department),
         // including the viewer's own Tickets.Transfer grant/denial.
-        var isManager = ActionContext is { } actionContext
-            && (actionContext.OverrideApplies || actionContext.HasAnyRole(TicketRoleSets.TransferAnyTicket));
+        var holdsTransferAny = TicketActions.HoldsTransferAnyGrant(ActionContext);
+        var isManager = holdsTransferAny
+            || (ActionContext is { } actionContext
+                && (actionContext.OverrideApplies
+                    || (actionContext.HasAnyRole(TicketRoleSets.TransferAnyTicket) && !actionContext.IsDenied(TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransferAny))));
         CanTransfer = TicketActions.CanTransferTicket(ActionContext);
         TransferTargets = [];
         TransferTargetsUnavailable = false;
@@ -1428,7 +1437,8 @@ public sealed class TicketDetailsModel(
         // departments on it. Departments they merely belong to or can view are never added here, and the System Administrator override is not narrowed.
         // (/me is already loaded for the page; without a list nothing changes.)
         await nameResolver.PrimeOwnDepartmentsAsync(cancellationToken);
-        if (nameResolver.OwnTransferDepartmentIds.Count > 0 && ActionContext is not { OverrideApplies: true })
+        // A Transfer Any Ticket grant means any active department, so it is not narrowed by that list either.
+        if (nameResolver.OwnTransferDepartmentIds.Count > 0 && !holdsTransferAny && ActionContext is not { OverrideApplies: true })
         {
             TransferTargets = [.. TransferTargets.Where(d => nameResolver.OwnTransferDepartmentIds.Contains(d.DepartmentId))];
         }

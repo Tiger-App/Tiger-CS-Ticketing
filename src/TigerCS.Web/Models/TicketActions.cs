@@ -147,7 +147,8 @@ public static class TicketActions
             return false;
         }
 
-        if (c.OverrideApplies || c.HasAnyRole(TicketRoleSets.TransferAnyTicket))
+        // An explicit denial of Transfer Any Ticket takes the CS Manager's built-in any-ticket reach away (the per-ticket rule below still applies).
+        if (c.OverrideApplies || (c.HasAnyRole(TicketRoleSets.TransferAnyTicket) && !c.IsDenied(Permissions.TicketsTransferAny)))
         {
             return true;
         }
@@ -169,7 +170,14 @@ public static class TicketActions
     public static bool CanTransferTicket(TicketActionContext? context) =>
         context is { } c
         && !c.IsDenied(Permissions.TicketsTransfer)
-        && (CanTransfer(c) || (c.IsGranted(Permissions.TicketsTransfer) && c.TicketWithinGrantScope));
+        && (CanTransfer(c) || HoldsTransferAnyGrant(c) || (c.IsGranted(Permissions.TicketsTransfer) && c.TicketWithinGrantScope));
+
+    /// <summary>
+    /// An explicit Transfer Any Ticket grant held by a Call Center employee (CS Agent / Supervisor / Manager): any ticket, any active department,
+    /// whatever the viewer's departments. Mirrors <c>TransferAnyTicketPolicy.IsGrantedAsync</c>; read-only viewers never qualify.
+    /// </summary>
+    public static bool HoldsTransferAnyGrant(TicketActionContext? context) =>
+        context is { } c && c.IsGranted(Permissions.TicketsTransferAny) && c.HasAnyRole(TicketRoleSets.Transfer);
 
     /// <summary>Reopen including the viewer's own overrides (a denial hides it; Reopen has no grant path in the services).</summary>
     public static bool CanReopenTicket(TicketActionContext? context) =>
