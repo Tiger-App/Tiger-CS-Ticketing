@@ -43,7 +43,9 @@ public class CollectionsTowerAssignmentTests
         public FakeCollectionsTowerCatalog Catalog = new();
         public FakeCollectionsCrmProjectMap ProjectMap = new();
         public FixedTimeProvider Clock = new(November);
-        public Department CallCenter = null!, Collections = null!, Maintenance = null!;
+        public Department CallCenter = null!, Collections = null!, Maintenance = null!, Registration = null!;
+        public FakeUserTransferDepartmentRepository TransferLists = new();
+        public FakePermissionOverrideRepository Overrides = new();
         public Guid Manager = Guid.NewGuid();   // Collections department head
         public Guid Alice = Guid.NewGuid();     // Collections employee
         public Guid Bob = Guid.NewGuid();       // Collections employee
@@ -68,6 +70,7 @@ public class CollectionsTowerAssignmentTests
             f.CallCenter = f.Departments.AddDepartment("Call Center", "CC");
             f.Collections = f.Departments.AddDepartment("Collections", "COL");
             f.Maintenance = f.Departments.AddDepartment("Maintenance", "MNT");
+            f.Registration = f.Departments.AddDepartment("Registration", "REG");
             f.AddMember(f.Manager, "Collections Manager", f.Collections.DepartmentId);
             f.AddMember(f.Alice, "Alice", f.Collections.DepartmentId);
             f.AddMember(f.Bob, "Bob", f.Collections.DepartmentId);
@@ -97,7 +100,8 @@ public class CollectionsTowerAssignmentTests
             f.AutoAssignment = auto;
             f.Assignments = new TicketAssignmentAppService(
                 f.Tickets, f.TicketAssignments, f.Members, f.Departments, f.UnitOfWork, f.Audit, f.Clock, workflowSettings, auto,
-                collectionsTeam: f.Team, collectionsRouting: f.Routing, collectionsTowerResolver: resolver, assignmentHistory: f.History, collectionsGuard: f.Guard);
+                collectionsTeam: f.Team, collectionsRouting: f.Routing, collectionsTowerResolver: resolver, assignmentHistory: f.History, collectionsGuard: f.Guard,
+                permissionOverrides: f.Overrides, transferDepartments: f.TransferLists);
             f.Towers = new CollectionsTowerAssignmentAppService(f.Team, f.TowerRows, f.Catalog, f.Employees, f.UnitOfWork, f.Audit, f.Clock);
             return f;
         }
@@ -105,7 +109,7 @@ public class CollectionsTowerAssignmentTests
         public static CrmBuyerUnitDto CrmUnit(int unitId, string number, int projectId) =>
             new(1, 1, "Sold", unitId, number, 1, 1, null, projectId, $"Project {projectId}", null, 1, "Buyer");
 
-        private void AddMember(Guid id, string name, int departmentId)
+        public void AddMember(Guid id, string name, int departmentId)
         {
             var employee = new Employee(id, name, false, DateTime.UtcNow);
             Employees.Add(employee);
@@ -981,5 +985,233 @@ public class CollectionsTowerAssignmentTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Empty(f.History.Entries);
+    }
+
+    // ======================================================================================================================================
+    // Regression: Ticket Transfer / Reassignment validation and the separated transfer-destination permission
+    // ======================================================================================================================================
+
+    private static async Task<Ticket> CollectionsTicketAsync(Fixture f, Guid? owner = null, string number = "TG-COL-20261030-0004")
+    {
+        var ticket = Ticket.CreateVerified(number, f.Collections.DepartmentId, 10, 20, 5, (byte)PriorityLevel.High, "Instalment query", November);
+        await f.Tickets.AddAsync(ticket);
+        if (owner is { } o)
+        {
+            ticket.AssignTo(o);
+            await f.TicketAssignments.AddAsync(new TicketAssignment(ticket.TicketId, o, f.Collections.DepartmentId, November, null));
+            ticket.ChangeStatus(TicketStatus.InProgress);
+        }
+
+        return ticket;
+    }
+
+    // ---- Issue 1: the destination decides whether a Tower and Unit are needed ----
+
+    [Fact]
+    public async Task Transfer_ToRegistration_NeedsNoTowerOrUnit_WhateverTheTicketCarries()
+    {
+        var f = Fixture.Create();
+        var verified = await f.CallCenterTicketAsync(owner: f.CsAgent);                     // a ticket WITH a verified tower and unit
+        var typed = Ticket.CreateUnverified("TG-REG-20261109-0018", f.CallCenter.DepartmentId, 5, (byte)PriorityLevel.Medium, "q", November);
+        await f.Tickets.AddAsync(typed);                                                    // and one with none at all
+
+        var a = await f.Assignments.TransferAsync(f.Manager, [Roles.CsManager], verified.TicketId,
+            new TransferTicketRequestDto(f.Registration.DepartmentId, "Wrong department", [], ReasonCode: TicketTransferReason.WrongDepartment));
+        var b = await f.Assignments.TransferAsync(f.Manager, [Roles.CsManager], typed.TicketId,
+            new TransferTicketRequestDto(f.Registration.DepartmentId, "Wrong department", [], ReasonCode: TicketTransferReason.WrongDepartment));
+
+        Assert.Equal(TicketMutationOutcome.Success, a.Outcome);
+        Assert.Equal(TicketMutationOutcome.Success, b.Outcome);
+        Assert.Equal(f.Registration.DepartmentId, verified.CurrentDepartmentId);
+        Assert.Equal(f.Registration.DepartmentId, typed.CurrentDepartmentId);
+        Assert.Null(await f.SelectionStore.GetAsync(typed.TicketId));                       // no Collections unit is invented or stored
+        Assert.DoesNotContain(f.Audit.Entries, e => e.AfterValue is not null && e.AfterValue.Contains("CollectionsTower"));
+    }
+
+    [Fact]
+    public async Task Transfer_ToRegistration_IsNotBlocked_ByAStaleHalfSelectionFromAnEarlierCollectionsChoice()
+    {
+        var f = Fixture.Create();
+        var ticket = await f.CallCenterTicketAsync(owner: f.CsAgent);
+
+        // A tower (no unit) picked while Collections was selected, then the destination changed to Registration: it is the destination that counts.
+        var result = await f.Assignments.TransferAsync(f.Manager, [Roles.CsManager], ticket.TicketId,
+            new TransferTicketRequestDto(f.Registration.DepartmentId, "Wrong department", [], CollectionsTowerId: 1, CollectionsUnitRef: null));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(f.Registration.DepartmentId, ticket.CurrentDepartmentId);
+    }
+
+    [Fact]
+    public async Task Transfer_FromCollectionsToRegistration_Works_AndKeepsStatusPriorityAndSla()
+    {
+        var f = Fixture.Create();
+        var ticket = await CollectionsTicketAsync(f, owner: f.Alice, number: "TG-REG-20261109-0018");
+        var (status, priority, sla) = (ticket.TicketStatus, ticket.PriorityId, ticket.SlaState);
+
+        var result = await f.Assignments.TransferAsync(f.Manager, [Roles.CsManager], ticket.TicketId,
+            new TransferTicketRequestDto(f.Registration.DepartmentId, "Belongs to Registration", [], ReasonCode: TicketTransferReason.WrongDepartment));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(f.Registration.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal((status, priority, sla), (ticket.TicketStatus, ticket.PriorityId, ticket.SlaState));
+        Assert.Contains(f.Audit.Entries, a => a.Action == "Transfer" && a.AfterValue!.Contains($"DepartmentId={f.Registration.DepartmentId}"));
+    }
+
+    [Fact]
+    public async Task Transfer_ToCollections_StillRequiresAVerifiedPair_WhenOneHalfIsGiven_AndAcceptsAValidPair()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 2);
+        var typed = Ticket.CreateUnverified("TG-MANUAL-0099", f.CallCenter.DepartmentId, 5, (byte)PriorityLevel.Medium, "q", November);
+        await f.Tickets.AddAsync(typed);
+        var ticket = await f.CallCenterTicketAsync(owner: f.CsAgent);
+
+        var towerOnly = await f.TransferToCollectionsAsync(typed, towerId: 1);
+        var unitOnly = await f.TransferToCollectionsAsync(typed, unitRef: "crm:3");
+        var valid = await f.TransferToCollectionsAsync(ticket, towerId: 2, unitRef: "crm:4");
+
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, towerOnly.Outcome);
+        Assert.Equal(TicketMutationOutcome.CollectionsTowerUnitRequired, unitOnly.Outcome);
+        Assert.Equal(f.CallCenter.DepartmentId, typed.CurrentDepartmentId);                 // refused before anything was written
+        Assert.Equal(TicketMutationOutcome.Success, valid.Outcome);
+        Assert.Equal(f.Collections.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(f.Alice, ticket.CurrentOwnerEmployeeId);                                // routed by the chosen tower, as before
+    }
+
+    // ---- Issue 2: reassignment inside Collections ----
+
+    [Fact]
+    public async Task Reassign_FromCollections8ToCollections2_Works_AndPreservesStatusSlaHistoryAndAudit()
+    {
+        var f = Fixture.Create();
+        var collections8 = Guid.NewGuid();
+        var collections2 = Guid.NewGuid();
+        f.AddMember(collections8, "Collections 8", f.Collections.DepartmentId);
+        f.AddMember(collections2, "Collections 2", f.Collections.DepartmentId);
+        var ticket = await CollectionsTicketAsync(f, owner: collections8);
+        var before = (ticket.TicketStatus, ticket.PriorityId, ticket.SlaState, ticket.CurrentDepartmentId, ticket.CreatedAtUtc, ticket.TicketNumber, ticket.EscalationLevel);
+
+        var result = await f.Assignments.AssignAsync(collections8, [Roles.DepartmentEmployee], ticket.TicketId,
+            new AssignTicketRequestDto(collections2, [], Reason: "Collections 8 is overloaded"));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(collections2, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(before, (ticket.TicketStatus, ticket.PriorityId, ticket.SlaState, ticket.CurrentDepartmentId, ticket.CreatedAtUtc, ticket.TicketNumber, ticket.EscalationLevel));
+
+        var rows = f.TicketAssignments.Added.Where(a => a.TicketId == ticket.TicketId).ToList();    // history is appended to, never rewritten
+        Assert.Equal(2, rows.Count);
+        Assert.False(rows[0].IsCurrent);
+        Assert.Equal(collections8, rows[0].AssignedEmployeeId);
+        Assert.True(rows[1].IsCurrent);
+        Assert.Equal(collections2, rows[1].AssignedEmployeeId);
+
+        var entry = Assert.Single(f.History.Entries);
+        Assert.Equal((TicketAssignmentKind.Manual, (Guid?)collections8, collections2, (Guid?)collections8, "Collections 8 is overloaded"),
+            (entry.Kind, entry.PreviousEmployeeId, entry.NewEmployeeId, entry.ChangedByEmployeeId, entry.Reason));
+        Assert.Contains(f.Audit.Entries, a => a.Action == "Assign" && a.BeforeValue == collections8.ToString() && a.AfterValue == collections2.ToString());
+    }
+
+    [Fact]
+    public async Task Reassign_IsValidatedOnTheBackend_InactiveOutsiderAndUnknownAssigneesAreRefused_WithNothingWritten()
+    {
+        var f = Fixture.Create();
+        var collections8 = Guid.NewGuid();
+        var collections2 = Guid.NewGuid();
+        f.AddMember(collections8, "Collections 8", f.Collections.DepartmentId);
+        f.AddMember(collections2, "Collections 2", f.Collections.DepartmentId);
+        f.Deactivate(collections2);
+        var ticket = await CollectionsTicketAsync(f, owner: collections8);
+        var saves = f.UnitOfWork.SaveChangesCallCount;
+
+        var inactive = await f.Assignments.AssignAsync(collections8, [Roles.DepartmentEmployee], ticket.TicketId, new AssignTicketRequestDto(collections2, []));
+        var outsider = await f.Assignments.AssignAsync(collections8, [Roles.DepartmentEmployee], ticket.TicketId, new AssignTicketRequestDto(f.Outsider, []));
+        var unknown = await f.Assignments.AssignAsync(collections8, [Roles.DepartmentEmployee], ticket.TicketId, new AssignTicketRequestDto(Guid.NewGuid(), []));
+
+        Assert.All([inactive, outsider, unknown], r => Assert.Equal(TicketMutationOutcome.EmployeeNotInDepartment, r.Outcome));
+        Assert.Equal(collections8, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(saves, f.UnitOfWork.SaveChangesCallCount);
+        Assert.Empty(f.History.Entries);
+    }
+
+    // ---- Issue 3 / unauthorized attempts ----
+
+    [Fact]
+    public async Task Reassign_ByAnEmployeeOutsideCollections_OrWithAssignDenied_IsForbidden_AndChangesNothing()
+    {
+        var f = Fixture.Create();
+        var ticket = await CollectionsTicketAsync(f, owner: f.Alice);
+        f.TransferLists.Allow(f.Outsider, f.Collections.DepartmentId);                      // being allowed to TRANSFER to Collections grants no reassignment
+        f.Overrides.Set(f.Bob, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsAssign, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Deny);
+        var saves = f.UnitOfWork.SaveChangesCallCount;
+
+        var outsider = await f.Assignments.AssignAsync(f.Outsider, [Roles.DepartmentEmployee], ticket.TicketId, new AssignTicketRequestDto(f.Bob, []));
+        var denied = await f.Assignments.AssignAsync(f.Bob, [Roles.DepartmentEmployee], ticket.TicketId, new AssignTicketRequestDto(f.Bob, []));   // a Collections member, but Assign is denied to them
+        var deniedManager = await f.Assignments.AssignAsync(f.Bob, [Roles.CsManager], ticket.TicketId, new AssignTicketRequestDto(f.Bob, []));
+
+        Assert.All([outsider, denied, deniedManager], r => Assert.Equal(TicketMutationOutcome.Forbidden, r.Outcome));
+        Assert.Equal(f.Alice, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(saves, f.UnitOfWork.SaveChangesCallCount);
+    }
+
+    [Fact]
+    public async Task Transfer_WithAnExplicitDestinationList_IsLimitedToThatList_AndViewAccessGrantsNothing()
+    {
+        var f = Fixture.Create();
+        var supervisor = Guid.NewGuid();
+        f.AddMember(supervisor, "Supervisor", f.CallCenter.DepartmentId);                    // a member of the Call Center: sees it, plus ...
+        f.AddMember(supervisor, "Supervisor", f.Registration.DepartmentId);                  // ... also a member (can view) Registration
+        f.TransferLists.Allow(supervisor, f.Maintenance.DepartmentId);                       // but may only TRANSFER to Maintenance
+        var toRegistration = await f.CallCenterTicketAsync(owner: supervisor);
+        var toCollections = await f.CallCenterTicketAsync(owner: supervisor);
+        var toMaintenance = await f.CallCenterTicketAsync(owner: supervisor);
+        var saves = f.UnitOfWork.SaveChangesCallCount;
+
+        var viewOnly = await f.Assignments.TransferAsync(supervisor, [Roles.CsSupervisor], toRegistration.TicketId,
+            new TransferTicketRequestDto(f.Registration.DepartmentId, "Wrong department", []));
+        var notListed = await f.Assignments.TransferAsync(supervisor, [Roles.CsSupervisor], toCollections.TicketId,
+            new TransferTicketRequestDto(f.Collections.DepartmentId, "Payment follow-up", []));
+        Assert.Equal(TicketMutationOutcome.TransferDestinationNotPermitted, viewOnly.Outcome);
+        Assert.Equal(TicketMutationOutcome.TransferDestinationNotPermitted, notListed.Outcome);
+        Assert.Equal(f.CallCenter.DepartmentId, toRegistration.CurrentDepartmentId);
+        Assert.Equal(f.CallCenter.DepartmentId, toCollections.CurrentDepartmentId);
+        Assert.Equal(saves, f.UnitOfWork.SaveChangesCallCount);                               // refused before any write
+
+        var listed = await f.Assignments.TransferAsync(supervisor, [Roles.CsSupervisor], toMaintenance.TicketId,
+            new TransferTicketRequestDto(f.Maintenance.DepartmentId, "Needs maintenance", []));
+        Assert.Equal(TicketMutationOutcome.Success, listed.Outcome);
+        Assert.Equal(f.Maintenance.DepartmentId, toMaintenance.CurrentDepartmentId);
+    }
+
+    [Fact]
+    public async Task Transfer_WithoutAList_KeepsTheRoleBasedBehaviour_AndTheAdministratorIsNeverNarrowed()
+    {
+        var f = Fixture.Create();
+        var noList = Guid.NewGuid();
+        f.AddMember(noList, "No list", f.CallCenter.DepartmentId);
+        var admin = Guid.NewGuid();
+        f.TransferLists.Allow(admin, f.Maintenance.DepartmentId);                            // a list on an administrator does not restrict the central override
+        var a = await f.CallCenterTicketAsync(owner: noList);
+        var b = await f.CallCenterTicketAsync(owner: f.CsAgent);
+
+        var legacy = await f.Assignments.TransferAsync(noList, [Roles.CsAgent], a.TicketId, new TransferTicketRequestDto(f.Registration.DepartmentId, "Wrong department", []));
+        var administrator = await f.Assignments.TransferAsync(admin, [Roles.SystemAdministrator], b.TicketId, new TransferTicketRequestDto(f.Registration.DepartmentId, "Wrong department", []));
+
+        Assert.Equal(TicketMutationOutcome.Success, legacy.Outcome);
+        Assert.Equal(TicketMutationOutcome.Success, administrator.Outcome);
+    }
+
+    [Fact]
+    public async Task Transfer_ByARoleThatMayNotTransfer_IsStillForbidden_EvenWithTheDestinationOnTheirList()
+    {
+        var f = Fixture.Create();
+        var ticket = await CollectionsTicketAsync(f, owner: f.Alice);
+        f.TransferLists.Allow(f.Alice, f.Registration.DepartmentId);                         // a list narrows what a role may do; it never grants the role
+
+        var result = await f.Assignments.TransferAsync(f.Alice, [Roles.DepartmentEmployee], ticket.TicketId,
+            new TransferTicketRequestDto(f.Registration.DepartmentId, "Wrong department", []));
+
+        Assert.Equal(TicketMutationOutcome.Forbidden, result.Outcome);
+        Assert.Equal(f.Collections.DepartmentId, ticket.CurrentDepartmentId);
     }
 }

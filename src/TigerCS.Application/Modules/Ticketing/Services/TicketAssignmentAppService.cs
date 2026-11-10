@@ -39,7 +39,8 @@ public sealed class TicketAssignmentAppService(
     CollectionsTicketTowerResolver? collectionsTowerResolver = null,
     ITicketAssignmentHistoryRepository? assignmentHistory = null,
     CollectionsTransferGuard? collectionsGuard = null,
-    IOutboxWriter? outboxWriter = null)
+    IOutboxWriter? outboxWriter = null,
+    IUserTransferDepartmentRepository? transferDepartments = null)
 {
     /// <summary>Customer "assigned" and colleague "assigned to you" notification events, written in the operation's own transaction.</summary>
     private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
@@ -122,6 +123,14 @@ public sealed class TicketAssignmentAppService(
         if (ticket is null)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        // An explicit denial of Tickets.Assign always blocks (the endpoint gate enforces it too; the service repeats it so no other caller can bypass it).
+        // Reassignment authority comes only from this permission and the role / team rules below - never from which departments the caller can view
+        // or may transfer to.
+        if (await CallerPermissionOverrides.GetAsync(permissionOverrides, callerEmployeeId, Permissions.TicketsAssign, cancellationToken) == PermissionEffect.Deny)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
 
         // Collections tickets: the Collections team itself (not just its supervisors) may assign and reassign within the team. Decided server-side from the
@@ -352,6 +361,13 @@ public sealed class TicketAssignmentAppService(
         if (targetDepartment is null || !targetDepartment.IsActive)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.TargetDepartmentInactive);
+        }
+
+        // The destination must be one the caller is authorised to transfer to. Judged on the department actually requested (never on the departments
+        // the caller can merely view), and before any write.
+        if (!await TransferDestinationPolicy.IsPermittedAsync(transferDepartments, callerEmployeeId, callerRoles, request.TargetDepartmentId, cancellationToken))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.TransferDestinationNotPermitted);
         }
 
         // Transfer-and-assign: the explicit assignee must belong to the

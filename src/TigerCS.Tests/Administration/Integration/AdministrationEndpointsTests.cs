@@ -102,6 +102,54 @@ public class AdministrationEndpointsTests : IClassFixture<TigerCsApiFactory>
         Assert.Contains(await db.AuditEntries.Where(a => a.EntityId == created.EmployeeId.ToString()).ToListAsync(), a => a.Action == "AdminDeactivateUser");
     }
 
+    [Fact]
+    public async Task Users_TransferDepartments_AreSeparateFromMembership_ValidatedAuditedAndShownOnMe()
+    {
+        var (admin, _) = await CreateClientAsync(Roles.SystemAdministrator);
+        var home = await _factory.CreateDepartmentAsync(Unique("Home"), Guid.NewGuid().ToString("N")[..8]);
+        var registration = await _factory.CreateDepartmentAsync(Unique("Registration"), Guid.NewGuid().ToString("N")[..8]);
+        var collections = await _factory.CreateDepartmentAsync(Unique("Collections"), Guid.NewGuid().ToString("N")[..8]);
+        var userName = $"t{Guid.NewGuid():N}"[..20];
+        var created = await ReadAsync<AdminUserDto>(await admin.PostAsJsonAsync("/api/admin/users",
+            new CreateUserRequestDto(userName, $"{userName}@example.test", "Transfer Test", false, "Str0ng-Pass!", [Roles.CsSupervisor], home)));
+        var url = $"/api/admin/users/{created.EmployeeId}/transfer-departments";
+
+        Assert.Empty((await ReadAsync<UserTransferDepartmentsDto>(await admin.GetAsync(url))).DepartmentIds);          // no explicit list yet
+
+        var saved = await ReadAsync<UserTransferDepartmentsDto>(await admin.PutAsJsonAsync(url,
+            new SetUserTransferDepartmentsRequestDto([collections, registration, collections])));
+        Assert.Equal(new[] { registration, collections }.Order(), saved.DepartmentIds);
+        Assert.Equal(saved.DepartmentIds, (await ReadAsync<UserTransferDepartmentsDto>(await admin.GetAsync(url))).DepartmentIds);
+
+        // Separate from membership: the user is still a member of their home department only, and nothing was granted by viewing it.
+        var fetched = await ReadAsync<AdminUserDto>(await admin.GetAsync($"/api/admin/users/{created.EmployeeId}"));
+        Assert.Equal([home], fetched.Departments.Select(d => d.DepartmentId));
+        Assert.DoesNotContain(home, saved.DepartmentIds);
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync(url, new SetUserTransferDepartmentsRequestDto([987654]))).StatusCode);
+        Assert.Equal(HttpStatusCode.NotFound, (await admin.PutAsJsonAsync($"/api/admin/users/{Guid.NewGuid()}/transfer-departments", new SetUserTransferDepartmentsRequestDto([registration]))).StatusCode);
+
+        // Only an administrator manages the list.
+        var (manager, _) = await CreateClientAsync(Roles.CsManager);
+        Assert.Equal(HttpStatusCode.Forbidden, (await manager.GetAsync(url)).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await manager.PutAsJsonAsync(url, new SetUserTransferDepartmentsRequestDto([registration]))).StatusCode);
+
+        // The user's own /me carries the list, so the Transfer form can offer exactly those departments.
+        var user = _factory.CreateClient();
+        var login = await ReadAsync<LoginResponseDto>(await user.PostAsJsonAsync("/api/auth/login", new LoginRequestDto(userName, "Str0ng-Pass!")));
+        user.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.AccessToken);
+        var me = await ReadAsync<CurrentUserResponseDto>(await user.GetAsync("/api/users/me"));
+        Assert.Equal(saved.DepartmentIds, me.TransferDepartmentIds);
+
+        Assert.Empty((await ReadAsync<UserTransferDepartmentsDto>(await admin.PutAsJsonAsync(url, new SetUserTransferDepartmentsRequestDto([])))).DepartmentIds);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        var audits = await db.AuditEntries.Where(a => a.EntityId == created.EmployeeId.ToString() && a.Action == "AdminSetTransferDepartments").ToListAsync();
+        Assert.Equal(2, audits.Count);                                                                             // the save and the clear; the failed attempts wrote nothing
+        Assert.Empty(await db.UserTransferDepartments.Where(t => t.EmployeeId == created.EmployeeId).ToListAsync());
+    }
+
     // ------------------------------------------------------------- channels
 
     [Fact]

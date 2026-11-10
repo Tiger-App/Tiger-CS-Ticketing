@@ -2103,6 +2103,36 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("UserDepartmentAssignments", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.IdentityAndAccess.UserTransferDepartment", b =>
+                {
+                    b.Property<int>("UserTransferDepartmentId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("UserTransferDepartmentId"));
+
+                    b.Property<int>("DepartmentId")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("GrantedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("GrantedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("UserTransferDepartmentId");
+
+                    b.HasIndex("DepartmentId");
+
+                    b.HasIndex("EmployeeId", "DepartmentId")
+                        .IsUnique();
+
+                    b.ToTable("UserTransferDepartments", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.Notifications.Notification", b =>
                 {
                     b.Property<long>("NotificationId")
@@ -4550,6 +4580,21 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Navigation("Department");
 
                     b.Navigation("Employee");
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.IdentityAndAccess.UserTransferDepartment", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Department", null)
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("TigerCS.Domain.Modules.Notifications.Notification", b =>

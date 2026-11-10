@@ -437,6 +437,11 @@
     var form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
 
+    // A form's own handler (a validation message, or a fetch-based save) runs first and may already have cancelled this
+    // submit. Nothing is being sent then, so the form must stay usable: marking it "submitting" here would disable its
+    // button for good and make every later attempt - after the user fixed what the message asked for - silently do nothing.
+    if (event.defaultPrevented) return;
+
     if (form.hasAttribute("data-submitting")) {
       event.preventDefault();
       event.stopImmediatePropagation();
