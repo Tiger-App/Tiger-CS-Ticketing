@@ -27,6 +27,7 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     [BindProperty] public ProfileInput Profile { get; set; } = new();
     [BindProperty] public RolesInput RolesForm { get; set; } = new();
     [BindProperty] public MembershipInput Membership { get; set; } = new();
+    [BindProperty] public AccessibleDepartmentsInput AccessibleDepartments { get; set; } = new();
     [BindProperty] public ActivationInput Activation { get; set; } = new();
     [BindProperty] public ResetPasswordInput ResetPassword { get; set; } = new();
 
@@ -124,6 +125,11 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
         ApplyAsync(id, adminApi.AddUserDepartmentAsync(id, new AddDepartmentMembershipRequestDto(Membership.DepartmentId, Membership.IsPrimary), cancellationToken),
             "Department membership added.", "The department membership could not be added.");
 
+    /// <summary>Saves the whole Accessible Departments selection at once. The primary department is never changed here (the Api keeps it whatever is posted).</summary>
+    public Task<IActionResult> OnPostAccessibleDepartmentsAsync(Guid id, CancellationToken cancellationToken) =>
+        ApplyAsync(id, adminApi.SetUserAccessibleDepartmentsAsync(id, new SetAccessibleDepartmentsRequestDto(AccessibleDepartments.DepartmentIds ?? []), cancellationToken),
+            "Accessible departments saved.", "The accessible departments could not be saved.");
+
     public Task<IActionResult> OnPostRemoveDepartmentAsync(Guid id, int departmentId, CancellationToken cancellationToken) =>
         ApplyAsync(id, adminApi.RemoveUserDepartmentAsync(id, departmentId, cancellationToken),
             "Department membership removed.", "The department membership could not be removed.");
@@ -219,6 +225,11 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     {
         public int DepartmentId { get; set; }
         public bool IsPrimary { get; set; }
+    }
+
+    public sealed class AccessibleDepartmentsInput
+    {
+        public List<int>? DepartmentIds { get; set; }
     }
 
     public sealed class ActivationInput

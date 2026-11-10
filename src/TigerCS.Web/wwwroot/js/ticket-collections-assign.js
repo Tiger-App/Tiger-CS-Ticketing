@@ -2,7 +2,9 @@
    unchanged CollectionsAssign handler. The modal closes only once the server confirms; then "Assigned To", the Current line, the row version and the
    assignment-history table are updated in place and the page is never left. */
 (() => {
-    document.addEventListener('DOMContentLoaded', () => {
+    // Run now when the document is already parsed (the script can be injected late or deferred); otherwise wait for it.
+    const onReady = fn => (document.readyState === 'loading' ? document.addEventListener('DOMContentLoaded', fn) : fn());
+    onReady(() => {
         const root = document.querySelector('[data-collections-assign]');
         if (!root) return;
         const dialog = root.querySelector('[data-assign-dialog]');
@@ -18,12 +20,17 @@
         const options = () => Array.from(list.querySelectorAll('.reassign-option'));
         const checked = () => list.querySelector('input[data-assign-option]:checked');
         let busy = false;
+        // The employee who owns the ticket now (empty when nobody does). The submit button is enabled only for a chosen person who is
+        // someone else: the decision is made from the radio's own value, never from a disabled state or a label.
+        let currentId = (dialog.dataset.currentId || '').toLowerCase();
+        const sameAsCurrent = value => currentId !== '' && (value || '').toLowerCase() === currentId;
 
         const say = (text, bad) => { status.textContent = text; status.classList.toggle('is-error', !!bad); };
 
         function refresh() {
             const pick = checked();
-            submit.disabled = busy || !pick;
+            const valid = !!pick && !!pick.value && !sameAsCurrent(pick.value);
+            submit.disabled = busy || !valid;
             selectedText.textContent = '';
             if (pick) {
                 const name = pick.closest('.reassign-option').querySelector('.reassign-option__name').textContent;
@@ -75,28 +82,35 @@
             });
             noMatch.hidden = shown > 0;
         });
-        list.addEventListener('change', () => { say(''); refresh(); });
+        // 'change' is the normal signal; 'input' and 'click' cover browsers/assistive tech that update the radio without a bubbling change.
+        ['change', 'input', 'click'].forEach(type => list.addEventListener(type, () => { say(''); refresh(); }));
 
         form.addEventListener('submit', async e => {
             e.preventDefault();
             if (busy) return;
-            if (!checked()) { say('Choose a team member.', true); return; }
+            const pick = checked();
+            if (!pick || !pick.value) { say('Choose a team member.', true); return; }
+            if (sameAsCurrent(pick.value)) { say('The ticket is already assigned to that person. Choose someone else.', true); return; }
             setBusy(true);
             say('');
             try {
                 const response = await fetch(root.dataset.postUrl, { method: 'POST', body: new FormData(form), headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, credentials: 'same-origin' });
-                const data = await response.json();
+                let data;
+                try { data = await response.json(); } catch { data = null; }
+                if (!data) { say(response.ok ? 'The server sent an unexpected answer. Reload the page.' : `The assignment was refused (${response.status}). Reload the page and try again.`, true); return; }
                 if (!data.ok) { say(data.message || 'Could not save.', true); return; }
                 const label = document.querySelector('.tw-owner .tw-fact__v');
                 if (label) label.textContent = data.ownerName;
                 dialog.querySelector('[data-assign-current]').textContent = data.ownerName;
                 form.querySelector('[data-assign-rowversion]').value = data.rowVersion;
+                currentId = (data.ownerId || '').toLowerCase();
+                dialog.dataset.currentId = currentId;
                 openButton.querySelector('[data-assign-open-label]').textContent = 'Reassign';
                 dialog.querySelector('[data-assign-title]').textContent = 'Reassign ticket';
                 submit.dataset.label = 'Reassign';
                 options().forEach(o => {
                     const input = o.querySelector('input');
-                    const isCurrent = input.value === data.ownerId;
+                    const isCurrent = sameAsCurrent(input.value);
                     o.classList.toggle('is-current', isCurrent);
                     const tag = o.querySelector('.reassign-option__tag');
                     if (isCurrent && !tag) {

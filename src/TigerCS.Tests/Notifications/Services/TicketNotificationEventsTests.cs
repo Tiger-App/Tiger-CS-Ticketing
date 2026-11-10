@@ -382,7 +382,7 @@ public class TicketNotificationEventsTests
     }
 
     [Fact]
-    public async Task ManualAssign_ToTheCurrentOwnerAgain_QueuesNothing()
+    public async Task ManualAssign_ToTheCurrentOwnerAgain_IsRejected_AndQueuesNothing()
     {
         var f = CreateAssignment();
         var manager = Guid.NewGuid();
@@ -391,7 +391,8 @@ public class TicketNotificationEventsTests
 
         var result = await f.Service.AssignAsync(manager, [Roles.CsManager], ticket.TicketId, new AssignTicketRequestDto(agent, []));
 
-        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        // Reassigning to the person who already owns the ticket is refused with a clear outcome; nothing is written or notified.
+        Assert.Equal(TicketMutationOutcome.AlreadyAssignedToEmployee, result.Outcome);
         Assert.Empty(f.Outbox.Committed);
     }
 

@@ -156,6 +156,55 @@ public class AdminUserAppServiceTests
     }
 
     [Fact]
+    public async Task SetAccessibleDepartments_adds_and_removes_in_one_save_and_never_touches_the_primary()
+    {
+        var f = Create();
+        var id = SeedUser(f, "Nour A", Roles.DepartmentEmployee);
+        var collections = f.Departments.AddDepartment("Collections", "COL");
+        var registration = f.Departments.AddDepartment("Registration", "REG");
+        var maintenance = f.Departments.AddDepartment("Maintenance", "MNT");
+        await f.Service.AddDepartmentAsync(Admin, id, new AddDepartmentMembershipRequestDto(collections.DepartmentId, true));
+        await f.Service.AddDepartmentAsync(Admin, id, new AddDepartmentMembershipRequestDto(registration.DepartmentId, false));
+
+        // The list omits the primary (Collections) and swaps Registration for Maintenance: the primary must survive regardless.
+        var result = await f.Service.SetAccessibleDepartmentsAsync(Admin, id, new SetAccessibleDepartmentsRequestDto([maintenance.DepartmentId]));
+
+        Assert.Equal(AdminOutcome.Success, result.Outcome);
+        Assert.Equal(["Collections", "Maintenance"], result.Value!.Departments.Select(d => d.Name).Order());
+        Assert.True(result.Value.Departments.Single(d => d.Name == "Collections").IsPrimary);
+        Assert.False(result.Value.Departments.Single(d => d.Name == "Maintenance").IsPrimary);
+        Assert.Contains(f.Audit.Entries, e => e.Action == "AdminSetAccessibleDepartments" && e.ActorEmployeeId == Admin);
+
+        // Clearing the list leaves only the primary; repeating the same set changes (and audits) nothing more.
+        var cleared = await f.Service.SetAccessibleDepartmentsAsync(Admin, id, new SetAccessibleDepartmentsRequestDto([]));
+        var auditCount = f.Audit.Entries.Count;
+        var again = await f.Service.SetAccessibleDepartmentsAsync(Admin, id, new SetAccessibleDepartmentsRequestDto([]));
+        Assert.Equal(["Collections"], cleared.Value!.Departments.Select(d => d.Name));
+        Assert.Equal(AdminOutcome.Success, again.Outcome);
+        Assert.Equal(auditCount, f.Audit.Entries.Count);
+    }
+
+    [Fact]
+    public async Task SetAccessibleDepartments_rejects_unknown_or_inactive_departments_and_changes_nothing()
+    {
+        var f = Create();
+        var id = SeedUser(f, "Nour A", Roles.DepartmentEmployee);
+        var collections = f.Departments.AddDepartment("Collections", "COL");
+        var registration = f.Departments.AddDepartment("Registration", "REG");
+        var legacy = f.Departments.AddDepartment("Legacy", "LEG", isActive: false);
+        await f.Service.AddDepartmentAsync(Admin, id, new AddDepartmentMembershipRequestDto(collections.DepartmentId, true));
+
+        var inactive = await f.Service.SetAccessibleDepartmentsAsync(Admin, id, new SetAccessibleDepartmentsRequestDto([registration.DepartmentId, legacy.DepartmentId]));
+        var unknown = await f.Service.SetAccessibleDepartmentsAsync(Admin, id, new SetAccessibleDepartmentsRequestDto([9999]));
+        var missingUser = await f.Service.SetAccessibleDepartmentsAsync(Admin, Guid.NewGuid(), new SetAccessibleDepartmentsRequestDto([]));
+
+        Assert.Equal(AdminOutcome.ValidationFailed, inactive.Outcome);
+        Assert.Equal(AdminOutcome.ValidationFailed, unknown.Outcome);
+        Assert.Equal(AdminOutcome.NotFound, missingUser.Outcome);
+        Assert.Equal(["Collections"], (await f.Service.GetAsync(id))!.Departments.Select(d => d.Name));   // not even the valid Registration was applied
+    }
+
+    [Fact]
     public async Task ResetPassword_replaces_the_password_lifts_lockout_rotates_the_stamp_and_audits_the_reason_only()
     {
         var f = Create();

@@ -87,6 +87,17 @@ public class AdminUsersController(AdminUserAppService users, AdminUserPermission
     public async Task<IActionResult> AddDepartment(Guid employeeId, [FromBody] AddDepartmentMembershipRequestDto request, CancellationToken cancellationToken) =>
         FromResult(await users.AddDepartmentAsync(CallerEmployeeId, employeeId, request, cancellationToken));
 
+    /// <summary>Sets every department (besides the primary one) the user may access, in one call.</summary>
+    /// <remarks>The primary department is never changed or removed. Departments not listed are removed; listed ones not yet held are added (active departments only).</remarks>
+    [HttpPut("{employeeId:guid}/departments")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
+    [ProducesResponseType<AdminUserDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> SetAccessibleDepartments(Guid employeeId, [FromBody] SetAccessibleDepartmentsRequestDto request, CancellationToken cancellationToken) =>
+        FromResult(await users.SetAccessibleDepartmentsAsync(CallerEmployeeId, employeeId, request, cancellationToken));
+
     /// <summary>Resets the user's password (the "forgot my password" path, taken on the user's behalf).</summary>
     /// <remarks>
     /// Identity's password policy decides whether the new password is

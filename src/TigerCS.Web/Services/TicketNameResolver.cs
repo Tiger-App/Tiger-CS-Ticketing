@@ -100,6 +100,12 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
     /// <summary>The caller's own department memberships — the only set of department id→name pairs the Api exposes.</summary>
     public IReadOnlyCollection<DepartmentMembershipDto> OwnDepartments { get; private set; } = [];
 
+    /// <summary>
+    /// The departments the Tickets Department filter offers: every department the Api lets the caller see (<c>AccessibleDepartments</c> from the
+    /// same /me call). Falls back to the memberships when an older Api does not send it. Filtering is only a narrowing - the Api still scopes every list, count, search and export.
+    /// </summary>
+    public IReadOnlyCollection<DepartmentMembershipDto> AccessibleDepartments { get; private set; } = [];
+
     /// <summary>The caller's own explicit permission grants and denials from the same /me call (empty when none or unreadable).</summary>
     public ViewerPermissions OwnPermissions { get; private set; } = ViewerPermissions.None;
 
@@ -152,10 +158,11 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
         }
 
         OwnDepartments = me.Value.Departments;
+        AccessibleDepartments = me.Value.AccessibleDepartments ?? me.Value.Departments;
         OwnPermissions = new ViewerPermissions(
             new HashSet<string>(me.Value.GrantedPermissions ?? [], StringComparer.Ordinal),
             new HashSet<string>(me.Value.DeniedPermissions ?? [], StringComparer.Ordinal));
-        foreach (var department in me.Value.Departments)
+        foreach (var department in me.Value.Departments.Concat(AccessibleDepartments))
         {
             _departmentNames[department.DepartmentId] = department.Name;
         }

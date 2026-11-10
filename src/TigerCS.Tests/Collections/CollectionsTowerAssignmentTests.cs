@@ -725,6 +725,64 @@ public class CollectionsTowerAssignmentTests
         Assert.Equal(f.Bob, ticket.CurrentOwnerEmployeeId);
     }
 
+    // Reassign (Collections 8 -> Collections 2 style) --------------------------------------------------------------------------------
+    [Fact]
+    public async Task SameDepartmentReassignment_KeepsTheDepartment_AndRecordsWhoChangedItWhenAndWhy()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);
+        var ticket = await f.CallCenterTicketAsync();
+        await f.TransferToCollectionsAsync(ticket);
+        var departmentBefore = ticket.CurrentDepartmentId;
+        var statusBefore = ticket.TicketStatus;
+
+        var result = await f.Assignments.AssignAsync(f.Alice, [Roles.DepartmentEmployee], ticket.TicketId, new AssignTicketRequestDto(f.Bob, [], Reason: "Workload"));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(f.Bob, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(departmentBefore, ticket.CurrentDepartmentId);   // the assigned department only changes with a transfer
+        Assert.Equal(statusBefore, ticket.TicketStatus);
+        var entry = f.History.Entries.Last();
+        Assert.Equal((f.Alice, f.Bob, (Guid?)f.Alice, "Workload", November), (entry.PreviousEmployeeId, entry.NewEmployeeId, entry.ChangedByEmployeeId, entry.Reason, entry.ChangedAtUtc));
+        Assert.Contains(f.Audit.Entries, a => a.Action == "Assign" && a.BeforeValue == f.Alice.ToString() && a.AfterValue == f.Bob.ToString());
+    }
+
+    [Fact]
+    public async Task ReassigningToTheCurrentAssignee_IsRejectedWithAClearOutcome_AndWritesNothing()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);
+        var ticket = await f.CallCenterTicketAsync();
+        await f.TransferToCollectionsAsync(ticket);
+        var historyBefore = f.History.Entries.Count;
+
+        var result = await f.Assignments.AssignAsync(f.Alice, [Roles.DepartmentEmployee], ticket.TicketId, new AssignTicketRequestDto(f.Alice, []));
+
+        Assert.Equal(TicketMutationOutcome.AlreadyAssignedToEmployee, result.Outcome);
+        Assert.Equal(f.Alice, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(historyBefore, f.History.Entries.Count);
+    }
+
+    [Fact]
+    public async Task ReassigningToAnotherDepartmentsEmployee_IsNotAnAssign_ItNeedsTheTransferPermission()
+    {
+        var f = Fixture.Create();
+        await f.ActivateAsync(f.Alice, 2026, 11, 1);
+        var ticket = await f.CallCenterTicketAsync();
+        await f.TransferToCollectionsAsync(ticket);
+
+        // Assign never crosses departments: a Maintenance employee is not an eligible Collections assignee, even for the Collections manager.
+        var assign = await f.Assignments.AssignAsync(f.Manager, [Roles.DepartmentHead], ticket.TicketId, new AssignTicketRequestDto(f.Outsider, []));
+        // Moving the ticket to another department is a Transfer, which a plain Collections employee is not authorized to do.
+        var transfer = await f.Assignments.TransferAsync(f.Alice, [Roles.DepartmentEmployee], ticket.TicketId,
+            new TransferTicketRequestDto(f.Maintenance.DepartmentId, "Wrong team", [], f.Outsider, TicketTransferReason.WrongDepartment));
+
+        Assert.Equal(TicketMutationOutcome.EmployeeNotInDepartment, assign.Outcome);
+        Assert.Equal(TicketMutationOutcome.Forbidden, transfer.Outcome);
+        Assert.Equal(f.Alice, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(f.Collections.DepartmentId, ticket.CurrentDepartmentId);
+    }
+
     [Fact]
     public async Task CollectionsEmployee_CanAssignAnUnassignedTicket_WithoutAReason()
     {
