@@ -64,6 +64,9 @@ public sealed class CollectionsReviewEndpointsTests
             new ConfirmDispatchRequest(Selection, 1, "x", "k", true))).StatusCode,
         ["export"] = (await client.PostAsJsonAsync("/api/collections/review/export/genesys", Selection)).StatusCode,
         ["export-review"] = (await client.PostAsJsonAsync("/api/collections/review/export/review", new ReviewFilter())).StatusCode,
+        ["exceptions"] = (await client.GetAsync("/api/collections/review/exceptions?reminderType=CurrentMonth")).StatusCode,
+        ["exceptions-include"] = (await client.PostAsJsonAsync("/api/collections/review/exceptions/include", new { reminderType = "CurrentMonth", unitKeys = new[] { "4|T0001|TP140-1" } })).StatusCode,
+        ["exceptions-remove"] = (await client.PostAsJsonAsync("/api/collections/review/exceptions/remove", new { reminderType = "CurrentMonth", unitKeys = new[] { "4|T0001|TP140-1" } })).StatusCode,
         ["overlaps"] = (await client.GetAsync("/api/collections/review/overlaps")).StatusCode,
         ["contacts"] = (await client.GetAsync($"/api/collections/review/dispatches/{AnyDispatch}/contacts")).StatusCode,
         ["sweep"] = (await client.PostAsync("/api/collections/review/suppression/sweep", null)).StatusCode,
@@ -96,7 +99,7 @@ public sealed class CollectionsReviewEndpointsTests
         Assert.All(await CallEveryRouteAsync(anonymous), r => Assert.Equal(HttpStatusCode.Unauthorized, r.Value));
         using var reporter = await Client(factory, Roles.ReportingUser);
         var results = await CallEveryRouteAsync(reporter);
-        foreach (var route in new[] { "runs/current", "runs/{id}", "records", "dispatches", "readiness", "dispatches/{id}", "refresh", "summary", "confirm", "export", "export-review", "reconcile", "cancel", "retry-email", "overlaps", "sweep", "contacts", "genesys-check" })
+        foreach (var route in new[] { "runs/current", "runs/{id}", "records", "dispatches", "readiness", "dispatches/{id}", "refresh", "summary", "confirm", "export", "export-review", "reconcile", "cancel", "retry-email", "overlaps", "sweep", "contacts", "genesys-check", "exceptions", "exceptions-include", "exceptions-remove" })
             Assert.Equal(HttpStatusCode.Forbidden, results[route]);
         Assert.Equal(0, source.Reads);
     }
@@ -114,6 +117,9 @@ public sealed class CollectionsReviewEndpointsTests
         Assert.Equal(HttpStatusCode.Forbidden, results["confirm"]);
         Assert.Equal(HttpStatusCode.Forbidden, results["export"]);
         Assert.Equal(HttpStatusCode.Forbidden, results["export-review"]);
+        Assert.Equal(HttpStatusCode.Forbidden, results["exceptions"]);                            // manual GULF_CUSTOMERS inclusion needs the send permission
+        Assert.Equal(HttpStatusCode.Forbidden, results["exceptions-include"]);
+        Assert.Equal(HttpStatusCode.Forbidden, results["exceptions-remove"]);
         Assert.Equal(HttpStatusCode.Forbidden, results["reconcile"]);
         Assert.Equal(HttpStatusCode.Forbidden, results["genesys-check"]);                         // calls Genesys (read only): needs the send permission
         Assert.Equal(HttpStatusCode.Forbidden, results["cancel"]);

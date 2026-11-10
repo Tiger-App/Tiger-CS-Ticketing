@@ -58,6 +58,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
     public DbSet<Department> Departments => Set<Department>();
 
     public DbSet<UserPermissionOverride> UserPermissionOverrides => Set<UserPermissionOverride>();
+    public DbSet<UserTransferDepartment> UserTransferDepartments => Set<UserTransferDepartment>();
 
     public DbSet<UserDepartmentAssignment> UserDepartmentAssignments => Set<UserDepartmentAssignment>();
 
@@ -179,6 +180,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
     public DbSet<CollectionsGenesysBatch> CollectionsGenesysBatches => Set<CollectionsGenesysBatch>();
     public DbSet<CollectionsGenesysMessageResult> CollectionsGenesysMessageResults => Set<CollectionsGenesysMessageResult>();
     public DbSet<CollectionsGenesysSyncState> CollectionsGenesysSyncStates => Set<CollectionsGenesysSyncState>();
+    public DbSet<CollectionsExceptionInclusion> CollectionsExceptionInclusions => Set<CollectionsExceptionInclusion>();
 
     public DbSet<TicketApproval> TicketApprovals => Set<TicketApproval>();
 
@@ -194,6 +196,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new ApplicationRoleConfiguration());
         builder.ApplyConfiguration(new EmployeeConfiguration());
         builder.ApplyConfiguration(new UserPermissionOverrideConfiguration());
+        builder.ApplyConfiguration(new UserTransferDepartmentConfiguration());
         builder.ApplyConfiguration(new DepartmentConfiguration());
         builder.ApplyConfiguration(new UserDepartmentAssignmentConfiguration());
 
@@ -264,6 +267,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new CollectionsGenesysBatchConfiguration());
         builder.ApplyConfiguration(new CollectionsGenesysMessageResultConfiguration());
         builder.ApplyConfiguration(new CollectionsGenesysSyncStateConfiguration());
+        builder.ApplyConfiguration(new CollectionsExceptionInclusionConfiguration());
         builder.ApplyConfiguration(new TicketApprovalConfiguration());
         builder.ApplyConfiguration(new TicketWorkflowEventConfiguration());
         builder.ApplyConfiguration(new RequestTypeApprovalRequirementConfiguration());

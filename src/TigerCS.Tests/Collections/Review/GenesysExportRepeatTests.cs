@@ -295,16 +295,16 @@ public sealed class GenesysExportRepeatTests
     // ------------------------------------------------------------ the labels when the schema or the data was not verified
 
     [Fact]
-    public async Task WithoutSchemaVerification_TheFileIsLabelled_TemplateNotVerifiedAgainstGenesys_ButStaysTheSixColumnTemplate()
+    public async Task WithoutSchemaVerification_TheFileIsLabelled_TemplateNotVerifiedAgainstGenesys_ButStaysTheElevenColumnManualTemplate()
     {
         using var h = await SeededAsync();                                                       // no OAuth credentials in the harness
         var dto = (await ExportAsync(h, All())).Value!;
         Assert.False(dto.SchemaVerified);
         Assert.StartsWith("Template not verified against Genesys", dto.Notices[0]);
         Assert.EndsWith("(Template not verified against Genesys).csv", dto.FileName);
-        Assert.Equal(["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], GenesysContactTemplate.ParseCsv(dto.Csv)[0]);
+        Assert.Equal(ManualGenesysFile.Template, GenesysContactTemplate.ParseCsv(dto.Csv)[0]);
         Assert.DoesNotContain("not verified", dto.Csv, StringComparison.OrdinalIgnoreCase);       // the file itself is import-ready
-        Assert.True(GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys)).IsMatch);
+        Assert.True(GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys), manual: true).IsMatch);
         Assert.Contains("Template not verified against Genesys", (await AuditAsync(h, GenesysExportService.AuditAction)).Single().AfterValue);
     }
 

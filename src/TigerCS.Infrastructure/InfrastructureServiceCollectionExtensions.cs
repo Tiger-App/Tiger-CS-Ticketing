@@ -143,6 +143,7 @@ public static class InfrastructureServiceCollectionExtensions
         // pattern as the System Administrator override below: one bare
         // handler, no policy has to know about it.
         services.AddScoped<IUserPermissionOverrideRepository, UserPermissionOverrideRepository>();
+        services.AddScoped<IUserTransferDepartmentRepository, UserTransferDepartmentRepository>();
         services.AddScoped<IAuthorizationHandler, UserPermissionAuthorizationHandler>();
 
         // The central System Administrator authorization override (ADR-0024).
@@ -450,6 +451,10 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IReviewStore, ReviewStore>();
         services.AddScoped<IGenesysExportHistory, ReviewStore>();
         services.AddScoped<IGenesysExportLock, GenesysExportRunLock>();
+        // Unit exception policies (permanent special cases; GULF_CUSTOMERS with the day-14 window and manual inclusions). Configuration-driven; audited; no automatic sending.
+        services.AddScoped<TigerCS.Application.Modules.Collections.Exceptions.CollectionsExceptionPolicy>();
+        services.AddScoped<TigerCS.Application.Modules.Collections.Exceptions.IExceptionInclusionStore, ExceptionInclusionStore>();
+        services.AddScoped<TigerCS.Application.Modules.Collections.Exceptions.ExceptionInclusionService>();
         services.AddScoped<ReviewQueryService>();
         services.AddScoped<ReviewRefreshService>();
         services.AddScoped<IReviewRefreshRunner>(sp => sp.GetRequiredService<ReviewRefreshService>());
@@ -491,6 +496,7 @@ public static class InfrastructureServiceCollectionExtensions
         // endpoints compose these over the existing services above.
         services.AddScoped<AdminUserAppService>();
         services.AddScoped<AdminUserPermissionAppService>();
+        services.AddScoped<AdminUserTransferDepartmentAppService>();
         services.AddScoped<AdminDepartmentAppService>();
         services.AddScoped<DepartmentCoverageService>();
         services.AddScoped<StaffProvisioningService>();

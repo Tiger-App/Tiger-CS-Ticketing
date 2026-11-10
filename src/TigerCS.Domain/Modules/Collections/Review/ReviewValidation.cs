@@ -57,6 +57,14 @@ public static class ReviewReasons
     public const string CrmUnavailable = "CrmUnavailable";
     /// <summary>Manual only (derived when listing, never stored): the customer was already added to a Genesys dispatch today (the contact-frequency limit).</summary>
     public const string ContactedToday = "ContactedToday";
+    /// <summary>The unit is in the permanent special-cases list (<c>SpecialCaseUnitCodes</c>): never part of a normal campaign, whatever the date or any manual inclusion.</summary>
+    public const string SpecialCaseExcluded = "SpecialCaseExcluded";
+    /// <summary>The unit is in GULF_CUSTOMERS / CHEQUES: excluded except for a Manual campaign on the 14th (Dubai) or when it was included manually for that campaign.</summary>
+    public const string GulfCustomerExcluded = "GulfCustomerExcluded";
+    /// <summary>Warning (shown, never blocking): a GULF_CUSTOMERS unit is eligible for this Manual campaign because an authorized person included it.</summary>
+    public const string ManuallyIncluded = "ManuallyIncluded";
+    /// <summary>Warning (shown, never blocking): a GULF_CUSTOMERS unit is eligible for this Manual campaign because today is its monthly inclusion day.</summary>
+    public const string GulfInclusionDay = "GulfInclusionDay";
 
     public static readonly IReadOnlyList<ReviewReasonInfo> All =
     [
@@ -86,6 +94,10 @@ public static class ReviewReasons
         new(CrmUnavailable, ReasonKind.NeedsReview, "CRM contact data is switched on but could not be used (never loaded, too old, or unreadable), so the contact may be incomplete. This is a service problem, not a missing value in CRM; nothing is sent until it is back."),
         new(ContactedToday, ReasonKind.Exclusion, "This customer was already added to a Genesys contact list today. The contact-frequency limit is one contact per customer per day; try again tomorrow."),
         new(SharedPhoneMultipleUnits, ReasonKind.Exclusion, "Stored before the per-unit calling decision: a phone number shared by several units no longer holds a record back (each unit is its own call). Refresh the approval data."),
+        new(SpecialCaseExcluded, ReasonKind.Exclusion, "This unit is a permanent special case: it is never part of a normal Collections campaign, on any date and whatever is selected."),
+        new(GulfCustomerExcluded, ReasonKind.Exclusion, "This unit belongs to GULF_CUSTOMERS (cheques). It is excluded from campaigns except in a Manual campaign on the 14th of the month, or when an authorized person includes it manually for that campaign."),
+        new(ManuallyIncluded, ReasonKind.Warning, "Manually included: an authorized person added this GULF_CUSTOMERS unit to this Manual campaign. Every other safety check still applies."),
+        new(GulfInclusionDay, ReasonKind.Warning, "GULF_CUSTOMERS unit eligible today: the 14th of the month is its Manual campaign day. Every other safety check still applies."),
         new(ReminderTypeOverlap, ReasonKind.Exclusion, "This unit qualifies for more than one reminder type today (for example Current Month and Legal Notice on day 14). Sending both would call twice on the same day, and the business has not yet decided which takes priority, so these records are held back.")
     ];
 

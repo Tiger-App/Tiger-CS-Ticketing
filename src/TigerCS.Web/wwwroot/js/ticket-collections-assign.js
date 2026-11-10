@@ -80,11 +80,16 @@
         form.addEventListener('submit', async e => {
             e.preventDefault();
             if (busy) return;
-            if (!checked()) { say('Choose a team member.', true); return; }
+            const pick = checked();
+            if (!pick) { say('Choose a team member.', true); return; }
+            // Build the payload BEFORE the form is put into its busy state: setBusy disables every radio, and a disabled control is left out of FormData -
+            // the server would then receive no employee at all and answer "Choose who to assign the ticket to." for a selection that was made.
+            const body = new FormData(form);
+            body.set('CollectionsAssign.EmployeeId', pick.value);
             setBusy(true);
             say('');
             try {
-                const response = await fetch(root.dataset.postUrl, { method: 'POST', body: new FormData(form), headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, credentials: 'same-origin' });
+                const response = await fetch(root.dataset.postUrl, { method: 'POST', body, headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, credentials: 'same-origin' });
                 const data = await response.json();
                 if (!data.ok) { say(data.message || 'Could not save.', true); return; }
                 const label = document.querySelector('.tw-owner .tw-fact__v');

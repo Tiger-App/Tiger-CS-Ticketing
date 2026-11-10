@@ -55,8 +55,9 @@ public sealed class GenesysExportMultiUnitTests
         var dto = (await ExportAsync(h)).Value!;
         var rows = GenesysContactTemplate.ParseCsv(dto.Csv);
         Assert.Equal(2, dto.RowCount); Assert.Equal(2, dto.UnitCount); Assert.Equal(0, dto.ExcludedUnits);
-        Assert.Equal(new[] { "+971500000001", "Customer 1", "5000.00", "2026-10-20" }, new[] { rows[1][0], rows[1][1], rows[1][4], rows[1][5] });
-        Assert.Equal(new[] { "+971500000001", "Customer 1", "700.00", "2026-10-25" }, new[] { rows[2][0], rows[2][1], rows[2][4], rows[2][5] });
+        string[] Pick(List<string> r) => new[] { "Phone", "CustomerName", "AmountDue", "DueDate" }.Select(c => ManualGenesysFile.Cell(rows, r, c)).ToArray();
+        Assert.Equal(new[] { "+971500000001", "Customer 1", "5000.00", "2026-10-20" }, Pick(rows[1]));
+        Assert.Equal(new[] { "+971500000001", "Customer 1", "700.00", "2026-10-25" }, Pick(rows[2]));
         Assert.Equal(5700m, dto.TotalAmount);
         Assert.DoesNotContain(dto.Notices, n => n.Contains("combined"));
         Assert.DoesNotContain(dto.Notices, n => n.Contains("held back from sending"));
@@ -73,8 +74,9 @@ public sealed class GenesysExportMultiUnitTests
         var rows = GenesysContactTemplate.ParseCsv(dto.Csv);
         Assert.Equal(3, rows.Count); Assert.Equal(2, dto.RowCount);
         var byPhone = rows.Skip(1).ToDictionary(r => r[0], StringComparer.Ordinal);
-        Assert.Equal(new[] { "Customer 1", "5000.00", "2026-10-20" }, new[] { byPhone["+971500000001"][1], byPhone["+971500000001"][4], byPhone["+971500000001"][5] });
-        Assert.Equal(new[] { "Customer 1", "700.00", "2026-10-25" }, new[] { byPhone["+971500000002"][1], byPhone["+971500000002"][4], byPhone["+971500000002"][5] });
+        string[] Pick(string phone) => new[] { "CustomerName", "AmountDue", "DueDate" }.Select(c => ManualGenesysFile.Cell(rows, byPhone[phone], c)).ToArray();
+        Assert.Equal(new[] { "Customer 1", "5000.00", "2026-10-20" }, Pick("+971500000001"));
+        Assert.Equal(new[] { "Customer 1", "700.00", "2026-10-25" }, Pick("+971500000002"));
         Assert.Equal(5700m, dto.TotalAmount);
     }
 
@@ -97,7 +99,7 @@ public sealed class GenesysExportMultiUnitTests
         var dto = (await ExportAsync(h)).Value!;
         var rows = GenesysContactTemplate.ParseCsv(dto.Csv);
         Assert.Equal(3, dto.RowCount); Assert.Empty(dto.Exclusions!);
-        Assert.Equal(["Customer 1", "Customer 2", "Customer 3"], rows.Skip(1).Select(r => r[1]));
+        Assert.Equal(["Customer 1", "Customer 2", "Customer 3"], rows.Skip(1).Select(r => ManualGenesysFile.Cell(rows, r, "CustomerName")));
         Assert.Equal(["+971500000009", "+971500000009", "+971500000003"], rows.Skip(1).Select(r => r[0]));
         Assert.Equal(1500m, dto.TotalAmount);
         Assert.Contains("Rows=3;Units=3;Excluded=0;Exclusions=", await AuditAsync(h));
@@ -154,9 +156,9 @@ public sealed class GenesysExportMultiUnitTests
             Assert.Equal(previewUnits.Select(p => p.UnitCode), exported.Select(e => e.UnitCode));
             Assert.Equal(previewUnits.Select(p => p.RemainingAmount!.Value.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)), exported.Select(e => e.Amount));
             Assert.Equal(previewUnits.Select(p => p.DueDate!.Value.ToString("yyyy-MM-dd")), exported.Select(e => e.DueDate));
-            Assert.Equal(6, csv.Skip(1).Count(r => r[1] == "Customer 26" && r[0] == "+971500000026"));                        // same customer, same number, six units: six rows
+            Assert.Equal(6, csv.Skip(1).Count(r => ManualGenesysFile.Cell(csv, r, "CustomerName") == "Customer 26" && r[0] == "+971500000026"));                        // same customer, same number, six units: six rows
             Assert.Equal(5, csv.Skip(1).Count(r => r[0] == "+971500000777"));                                                 // five different customers on one number: five rows
-            Assert.Equal(["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], csv[0]);          // the six columns, unchanged
+            Assert.Equal(ManualGenesysFile.Template, csv[0]);          // the eleven official Manual columns
         }
     }
 
@@ -165,8 +167,9 @@ public sealed class GenesysExportMultiUnitTests
     {
         var resolved = await scope.Query.ResolveForExportAsync(new SelectionRequest(Manual(), ReviewQueryService.ModeAllMatching), CancellationToken.None);
         var rows = GenesysExportRows.Build(resolved.Candidates).Rows;
-        var csv = GenesysContactTemplate.ParseCsv(dto.Csv).Skip(1).ToList();
+        var file = GenesysContactTemplate.ParseCsv(dto.Csv);
+        var csv = file.Skip(1).ToList();
         Assert.Equal(rows.Count, csv.Count);
-        return rows.Select((r, i) => (r.First.UnitCode, csv[i][4], csv[i][5])).ToList();
+        return rows.Select((r, i) => (r.First.UnitCode, ManualGenesysFile.Cell(file, csv[i], "AmountDue"), ManualGenesysFile.Cell(file, csv[i], "DueDate"))).ToList();
     }
 }

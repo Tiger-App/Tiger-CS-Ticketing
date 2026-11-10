@@ -50,3 +50,9 @@ public sealed record ResetUserPasswordRequestDto(string NewPassword, string? Rea
 /// <summary>The password rules ASP.NET Core Identity is currently configured with — what the reset form shows and checks live.</summary>
 public sealed record PasswordPolicyDto(
     int RequiredLength, bool RequireDigit, bool RequireLowercase, bool RequireUppercase, bool RequireNonAlphanumeric, int RequiredUniqueChars);
+
+/// <summary>The departments an employee is explicitly authorised to transfer tickets to (Administration → Users). Empty = no explicit list (role-based behaviour).</summary>
+public sealed record UserTransferDepartmentsDto(Guid EmployeeId, IReadOnlyList<int> DepartmentIds);
+
+/// <summary>Replaces the employee's transfer-destination list. An empty list removes the restriction.</summary>
+public sealed record SetUserTransferDepartmentsRequestDto(IReadOnlyList<int> DepartmentIds);

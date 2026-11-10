@@ -91,7 +91,7 @@ public sealed class SuppressionService(
         try
         {
             result = await client.SetNotCallableAsync(candidate.ContactListId, item.GenesysContactId!,
-                DispatchService.ToPayload(item, candidate.ContactListId, genesys), ct);
+                DispatchService.ToPayload(item, candidate.ContactListId, genesys, DispatchService.IsManualListId(candidate.ContactListId, genesys)), ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)

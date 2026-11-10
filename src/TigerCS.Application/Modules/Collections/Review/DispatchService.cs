@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using TigerCS.Application.Modules.Collections.Abstractions;
+using TigerCS.Application.Modules.Collections.Exceptions;
 using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Domain.Modules.Collections;
 using TigerCS.Domain.Modules.Collections.Review;
@@ -26,7 +27,8 @@ public sealed class DispatchService(
     CollectionsOptions options, GenesysOutboundOptions genesys, CollectionsAuthorizationService authorization, CollectionsClock clock,
     IReviewStore store, IReviewJobScheduler scheduler, IGenesysOutboundClient client,
     ReviewQueryService query, CurrentBalanceReader balances, ILogger<DispatchService> logger,
-    TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository? employees = null, PactReceivablesOptions? sourceOptions = null)
+    TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository? employees = null, PactReceivablesOptions? sourceOptions = null,
+    CollectionsExceptionPolicy? exceptions = null, IExceptionInclusionStore? inclusions = null)
 {
     private readonly SpecialCaseUnits special = SpecialCaseUnits.From(sourceOptions);
     private const string SpecialCaseReason = "Special case unit: handled outside the Collections campaigns, never sent from here";
@@ -137,7 +139,8 @@ public sealed class DispatchService(
             Items = resolved.Records.Select(r => new CollectionsDispatchItem
             {
                 RecordKey = r.RecordKey, ReminderType = r.ReminderType, CompanyId = r.CompanyId, TenantId = r.TenantId, UnitId = r.UnitId,
-                UnitCode = r.UnitCode, CustomerName = r.CustomerName, Phone = r.Phone, Email = r.Email, Amount = r.RemainingAmount!.Value,
+                UnitCode = r.UnitCode, ProjectName = r.ProjectCode, TowerName = CollectionsTowerName.IsUsable(r.TowerName, r.TowerNumber) ? r.TowerName!.Trim() : "",
+                CustomerName = r.CustomerName, Phone = r.Phone, Email = r.Email, Amount = r.RemainingAmount!.Value,
                 Currency = r.Currency, DueDate = r.DueDate!.Value, Status = DispatchItemStatus.Approved, VoiceEligible = IsVoiceEligible(r.Phone)
             }).ToList()
         };
@@ -164,7 +167,8 @@ public sealed class DispatchService(
     /// <summary>
     /// Checks a Genesys contact list before anything is uploaded to it. Null = it can be used; otherwise the exact reason. Read-only: it only looks.
     /// <list type="bullet">
-    /// <item>The list must exist and carry every column of the contact template (Phone, CustomerName, Email Address, ReminderType, AmountDue, DueDate), or the upload would fail or drop data.</item>
+    /// <item>The list must exist and carry every column of its contact template, or the upload would fail or drop data: Auto lists the six (Phone, CustomerName, Email Address, ReminderType, AmountDue,
+    /// DueDate); the Manual list the eleven official ones (Phone, Email, CustomerName, ReminderType, AmountDue, UnitNumber, ProjectName, TowerName, DueDate, DueMonthAr, TenantId).</item>
     /// <item>No OTHER campaign that is on (or stopping) may dial the list: contacts added to it would be dialled at once, which would interfere with that campaign. The type\'s own stage campaign is
     /// the intended consumer of its own list and is not interference. Anything that cannot be checked is refused.</item>
     /// </list>
@@ -187,7 +191,10 @@ public sealed class DispatchService(
         }
         if (list.Outcome != GenesysUploadOutcome.Accepted)
             return $"The {label} contact list could not be checked in Genesys ({list.Error}){ListConfigurationHint(manualList ? CampaignReminderTypes.ManualListKey : owner.ToString(), listId, list.HttpStatus)} Nothing was uploaded.";
-        var missing = GenesysContactTemplate.Columns.Where(c => !list.Columns.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
+        // The Manual list must carry the eleven official columns by their exact names ("Email", not "Email Address"); Auto lists keep the six-column check as it was.
+        var missing = manualList
+            ? GenesysContactTemplate.CheckHeader(list.Columns, manual: true).Missing.ToList()
+            : GenesysContactTemplate.Columns.Where(c => !list.Columns.Contains(c, StringComparer.OrdinalIgnoreCase)).ToList();
         if (missing.Count > 0)
             return $"The {label} contact list does not have the required column(s): {string.Join(", ", missing)}. Nothing was uploaded.";
         GenesysCampaignLookupResult campaigns;
@@ -373,13 +380,38 @@ public sealed class DispatchService(
         // A unit PACT has cancelled (asterisk anywhere in its code) never gets a reminder, whatever was prepared or approved earlier. Checked before any balance is read.
         var cancelledItems = items.Where(i => ReviewRecordBuilder.IsCancelledUnit(i.UnitCode)).ToList();
         foreach (var c in cancelledItems) { c.Status = DispatchItemStatus.Excluded; c.StatusReason = "Cancelled unit (code contains *): no reminder is sent"; }
+
+        // The exception policies, read AGAIN right before the upload, with today's Dubai date and the campaign's manual inclusions as they stand now: an approved unit never bypasses the GULF_CUSTOMERS date
+        // restriction (approved on the 14th, uploaded after midnight; an inclusion removed after approval), and a permanent special case is never uploaded. Only that unit is dropped, with its reason.
+        var decisions = new Dictionary<string, ExceptionDecision>(StringComparer.Ordinal);
+        if (exceptions is { HasExclusions: true })
+        {
+            var manualDispatch = ManualFilters.FromStored(dispatch.FilterJson) is not null;
+            var included = new Dictionary<CampaignReminderType, HashSet<string>>();
+            if (manualDispatch && inclusions is not null)
+                foreach (var type in items.Where(i => exceptions.IsGulfCustomer(i.UnitCode)).Select(i => i.ReminderType).Distinct())
+                    included[type] = ExceptionInclusionService.IncludedSet(await inclusions.ListActiveAsync(CollectionsExceptionPolicy.CampaignKey(asOf, type), ct));
+            foreach (var item in items.Except(cancelledItems).ToList())
+            {
+                var isIncluded = included.TryGetValue(item.ReminderType, out var set) && set.Contains(ExceptionInclusionService.Identity(item.CompanyId, item.TenantId, item.UnitCode));
+                var decision = exceptions.Evaluate(item.UnitCode, asOf, manualDispatch, isIncluded);
+                decisions[item.RecordKey] = decision;
+                if (!decision.Excluded) continue;
+                item.Status = DispatchItemStatus.Excluded;
+                item.StatusReason = decision.ReasonCode == ReviewReasons.SpecialCaseExcluded
+                    ? SpecialCaseReason
+                    : "GULF_CUSTOMERS unit: not eligible on this date and not manually included for this campaign";
+                cancelledItems.Add(item);
+                logger.LogInformation("Collections exception: unit {UnitCode} excluded from the upload of dispatch {DispatchId} ({Reason}).", item.UnitCode, dispatch.CollectionsDispatchId, decision.ReasonCode);
+            }
+        }
         if (cancelledItems.Count > 0) items = items.Except(cancelledItems).ToList();
         if (items.Count == 0)
         {
             await store.UpdateItemsAsync(cancelledItems, ct);
             dispatch.ExcludedAtDispatchCount = cancelledItems.Count;
             dispatch.Status = DispatchStatus.Completed; dispatch.CompletedAtUtc = clock.UtcNow; dispatch.StartedAtUtc ??= clock.UtcNow;
-            dispatch.StatusReason = "Every approved record belongs to a cancelled unit (code contains *); nothing was uploaded.";
+            dispatch.StatusReason = "Every approved record belongs to a cancelled unit (code contains *) or is excluded by the exception policy; nothing was uploaded.";
             dispatch.Phase = "Finished"; dispatch.LeaseOwner = null; dispatch.LeaseExpiresAtUtc = null;
             await store.UpdateDispatchAsync(dispatch, ct);
             return false;
@@ -438,6 +470,8 @@ public sealed class DispatchService(
                 }
                 nowAmount = calc.Qualifies ? calc.Amount : null; nowDue = calc.EarliestDue;
             }
+            // The record was rebuilt with the stored exception reasons; the decision taken above (today, this campaign's inclusions) is what applies now.
+            if (decisions.TryGetValue(item.RecordKey, out var exceptionDecision)) ExceptionRecordRules.Apply(now, exceptionDecision);
             var sendable = manual ? ReviewRecordBuilder.IsManuallySendable(now) : now.ValidationStatus == ReviewValidationStatus.Ready;
             var unchanged = sendable && nowAmount == item.Amount
                 && nowDue == item.DueDate && now.Currency == item.Currency && now.Phone == item.Phone
@@ -693,7 +727,7 @@ public sealed class DispatchService(
     private async Task SubmitAsync(CollectionsGenesysBatch batch, CancellationToken ct)
     {
         var items = (await store.GetBatchItemsAsync(batch.CollectionsGenesysBatchId, ct)).OrderBy(i => i.BatchPosition).ToList();
-        var payloads = items.Select(i => ToPayload(i, batch.ContactListId, genesys)).ToList();
+        var payloads = items.Select(i => ToPayload(i, batch.ContactListId, genesys, IsManualList(batch.ContactListId))).ToList();
         batch.RequestHash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(JsonSerializer.Serialize(payloads))));
         GenesysUploadResult result;
         try { result = await client.UploadContactsAsync(batch.ContactListId, payloads, ct); }
@@ -744,10 +778,19 @@ public sealed class DispatchService(
     }
 
     /// <summary>The exact contact object posted to Genesys: the list id, the six data fields as strings, and callable (true only for approved voice-eligible contacts).</summary>
-    public static GenesysContactPayload ToPayload(CollectionsDispatchItem item, string contactListId, GenesysOutboundOptions settings) => new(
+    public static GenesysContactPayload ToPayload(CollectionsDispatchItem item, string contactListId, GenesysOutboundOptions settings, bool manual = false) => new(
         contactListId, item.Phone, item.CustomerName, item.Email, settings.LabelFor(item.ReminderType),
         MoneyNormalizer.Format(item.Amount), item.DueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
-        Callable: item.VoiceEligible && IsVoiceEligible(item.Phone));
+        Callable: item.VoiceEligible && IsVoiceEligible(item.Phone),
+        // Manual only: the eleven-column contact. Every value is one the item already holds (frozen at approval); nothing is looked up or invented here, and an Auto payload carries none of it.
+        Manual: manual ? new(item.UnitCode, item.ProjectName, item.TowerName, GenesysContactTemplate.ArabicMonthName(item.DueDate), item.TenantId) : null);
+
+    /// <summary>True when <paramref name="contactListId"/> is the dedicated Manual contact list (a missing or invalid Manual id means no list is the Manual list).</summary>
+    public static bool IsManualListId(string contactListId, GenesysOutboundOptions settings)
+    {
+        try { return string.Equals(contactListId, settings.ManualContactListId, StringComparison.OrdinalIgnoreCase); }
+        catch (InvalidOperationException) { return false; }
+    }
 
     /// <summary>Why nothing is approved or sent while the financial source is not reconciled.</summary>
     public const string NotReconciledMessage = "The financial source is not reconciled (no valid sign-off and snapshot-consistency evidence for the PACT procedure in use), so nothing can be approved or sent. Reconcile it first.";
@@ -759,7 +802,7 @@ public sealed class DispatchService(
 
     // ---------------------------------------------------------------- audit export
 
-    /// <summary>The contacts of a dispatch exactly as sent to Genesys (the six contact-list columns), for comparison with the Genesys list.</summary>
+    /// <summary>The contacts of a dispatch exactly as sent to Genesys (the six Auto columns, or the eleven Manual ones), for comparison with the Genesys list.</summary>
     public async Task<CollectionsResult<string>> ExportContactsAsync(CollectionsCaller caller, Guid dispatchId, CancellationToken ct)
     {
         if (!(await authorization.ResolveAsync(caller, ct)).CanSendReminders)
@@ -769,7 +812,7 @@ public sealed class DispatchService(
         var lists = dispatch.Batches.ToDictionary(b => b.CollectionsGenesysBatchId, b => b.ContactListId);
         var sent = dispatch.Items.Where(i => i.CollectionsGenesysBatchId is not null && i.Status != DispatchItemStatus.Excluded && i.Status != DispatchItemStatus.Released)
             .OrderBy(i => i.CollectionsGenesysBatchId).ThenBy(i => i.BatchPosition)
-            .Select(i => ToPayload(i, lists[i.CollectionsGenesysBatchId!.Value], genesys));
+            .Select(i => ToPayload(i, lists[i.CollectionsGenesysBatchId!.Value], genesys, IsManualListId(lists[i.CollectionsGenesysBatchId!.Value], genesys)));
         return CollectionsResult<string>.Ok(GenesysContactTemplate.WriteCsv(sent));
     }
 

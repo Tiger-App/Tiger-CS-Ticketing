@@ -83,8 +83,18 @@
         tower.addEventListener('change', () => { fillUnits(); say(''); });
         unit.addEventListener('change', () => say(''));
         trigger.addEventListener('change', sync);
+        trigger.addEventListener('input', sync);
+        // The browser can restore a select's value (back/forward, reload) without firing 'change'; re-read the real selection then.
+        window.addEventListener('pageshow', sync);
         form.addEventListener('submit', e => {
-            if (!active()) return;
+            // Judge the destination actually selected NOW, never an earlier state: for any other department nothing is validated and nothing
+            // is posted (the fields are emptied and disabled), so a Tower or Unit picked for Collections earlier cannot go along - or block - a transfer elsewhere.
+            if (!active()) {
+                tower.disabled = unit.disabled = true;
+                tower.value = unit.value = '';
+                say('');
+                return;
+            }
             if (optional) {
                 if (tower.value && !unit.value) { e.preventDefault(); say(HALF); unit.focus(); }
                 return;

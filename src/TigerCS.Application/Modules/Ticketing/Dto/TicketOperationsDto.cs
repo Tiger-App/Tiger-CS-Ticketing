@@ -291,6 +291,9 @@ public enum TicketMutationOutcome
     /// <summary>MVP-API-Contracts.md §3.6: target equals the ticket's current department.</summary>
     AlreadyInTargetDepartment,
 
+    /// <summary>The caller has an explicit transfer-destination list (Administration → Users) and the requested department is not on it. Viewing a department never grants this.</summary>
+    TransferDestinationNotPermitted,
+
     InvalidStatusTransition,
     TicketNotAssigned,
     NotEligibleForResolution,

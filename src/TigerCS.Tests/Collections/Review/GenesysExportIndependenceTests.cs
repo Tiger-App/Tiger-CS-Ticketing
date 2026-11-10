@@ -61,8 +61,8 @@ public sealed class GenesysExportIndependenceTests
         using var h = await SeededAsync(null, Mixed());
         var dto = (await ExportAsync(h, All(Filter(mode)))).Value!;
         var rows = Rows(dto);
-        Assert.Equal(2, dto.RowCount); Assert.Equal(["Customer 1", "Customer 2"], rows.Skip(1).Select(r => r[1]));
-        Assert.Equal(["5000.00", "700.00"], rows.Skip(1).Select(r => r[4]));
+        Assert.Equal(2, dto.RowCount); Assert.Equal(["Customer 1", "Customer 2"], rows.Skip(1).Select(r => ManualGenesysFile.Cell(rows, r, "CustomerName")));
+        Assert.Equal(["5000.00", "700.00"], rows.Skip(1).Select(r => ManualGenesysFile.Cell(rows, r, "AmountDue")));
         Assert.Equal(new Dictionary<string, int> { ["Ready"] = 1, ["NeedsReview"] = 1 }, dto.IncludedByStatus);
         Assert.False(dto.DataVerified); Assert.Contains("PaymentStatusUnknown:1", dto.UnverifiedReasons!); Assert.Contains("SourceAmountsInconsistent:1", dto.UnverifiedReasons!);
         Assert.Contains(dto.Notices, n => n.Contains("1 unit(s) have a remaining amount that could not be determined reliably (PaymentStatusUnknown)") && n.Contains("not classified as unpaid"));
@@ -124,7 +124,7 @@ public sealed class GenesysExportIndependenceTests
         using (var context = h.CreateContext())
             await context.Database.ExecuteSqlInterpolatedAsync($"UPDATE \"CollectionsReviewRecords\" SET \"InstalmentsJson\" = NULL WHERE \"TenantId\" = {"T0003"}");
         var dto = (await ExportAsync(h, All(Filter("Manual")))).Value!;
-        Assert.Equal(1, dto.RowCount); Assert.Equal("Customer 1", Rows(dto)[1][1]); Assert.Equal(5000m, dto.TotalAmount);
+        Assert.Equal(1, dto.RowCount); Assert.Equal("Customer 1", ManualGenesysFile.Cell(Rows(dto), Rows(dto)[1], "CustomerName")); Assert.Equal(5000m, dto.TotalAmount);
         Assert.Equal([(GenesysExportRows.AmountUnavailable, 2)], dto.Exclusions!.Select(e => (e.Code, e.Units)));
         Assert.Contains(dto.Notices, n => n.Contains("2 of the 3 matching customer unit(s) are not in the file") && n.Contains("no value was invented"));
     }
@@ -149,7 +149,7 @@ public sealed class GenesysExportIndependenceTests
         var dto = (await ExportAsync(h, All(Filter("Manual")))).Value!;
         Assert.Equal(1, dto.RowCount); Assert.Equal([(GenesysExportRows.NoCallablePhone, 2)], dto.Exclusions!.Select(e => (e.Code, e.Units)));
         Assert.DoesNotContain("Customer 2", dto.Csv); Assert.DoesNotContain("Customer 3", dto.Csv);
-        Assert.True(GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys)).IsMatch);
+        Assert.True(GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys), manual: true).IsMatch);
         using var none = await SeededAsync(null, ReviewHarness.Row(2, mobile: "123"));
         var refused = await ExportAsync(none, All(Filter("Manual")));
         Assert.Equal(CollectionsOutcome.InvalidRequest, refused.Outcome); Assert.Contains("NoCallablePhone", refused.Detail); Assert.Contains("Nothing was exported", refused.Detail);
@@ -191,7 +191,7 @@ public sealed class GenesysExportIndependenceTests
         var refused = new LoginRefusedClient();
         var dto = (await ExportAsync(h, All(Filter("Manual")), refused)).Value!;
         Assert.Equal(1, dto.RowCount); Assert.False(dto.SchemaVerified);
-        Assert.Equal(["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], Rows(dto)[0]);
+        Assert.Equal(ManualGenesysFile.Template, Rows(dto)[0]);
         Assert.StartsWith(GenesysExportService.NotVerifiedLabel, dto.Notices[0]);
         Assert.Contains("could not be read in Genesys (The Genesys login service refused the credentials (HTTP 400, invalid_client))", dto.Notices[0]);
         Assert.Contains($"({GenesysExportService.NotVerifiedLabel})", dto.FileName);
@@ -223,9 +223,9 @@ public sealed class GenesysExportIndependenceTests
         using var h = await SeededAsync(null, ReviewHarness.Row(1, name: "O'Brien, \"Tiger\" Holdings\nLtd"), ReviewHarness.Row(2, name: "Plain Name"));
         var dto = (await ExportAsync(h, All(Filter("Manual")))).Value!;
         var rows = Rows(dto);
-        Assert.Equal(3, rows.Count); Assert.All(rows, r => Assert.Equal(6, r.Count));
-        Assert.Equal("O'Brien, \"Tiger\" Holdings\nLtd", rows[1][1]);
-        Assert.True(GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys)).IsMatch);
+        Assert.Equal(3, rows.Count); Assert.All(rows, r => Assert.Equal(11, r.Count));
+        Assert.Equal("O'Brien, \"Tiger\" Holdings\nLtd", ManualGenesysFile.Cell(rows, rows[1], "CustomerName"));
+        Assert.True(GenesysContactTemplate.Verify(dto.Csv, GenesysContactTemplate.ExpectedReminderTypes(h.Genesys), manual: true).IsMatch);
         Assert.Equal(2, dto.RowCount);
     }
 

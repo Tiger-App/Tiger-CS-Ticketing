@@ -9,7 +9,8 @@ public sealed class UserProfileAppService(
     IEmployeeRepository employeeRepository,
     IUserRoleReader roleReader,
     IUserDepartmentAssignmentRepository assignmentRepository,
-    IUserPermissionOverrideRepository? permissionOverrides = null)
+    IUserPermissionOverrideRepository? permissionOverrides = null,
+    IUserTransferDepartmentRepository? transferDepartments = null)
 {
     public async Task<CurrentUserResponseDto?> GetCurrentUserAsync(Guid employeeId, CancellationToken cancellationToken = default)
     {
@@ -36,6 +37,7 @@ public sealed class UserProfileAppService(
 
         return new CurrentUserResponseDto(
             employee.EmployeeId, employee.DisplayName, roles, departments, employee.IsGeynessStaff,
-            EffectivePermissions.Compute(roles, effects).Order(StringComparer.Ordinal).ToList(), granted, denied);
+            EffectivePermissions.Compute(roles, effects).Order(StringComparer.Ordinal).ToList(), granted, denied,
+            transferDepartments is null ? [] : [.. (await transferDepartments.GetDepartmentIdsAsync(employeeId, cancellationToken)).Order()]);
     }
 }

@@ -307,4 +307,6 @@ public sealed class FakeTimeProvider(DateTime utcNow) : TimeProvider
     public override DateTimeOffset GetUtcNow() => _utcNow;
 
     public void Advance(TimeSpan by) => _utcNow = _utcNow.Add(by);
+
+    public void Set(DateTime utcNow) => _utcNow = new DateTimeOffset(DateTime.SpecifyKind(utcNow, DateTimeKind.Utc), TimeSpan.Zero);
 }

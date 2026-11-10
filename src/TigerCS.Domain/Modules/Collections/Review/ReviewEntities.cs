@@ -170,6 +170,10 @@ public class CollectionsDispatchItem
     public string TenantId { get; set; } = "";
     public int? UnitId { get; set; }
     public string UnitCode { get; set; } = "";
+    /// <summary>The unit's project as the review record held it at approval (Manual contact list <c>ProjectName</c>). Empty on items approved before this column existed.</summary>
+    public string ProjectName { get; set; } = "";
+    /// <summary>The unit's real tower name at approval (Manual contact list <c>TowerName</c>); empty when the tower has none. Empty on items approved before this column existed.</summary>
+    public string TowerName { get; set; } = "";
     public string CustomerName { get; set; } = "";
     public string Phone { get; set; } = "";
     public string Email { get; set; } = "";
@@ -287,4 +291,24 @@ public class CollectionsGenesysSyncState
     public int MessageAttempts { get; set; }
     public int ConversationsFound { get; set; }
     public DateTime? LastCompletedAtUtc { get; set; }
+}
+
+/// <summary>
+/// A manual inclusion of ONE GULF_CUSTOMERS unit in ONE Manual campaign (<see cref="CampaignKey"/> = Manual, the Dubai business date and the campaign type). It never changes the unit's
+/// financial data and never overrides a permanent special case; it only lifts the GULF_CUSTOMERS restriction for that campaign, while every other safety check stays in force. It expires
+/// by construction (the key carries the date) and can be removed before sending (<see cref="RemovedAtUtc"/> set; the row is kept as the audit of who included it and when).
+/// </summary>
+public class CollectionsExceptionInclusion
+{
+    public long CollectionsExceptionInclusionId { get; set; }
+    /// <summary><c>Manual:yyyy-MM-dd:{ReminderType}</c>.</summary>
+    public string CampaignKey { get; set; } = "";
+    public int CompanyId { get; set; }
+    public string TenantId { get; set; } = "";
+    /// <summary>The normalized unit code (trimmed, upper case).</summary>
+    public string UnitCode { get; set; } = "";
+    public Guid IncludedByEmployeeId { get; set; }
+    public DateTime IncludedAtUtc { get; set; }
+    public Guid? RemovedByEmployeeId { get; set; }
+    public DateTime? RemovedAtUtc { get; set; }
 }

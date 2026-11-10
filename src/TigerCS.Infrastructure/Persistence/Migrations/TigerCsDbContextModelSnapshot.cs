@@ -725,6 +725,13 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .IsUnicode(false)
                         .HasColumnType("varchar(20)");
 
+                    b.Property<string>("ProjectName")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)")
+                        .HasDefaultValue("");
+
                     b.Property<string>("RecordKey")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -763,6 +770,13 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
+                    b.Property<string>("TowerName")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)")
+                        .HasDefaultValue("");
+
                     b.Property<string>("UnitCode")
                         .IsRequired()
                         .HasMaxLength(60)
@@ -791,6 +805,58 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasFilter("[Status] IN ('Approved','UploadedToGenesys','UnknownOutcome')");
 
                     b.ToTable("CollectionsDispatchItems", (string)null);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.Collections.Review.CollectionsExceptionInclusion", b =>
+                {
+                    b.Property<long>("CollectionsExceptionInclusionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("CollectionsExceptionInclusionId"));
+
+                    b.Property<string>("CampaignKey")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<int>("CompanyId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("IncludedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("IncludedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("RemovedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("RemovedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("UnitCode")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.HasKey("CollectionsExceptionInclusionId");
+
+                    b.HasIndex("CampaignKey")
+                        .HasDatabaseName("IX_CollectionsExceptionInclusions_Campaign");
+
+                    b.HasIndex("CampaignKey", "CompanyId", "TenantId", "UnitCode")
+                        .IsUnique()
+                        .HasDatabaseName("UX_CollectionsExceptionInclusions_Active")
+                        .HasFilter("[RemovedAtUtc] IS NULL");
+
+                    b.ToTable("CollectionsExceptionInclusions", (string)null);
                 });
 
             modelBuilder.Entity("TigerCS.Domain.Modules.Collections.Review.CollectionsGenesysBatch", b =>
@@ -2035,6 +2101,36 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .IsUnique();
 
                     b.ToTable("UserDepartmentAssignments", (string)null);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.IdentityAndAccess.UserTransferDepartment", b =>
+                {
+                    b.Property<int>("UserTransferDepartmentId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("UserTransferDepartmentId"));
+
+                    b.Property<int>("DepartmentId")
+                        .HasColumnType("int");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("GrantedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("GrantedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("UserTransferDepartmentId");
+
+                    b.HasIndex("DepartmentId");
+
+                    b.HasIndex("EmployeeId", "DepartmentId")
+                        .IsUnique();
+
+                    b.ToTable("UserTransferDepartments", (string)null);
                 });
 
             modelBuilder.Entity("TigerCS.Domain.Modules.Notifications.Notification", b =>
@@ -4484,6 +4580,21 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Navigation("Department");
 
                     b.Navigation("Employee");
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.IdentityAndAccess.UserTransferDepartment", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Department", null)
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("TigerCS.Domain.Modules.Notifications.Notification", b =>

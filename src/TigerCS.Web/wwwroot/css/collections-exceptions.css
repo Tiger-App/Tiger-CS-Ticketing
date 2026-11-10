@@ -1,0 +1,7 @@
+.exceptions__intro { max-width: 70ch; margin: 0 0 var(--space-3, 12px); color: var(--text-muted, #5b6470); }
+.exceptions__results { margin-top: var(--space-3, 12px); }
+.exceptions__summary { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 var(--space-3, 12px); }
+.exceptions__actions { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: var(--space-2, 8px); }
+.exceptions__note { display: block; margin-top: 2px; font-size: .8125rem; color: var(--text-muted, #5b6470); }
+.exceptions__pager { display: flex; gap: 12px; align-items: center; margin-top: var(--space-3, 12px); }
+@media (max-width: 640px) { .exceptions__actions .btn { flex: 1 1 100%; } }

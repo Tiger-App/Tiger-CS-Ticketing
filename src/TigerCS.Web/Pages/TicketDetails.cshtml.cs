@@ -1424,6 +1424,15 @@ public sealed class TicketDetailsModel(
                 .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
         ];
 
+        // The viewer's explicit transfer-destination list (Administration -> Users) narrows what is offered, exactly as the Api enforces it: only the
+        // departments on it. Departments they merely belong to or can view are never added here, and the System Administrator override is not narrowed.
+        // (/me is already loaded for the page; without a list nothing changes.)
+        await nameResolver.PrimeOwnDepartmentsAsync(cancellationToken);
+        if (nameResolver.OwnTransferDepartmentIds.Count > 0 && ActionContext is not { OverrideApplies: true })
+        {
+            TransferTargets = [.. TransferTargets.Where(d => nameResolver.OwnTransferDepartmentIds.Contains(d.DepartmentId))];
+        }
+
         // A Call Center agent (department identified by CODE, never by name) transfers a classified ticket to the department that owns its
         // request type — selected for them and the only choice offered. The API refuses any other target; the CS Manager is unrestricted.
         var inCallCenter = active.Any(d => d.DepartmentId == ticket.CurrentDepartmentId

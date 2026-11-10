@@ -75,7 +75,7 @@ The supplied `GetHandoverAndDownPaymentPaymentsAsync` method executes only the B
 
 The commented TP119 condition remains inactive. String comparisons are case-sensitive; CRM keys retain the exact timestamp instead of silently reducing it to a date.
 
-Only the active `SEPCIAL_CASES` entries were imported. Commented entries, `DN_SEPCIAL_CASES` and `GULF_CUSTOMERS` are not added to this filter, because the original function does not use them. Individual configured TP119 units are excluded, while the commented TP119 prefix/date rule remains inactive.
+Only the active `SEPCIAL_CASES` entries were imported. Commented entries and `DN_SEPCIAL_CASES` are not added to this filter, because the original function does not use them. `GULF_CUSTOMERS` is not part of this Receivables filter either (Receivables keeps every unit's financial data); it is a Collections campaign policy, see [Collections campaign exceptions](Exceptions.md). Individual configured TP119 units are excluded, while the commented TP119 prefix/date rule remains inactive.
 
 ## Environment setup
 

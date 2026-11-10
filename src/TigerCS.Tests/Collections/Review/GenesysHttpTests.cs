@@ -395,6 +395,61 @@ public sealed class GenesysHttpTests
         Assert.Empty(result.ContactIds);          // the dispatch service then marks the unmatched contacts as unconfirmed
     }
 
+    // ------------------------------------------------------------ the Manual list: the eleven official columns on the wire
+
+    private static GenesysContactPayload ManualContact(int n = 1, string listId = ListId) => Contact(n, listId) with
+    {
+        Manual = new GenesysManualFields($"TP140-{n}", "TP140", "Blue Wave", "أكتوبر", $"T{n:D4}")
+    };
+
+    private static readonly string[] ManualKeys = ["Phone", "Email", "CustomerName", "ReminderType", "AmountDue", "UnitNumber", "ProjectName", "TowerName", "DueDate", "DueMonthAr", "TenantId"];
+
+    [Fact]
+    public async Task AManualUpload_SendsExactlyTheElevenKeys_AsStrings_WithEmailNotEmailAddress()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        var result = await client.UploadContactsAsync(ListId, [ManualContact(1), ManualContact(2)], CancellationToken.None);
+        Assert.Equal(GenesysUploadOutcome.Accepted, result.Outcome);
+        var (_, body) = Assert.Single(handler.Upload);
+        using var json = JsonDocument.Parse(body);
+        var contacts = json.RootElement.EnumerateArray().ToList();
+        Assert.Equal(2, contacts.Count);
+        foreach (var contact in contacts)
+        {
+            Assert.Equal(["contactListId", "data", "callable"], contact.EnumerateObject().Select(p => p.Name));
+            var data = contact.GetProperty("data");
+            Assert.Equal(ManualKeys, data.EnumerateObject().Select(p => p.Name));
+            Assert.All(data.EnumerateObject(), p => Assert.Equal(JsonValueKind.String, p.Value.ValueKind));
+            Assert.False(data.TryGetProperty("Email Address", out _));
+        }
+        var first = contacts[0].GetProperty("data");
+        Assert.Equal("c1@example.test", first.GetProperty("Email").GetString());
+        Assert.Equal(("TP140-1", "TP140", "Blue Wave", "أكتوبر", "T0001"), (first.GetProperty("UnitNumber").GetString(), first.GetProperty("ProjectName").GetString(),
+            first.GetProperty("TowerName").GetString(), first.GetProperty("DueMonthAr").GetString(), first.GetProperty("TenantId").GetString()));
+        Assert.Equal("2026-10-20", first.GetProperty("DueDate").GetString());
+    }
+
+    [Fact]
+    public async Task AnAutoUpload_StaysTheSixKeys_WithEmailAddress()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        await client.UploadContactsAsync(ListId, [Contact(1), Contact(2)], CancellationToken.None);
+        using var json = JsonDocument.Parse(Assert.Single(handler.Upload).Body);
+        Assert.All(json.RootElement.EnumerateArray(), c =>
+            Assert.Equal(["Phone", "CustomerName", "Email Address", "ReminderType", "AmountDue", "DueDate"], c.GetProperty("data").EnumerateObject().Select(p => p.Name)));
+    }
+
+    [Fact]
+    public async Task ASuppressionOfAManualContact_KeepsTheElevenKeys_SoItNeverBlanksTheManualFields()
+    {
+        var (client, _, handler, _, _, _) = Build();
+        handler.Responses.Enqueue(_ => Json(HttpStatusCode.OK, "{\"id\":\"abc-123\",\"callable\":false}"));
+        await client.SetNotCallableAsync(ListId, "abc-123", ManualContact(), CancellationToken.None);
+        using var json = JsonDocument.Parse(Assert.Single(handler.Upload).Body);
+        Assert.Equal(ManualKeys, json.RootElement.GetProperty("data").EnumerateObject().Select(p => p.Name));
+        Assert.False(json.RootElement.GetProperty("callable").GetBoolean());
+    }
+
     // ------------------------------------------------------------ suppression: PUT callable=false
 
     [Fact]

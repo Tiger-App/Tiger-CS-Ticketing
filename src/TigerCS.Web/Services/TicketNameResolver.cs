@@ -100,6 +100,9 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
     /// <summary>The caller's own department memberships — the only set of department id→name pairs the Api exposes.</summary>
     public IReadOnlyCollection<DepartmentMembershipDto> OwnDepartments { get; private set; } = [];
 
+    /// <summary>The departments the caller is explicitly authorised to transfer tickets to (empty = no explicit list, role-based behaviour). Never derived from memberships.</summary>
+    public IReadOnlyCollection<int> OwnTransferDepartmentIds { get; private set; } = [];
+
     /// <summary>The caller's own explicit permission grants and denials from the same /me call (empty when none or unreadable).</summary>
     public ViewerPermissions OwnPermissions { get; private set; } = ViewerPermissions.None;
 
@@ -152,6 +155,7 @@ public sealed class TicketNameResolver(UsersApiClient usersApiClient, Department
         }
 
         OwnDepartments = me.Value.Departments;
+        OwnTransferDepartmentIds = me.Value.TransferDepartmentIds ?? [];
         OwnPermissions = new ViewerPermissions(
             new HashSet<string>(me.Value.GrantedPermissions ?? [], StringComparer.Ordinal),
             new HashSet<string>(me.Value.DeniedPermissions ?? [], StringComparer.Ordinal));
