@@ -20,6 +20,9 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     public IReadOnlyCollection<DepartmentDto> ActiveDepartments { get; private set; } = [];
     public string? LoadError { get; private set; }
 
+    /// <summary>The departments this user may transfer tickets to. Empty = no explicit list (role-based behaviour). Independent of <see cref="UserRecord"/>'s memberships.</summary>
+    public IReadOnlyCollection<int> TransferDepartmentIds { get; private set; } = [];
+
     /// <summary>Identity's configured password rules; null if they could not be loaded (the server still validates).</summary>
     public PasswordPolicyDto? PasswordPolicy { get; private set; }
 
@@ -29,6 +32,7 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     [BindProperty] public MembershipInput Membership { get; set; } = new();
     [BindProperty] public AccessibleDepartmentsInput AccessibleDepartments { get; set; } = new();
     [BindProperty] public ActivationInput Activation { get; set; } = new();
+    [BindProperty] public TransferDepartmentsInput TransferDepartments { get; set; } = new();
     [BindProperty] public ResetPasswordInput ResetPassword { get; set; } = new();
 
     /// <summary>The policy stated beside every new-password field — the pilot defaults in docs/DEV-SETUP.md §3.</summary>
@@ -59,6 +63,8 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
             }
 
             UserRecord = result.Value;
+            var transfer = await adminApi.GetUserTransferDepartmentsAsync(employeeId, cancellationToken);
+            TransferDepartmentIds = transfer.IsSuccess && transfer.Value is not null ? transfer.Value.DepartmentIds : [];
             await LoadPasswordPolicyAsync(cancellationToken);
             Profile = new ProfileInput
             {
@@ -129,6 +135,25 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     public Task<IActionResult> OnPostAccessibleDepartmentsAsync(Guid id, CancellationToken cancellationToken) =>
         ApplyAsync(id, adminApi.SetUserAccessibleDepartmentsAsync(id, new SetAccessibleDepartmentsRequestDto(AccessibleDepartments.DepartmentIds ?? []), cancellationToken),
             "Accessible departments saved.", "The accessible departments could not be saved.");
+
+    /// <summary>Saves the departments this user may transfer tickets to. Posting no checkbox clears the list. Membership (view access) is never touched.</summary>
+    public async Task<IActionResult> OnPostTransferDepartmentsAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var result = await adminApi.SetUserTransferDepartmentsAsync(
+            id, new SetUserTransferDepartmentsRequestDto(TransferDepartments.DepartmentIds ?? []), cancellationToken);
+        if (result.IsSuccess)
+        {
+            StatusMessage = result.Value is { DepartmentIds.Count: > 0 }
+                ? "Transfer destinations saved."
+                : "Transfer destinations cleared. This user's transfers follow their role again.";
+        }
+        else
+        {
+            ErrorMessage = DescribeFailure(result, "The transfer destinations could not be saved.");
+        }
+
+        return RedirectToPage("/Admin/UserEdit", new { id });
+    }
 
     public Task<IActionResult> OnPostRemoveDepartmentAsync(Guid id, int departmentId, CancellationToken cancellationToken) =>
         ApplyAsync(id, adminApi.RemoveUserDepartmentAsync(id, departmentId, cancellationToken),
@@ -219,6 +244,11 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     public sealed class RolesInput
     {
         public List<string>? Roles { get; set; }
+    }
+
+    public sealed class TransferDepartmentsInput
+    {
+        public List<int>? DepartmentIds { get; set; }
     }
 
     public sealed class MembershipInput

@@ -15,6 +15,7 @@ public sealed record DepartmentMembershipDto(int DepartmentId, string Name, bool
 /// <param name="EffectivePermissions">Role baseline combined with the caller's own overrides (display only; the Api enforces).</param>
 /// <param name="GrantedPermissions">Permissions the caller holds through an explicit grant.</param>
 /// <param name="DeniedPermissions">Permissions explicitly denied to the caller - a UI must never offer these actions.</param>
+/// <param name="TransferDepartmentIds">The departments the caller is explicitly authorised to transfer tickets to; empty when no explicit list applies (role-based behaviour). Display only - the Api enforces.</param>
 /// <param name="AccessibleDepartments">Every department whose tickets the caller can see, by the same rule the ticket queries apply (all active departments for a cross-department role; otherwise the caller's memberships). What the Tickets Department filter offers. Null from an older Api: use <c>Departments</c>.</param>
 public sealed record CurrentUserResponseDto(
     Guid EmployeeId,
@@ -25,6 +26,7 @@ public sealed record CurrentUserResponseDto(
     IReadOnlyCollection<string>? EffectivePermissions = null,
     IReadOnlyCollection<string>? GrantedPermissions = null,
     IReadOnlyCollection<string>? DeniedPermissions = null,
+    IReadOnlyCollection<int>? TransferDepartmentIds = null,
     IReadOnlyCollection<DepartmentMembershipDto>? AccessibleDepartments = null);
 
 /// <summary>One member of a department (MVP-API-Contracts.md §1.4).</summary>

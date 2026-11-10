@@ -269,6 +269,8 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "DELETE /api/admin/users/{employeeId}/departments/{departmentId}",
         "POST /api/admin/users/{employeeId}/password",
         "POST /api/admin/users/{employeeId}/unlock",
+        "GET /api/admin/users/{employeeId}/transfer-departments",
+        "PUT /api/admin/users/{employeeId}/transfer-departments",
         "GET /api/admin/users/{employeeId}/permissions",
         "PUT /api/admin/users/{employeeId}/permissions",
         "GET /api/admin/users/password-policy",

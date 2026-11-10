@@ -12,7 +12,8 @@ namespace TigerCS.Api.Controllers;
 [Route("api/admin/users")]
 [Authorize(Policy = PolicyNames.SystemAdministrator)]
 [Tags(OpenApiTags.Administration)]
-public class AdminUsersController(AdminUserAppService users, AdminUserPermissionAppService permissions) : AdminControllerBase
+public class AdminUsersController(
+    AdminUserAppService users, AdminUserPermissionAppService permissions, AdminUserTransferDepartmentAppService transferDepartments) : AdminControllerBase
 {
     /// <summary>Lists users with optional search (display name, user name, e-mail) and inactive users included on request.</summary>
     [HttpGet]
@@ -134,6 +135,23 @@ public class AdminUsersController(AdminUserAppService users, AdminUserPermission
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
     public async Task<IActionResult> RemoveDepartment(Guid employeeId, int departmentId, CancellationToken cancellationToken) =>
         FromResult(await users.RemoveDepartmentAsync(CallerEmployeeId, employeeId, departmentId, cancellationToken));
+
+    /// <summary>The departments the employee is authorised to transfer tickets to (empty = no explicit list). Separate from department membership (view access).</summary>
+    [HttpGet("{employeeId:guid}/transfer-departments")]
+    [RequirePermission(Permissions.AdminUsersView)]
+    [ProducesResponseType<UserTransferDepartmentsDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetTransferDepartments(Guid employeeId, CancellationToken cancellationToken) =>
+        FromResult(await transferDepartments.GetAsync(employeeId, cancellationToken));
+
+    /// <summary>Replaces the employee's transfer-destination list. An empty list removes the restriction; membership is never changed by this call. Audited.</summary>
+    [HttpPut("{employeeId:guid}/transfer-departments")]
+    [RequirePermission(Permissions.AdminUsersEdit)]
+    [ProducesResponseType<UserTransferDepartmentsDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> SetTransferDepartments(Guid employeeId, [FromBody] SetUserTransferDepartmentsRequestDto request, CancellationToken cancellationToken) =>
+        FromResult(await transferDepartments.SetAsync(CallerEmployeeId, employeeId, request, cancellationToken));
 
     /// <summary>The employee's roles, role baseline, per-permission overrides, effective permissions and recent changes.</summary>
     [HttpGet("{employeeId:guid}/permissions")]

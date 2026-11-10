@@ -58,6 +58,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
     public DbSet<Department> Departments => Set<Department>();
 
     public DbSet<UserPermissionOverride> UserPermissionOverrides => Set<UserPermissionOverride>();
+    public DbSet<UserTransferDepartment> UserTransferDepartments => Set<UserTransferDepartment>();
 
     public DbSet<UserDepartmentAssignment> UserDepartmentAssignments => Set<UserDepartmentAssignment>();
 
@@ -195,6 +196,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new ApplicationRoleConfiguration());
         builder.ApplyConfiguration(new EmployeeConfiguration());
         builder.ApplyConfiguration(new UserPermissionOverrideConfiguration());
+        builder.ApplyConfiguration(new UserTransferDepartmentConfiguration());
         builder.ApplyConfiguration(new DepartmentConfiguration());
         builder.ApplyConfiguration(new UserDepartmentAssignmentConfiguration());
 

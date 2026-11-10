@@ -1217,6 +1217,12 @@ public class TicketsController(
             title: "Target department is inactive",
             statusCode: StatusCodes.Status404NotFound),
 
+        TicketMutationOutcome.TransferDestinationNotPermitted => Problem(
+            type: "https://tigercs.internal/problems/transfer-destination-not-permitted",
+            title: "You are not authorised to transfer tickets to that department",
+            detail: "Your account may transfer tickets only to the departments an administrator has authorised for you. Being able to view a department does not authorise transfers to it.",
+            statusCode: StatusCodes.Status403Forbidden),
+
         TicketMutationOutcome.AlreadyInTargetDepartment => Problem(
             type: "https://tigercs.internal/problems/already-in-target-department",
             title: "Ticket is already in the target department",

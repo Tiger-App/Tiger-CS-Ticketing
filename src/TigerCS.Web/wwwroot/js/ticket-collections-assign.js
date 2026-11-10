@@ -91,10 +91,14 @@
             const pick = checked();
             if (!pick || !pick.value) { say('Choose a team member.', true); return; }
             if (sameAsCurrent(pick.value)) { say('The ticket is already assigned to that person. Choose someone else.', true); return; }
+            // Build the payload BEFORE the form is put into its busy state: setBusy disables every radio, and a disabled control is left out of FormData -
+            // the server would then receive no employee at all and answer "Choose who to assign the ticket to." for a selection that was made.
+            const body = new FormData(form);
+            body.set('CollectionsAssign.EmployeeId', pick.value);
             setBusy(true);
             say('');
             try {
-                const response = await fetch(root.dataset.postUrl, { method: 'POST', body: new FormData(form), headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, credentials: 'same-origin' });
+                const response = await fetch(root.dataset.postUrl, { method: 'POST', body, headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' }, credentials: 'same-origin' });
                 let data;
                 try { data = await response.json(); } catch { data = null; }
                 if (!data) { say(response.ok ? 'The server sent an unexpected answer. Reload the page.' : `The assignment was refused (${response.status}). Reload the page and try again.`, true); return; }

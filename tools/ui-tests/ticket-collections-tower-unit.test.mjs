@@ -128,3 +128,38 @@ test('optional Tower: another department still posts nothing and is never blocke
     assert.equal(t.submit(), false);
     assert.equal(t.fetched(), 0);
 });
+
+// ---- Regression: a transfer to Registration (or any non-Collections department) is judged on the destination selected NOW ----
+const REG_PAGE = OPTIONAL_PAGE.replace('<option value="7">Collections</option>', '<option value="5">Registration</option><option value="7">Collections</option>');
+
+test('Registration after Collections: a half-picked Tower/Unit is neither validated nor posted', async () => {
+    const t = await load(REG_PAGE);
+    t.pick('Transfer_TargetDepartmentId', '7'); await t.settle();
+    const tower = t.d.querySelector('[data-ct-tower]'), error = t.d.querySelector('[data-ct-error]');
+    tower.value = '2'; tower.dispatchEvent(new t.win.Event('change', { bubbles: true }));      // a tower, no unit: would be refused for Collections
+    t.pick('Transfer_TargetDepartmentId', '5'); await t.settle();                               // ... then the agent chooses Registration
+    assert.equal(t.d.querySelector('[data-ct]').hidden, true);
+    assert.equal(t.submit(), false);                                                           // not blocked
+    assert.equal(error.hidden, true);                                                           // no Collections message
+    assert.equal(tower.disabled, true);                                                         // disabled controls are not posted
+    assert.equal(new t.win.FormData(t.d.getElementById('f')).has('Transfer.CollectionsTowerId'), false);
+});
+
+test('a restored selection without a change event is still judged by the real destination at submit', async () => {
+    const t = await load(REG_PAGE);
+    t.pick('Transfer_TargetDepartmentId', '7'); await t.settle();
+    const tower = t.d.querySelector('[data-ct-tower]');
+    tower.value = '2'; tower.dispatchEvent(new t.win.Event('change', { bubbles: true }));
+    t.d.getElementById('Transfer_TargetDepartmentId').value = '5';                              // changed with NO event (browser form restore)
+    assert.equal(t.submit(), false);
+    assert.equal(new t.win.FormData(t.d.getElementById('f')).has('Transfer.CollectionsTowerId'), false);
+    assert.equal(new t.win.FormData(t.d.getElementById('f')).has('Transfer.CollectionsUnitRef'), false);
+});
+
+test('Collections still requires a complete pair when only one half is chosen', async () => {
+    const t = await load(REG_PAGE);
+    t.pick('Transfer_TargetDepartmentId', '7'); await t.settle();
+    const tower = t.d.querySelector('[data-ct-tower]');
+    tower.value = '2'; tower.dispatchEvent(new t.win.Event('change', { bubbles: true }));
+    assert.equal(t.submit(), true);
+});

@@ -67,6 +67,13 @@ public sealed class AdminApiClient(HttpClient httpClient, ILogger<AdminApiClient
     public Task<ApiResult<UserPermissionsDto>> SetUserPermissionsAsync(Guid employeeId, SetUserPermissionsRequestDto request, CancellationToken ct) =>
         PutAsync<SetUserPermissionsRequestDto, UserPermissionsDto>($"api/admin/users/{employeeId}/permissions", request, ct);
 
+    /// <summary>The departments the user may transfer tickets to (separate from membership, which is view access).</summary>
+    public Task<ApiResult<UserTransferDepartmentsDto>> GetUserTransferDepartmentsAsync(Guid employeeId, CancellationToken ct) =>
+        GetAsync<UserTransferDepartmentsDto>($"api/admin/users/{employeeId}/transfer-departments", ct);
+
+    public Task<ApiResult<UserTransferDepartmentsDto>> SetUserTransferDepartmentsAsync(Guid employeeId, SetUserTransferDepartmentsRequestDto request, CancellationToken ct) =>
+        PutAsync<SetUserTransferDepartmentsRequestDto, UserTransferDepartmentsDto>($"api/admin/users/{employeeId}/transfer-departments", request, ct);
+
     public Task<ApiResult<AdminUserDto>> UnlockUserAsync(Guid employeeId, CancellationToken ct) =>
         PostAsync<object, AdminUserDto>($"api/admin/users/{employeeId}/unlock", new { }, ct);
 
