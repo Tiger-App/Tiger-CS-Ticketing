@@ -143,6 +143,7 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="ViewerActsAsInteractionHandler">True when the caller is a CS Agent Genesys reported as handling this ticket's interaction, belongs to its department and nobody else owns it: the server lets them Resolve, Close and Transfer it. Populated on detail reads; the UI uses it to show those actions.</param>
 /// <param name="CanAssignInCollections">True when THIS caller may assign / reassign this ticket as a member of the Collections team (the ticket is in Collections, the caller belongs to it and holds a Collections department role). Decided by the same <c>CollectionsTeam</c> rule <c>TicketAssignmentAppService</c> enforces. Populated on detail reads.</param>
 /// <param name="CanTakeOwnership">True when THIS caller may take ownership of this ticket right now - decided by the very same policy the <c>POST /ownership</c> endpoint applies (Call Center agent, ticket unassigned, active, human-handling, no pending approval), so the UI shows the action exactly when the API would accept it. Populated on detail reads.</param>
+/// <param name="ViewerCanTransferAnyTicket">True when the caller holds an explicit Transfer Any Ticket grant (Call Center employee) and the ticket is open: they may transfer it to any active department even though it is outside their departments, and the ticket opens read-only for them otherwise. Populated on detail reads.</param>
 /// <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
 /// <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
 /// <param name="IsDefaultClassification">True when the ticket carries the approved default classification (Customer Services / General / General) - read from the stored category and request type, never inferred from a name. The UI shows "Customer Services / General" and keeps Reclassify available.</param>
@@ -228,7 +229,8 @@ public sealed record TicketDetailDto(
     string? ExternalCustomerName = null,
     bool CanAssignInCollections = false,
     string? CurrentOwnerName = null,
-    bool IsAiVirtualAgent = false);
+    bool IsAiVirtualAgent = false,
+    bool ViewerCanTransferAnyTicket = false);
 
 public enum TicketQueryOutcome
 {
