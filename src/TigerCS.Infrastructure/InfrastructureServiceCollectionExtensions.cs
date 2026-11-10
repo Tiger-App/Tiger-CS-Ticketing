@@ -143,6 +143,7 @@ public static class InfrastructureServiceCollectionExtensions
         // pattern as the System Administrator override below: one bare
         // handler, no policy has to know about it.
         services.AddScoped<IUserPermissionOverrideRepository, UserPermissionOverrideRepository>();
+        services.AddScoped<IUserTransferDepartmentRepository, UserTransferDepartmentRepository>();
         services.AddScoped<IAuthorizationHandler, UserPermissionAuthorizationHandler>();
 
         // The central System Administrator authorization override (ADR-0024).
@@ -495,6 +496,7 @@ public static class InfrastructureServiceCollectionExtensions
         // endpoints compose these over the existing services above.
         services.AddScoped<AdminUserAppService>();
         services.AddScoped<AdminUserPermissionAppService>();
+        services.AddScoped<AdminUserTransferDepartmentAppService>();
         services.AddScoped<AdminDepartmentAppService>();
         services.AddScoped<DepartmentCoverageService>();
         services.AddScoped<StaffProvisioningService>();

@@ -225,6 +225,8 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["DELETE /api/admin/users/{employeeId:guid}/departments/{departmentId:int}"] = nameof(Administration.Integration.AdministrationEndpointsTests.Users_CreateListGetEditRolesMembershipAndDeactivate),
         ["POST /api/admin/users/{employeeId:guid}/password"] = nameof(PasswordManagementEndpointsTests.AdminReset_GoodPassword_Returns204_InvalidatesEveryEarlierToken_LiftsLockout_AndAuditsWithoutTheSecret),
         ["POST /api/admin/users/{employeeId:guid}/unlock"] = nameof(PasswordManagementEndpointsTests.AdminUnlock_ClearsLockoutEndAndFailedCount_LetsTheUserSignInAgain_AndAudits),
+        ["GET /api/admin/users/{employeeId:guid}/transfer-departments"] = nameof(Administration.Integration.AdministrationEndpointsTests.Users_TransferDepartments_AreSeparateFromMembership_ValidatedAuditedAndShownOnMe),
+        ["PUT /api/admin/users/{employeeId:guid}/transfer-departments"] = nameof(Administration.Integration.AdministrationEndpointsTests.Users_TransferDepartments_AreSeparateFromMembership_ValidatedAuditedAndShownOnMe),
         ["GET /api/admin/users/{employeeId:guid}/permissions"] = nameof(TigerCS.Tests.Permissions.PermissionEnforcementTests.Permission_management_is_refused_to_every_non_administrator_and_to_anonymous_callers),
         ["PUT /api/admin/users/{employeeId:guid}/permissions"] = nameof(TigerCS.Tests.Permissions.PermissionEnforcementTests.Saving_permissions_through_the_api_takes_effect_on_the_next_request_and_is_audited),
         ["GET /api/admin/users/password-policy"] = nameof(PasswordManagementEndpointsTests.PasswordPolicyEndpoint_ReturnsTheConfiguredIdentityOptions_ToAnAdministratorOnly),

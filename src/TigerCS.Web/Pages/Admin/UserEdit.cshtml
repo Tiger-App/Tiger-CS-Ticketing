@@ -223,7 +223,7 @@
             <section class="panel admin-form-panel admin-grid__wide" aria-labelledby="departments-title">
                 <div class="panel__header">
                     <h2 class="panel__title" id="departments-title">Departments <span class="panel__count">@u.Departments.Count</span></h2>
-                    <span class="panel__hint">Where this user receives assignments</span>
+                    <span class="panel__hint">Where this user belongs and can view tickets, and receives assignments</span>
                 </div>
                 @if (u.Departments.Count == 0)
                 {
@@ -281,6 +281,29 @@
                 {
                     <p class="panel__note">Reactivate the user before changing department membership.</p>
                 }
+            </section>
+
+            <section class="panel admin-form-panel admin-grid__wide" aria-labelledby="transfer-departments-title">
+                <div class="panel__header">
+                    <h2 class="panel__title" id="transfer-departments-title">Transfer destinations <span class="panel__count">@Model.TransferDepartmentIds.Count</span></h2>
+                    <span class="panel__hint">Departments this user may transfer tickets to</span>
+                </div>
+                <div class="panel__note panel__note--top">
+                    <p>This list is separate from the departments above: belonging to or viewing a department never lets the user transfer tickets to it, and a destination here does not add them to that department. Whether the user may reassign tickets is a permission of its own (<a href="/Admin/Users/@u.EmployeeId/Permissions">Manage Permissions → Assign tickets</a>).</p>
+                    <p>With no destination ticked, this user's transfers follow their role exactly as before. With one or more ticked, they can transfer only to those.</p>
+                </div>
+                <form method="post" asp-page-handler="TransferDepartments" asp-route-id="@u.EmployeeId" class="admin-form">
+                    <div class="form-group">
+                        @foreach (var d in Model.ActiveDepartments.OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+                        {
+                            <label class="checkbox-field">
+                                <input type="checkbox" name="TransferDepartments.DepartmentIds" value="@d.DepartmentId" checked="@(Model.TransferDepartmentIds.Contains(d.DepartmentId) ? "checked" : null)" />
+                                @d.Name
+                            </label>
+                        }
+                    </div>
+                    <div class="form-actions"><button type="submit" class="btn btn-gold btn-sm">Save transfer destinations</button></div>
+                </form>
             </section>
 
             <section class="panel panel--tone admin-form-panel admin-grid__wide" aria-labelledby="reset-password-title">
