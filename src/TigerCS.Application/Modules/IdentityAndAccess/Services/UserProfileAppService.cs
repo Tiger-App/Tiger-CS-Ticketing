@@ -1,5 +1,7 @@
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Dto;
+using TigerCS.Application.Authorization;
+using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 
 namespace TigerCS.Application.Modules.IdentityAndAccess.Services;
@@ -10,7 +12,8 @@ public sealed class UserProfileAppService(
     IUserRoleReader roleReader,
     IUserDepartmentAssignmentRepository assignmentRepository,
     IUserPermissionOverrideRepository? permissionOverrides = null,
-    IUserTransferDepartmentRepository? transferDepartments = null)
+    IUserTransferDepartmentRepository? transferDepartments = null,
+    IDepartmentRepository? departmentRepository = null)
 {
     public async Task<CurrentUserResponseDto?> GetCurrentUserAsync(Guid employeeId, CancellationToken cancellationToken = default)
     {
@@ -35,9 +38,24 @@ public sealed class UserProfileAppService(
             .Where(k => EffectivePermissions.Resolve(k, baseline, effects) == PermissionSource.Granted).ToList();
         var denied = effects.Where(e => e.Value == PermissionEffect.Deny).Select(e => e.Key).Order(StringComparer.Ordinal).ToList();
 
+        // The Tickets Department filter must offer exactly the departments the ticket queries will let this caller see - not just where they
+        // are a member. A cross-department role (CS Supervisor/Manager, executives, the System Administrator override) sees every department,
+        // so it is offered every active one; everyone else sees their memberships. Same decision as TicketQueryAppService.ResolveVisibleDepartmentIdsAsync.
+        var accessible = departments;
+        var seesEveryDepartment = !TicketVisibilityRule.IsRestrictedCsAgent(roles)
+            && AuthorizationGate.Evaluate(roles, () => roles.Any(TicketRoleSets.CrossDepartmentView.Contains));
+        if (seesEveryDepartment && departmentRepository is not null)
+        {
+            accessible = (await departmentRepository.ListAsync(activeOnly: true, cancellationToken))
+                .Select(d => new DepartmentMembershipDto(d.DepartmentId, d.Name, departments.Any(m => m.DepartmentId == d.DepartmentId && m.IsPrimary)))
+                .OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
+                .ToList();
+        }
+
         return new CurrentUserResponseDto(
             employee.EmployeeId, employee.DisplayName, roles, departments, employee.IsGeynessStaff,
             EffectivePermissions.Compute(roles, effects).Order(StringComparer.Ordinal).ToList(), granted, denied,
-            transferDepartments is null ? [] : [.. (await transferDepartments.GetDepartmentIdsAsync(employeeId, cancellationToken)).Order()]);
+            transferDepartments is null ? [] : [.. (await transferDepartments.GetDepartmentIdsAsync(employeeId, cancellationToken)).Order()],
+            accessible);
     }
 }

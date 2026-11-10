@@ -160,6 +160,13 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.TicketClosed);
         }
 
+        // Reassigning to the person who already owns the ticket changes nothing; say so instead of writing a no-op history row.
+        // (After the authorization gate, so it never reveals who owns a ticket to a caller who may not touch it.)
+        if (ticket.CurrentOwnerEmployeeId is { } existingOwner && existingOwner == request.AssignedEmployeeId)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.AlreadyAssignedToEmployee);
+        }
+
         // Workflow/Automation phase 2 — department workflow settings can
         // only NARROW what the role sets above already allow (fail-safe
         // rule: a provisional "allowed" seed never grants anything; existing

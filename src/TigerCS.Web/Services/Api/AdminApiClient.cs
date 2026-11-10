@@ -48,6 +48,9 @@ public sealed class AdminApiClient(HttpClient httpClient, ILogger<AdminApiClient
     public Task<ApiResult<AdminUserDto>> AddUserDepartmentAsync(Guid employeeId, AddDepartmentMembershipRequestDto request, CancellationToken ct) =>
         PostAsync<AddDepartmentMembershipRequestDto, AdminUserDto>($"api/admin/users/{employeeId}/departments", request, ct);
 
+    public Task<ApiResult<AdminUserDto>> SetUserAccessibleDepartmentsAsync(Guid employeeId, SetAccessibleDepartmentsRequestDto request, CancellationToken ct) =>
+        PutAsync<SetAccessibleDepartmentsRequestDto, AdminUserDto>($"api/admin/users/{employeeId}/departments", request, ct);
+
     public Task<ApiResult<AdminUserDto>> RemoveUserDepartmentAsync(Guid employeeId, int departmentId, CancellationToken ct) =>
         DeleteAsync<AdminUserDto>($"api/admin/users/{employeeId}/departments/{departmentId}", ct);
 

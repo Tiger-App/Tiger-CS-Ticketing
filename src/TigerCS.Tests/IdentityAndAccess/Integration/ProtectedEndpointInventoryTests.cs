@@ -222,6 +222,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["PATCH /api/admin/users/{employeeId:guid}/activation"] = nameof(Administration.Integration.AdministrationEndpointsTests.Users_CreateListGetEditRolesMembershipAndDeactivate),
         ["PUT /api/admin/users/{employeeId:guid}/roles"] = nameof(Administration.Integration.AdministrationEndpointsTests.Users_CreateListGetEditRolesMembershipAndDeactivate),
         ["POST /api/admin/users/{employeeId:guid}/departments"] = nameof(Administration.Integration.AdministrationEndpointsTests.Users_CreateListGetEditRolesMembershipAndDeactivate),
+        ["PUT /api/admin/users/{employeeId:guid}/departments"] = nameof(Administration.Integration.AdministrationEndpointsTests.Users_CreateListGetEditRolesMembershipAndDeactivate),
         ["DELETE /api/admin/users/{employeeId:guid}/departments/{departmentId:int}"] = nameof(Administration.Integration.AdministrationEndpointsTests.Users_CreateListGetEditRolesMembershipAndDeactivate),
         ["POST /api/admin/users/{employeeId:guid}/password"] = nameof(PasswordManagementEndpointsTests.AdminReset_GoodPassword_Returns204_InvalidatesEveryEarlierToken_LiftsLockout_AndAuditsWithoutTheSecret),
         ["POST /api/admin/users/{employeeId:guid}/unlock"] = nameof(PasswordManagementEndpointsTests.AdminUnlock_ClearsLockoutEndAndFailedCount_LetsTheUserSignInAgain_AndAudits),

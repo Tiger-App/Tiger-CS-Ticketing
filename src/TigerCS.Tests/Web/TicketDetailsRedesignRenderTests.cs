@@ -173,6 +173,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Contains("TG-", control);                                        // the ticket number is shown
         Assert.Contains("<dd data-assign-current>", control);                   // and the current assignee
         Assert.Contains("data-assign-submit disabled", control);                // nothing selected: cannot submit
+        Assert.Matches("data-assign-dialog data-current-id=\"[0-9a-f-]{36}\"", control);   // the current assignee the modal compares the chosen radio against
         Assert.Contains("btn-reassign-cancel", control);
         Assert.DoesNotContain("tw-assign__panel", offered);                     // the old popover is gone
         Assert.DoesNotContain("<summary class=\"btn btn-sm\">Reassign", offered);
