@@ -281,6 +281,34 @@
                 {
                     <p class="panel__note">Reactivate the user before changing department membership.</p>
                 }
+                @* Accessible Departments: the whole set at once. These are the user's department memberships, the same rows that decide which
+                   departments' tickets they can see and filter by, so nothing is stored twice. The primary department is fixed here: it is
+                   listed but locked, and the Api keeps it whatever is posted. *@
+                @{
+                    var primaryDepartment = u.Departments.FirstOrDefault(d => d.IsPrimary);
+                    var held = u.Departments.Select(d => d.DepartmentId).ToHashSet();
+                    var choosable = Model.ActiveDepartments.Where(d => primaryDepartment is null || d.DepartmentId != primaryDepartment.DepartmentId).OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase).ToList();
+                }
+                <form method="post" asp-page-handler="AccessibleDepartments" asp-route-id="@u.EmployeeId" class="admin-form" data-accessible-departments>
+                    <div class="form-group">
+                        <label class="form-label" for="accessible-search">Accessible Departments</label>
+                        <input type="search" id="accessible-search" class="form-control" placeholder="Search departments" autocomplete="off" data-ad-search />
+                        <div class="ad-list" role="group" aria-label="Accessible Departments" data-ad-list>
+                            @if (primaryDepartment is not null)
+                            {
+                                <label class="ad-option ad-option--primary"><input type="checkbox" checked disabled /> <span>@primaryDepartment.Name</span> <span class="badge badge-version-published"><span class="badge-dot"></span>Primary</span></label>
+                            }
+                            @foreach (var d in choosable)
+                            {
+                                <label class="ad-option"><input type="checkbox" name="AccessibleDepartments.DepartmentIds" value="@d.DepartmentId" checked="@held.Contains(d.DepartmentId)" disabled="@(!u.IsActive && !held.Contains(d.DepartmentId))" /> <span>@d.Name</span></label>
+                            }
+                            <p class="ad-empty" data-ad-empty hidden>No department matches your search.</p>
+                        </div>
+                        <span class="field-hint">Tick every department this user may access besides their primary one. Access follows membership: the user sees and filters tickets of these departments, and can be assigned work there.</span>
+                    </div>
+                    <button type="submit" class="btn btn-sm" disabled="@(u.IsActive ? null : "disabled")">Save accessible departments</button>
+                </form>
+                <script src="~/js/admin-accessible-departments.js" asp-append-version="true"></script>
             </section>
 
             <section class="panel admin-form-panel admin-grid__wide" aria-labelledby="transfer-departments-title">

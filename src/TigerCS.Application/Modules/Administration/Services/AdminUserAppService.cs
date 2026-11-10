@@ -280,6 +280,74 @@ public sealed class AdminUserAppService(
         return AdminResult<AdminUserDto>.Success((await GetAsync(employeeId, cancellationToken))!);
     }
 
+    /// <summary>
+    /// Sets, in one atomic save, the departments (besides the primary one) the user may access. Built on the existing membership model
+    /// (<c>UserDepartmentAssignments</c>) - the same rows that already scope the user's ticket visibility - so nothing parallel exists to
+    /// drift apart. The primary department is preserved as it is: never added, demoted or removed here, whatever the list says. Only
+    /// active departments can be added; a department that is already held (even if now inactive) can stay or be removed.
+    /// </summary>
+    public async Task<AdminResult<AdminUserDto>> SetAccessibleDepartmentsAsync(
+        Guid actorEmployeeId, Guid employeeId, SetAccessibleDepartmentsRequestDto request, CancellationToken cancellationToken = default)
+    {
+        var employee = await employeeRepository.GetByIdAsync(employeeId, cancellationToken);
+        if (employee is null)
+        {
+            return AdminResult<AdminUserDto>.NotFound();
+        }
+
+        var wanted = (request.DepartmentIds ?? []).Distinct().ToHashSet();
+        var current = await assignmentRepository.GetByEmployeeIdAsync(employeeId, cancellationToken);
+        var primary = current.FirstOrDefault(a => a.IsPrimary);
+        var held = current.ToDictionary(a => a.DepartmentId);
+
+        var toAdd = wanted.Where(id => !held.ContainsKey(id) && id != primary?.DepartmentId).ToList();
+        var toRemove = current.Where(a => !a.IsPrimary && !wanted.Contains(a.DepartmentId)).ToList();
+
+        if (toAdd.Count > 0 && !employee.IsActive)
+        {
+            return AdminResult<AdminUserDto>.Conflict("A deactivated user cannot be given access to more departments.");
+        }
+
+        foreach (var departmentId in toAdd)
+        {
+            var department = await departmentRepository.GetByIdAsync(departmentId, cancellationToken);
+            if (department is null)
+            {
+                return AdminResult<AdminUserDto>.Invalid($"Department {departmentId} does not exist.");
+            }
+
+            if (!department.IsActive)
+            {
+                return AdminResult<AdminUserDto>.Invalid($"The department '{department.Name}' is inactive and cannot be granted.");
+            }
+        }
+
+        if (toAdd.Count == 0 && toRemove.Count == 0)
+        {
+            return AdminResult<AdminUserDto>.Success((await GetAsync(employeeId, cancellationToken))!);
+        }
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        foreach (var departmentId in toAdd)
+        {
+            await assignmentRepository.AddAsync(new UserDepartmentAssignment(employeeId, departmentId, false, now, actorEmployeeId), cancellationToken);
+        }
+
+        foreach (var assignment in toRemove)
+        {
+            assignmentRepository.Remove(assignment);
+        }
+
+        await auditWriter.WriteAsync(
+            actorEmployeeId, "AdminSetAccessibleDepartments", "Employee", employeeId.ToString(),
+            beforeValue: string.Join(",", current.Select(a => a.DepartmentId).Order()),
+            afterValue: string.Join(",", current.Where(a => a.IsPrimary || wanted.Contains(a.DepartmentId)).Select(a => a.DepartmentId).Concat(toAdd).Order()),
+            Guid.NewGuid(), cancellationToken);
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        return AdminResult<AdminUserDto>.Success((await GetAsync(employeeId, cancellationToken))!);
+    }
+
     public async Task<AdminResult<AdminUserDto>> RemoveDepartmentAsync(
         Guid actorEmployeeId, Guid employeeId, int departmentId, CancellationToken cancellationToken = default)
     {

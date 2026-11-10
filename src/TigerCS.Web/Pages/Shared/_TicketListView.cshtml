@@ -49,7 +49,7 @@
     // permission check and backend predicate is unchanged. The badge counts
     // only the controls the drawer actually shows for this view.
     var filterCount = 0;
-    if (Model.DepartmentId is not null && Model.NameResolver.OwnDepartments.Count > 0) filterCount++;
+    if (Model.DepartmentId is not null && Model.NameResolver.AccessibleDepartments.Count > 0) filterCount++;
     if (!isClosedView && !string.IsNullOrEmpty(Model.TicketStatus)) filterCount++;
     if (Model.PriorityId is not null) filterCount++;
     if (!isClosedView && !string.IsNullOrEmpty(Model.SlaFilterValue)) filterCount++;
@@ -93,13 +93,13 @@
         <div class="drawer__body">
             <div class="drawer__fields">
 
-        @if (Model.NameResolver.OwnDepartments.Count > 0)
+        @if (Model.NameResolver.AccessibleDepartments.Count > 0)
         {
             <div class="field-group">
                 <label class="field-label" for="departmentId">Department</label>
                 <select class="field-select" id="departmentId" name="departmentId">
                     <option value="">All my departments</option>
-                    @foreach (var d in Model.NameResolver.OwnDepartments)
+                    @foreach (var d in Model.NameResolver.AccessibleDepartments.OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
                     {
                         <option value="@d.DepartmentId" selected="@(Model.DepartmentId == d.DepartmentId)">@d.Name</option>
                     }
@@ -276,7 +276,7 @@
     @if (!showAssigneeFilter && Model.InDepartmentQueue) { <input type="hidden" name="inDepartmentQueue" value="true" /> }
     @if (isClosedView && Model.SlaBreached) { <input type="hidden" name="slaBreached" value="true" /> }
     @if (isClosedView && Model.DueToday) { <input type="hidden" name="dueToday" value="true" /> }
-    @if (Model.DepartmentId is { } drilldownDepartmentId && Model.NameResolver.OwnDepartments.Count == 0) { <input type="hidden" name="departmentId" value="@drilldownDepartmentId" /> }
+    @if (Model.DepartmentId is { } drilldownDepartmentId && Model.NameResolver.AccessibleDepartments.Count == 0) { <input type="hidden" name="departmentId" value="@drilldownDepartmentId" /> }
     @if (Model.Channels.Count == 0 && Model.ChannelId is { } channelId) { <input type="hidden" name="channelId" value="@channelId" /> }
     @if (Model.RequestTypeId is { } requestTypeId) { <input type="hidden" name="requestTypeId" value="@requestTypeId" /> }
     @if (Model.ActiveOnly) { <input type="hidden" name="activeOnly" value="true" /> }

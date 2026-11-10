@@ -382,7 +382,10 @@ public enum TicketMutationOutcome
     ClaimBlockedByPendingApproval,
 
     /// <summary>The classification cannot be completed with a valid request type because the target department has no usable General request type. Nothing was changed; run EnsureDefaultGeneralClassification.sql.</summary>
-    DefaultClassificationNotConfigured
+    DefaultClassificationNotConfigured,
+
+    /// <summary>Assign: the chosen employee already owns the ticket, so there is nothing to reassign. Appended last so no existing outcome changes its numeric value.</summary>
+    AlreadyAssignedToEmployee
 }
 
 public sealed record TicketMutationResult(TicketMutationOutcome Outcome, TicketDetailDto? Response = null)

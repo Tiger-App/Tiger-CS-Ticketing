@@ -85,6 +85,19 @@ public class AdministrationEndpointsTests : IClassFixture<TigerCsApiFactory>
             new AddDepartmentMembershipRequestDto(secondDepartment, false)));
         Assert.Equal(2, membership.Departments.Count);
 
+        // Accessible Departments: the whole set in one call; the primary is kept whatever is posted, and only a System Administrator may do it.
+        var cleared = await ReadAsync<AdminUserDto>(await admin.PutAsJsonAsync($"/api/admin/users/{created.EmployeeId}/departments",
+            new SetAccessibleDepartmentsRequestDto([])));
+        Assert.True(Assert.Single(cleared.Departments).IsPrimary);
+        var restored = await ReadAsync<AdminUserDto>(await admin.PutAsJsonAsync($"/api/admin/users/{created.EmployeeId}/departments",
+            new SetAccessibleDepartmentsRequestDto([secondDepartment])));
+        Assert.Equal(2, restored.Departments.Count);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync($"/api/admin/users/{created.EmployeeId}/departments",
+            new SetAccessibleDepartmentsRequestDto([int.MaxValue]))).StatusCode);
+        var (agent, _) = await CreateClientAsync(Roles.CsAgent);
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.PutAsJsonAsync($"/api/admin/users/{created.EmployeeId}/departments",
+            new SetAccessibleDepartmentsRequestDto([]))).StatusCode);
+
         var removePrimary = await admin.DeleteAsync($"/api/admin/users/{created.EmployeeId}/departments/{departmentId}");
         Assert.Equal(HttpStatusCode.Conflict, removePrimary.StatusCode);
         var removed = await ReadAsync<AdminUserDto>(await admin.DeleteAsync($"/api/admin/users/{created.EmployeeId}/departments/{secondDepartment}"));

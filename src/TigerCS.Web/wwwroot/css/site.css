@@ -2970,6 +2970,7 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .reassign-modal textarea.form-control { min-height: 64px; resize: vertical; }
 .reassign-list { margin-top: 8px; max-height: min(30dvh, 220px); overflow-y: auto; border: 1px solid var(--tw-line, #d0d5dd); border-radius: 10px; }
 .reassign-option { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; font-size: 14px; }
+.reassign-option[hidden] { display: none; }
 .reassign-option + .reassign-option { border-top: 1px solid var(--tw-line, #eef0f4); }
 .reassign-option:hover { background: var(--color-neutral-tint, #f2f4f7); }
 .reassign-option:has(input:checked) { background: #EFF4FF; }
@@ -3374,3 +3375,12 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
   .dashboard-workspace .dash-attention .data-table tbody tr:hover td { background: transparent; }
   .dashboard-workspace .summary-legend { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Administration -> Users: Accessible Departments searchable multi-select */
+.ad-list { margin-top: 8px; max-height: 240px; overflow-y: auto; border: 1px solid var(--tw-line, #d0d5dd); border-radius: 10px; }
+.ad-option { display: flex; align-items: center; gap: 10px; padding: 8px 12px; cursor: pointer; font-size: 14px; }
+.ad-option[hidden] { display: none; }
+.ad-option + .ad-option { border-top: 1px solid var(--tw-line, #eef0f4); }
+.ad-option:hover { background: var(--color-neutral-tint, #f2f4f7); }
+.ad-option--primary { cursor: default; color: var(--tw-muted, #667085); }
+.ad-empty { margin: 0; padding: 12px; font-size: 13px; color: var(--tw-muted, #667085); }

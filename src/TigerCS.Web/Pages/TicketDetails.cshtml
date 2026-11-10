@@ -618,7 +618,7 @@ else
                                 var ownerLabel = hasOwner ? Model.OwnerName ?? TicketDisplay.UnknownEmployeeLabel : "No one assigned";
                                 <div class="tw-assign" data-collections-assign data-post-url="@Url.Page("TicketDetails", "CollectionsAssign", new { id = t.TicketId })">
                                     <button type="button" class="btn-reassign" data-assign-open aria-haspopup="dialog">@TicketIcons.Svg("user-round-cog", "ic ic--btn")<span data-assign-open-label>@(hasOwner ? "Reassign" : "Assign")</span></button>
-                                    <dialog class="reassign-modal" data-assign-dialog aria-labelledby="reassign-title">
+                                    <dialog class="reassign-modal" data-assign-dialog data-current-id="@t.CurrentOwnerEmployeeId" aria-labelledby="reassign-title">
                                         <form method="post" asp-page-handler="CollectionsAssign" asp-route-id="@t.TicketId" class="reassign-modal__form" novalidate>
                                             <input type="hidden" asp-for="CollectionsAssign.RowVersionBase64" data-assign-rowversion />
                                             <div class="reassign-modal__head">
