@@ -40,7 +40,7 @@ public static class RolePermissionDefaults
                 TicketsView, TicketsEdit, TicketsAssign, TicketsResolve, TicketsApprove, TicketsEscalate,
                 CustomersView, DashboardView),
             [Roles.CsManager] = Set(
-                TicketsView, TicketsEdit, TicketsAssign, TicketsTransfer, TicketsApprove, TicketsClose, TicketsReopen, TicketsEscalate,
+                TicketsView, TicketsEdit, TicketsAssign, TicketsTransfer, TicketsTransferAny, TicketsApprove, TicketsClose, TicketsReopen, TicketsEscalate,
                 CustomersView, CustomersSend, CollectionsView, CollectionsEdit, CollectionsSend,
                 CampaignsView, CampaignsExport, ReportsView, DashboardView, InteractionsView, InteractionsEdit),
             [Roles.GeneralManager] = Set(

@@ -38,7 +38,8 @@ public sealed class TicketQueryAppService(
     DefaultClassificationService? defaultClassification = null,
     TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTeam? collectionsTeam = null,
     ITicketUnassignedWorkRepository? unassignedWorkRepository = null,
-    Microsoft.Extensions.Logging.ILogger<TicketQueryAppService>? logger = null)
+    Microsoft.Extensions.Logging.ILogger<TicketQueryAppService>? logger = null,
+    IUserPermissionOverrideRepository? permissionOverrides = null)
 {
     /// <summary>Whether the caller may use the supervisor escalation-review filter (<c>escalated=true</c>).</summary>
     public static bool CanReviewEscalations(IReadOnlyCollection<string> callerRoles) =>
@@ -233,6 +234,8 @@ public sealed class TicketQueryAppService(
         var detail = ToDetailDto(ticket) with
         {
             IsReadOnlyAccess = accessLevel == TicketAccessLevel.ReadOnly,
+            ViewerCanTransferAnyTicket = ticket.TicketStatus != TicketStatus.Closed
+                && await TransferAnyTicketPolicy.IsGrantedAsync(permissionOverrides, callerEmployeeId, callerRoles, cancellationToken),
             // The same policy the Take Ownership endpoint applies - the UI shows the action exactly when the API would accept it.
             CanTakeOwnership = claimPolicy is not null
                 && ticket.CurrentOwnerEmployeeId is null
@@ -533,11 +536,22 @@ public sealed class TicketQueryAppService(
         TicketVisibilityRule.IsRestrictedCsAgent(callerRoles, callerEmployeeId, serviceIdentities);
 
     /// <summary>How much of the ticket the caller may use: Full, ReadOnly (the creator outside the department) or None.</summary>
-    internal Task<TicketAccessLevel> GetTicketAccessAsync(
-        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken) =>
-        TicketVisibilityRule.GetTicketAccessAsync(
+    internal async Task<TicketAccessLevel> GetTicketAccessAsync(
+        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, Ticket ticket, CancellationToken cancellationToken)
+    {
+        var access = await TicketVisibilityRule.GetTicketAccessAsync(
             userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken, claimPolicy,
             InactivityReopenCutoffUtc());
+
+        // Transfer Any Ticket: an open ticket the caller cannot otherwise see opens READ-ONLY for the holder, so they can read what they need
+        // to transfer it. Nothing else is widened - every modification is still refused (Full access is unchanged); only the Transfer
+        // action, which makes its own stricter check, is let through.
+        return access == TicketAccessLevel.None
+            && ticket.TicketStatus != TicketStatus.Closed
+            && await TransferAnyTicketPolicy.IsGrantedAsync(permissionOverrides, callerEmployeeId, callerRoles, cancellationToken)
+            ? TicketAccessLevel.ReadOnly
+            : access;
+    }
 
     /// <summary>The start of the existing reopen window: an inactivity-closed ticket closed before this can no longer be reopened (and no longer opens its last responsible agent).</summary>
     private DateTime InactivityReopenCutoffUtc() => timeProvider.GetUtcNow().UtcDateTime - reopenPolicy.Window;

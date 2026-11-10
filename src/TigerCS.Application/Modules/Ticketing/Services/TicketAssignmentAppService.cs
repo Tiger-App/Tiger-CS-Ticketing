@@ -300,8 +300,17 @@ public sealed class TicketAssignmentAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
         }
 
+        // Tickets.TransferAny ("Transfer Any Ticket"): an explicit grant lets a Call Center employee transfer any open ticket, whatever its
+        // department, to any active department. It is separate from department membership, Tickets.Assign, user administration and the
+        // System Administrator override, and it changes nothing else about the transfer (status, reasons, SLA, audit, Collections Tower/Unit).
+        // An explicit denial removes the CS Manager's built-in any-ticket reach (the ordinary per-ticket rule below still applies to them).
+        var transferAnyOverride = await TransferAnyTicketPolicy.GetOverrideAsync(permissionOverrides, callerEmployeeId, cancellationToken);
+        var holdsTransferAnyGrant = transferAnyOverride == PermissionEffect.Grant && TransferAnyTicketPolicy.IsEligibleRole(callerRoles);
+        var hasRoleTransferAny = callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains) && transferAnyOverride != PermissionEffect.Deny;
+
         var transferAuthorized = await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
-            callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains)
+            hasRoleTransferAny
+            || holdsTransferAnyGrant
             || (callerRoles.Any(TicketRoleSets.Transfer.Contains)
                 && (ticket.CurrentOwnerEmployeeId == callerEmployeeId
                     || await TicketOwnershipRules.IsActingInteractionHandlerAsync(
@@ -320,8 +329,7 @@ public sealed class TicketAssignmentAppService(
             transferAuthorized = true;
         }
 
-        var isAdministrativeTransfer = AuthorizationOverride.AppliesTo(callerRoles)
-            || callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains);
+        var isAdministrativeTransfer = AuthorizationOverride.AppliesTo(callerRoles) || hasRoleTransferAny || holdsTransferAnyGrant;
         var fromCallCenter = !isAdministrativeTransfer
             && await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
 
@@ -372,7 +380,9 @@ public sealed class TicketAssignmentAppService(
 
         // The destination must be one the caller is authorised to transfer to. Judged on the department actually requested (never on the departments
         // the caller can merely view), and before any write.
-        if (!await TransferDestinationPolicy.IsPermittedAsync(transferDepartments, callerEmployeeId, callerRoles, request.TargetDepartmentId, cancellationToken))
+        // A Transfer Any Ticket grant means "any active department" (checked above), so the per-user destination list does not narrow it.
+        if (!holdsTransferAnyGrant
+            && !await TransferDestinationPolicy.IsPermittedAsync(transferDepartments, callerEmployeeId, callerRoles, request.TargetDepartmentId, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.TransferDestinationNotPermitted);
         }

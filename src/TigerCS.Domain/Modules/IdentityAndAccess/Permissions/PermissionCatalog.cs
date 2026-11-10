@@ -83,6 +83,7 @@ public static class Permissions
     public const string TicketsResolve = "Tickets.Resolve";
     public const string TicketsClose = "Tickets.Close";
     public const string TicketsTransfer = "Tickets.Transfer";
+    public const string TicketsTransferAny = "Tickets.TransferAny";
     public const string TicketsReopen = "Tickets.Reopen";
     public const string TicketsEscalate = "Tickets.Escalate";
 
@@ -122,6 +123,8 @@ public static class PermissionCatalog
         new(Permissions.TicketsEdit, PermissionModules.Tickets, PermissionAction.Edit, "Edit tickets", "Classify, add notes, change status and resolve."),
         new(Permissions.TicketsAssign, PermissionModules.Tickets, PermissionAction.Assign, "Assign tickets", "Assign or reassign a ticket to an employee (within the department scope the role allows)."),
         new(Permissions.TicketsTransfer, PermissionModules.Tickets, PermissionAction.Transfer, "Transfer tickets", "Move a ticket to another department. Never bypasses ticket visibility, status or department workflow settings."),
+        new(Permissions.TicketsTransferAny, PermissionModules.Tickets, PermissionAction.Transfer, "Transfer Any Ticket",
+            "Call Center employees only: transfer any open ticket, whatever its current department, to any active department, and open the ticket to do so. Separate from Accessible Departments, Reassign Ticket (Assign tickets), Manage Users and System Administrator; ticket status, Collections Tower/Unit and audit rules still apply. Needs Transfer tickets not to be denied."),
         new(Permissions.TicketsApprove, PermissionModules.Tickets, PermissionAction.Approve, "Approve requests", "Decide ticket approvals and priority-downgrade requests."),
         new(Permissions.TicketsResolve, PermissionModules.Tickets, PermissionAction.Resolve, "Resolve tickets", "Resolve a ticket. The employee a ticket is assigned to can always resolve it unless this is denied; a grant never bypasses ticket visibility, status or workflow rules."),
         new(Permissions.TicketsClose, PermissionModules.Tickets, PermissionAction.Close, "Close tickets", "Close a resolved ticket. The assigned employee can always close their own ticket unless this is denied; a grant never bypasses ticket visibility, status or workflow rules."),

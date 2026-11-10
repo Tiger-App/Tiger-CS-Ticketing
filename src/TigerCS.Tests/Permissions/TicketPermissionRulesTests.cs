@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
+using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Infrastructure.Persistence;
 using TigerCS.Tests.IdentityAndAccess.Integration;
 using TigerCS.Tests.Notifications.Integration;
@@ -200,6 +201,141 @@ public class TicketPermissionRulesTests : LifecycleIntegrationTestBase, IClassFi
         await SetOverrideAsync(assigneeId, P.TicketsTransfer, PermissionEffect.Grant);
         Assert.Equal(HttpStatusCode.OK,
             (await assignee.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(current))).StatusCode);
+    }
+
+    // ---- Transfer Any Ticket ----
+
+    private async Task<(HttpClient Client, Guid Id)> CallCenterClientOutsideAsync(string role, Scenario s)
+    {
+        var (client, id) = await CreateClientAsync(role);
+        var home = await _factory.CreateDepartmentAsync("Call Center " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        await _factory.AssignPrimaryDepartmentAsync(id, home);
+        return (client, id);
+    }
+
+    [Fact]
+    public async Task Transfer_any_ticket_lets_a_cs_agent_transfer_a_ticket_outside_their_departments_to_any_active_department()
+    {
+        var s = await AssignedTicketAsync();
+        var target = await _factory.CreateDepartmentAsync("Target " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        TransferTicketRequestDto Body(string version) => new(target, "Needs another team", Convert.FromBase64String(version), null, TicketTransferReason.WrongDepartment);
+        var (agent, agentId) = await CallCenterClientOutsideAsync(Roles.CsAgent, s);
+
+        // Without the permission the existing rules apply: the ticket is not the agent's, so it is not visible and cannot be transferred.
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.GetAsync($"/api/tickets/{s.Ticket.TicketId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await agent.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(s.RowVersion))).StatusCode);
+
+        await SetOverrideAsync(agentId, P.TicketsTransferAny, PermissionEffect.Grant);
+
+        // With it the ticket opens (read-only: only what the transfer needs), the Transfer action works, and nothing else does.
+        var opened = await agent.GetAsync($"/api/tickets/{s.Ticket.TicketId}");
+        Assert.Equal(HttpStatusCode.OK, opened.StatusCode);
+        var detail = (await opened.Content.ReadFromJsonAsync<TicketDetailDto>())!;
+        Assert.True(detail.IsReadOnlyAccess);
+        Assert.True(detail.ViewerCanTransferAnyTicket);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await agent.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/close", new CloseTicketRequestDto(Convert.FromBase64String(detail.RowVersion)))).StatusCode);
+
+        var transfer = await agent.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(detail.RowVersion));
+        Assert.Equal(HttpStatusCode.OK, transfer.StatusCode);
+        Assert.Equal(target, (await transfer.Content.ReadFromJsonAsync<TicketDetailDto>())!.CurrentDepartmentId);
+
+        // Audit history: one Transfer entry by the agent, carrying the usual before/after values.
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        var audit = await db.AuditEntries.Where(a => a.EntityId == s.Ticket.TicketId.ToString() && a.Action == "Transfer").ToListAsync();
+        Assert.Contains(audit, a => a.ActorEmployeeId == agentId && a.AfterValue!.Contains($"DepartmentId={target}"));
+    }
+
+    [Fact]
+    public async Task Transfer_any_ticket_is_not_narrowed_by_the_transfer_destination_list_but_still_refuses_an_unknown_department()
+    {
+        var s = await AssignedTicketAsync();
+        var allowed = await _factory.CreateDepartmentAsync("Allowed " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        var other = await _factory.CreateDepartmentAsync("Other " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        var (supervisor, supervisorId) = await CallCenterClientOutsideAsync(Roles.CsSupervisor, s);
+        using (var scope = _factory.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+            db.UserTransferDepartments.Add(new UserTransferDepartment(supervisorId, allowed, null, DateTime.UtcNow));
+            await db.SaveChangesAsync();
+        }
+
+        await SetOverrideAsync(supervisorId, P.TicketsTransferAny, PermissionEffect.Grant);
+
+        // The explicit destination list is a separate permission; "any active department" is not limited by it.
+        var current = (await supervisor.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{s.Ticket.TicketId}"))!.RowVersion;
+        var response = await supervisor.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer",
+            new TransferTicketRequestDto(other, "Needs another team", Convert.FromBase64String(current), null, TicketTransferReason.WrongDepartment));
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+
+        // An unknown / inactive department is still refused.
+        var after = (await supervisor.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{s.Ticket.TicketId}"))!.RowVersion;
+        var missing = await supervisor.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer",
+            new TransferTicketRequestDto(987654, "Needs another team", Convert.FromBase64String(after), null, TicketTransferReason.WrongDepartment));
+        Assert.NotEqual(HttpStatusCode.OK, missing.StatusCode);
+    }
+
+    [Fact]
+    public async Task Transfer_any_ticket_is_ignored_for_non_call_center_roles_and_does_not_grant_reassignment_or_department_membership()
+    {
+        var s = await AssignedTicketAsync();
+        var target = await _factory.CreateDepartmentAsync("Target " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        TransferTicketRequestDto Body(string version) => new(target, "Needs another team", Convert.FromBase64String(version), null, TicketTransferReason.WrongDepartment);
+
+        // A department employee outside the ticket's department: the grant is inert (Call Center employees only).
+        var (employee, employeeId) = await CreateClientAsync(Roles.DepartmentEmployee);
+        await _factory.AssignPrimaryDepartmentAsync(employeeId, await _factory.CreateDepartmentAsync("Elsewhere " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]));
+        await SetOverrideAsync(employeeId, P.TicketsTransferAny, PermissionEffect.Grant);
+        Assert.Equal(HttpStatusCode.Forbidden, (await employee.GetAsync($"/api/tickets/{s.Ticket.TicketId}")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await employee.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(s.RowVersion))).StatusCode);
+
+        // A Call Center agent holding the grant still cannot reassign (Tickets.Assign is separate) and gains no department membership.
+        var (agent, agentId) = await CallCenterClientOutsideAsync(Roles.CsAgent, s);
+        await SetOverrideAsync(agentId, P.TicketsTransferAny, PermissionEffect.Grant);
+        var (colleague, colleagueId) = await CreateClientAsync(Roles.DepartmentEmployee);
+        await _factory.AssignPrimaryDepartmentAsync(colleagueId, s.DepartmentId);
+        var assign = await agent.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/assignment",
+            new AssignTicketRequestDto(colleagueId, Convert.FromBase64String(s.RowVersion)));
+        Assert.Equal(HttpStatusCode.Forbidden, assign.StatusCode);
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        Assert.DoesNotContain(db.UserDepartmentAssignments, a => a.EmployeeId == agentId && a.DepartmentId == s.DepartmentId);
+    }
+
+    [Fact]
+    public async Task Transfer_any_ticket_does_not_override_a_transfer_denial()
+    {
+        var s = await AssignedTicketAsync();
+        var target = await _factory.CreateDepartmentAsync("Target " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        var (agent, agentId) = await CallCenterClientOutsideAsync(Roles.CsAgent, s);
+        await SetOverrideAsync(agentId, P.TicketsTransferAny, PermissionEffect.Grant);
+        await SetOverrideAsync(agentId, P.TicketsTransfer, PermissionEffect.Deny);
+
+        var version = (await s.Manager.GetFromJsonAsync<TicketDetailDto>($"/api/tickets/{s.Ticket.TicketId}"))!.RowVersion;
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await agent.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer",
+                new TransferTicketRequestDto(target, "Needs another team", Convert.FromBase64String(version), null, TicketTransferReason.WrongDepartment))).StatusCode);
+    }
+
+    [Fact]
+    public async Task Denying_transfer_any_ticket_removes_the_cs_managers_any_ticket_reach_only()
+    {
+        var s = await AssignedTicketAsync();
+        var target = await _factory.CreateDepartmentAsync("Target " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        TransferTicketRequestDto Body(string version) => new(target, "Needs another team", Convert.FromBase64String(version), null, TicketTransferReason.WrongDepartment);
+
+        await SetOverrideAsync(s.ManagerId, P.TicketsTransferAny, PermissionEffect.Deny);
+        var me = await s.Manager.GetFromJsonAsync<CurrentUserResponseDto>("/api/users/me");
+        Assert.DoesNotContain(P.TicketsTransferAny, me!.EffectivePermissions!);
+        Assert.Equal(HttpStatusCode.Forbidden,
+            (await s.Manager.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(s.RowVersion))).StatusCode);
+
+        await SetOverrideAsync(s.ManagerId, P.TicketsTransferAny, null);
+        Assert.Equal(HttpStatusCode.OK,
+            (await s.Manager.PostAsJsonAsync($"/api/tickets/{s.Ticket.TicketId}/transfer", Body(s.RowVersion))).StatusCode);
     }
 
     // ---- My Tickets ----

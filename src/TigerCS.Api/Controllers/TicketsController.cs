@@ -546,6 +546,8 @@ public class TicketsController(
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
     [HttpPost("{ticketId:long}/transfer")]
     [RequirePermission(Permissions.TicketsTransfer)]
+    // A Transfer Any Ticket holder opens an out-of-scope ticket read-only; the transfer is then decided by TransferAsync's own, stricter rule.
+    [PermitReadOnlyTicketAccess]
     [Tags(OpenApiTags.Transfer)]
     public async Task<IActionResult> Transfer(long ticketId, [FromBody] TransferTicketRequestDto request, CancellationToken cancellationToken)
     {

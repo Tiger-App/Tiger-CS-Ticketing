@@ -101,7 +101,9 @@ else
         else if (Model.IsReadOnlyAccess)
         {
             <div class="alert alert-info" role="status" id="read-only-notice">
-                <span>You created this ticket and can follow its progress, but it belongs to another department, so it is read-only for you.</span>
+                <span>@(t.ViewerCanTransferAnyTicket && !isClosed
+                    ? "This ticket belongs to another department. With the Transfer Any Ticket permission you can read it and transfer it; nothing else on it is available to you."
+                    : "You created this ticket and can follow its progress, but it belongs to another department, so it is read-only for you.")</span>
             </div>
         }
 
