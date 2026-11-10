@@ -18,7 +18,7 @@ public sealed class CollectionsCampaignAppService(
     CollectionsOptions options, CollectionsCampaignOptions campaignOptions, PactReceivablesOptions sourceOptions,
     CollectionsAuthorizationService authorization, CollectionsClock clock, IPactReceivablesSource source,
     ILogger<CollectionsCampaignAppService> logger, CollectionsUnitLinkService? links = null,
-    IFinancialReconciliationEvidence? reconciliation = null)
+    IFinancialReconciliationEvidence? reconciliation = null, TigerCS.Application.Modules.Collections.Exceptions.CollectionsExceptionPolicy? exceptions = null)
 {
     private readonly SpecialCaseUnits special = SpecialCaseUnits.From(sourceOptions);
 
@@ -106,7 +106,8 @@ public sealed class CollectionsCampaignAppService(
             // page - or, for an export, the bounded full result - reaches the application. Otherwise (a source without that capability, or a
             // snapshot the engine cannot use) every instalment of the window is read and evaluated in memory, as before.
             // A single payment status is evaluated in memory (the reference implementation): an engine that does not know the filter must never answer for it.
-            if (source is IPactCampaignSource campaign && paymentFilter == CampaignPaymentFilter.Both && !multiTower && floorSet is null)
+            // The unit exception policies (special cases, GULF_CUSTOMERS) are applied to the rows in memory below; a data-store engine that does not know them must never answer.
+            if (source is IPactCampaignSource campaign && paymentFilter == CampaignPaymentFilter.Both && !multiTower && floorSet is null && exceptions is not { HasExclusions: true })
             {
                 var request = new PactCampaignRequest(from, to, min, stageFrom, stageToExclusive, CollectionsCampaignPolicy.Threshold(selected),
                     selected != CollectionsCampaignStage.LegalReferral, term, phoneDigits,
@@ -160,6 +161,23 @@ public sealed class CollectionsCampaignAppService(
                 selected, scope, Stopwatch.GetElapsedTime(started).TotalMilliseconds, ex.GetType().Name);
             return CollectionsResult<CollectionsCampaignPreviewDto>.Fail(CollectionsOutcome.FinanceUnavailable,
                 "The campaign source could not be read.");
+        }
+
+        // Auto Preview (and the file made from it) never includes a permanent special case or a GULF_CUSTOMERS unit: those units are not campaign candidates, on any date. The Auto schedule is not
+        // the day-14 window (that is a Manual eligibility window), so Auto does not include them then either. Only the campaign loses the unit's rows; the receivables snapshot is untouched.
+        if (exceptions is { HasExclusions: true } && snapshot is not null)
+        {
+            var kept = new List<PactReceivableInstalment>(snapshot.Items.Count);
+            var dropped = new HashSet<(string Code, string Reason)>();
+            foreach (var row in snapshot.Items)
+            {
+                var decision = exceptions.Evaluate(row.UnitCode, date, manual: false, manuallyIncluded: false);
+                if (decision.Excluded) dropped.Add((TigerCS.Application.Modules.Collections.Exceptions.UnitCodeNormalizer.Normalize(row.UnitCode), decision.ReasonCode!));
+                else kept.Add(row);
+            }
+            foreach (var (code, reason) in dropped.OrderBy(d => d.Code, StringComparer.Ordinal))
+                logger.Log(forExport ? LogLevel.Information : LogLevel.Debug, "Collections exception: unit {UnitCode} excluded from the Auto {Stage} campaign ({Reason}).", code, selected, reason);
+            if (dropped.Count > 0) snapshot = snapshot with { Items = kept };
         }
 
         var sourceMs = Stopwatch.GetElapsedTime(started).TotalMilliseconds;

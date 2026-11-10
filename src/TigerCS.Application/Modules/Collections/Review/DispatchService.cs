@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using TigerCS.Application.Modules.Collections.Abstractions;
+using TigerCS.Application.Modules.Collections.Exceptions;
 using TigerCS.Application.Modules.Collections.Services;
 using TigerCS.Domain.Modules.Collections;
 using TigerCS.Domain.Modules.Collections.Review;
@@ -26,7 +27,8 @@ public sealed class DispatchService(
     CollectionsOptions options, GenesysOutboundOptions genesys, CollectionsAuthorizationService authorization, CollectionsClock clock,
     IReviewStore store, IReviewJobScheduler scheduler, IGenesysOutboundClient client,
     ReviewQueryService query, CurrentBalanceReader balances, ILogger<DispatchService> logger,
-    TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository? employees = null, PactReceivablesOptions? sourceOptions = null)
+    TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository? employees = null, PactReceivablesOptions? sourceOptions = null,
+    CollectionsExceptionPolicy? exceptions = null, IExceptionInclusionStore? inclusions = null)
 {
     private readonly SpecialCaseUnits special = SpecialCaseUnits.From(sourceOptions);
     private const string SpecialCaseReason = "Special case unit: handled outside the Collections campaigns, never sent from here";
@@ -378,13 +380,38 @@ public sealed class DispatchService(
         // A unit PACT has cancelled (asterisk anywhere in its code) never gets a reminder, whatever was prepared or approved earlier. Checked before any balance is read.
         var cancelledItems = items.Where(i => ReviewRecordBuilder.IsCancelledUnit(i.UnitCode)).ToList();
         foreach (var c in cancelledItems) { c.Status = DispatchItemStatus.Excluded; c.StatusReason = "Cancelled unit (code contains *): no reminder is sent"; }
+
+        // The exception policies, read AGAIN right before the upload, with today's Dubai date and the campaign's manual inclusions as they stand now: an approved unit never bypasses the GULF_CUSTOMERS date
+        // restriction (approved on the 14th, uploaded after midnight; an inclusion removed after approval), and a permanent special case is never uploaded. Only that unit is dropped, with its reason.
+        var decisions = new Dictionary<string, ExceptionDecision>(StringComparer.Ordinal);
+        if (exceptions is { HasExclusions: true })
+        {
+            var manualDispatch = ManualFilters.FromStored(dispatch.FilterJson) is not null;
+            var included = new Dictionary<CampaignReminderType, HashSet<string>>();
+            if (manualDispatch && inclusions is not null)
+                foreach (var type in items.Where(i => exceptions.IsGulfCustomer(i.UnitCode)).Select(i => i.ReminderType).Distinct())
+                    included[type] = ExceptionInclusionService.IncludedSet(await inclusions.ListActiveAsync(CollectionsExceptionPolicy.CampaignKey(asOf, type), ct));
+            foreach (var item in items.Except(cancelledItems).ToList())
+            {
+                var isIncluded = included.TryGetValue(item.ReminderType, out var set) && set.Contains(ExceptionInclusionService.Identity(item.CompanyId, item.TenantId, item.UnitCode));
+                var decision = exceptions.Evaluate(item.UnitCode, asOf, manualDispatch, isIncluded);
+                decisions[item.RecordKey] = decision;
+                if (!decision.Excluded) continue;
+                item.Status = DispatchItemStatus.Excluded;
+                item.StatusReason = decision.ReasonCode == ReviewReasons.SpecialCaseExcluded
+                    ? SpecialCaseReason
+                    : "GULF_CUSTOMERS unit: not eligible on this date and not manually included for this campaign";
+                cancelledItems.Add(item);
+                logger.LogInformation("Collections exception: unit {UnitCode} excluded from the upload of dispatch {DispatchId} ({Reason}).", item.UnitCode, dispatch.CollectionsDispatchId, decision.ReasonCode);
+            }
+        }
         if (cancelledItems.Count > 0) items = items.Except(cancelledItems).ToList();
         if (items.Count == 0)
         {
             await store.UpdateItemsAsync(cancelledItems, ct);
             dispatch.ExcludedAtDispatchCount = cancelledItems.Count;
             dispatch.Status = DispatchStatus.Completed; dispatch.CompletedAtUtc = clock.UtcNow; dispatch.StartedAtUtc ??= clock.UtcNow;
-            dispatch.StatusReason = "Every approved record belongs to a cancelled unit (code contains *); nothing was uploaded.";
+            dispatch.StatusReason = "Every approved record belongs to a cancelled unit (code contains *) or is excluded by the exception policy; nothing was uploaded.";
             dispatch.Phase = "Finished"; dispatch.LeaseOwner = null; dispatch.LeaseExpiresAtUtc = null;
             await store.UpdateDispatchAsync(dispatch, ct);
             return false;
@@ -443,6 +470,8 @@ public sealed class DispatchService(
                 }
                 nowAmount = calc.Qualifies ? calc.Amount : null; nowDue = calc.EarliestDue;
             }
+            // The record was rebuilt with the stored exception reasons; the decision taken above (today, this campaign's inclusions) is what applies now.
+            if (decisions.TryGetValue(item.RecordKey, out var exceptionDecision)) ExceptionRecordRules.Apply(now, exceptionDecision);
             var sendable = manual ? ReviewRecordBuilder.IsManuallySendable(now) : now.ValidationStatus == ReviewValidationStatus.Ready;
             var unchanged = sendable && nowAmount == item.Amount
                 && nowDue == item.DueDate && now.Currency == item.Currency && now.Phone == item.Phone

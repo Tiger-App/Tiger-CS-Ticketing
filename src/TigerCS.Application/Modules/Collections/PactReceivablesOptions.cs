@@ -38,6 +38,15 @@ public sealed class PactReceivablesOptions
     /// <summary>Set after copying the actual Helper.SEPCIAL_CASES list; an empty list must be intentional.</summary>
     public bool SpecialCasesConfigured { get; set; }
     public List<string> SpecialCaseUnitCodes { get; set; } = [];
+    /// <summary>
+    /// GULF_CUSTOMERS / CHEQUES: the unit codes the business pays by cheque. Excluded from every campaign (Preview, Export, Approval, Send, Auto) except that they become eligible for MANUAL
+    /// Preview, Export and Send on <see cref="GulfCustomersInclusionDay"/> of each month (Dubai date), or when an authorized person includes a unit manually for one Manual campaign.
+    /// Set true once the supplied list has been loaded; false (or an empty list) disables the policy. The list is configuration (<c>appsettings</c> / environment variables), never code.
+    /// </summary>
+    public bool GulfCustomersConfigured { get; set; }
+    public List<string> GulfCustomerUnitCodes { get; set; } = [];
+    /// <summary>The day of the month (Dubai) on which GULF_CUSTOMERS units are eligible for Manual campaigns. The business rule is 14.</summary>
+    public int GulfCustomersInclusionDay { get; set; } = 14;
     public List<string> PdcExcludedUnitCodes { get; set; } = [];
     /// <summary>
     /// Verified mapping of the original PACT report <c>Status</c> value to a payment status

@@ -807,6 +807,58 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("CollectionsDispatchItems", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.Collections.Review.CollectionsExceptionInclusion", b =>
+                {
+                    b.Property<long>("CollectionsExceptionInclusionId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("CollectionsExceptionInclusionId"));
+
+                    b.Property<string>("CampaignKey")
+                        .IsRequired()
+                        .HasMaxLength(80)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(80)");
+
+                    b.Property<int>("CompanyId")
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("IncludedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("IncludedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("RemovedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid?>("RemovedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TenantId")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<string>("UnitCode")
+                        .IsRequired()
+                        .HasMaxLength(60)
+                        .HasColumnType("nvarchar(60)");
+
+                    b.HasKey("CollectionsExceptionInclusionId");
+
+                    b.HasIndex("CampaignKey")
+                        .HasDatabaseName("IX_CollectionsExceptionInclusions_Campaign");
+
+                    b.HasIndex("CampaignKey", "CompanyId", "TenantId", "UnitCode")
+                        .IsUnique()
+                        .HasDatabaseName("UX_CollectionsExceptionInclusions_Active")
+                        .HasFilter("[RemovedAtUtc] IS NULL");
+
+                    b.ToTable("CollectionsExceptionInclusions", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.Collections.Review.CollectionsGenesysBatch", b =>
                 {
                     b.Property<long>("CollectionsGenesysBatchId")

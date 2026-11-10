@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Web;
 using Microsoft.Extensions.Logging;
 using TigerCS.Application.Modules.Collections.Dto;
+using TigerCS.Application.Modules.Collections.Exceptions;
 using TigerCS.Application.Modules.Collections.History;
 using TigerCS.Application.Modules.Collections.Reconciliation;
 using TigerCS.Application.Modules.Collections.Review;
@@ -166,6 +167,24 @@ public sealed class CollectionsApiClient(HttpClient httpClient, ILogger<Collecti
         PostAsync<SelectionRequest, GenesysExportDto>($"{ReviewBase}/export/genesys", request, cancellationToken);
 
     /// <summary>The Manual "Export review CSV": the filtered Manual list with status and reasons.</summary>
+    /// <summary>The GULF_CUSTOMERS units of the current approval data with their manual-inclusion state (Manage Exceptions).</summary>
+    public Task<ApiResult<ExceptionListDto>> GetExceptionUnitsAsync(string reminderType, string? search, IReadOnlyList<int>? towerIds, int page, CancellationToken cancellationToken)
+    {
+        var query = HttpUtility.ParseQueryString(string.Empty);
+        query["reminderType"] = reminderType;
+        if (!string.IsNullOrWhiteSpace(search)) query["search"] = search;
+        foreach (var id in towerIds ?? []) query.Add("towerIds", Id(id));
+        query["page"] = Id(page);
+        query["pageSize"] = "25";
+        return GetAsync<ExceptionListDto>($"{ReviewBase}/exceptions?{query}", cancellationToken);
+    }
+
+    public Task<ApiResult<ExceptionChangeResultDto>> IncludeExceptionUnitsAsync(ExceptionChangeRequest request, CancellationToken cancellationToken) =>
+        PostAsync<ExceptionChangeRequest, ExceptionChangeResultDto>($"{ReviewBase}/exceptions/include", request, cancellationToken);
+
+    public Task<ApiResult<ExceptionChangeResultDto>> RemoveExceptionUnitsAsync(ExceptionChangeRequest request, CancellationToken cancellationToken) =>
+        PostAsync<ExceptionChangeRequest, ExceptionChangeResultDto>($"{ReviewBase}/exceptions/remove", request, cancellationToken);
+
     public Task<ApiResult<ReviewExportDto>> ExportManualReviewAsync(ReviewFilter filter, CancellationToken cancellationToken) =>
         PostAsync<ReviewFilter, ReviewExportDto>($"{ReviewBase}/export/review", filter, cancellationToken);
 

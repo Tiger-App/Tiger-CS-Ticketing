@@ -18,7 +18,8 @@ public sealed record ReviewBuildContext(
     DateOnly AsOfDate, DateTime SourceReadAtUtc, string SourceLabel, string Currency, bool SourceReconciled,
     bool LegalNoticeReleased, bool LegalCaseApproved, decimal FloatTolerance,
     IReadOnlyDictionary<string, string> StatusMap, CrmLinkSet? Crm = null, DateOnly? PolicyStart = null,
-    IReadOnlySet<(int CompanyId, string TenantId, long UnitId)>? HeldUnits = null, SpecialCaseUnits? SpecialUnits = null);
+    IReadOnlySet<(int CompanyId, string TenantId, long UnitId)>? HeldUnits = null, SpecialCaseUnits? SpecialUnits = null,
+    TigerCS.Application.Modules.Collections.Exceptions.CollectionsExceptionPolicy? Exceptions = null);
 
 public sealed record ReviewBuildResult(IReadOnlyList<CollectionsReviewRecord> Records, int FloatNormalizedRows, int SettledRows, int CancelledRows = 0);
 
@@ -125,6 +126,13 @@ public static class ReviewRecordBuilder
                 // It is never stamped on each record, so a customer's own status says what is wrong with the customer's data, and nothing else. The one exception IS the customer's data:
                 // a unit whose snapshot amounts differ persistently from PACT after a refresh is held back on its own (SourceGate.HeldUnits), while every other unit stays as it is.
                 if (context.HeldUnits is { Count: > 0 } held && held.Contains((unit.Key.CompanyId, unit.Key.Tenant, (long)(unit.Key.UnitId ?? 0)))) reasons.Add(ReviewReasons.SourceMismatchUnresolved);
+                // The two unit-level exclusion policies (permanent special cases; GULF_CUSTOMERS / CHEQUES). Stored on EVERY record of the unit, whatever the date: the day-14 window and a manual inclusion
+                // are decided when the record is read (Manual only, with today's date and the campaign's inclusions), so a record built yesterday can never carry yesterday's decision into an upload.
+                if (context.Exceptions is { HasExclusions: true } exceptions)
+                {
+                    if (exceptions.IsSpecialCase(unit.Key.Code)) reasons.Add(ReviewReasons.SpecialCaseExcluded);
+                    if (exceptions.IsGulfCustomer(unit.Key.Code)) reasons.Add(ReviewReasons.GulfCustomerExcluded);
+                }
                 if (linked.Phone.Length == 0) reasons.Add(ReviewReasons.NoValidContact);
                 if (linked.CrmCustomerAmbiguous) reasons.Add(ReviewReasons.CrmCustomerAmbiguous);
                 if (linked.CrmCompanyAmbiguous) reasons.Add(ReviewReasons.CrmCompanyAmbiguous);
@@ -209,7 +217,12 @@ public static class ReviewRecordBuilder
     private static void MarkManualRepeatedCalls(List<CollectionsReviewRecord> records, List<CollectionsReviewRecord> candidates)
     {
         static (int, string, int?, string) Unit(CollectionsReviewRecord r) => (r.CompanyId, r.TenantId, r.UnitId, r.UnitCode);
-        static bool OnlyOutsideSchedule(CollectionsReviewRecord r) { var p = Parse(r.Reasons); return p.Count == 1 && p[0] == ReviewReasons.OutsideSchedule; }
+        // A GULF_CUSTOMERS unit carries its exclusion beside the schedule; the marker is still worked out so that, once the unit is allowed (day 14 or a manual inclusion), the one-call-per-unit protection holds.
+        static bool OnlyOutsideSchedule(CollectionsReviewRecord r)
+        {
+            var p = Parse(r.Reasons).Where(c => c != ReviewReasons.GulfCustomerExcluded).ToList();
+            return p.Count == 1 && p[0] == ReviewReasons.OutsideSchedule;
+        }
         var manual = records.Where(OnlyOutsideSchedule).ToList();
         if (manual.Count == 0) return;
         var candidateUnits = candidates.Select(Unit).ToHashSet();
@@ -226,7 +239,8 @@ public static class ReviewRecordBuilder
     {
         if (record.ValidationStatus == ReviewValidationStatus.Ready) return true;
         if (record.ValidationStatus != ReviewValidationStatus.Excluded) return false;
-        var reasons = Parse(record.Reasons);
+        // Warnings (a manual inclusion, the GULF_CUSTOMERS day) are shown but never block and never waive anything.
+        var reasons = Parse(record.Reasons).Where(c => ReviewReasons.KindOf(c) != ReasonKind.Warning).ToList();
         return reasons.Count == 1 && reasons[0] == ReviewReasons.OutsideSchedule;
     }
 

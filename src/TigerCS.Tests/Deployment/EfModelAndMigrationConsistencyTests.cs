@@ -43,15 +43,16 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         // AddUserPermissionOverrides (per-employee permission overrides), AddCollectionsTowerAssignments (Collections tower assignments) and AddCustomerContactDetails (agent-entered customer name/e-mail) were added after
         // these four and are deployed by their own scripts; the Production script for the four must stay exactly these, immediately before them.
         // AddDirectSendInstalments (one nullable column for Direct Send) is the newest and is deployed by its own script.
-        // AddCollectionsGenesysDeliveryStats (two new tables for the manual Sync from Genesys) was added after those and is deployed by its own script.
+        // AddCollectionsGenesysDeliveryStats (two new tables for the manual Sync from Genesys) and AddCollectionsExceptionInclusions (one new table for manual GULF_CUSTOMERS inclusions) were added after those and are deployed by their own scripts.
         // AddManualGenesysDispatchItemFields (two columns on CollectionsDispatchItems for the Manual Genesys contact list) is the newest and is deployed by its own script.
         Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^1]);
-        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^2]);
-        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^3]);
-        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^4]);
-        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^5]);
-        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^6]);
-        Assert.Equal(FourPendingMigrations, migrations.SkipLast(6).TakeLast(4));
+        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^2]);
+        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^3]);
+        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^4]);
+        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^5]);
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^6]);
+        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^7]);
+        Assert.Equal(FourPendingMigrations, migrations.SkipLast(7).TakeLast(4));
     }
 
     [Fact]

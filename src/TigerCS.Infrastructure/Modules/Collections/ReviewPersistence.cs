@@ -170,6 +170,48 @@ public class CollectionsGenesysSyncStateConfiguration : IEntityTypeConfiguration
     }
 }
 
+public class CollectionsExceptionInclusionConfiguration : IEntityTypeConfiguration<CollectionsExceptionInclusion>
+{
+    public void Configure(EntityTypeBuilder<CollectionsExceptionInclusion> builder)
+    {
+        builder.ToTable("CollectionsExceptionInclusions");
+        builder.HasKey(i => i.CollectionsExceptionInclusionId);
+        builder.Property(i => i.CollectionsExceptionInclusionId).ValueGeneratedOnAdd();
+        builder.Property(i => i.CampaignKey).HasMaxLength(80).IsUnicode(false).IsRequired();
+        builder.Property(i => i.TenantId).HasMaxLength(50).IsRequired();
+        builder.Property(i => i.UnitCode).HasMaxLength(60).IsRequired();
+        // One ACTIVE inclusion per unit and campaign, whatever the number of clicks or requests; removed rows stay as history.
+        builder.HasIndex(i => new { i.CampaignKey, i.CompanyId, i.TenantId, i.UnitCode }).IsUnique().HasFilter("[RemovedAtUtc] IS NULL").HasDatabaseName("UX_CollectionsExceptionInclusions_Active");
+        builder.HasIndex(i => i.CampaignKey).HasDatabaseName("IX_CollectionsExceptionInclusions_Campaign");
+    }
+}
+
+/// <summary>Manual GULF_CUSTOMERS inclusions. Writes are staged on the shared context; the caller saves them together with the audit entry (one transaction).</summary>
+public sealed class ExceptionInclusionStore(TigerCsDbContext db) : TigerCS.Application.Modules.Collections.Exceptions.IExceptionInclusionStore
+{
+    public async Task<IReadOnlyList<CollectionsExceptionInclusion>> ListActiveAsync(string campaignKey, CancellationToken ct) =>
+        await db.CollectionsExceptionInclusions.AsNoTracking().Where(i => i.CampaignKey == campaignKey && i.RemovedAtUtc == null).ToListAsync(ct);
+
+    public async Task<bool> StageAddAsync(CollectionsExceptionInclusion inclusion, CancellationToken ct)
+    {
+        var exists = await db.CollectionsExceptionInclusions.AnyAsync(i => i.CampaignKey == inclusion.CampaignKey && i.CompanyId == inclusion.CompanyId
+            && i.TenantId == inclusion.TenantId && i.UnitCode == inclusion.UnitCode && i.RemovedAtUtc == null, ct);
+        if (exists) return false;
+        db.CollectionsExceptionInclusions.Add(inclusion);
+        return true;
+    }
+
+    public async Task<bool> StageRemoveAsync(string campaignKey, int companyId, string tenantId, string unitCode, Guid removedBy, DateTime nowUtc, CancellationToken ct)
+    {
+        var row = await db.CollectionsExceptionInclusions.FirstOrDefaultAsync(i => i.CampaignKey == campaignKey && i.CompanyId == companyId
+            && i.TenantId == tenantId && i.UnitCode == unitCode && i.RemovedAtUtc == null, ct);
+        if (row is null) return false;
+        row.RemovedAtUtc = nowUtc;
+        row.RemovedByEmployeeId = removedBy;
+        return true;
+    }
+}
+
 /// <summary>
 /// Which database failures are worth a bounded retry, and how long to wait. Only connection-level failures (a dropped or timed-out link, a failed-over server, a deadlock victim) qualify;
 /// a constraint violation or any logic error is never retried. Callers retry ONLY writes that are safe to repeat.
@@ -410,6 +452,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
         if (s.TowerId is { } tower) q = q.Where(r => r.TowerId == tower);
         if (s.TowerIds is { Count: > 0 } towers) q = q.Where(r => r.TowerId != null && towers.Contains(r.TowerId.Value));
         if (floorUnitCodes is not null) q = q.Where(r => floorUnitCodes.Contains(r.UnitCode));   // empty = no unit on the chosen floors = nobody
+        if (s.UnitCodes is not null) { var codes = s.UnitCodes; q = q.Where(r => codes.Contains(r.UnitCode)); }   // exactly these codes (an empty set = nobody)
         if (s.Unit is { } unit) { var p = Like(unit); q = q.Where(r => EF.Functions.Like(r.UnitCode, p, "\\")); }
         if (s.CustomerText is { } text)
         {
