@@ -84,6 +84,10 @@ public class TicketConfiguration : IEntityTypeConfiguration<Ticket>
         builder.Property(t => t.CreatedByEmployeeId);
         builder.HasIndex(t => t.CreatedByEmployeeId, "IX_Tickets_CreatedByEmployeeId");
 
+        // First eligible Human Agent to own the ticket (write-once). Audit-style fact, so no foreign key; indexed for diagnostics and the return-to-Call-Center lookup.
+        builder.Property(t => t.OriginalHumanAgentId);
+        builder.HasIndex(t => t.OriginalHumanAgentId, "IX_Tickets_OriginalHumanAgentId");
+
         builder.HasOne<Department>()
             .WithMany()
             .HasForeignKey(t => t.OriginatingDepartmentId)
