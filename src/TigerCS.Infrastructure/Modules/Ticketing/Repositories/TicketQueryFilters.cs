@@ -230,6 +230,16 @@ internal static class TicketQueryFilters
     }
 
     /// <summary>
+    /// Tickets assigned to <paramref name="employeeId"/>: the current owner, or - because closure clears the owner - for a Closed ticket the
+    /// employee on its most recent assignment row. One definition for the closure KPIs and their drill-down lists.
+    /// </summary>
+    public static IQueryable<Ticket> AssignedToIncludingClosed(this IQueryable<Ticket> tickets, TigerCsDbContext dbContext, Guid employeeId) =>
+        tickets.Where(t => t.CurrentOwnerEmployeeId == employeeId
+            || (t.TicketStatus == TicketStatus.Closed && t.CurrentOwnerEmployeeId == null
+                && dbContext.TicketAssignments.Where(a => a.TicketId == t.TicketId).OrderByDescending(a => a.TicketAssignmentId)
+                    .Select(a => a.AssignedEmployeeId).FirstOrDefault() == employeeId));
+
+    /// <summary>
     /// Closed tickets in one Dashboard closure KPI. Written as correlated
     /// <c>EXISTS</c> predicates, so each ticket is counted once however many
     /// reviews, invitations or audit rows it has — never a join that could

@@ -123,6 +123,7 @@ public sealed class TicketClaimAppService(
         }
 
         ticket.AssignTo(callerEmployeeId);
+        await autoAssignmentService.RecordOriginalHumanAgentAsync(ticket, callerEmployeeId, "TookOwnership", correlationId, cancellationToken);
 
         await ticketAssignmentRepository.AddAsync(
             new TicketAssignment(ticketId, callerEmployeeId, callCenter.DepartmentId, now, assigningActorEmployeeId: callerEmployeeId),

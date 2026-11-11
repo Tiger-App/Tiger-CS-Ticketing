@@ -356,6 +356,16 @@ public sealed class TicketCreationAppService(
 
             ticket.RecordCreator(callerEmployeeId);
 
+            // Manual creation by an authenticated person: they are the Original Human Agent from the first moment. A ticket created by Genesys AI or
+            // any integration (no caller roles = the ingestion; or a configured service identity) starts with none - the first eligible agent to
+            // accept or be assigned it becomes the original (TicketAutoAssignmentService.RecordOriginalHumanAgentAsync).
+            if (callerRoles is not null
+                && callerEmployeeId != Guid.Empty
+                && serviceIdentities?.IsServiceIdentity(callerEmployeeId) != true)
+            {
+                ticket.RecordOriginalHumanAgent(callerEmployeeId);
+            }
+
             await ticketRepository.AddAsync(ticket, cancellationToken);
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
@@ -458,6 +468,14 @@ public sealed class TicketCreationAppService(
                 await autoAssignmentService.ApplyAnsweringAgentAsync(
                     ticket, answeringAgent, "Inquiry", now, correlationId, callerEmployeeId,
                     routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+            }
+            else if (request.GenesysContext is null
+                && callerRoles is not null
+                && ticket.OriginalHumanAgentId == callerEmployeeId
+                && await autoAssignmentService.TryAssignManualCreatorInCallCenterAsync(ticket, callerEmployeeId, now, correlationId, cancellationToken))
+            {
+                // A Human Agent who creates the ticket by hand owns it: the Call Center rotation is not consulted (it would hand a ticket Kawthar
+                // created to the next agent). An ineligible creator (not a Call Center CS Agent) falls through to the rotation below.
             }
             else
             {

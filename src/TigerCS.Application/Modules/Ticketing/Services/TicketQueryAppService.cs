@@ -127,7 +127,8 @@ public sealed class TicketQueryAppService(
             AvailableToTakeOnly: request.AvailableToTake == true,
             DepartmentFilterIncludesClaimable: callCenterFilter,
             IncludeGenesysIntake: await SeesGenesysIntakeAsync(callerEmployeeId, callerRoles, cancellationToken),
-            ExcludeClosed: request.ExcludeClosed == true);
+            ExcludeClosed: request.ExcludeClosed == true,
+            ClosedAssigneeEmployeeId: ResolveClosureAssigneeScope(callerEmployeeId, callerRoles));
 
         var result = await ticketRepository.SearchAsync(query, cancellationToken);
 
@@ -509,6 +510,25 @@ public sealed class TicketQueryAppService(
     public Guid? ResolveTicketListAgentScope(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles) =>
         ResolveTicketViewAgentScope(callerEmployeeId, callerRoles)
             ?? (OwnsTicketsOutsideDepartmentScope(callerRoles) ? callerEmployeeId : null);
+
+    /// <summary>
+    /// The employee the closure KPIs (and their drill-down lists) are limited to, or null for a manager. Always the authenticated caller -
+    /// never client-supplied. A manager is anyone the existing authorization policy gives cross-department ticket view
+    /// (<see cref="TicketRoleSets.CrossDepartmentView"/>: CS Supervisor/Manager, General Manager, Chairman/CEO, System Administrator) and a
+    /// Department Head keeps their department scope; every other caller - a Department Employee or a restricted CS Agent - counts only
+    /// the tickets assigned to them. The Genesys integration account keeps its created-only scope.
+    /// </summary>
+    public Guid? ResolveClosureAssigneeScope(Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles)
+    {
+        if (IsGenesysIntegration(callerEmployeeId, callerRoles))
+        {
+            return null;
+        }
+
+        return IsRestrictedAgent(callerEmployeeId, callerRoles) || TicketVisibilityRule.IsAssignmentOnlyEmployee(callerRoles)
+            ? callerEmployeeId
+            : null;
+    }
 
     private static bool OwnsTicketsOutsideDepartmentScope(IReadOnlyCollection<string> callerRoles) =>
         TicketVisibilityRule.HoldsDepartmentRole(callerRoles)

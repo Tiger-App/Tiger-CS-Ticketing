@@ -250,6 +250,9 @@ public sealed class AgentHandoffAppService(
             currentAssignment?.MarkSuperseded();
 
             ticket.AssignTo(callerEmployeeId);
+            // The accepting agent is the first eligible Human Agent of a ticket the AI / integration created. Write-once, so a later accept by
+            // someone else never changes it.
+            ticket.RecordOriginalHumanAgent(callerEmployeeId);
             await ticketAssignmentRepository.AddAsync(
                 new TicketAssignment(ticket.TicketId, callerEmployeeId, ticket.CurrentDepartmentId, now, callerEmployeeId),
                 cancellationToken);
