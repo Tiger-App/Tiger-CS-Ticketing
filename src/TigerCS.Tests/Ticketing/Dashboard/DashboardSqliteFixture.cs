@@ -261,6 +261,15 @@ public sealed class DashboardSqliteFixture : IDisposable
         context.SaveChanges();
     }
 
+    /// <summary>Seeds a bare employee (identity user + employee row), so assignment history can reference them under enforced foreign keys.</summary>
+    public Guid AddEmployee(TigerCsDbContext context, string displayName)
+    {
+        var employeeId = Guid.NewGuid();
+        AddEmployee(context, employeeId, displayName);
+        context.SaveChanges();
+        return employeeId;
+    }
+
     private static void AddEmployee(TigerCsDbContext context, Guid employeeId, string displayName)
     {
         context.Users.Add(new ApplicationUser

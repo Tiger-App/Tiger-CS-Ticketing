@@ -81,7 +81,8 @@ public sealed record TicketQuery(
     bool AvailableToTakeOnly = false,
     bool DepartmentFilterIncludesClaimable = false,
     bool IncludeGenesysIntake = false,
-    bool ExcludeClosed = false);
+    bool ExcludeClosed = false,
+    Guid? ClosedAssigneeEmployeeId = null);
 
 public sealed record TicketQueryResult(IReadOnlyList<Ticket> Items, int TotalCount);
 

@@ -375,6 +375,133 @@ public sealed class DashboardClosureKpiTests : IDisposable
     }
 
     // ---------------------------------------------------------------
+    // Caller scope: employee = own assigned tickets, manager = everyone's
+    // ---------------------------------------------------------------
+
+    private static readonly string[] EmployeeRoles = [Roles.DepartmentEmployee];
+    private static readonly string[] ManagerRoles = [Roles.CsManager];
+
+    /// <summary>A Closed ticket whose last assignee is <paramref name="assignee"/> (closure clears the live owner; the assignment history keeps who had it).</summary>
+    private Ticket ClosedAssignedTo(Guid assignee, DateTime? closedAtUtc = null, bool reviewed = false, int? departmentId = null)
+    {
+        using var context = _db.CreateContext();
+        var ticket = _db.AddTicket(context, departmentId ?? _db.CustomerServiceId, owner: assignee, status: TicketStatus.Closed, closedAtUtc: closedAtUtc ?? Now.AddDays(-2));
+        _db.AddAssignmentHistory(context, ticket, assignee);
+        if (reviewed)
+        {
+            _db.AddReview(context, ticket);
+        }
+
+        return ticket;
+    }
+
+    private (Guid Alice, Guid Bob) TwoEmployees()
+    {
+        using var context = _db.CreateContext();
+        return (_db.AddEmployee(context, "Alice Employee"), _db.AddEmployee(context, "Bob Employee"));
+    }
+
+    [Fact]
+    public async Task ClosureKpis_ForTwoEmployeesAndAManager_AreScopedByTheAuthenticatedCaller_AndReconcile()
+    {
+        var (alice, bob) = TwoEmployees();
+        var manager = Guid.NewGuid();
+
+        // Alice: 2 reviewed (one with several review records), 1 unreviewed, plus one closed outside the period.
+        var aliceReviewed = ClosedAssignedTo(alice, reviewed: true);
+        using (var w = _db.CreateContext()) { _db.AddReview(w, aliceReviewed, isTest: true); _db.AddReview(w, aliceReviewed, isTest: true, submit: false); }
+        ClosedAssignedTo(alice, reviewed: true);
+        ClosedAssignedTo(alice);
+        ClosedAssignedTo(alice, closedAtUtc: Now.AddDays(-60), reviewed: true);
+        // Bob (same department as Alice): 1 reviewed, 2 unreviewed, plus one outside the period.
+        ClosedAssignedTo(bob, reviewed: true);
+        ClosedAssignedTo(bob);
+        ClosedAssignedTo(bob);
+        ClosedAssignedTo(bob, closedAtUtc: Now.AddDays(-60));
+
+        var forAlice = await OverviewAsync(alice, EmployeeRoles);
+        var forBob = await OverviewAsync(bob, EmployeeRoles);
+        var forManager = await OverviewAsync(manager, ManagerRoles);
+
+        Assert.Equal((2, 1), (forAlice.Kpis.ReviewedTickets, forAlice.Kpis.NotReviewedTickets));
+        Assert.Equal((1, 2), (forBob.Kpis.ReviewedTickets, forBob.Kpis.NotReviewedTickets));
+        Assert.Equal((3, 3), (forManager.Kpis.ReviewedTickets, forManager.Kpis.NotReviewedTickets));
+
+        // The browser cannot widen the scope: an owner filter naming someone else only narrows within the caller's own tickets.
+        var aliceAskingForBob = await OverviewAsync(alice, EmployeeRoles, new DashboardOverviewRequestDto(OwnerEmployeeId: bob));
+        Assert.Equal((0, 0), (aliceAskingForBob.Kpis.ReviewedTickets, aliceAskingForBob.Kpis.NotReviewedTickets));
+
+        // Each card's list shows exactly what the card counted, for each caller.
+        foreach (var (caller, roles, overview) in new[] { (alice, EmployeeRoles, forAlice), (bob, EmployeeRoles, forBob), (manager, ManagerRoles, forManager) })
+        {
+            var from = overview.Filters.DateFrom;
+            var to = overview.Filters.DateTo;
+            Assert.Equal(overview.Kpis.ReviewedTickets, await QueueCountAsync(caller, roles, TicketClosureCategory.Reviewed, from, to));
+            Assert.Equal(overview.Kpis.NotReviewedTickets, await QueueCountAsync(caller, roles, TicketClosureCategory.NotReviewed, from, to));
+        }
+    }
+
+    [Fact]
+    public async Task ClosureKpis_EmployeeCountsOnlyTicketsAssignedToThem_NotTheirDepartmentsTickets_NorOnesAssignedToOthers()
+    {
+        var (alice, bob) = TwoEmployees();
+        ClosedAssignedTo(alice);
+        // A closed ticket in Alice's own department assigned to Bob, and an unassigned closed one.
+        ClosedAssignedTo(bob);
+        ClosedTicket(_db.CustomerServiceId, TicketClosureAuditActions.ClosedByAgent);
+        using (var w = _db.CreateContext())
+        {
+            w.UserDepartmentAssignments.Add(new UserDepartmentAssignment(alice, _db.CustomerServiceId, true, Now.AddDays(-50), null));
+            w.SaveChanges();
+        }
+
+        var forAlice = await OverviewAsync(alice, EmployeeRoles);
+
+        Assert.Equal((0, 1), (forAlice.Kpis.ReviewedTickets, forAlice.Kpis.NotReviewedTickets));
+        Assert.Equal(1, await QueueCountAsync(alice, EmployeeRoles, TicketClosureCategory.NotReviewed, forAlice.Filters.DateFrom, forAlice.Filters.DateTo));
+    }
+
+    [Fact]
+    public async Task ClosureKpis_CsAgentCountsOnlyTicketsAssignedToThem_NotOnesTheyWereOnlyResponsibleFor()
+    {
+        Guid agent, bob;
+        using (var context = _db.CreateContext())
+        {
+            agent = _db.AddEmployee(context, "Agnes Agent");
+            bob = _db.AddEmployee(context, "Bob Employee");
+            _db.MakeCsAgent(context, agent);
+        }
+
+        string[] agentRoles = [Roles.CsAgent];
+        ClosedAssignedTo(agent, reviewed: true);   // closed while assigned to the agent: theirs
+        ClosedAssignedTo(agent);                   // theirs, unreviewed
+        // The agent handed this one to a department employee who closed it: the agent may follow it, but it is Bob's.
+        using (var context = _db.CreateContext())
+        {
+            var handedOver = _db.AddTicket(context, _db.CustomerServiceId, owner: bob, status: TicketStatus.Closed, closedAtUtc: Now.AddDays(-2));
+            _db.AddAssignmentHistory(context, handedOver, agent);
+            _db.AddAssignmentHistory(context, handedOver, bob);
+        }
+
+        var overview = await OverviewAsync(agent, agentRoles);
+
+        Assert.Equal((1, 1), (overview.Kpis.ReviewedTickets, overview.Kpis.NotReviewedTickets));
+        Assert.Equal(1, await QueueCountAsync(agent, agentRoles, TicketClosureCategory.NotReviewed, overview.Filters.DateFrom, overview.Filters.DateTo));
+    }
+
+    [Fact]
+    public async Task ClosureKpis_ManagerOwnerFilter_MatchesTheClosedTicketsLastAssignee_NotTheClearedOwner()
+    {
+        var (alice, bob) = TwoEmployees();
+        ClosedAssignedTo(alice, reviewed: true);
+        ClosedAssignedTo(bob);
+
+        var forAlice = await OverviewAsync(Guid.NewGuid(), ManagerRoles, new DashboardOverviewRequestDto(OwnerEmployeeId: alice));
+
+        Assert.Equal((1, 0), (forAlice.Kpis.ReviewedTickets, forAlice.Kpis.NotReviewedTickets));
+    }
+
+    // ---------------------------------------------------------------
     // Drill-down parity
     // ---------------------------------------------------------------
 

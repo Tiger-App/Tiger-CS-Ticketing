@@ -36,34 +36,46 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
         var scoped = dbContext.Tickets.AsNoTracking().VisibleTo(dbContext, query.ScopeDepartmentIds, query.AgentScopeEmployeeId, createdOnly: query.CreatedOnlyScope, ownerEmployeeId: query.OwnerVisibilityEmployeeId,
             inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock), includeGenesysIntake: query.IncludeGenesysIntake);
 
+        var closureBase = scoped;
         if (query.DepartmentId is { } departmentFilterId)
         {
             scoped = scoped.Where(t => t.CurrentDepartmentId == departmentFilterId);
+            closureBase = closureBase.Where(t => t.CurrentDepartmentId == departmentFilterId);
+        }
+
+        // The closure KPIs take the same filters except status and owner: closure clears the current owner, so they judge "assigned to" by the
+        // closed ticket's last assignee (AssignedToIncludingClosed), and an employee-scoped caller is narrowed to their own tickets.
+        if (query.ClosedAssigneeEmployeeId is { } closedAssignee)
+        {
+            closureBase = closureBase.AssignedToIncludingClosed(dbContext, closedAssignee);
         }
 
         if (query.OwnerEmployeeId is { } ownerEmployeeId)
         {
+            closureBase = closureBase.AssignedToIncludingClosed(dbContext, ownerEmployeeId);
             scoped = scoped.Where(t => t.CurrentOwnerEmployeeId == ownerEmployeeId);
         }
 
         if (query.ChannelId is { } channelId)
         {
             scoped = scoped.WithOriginatingChannel(dbContext, channelId);
+            closureBase = closureBase.WithOriginatingChannel(dbContext, channelId);
         }
 
         if (query.RequestTypeId is { } requestTypeId)
         {
             scoped = scoped.Where(t => t.RequestTypeId == requestTypeId);
+            closureBase = closureBase.Where(t => t.RequestTypeId == requestTypeId);
         }
 
         if (query.PriorityId is { } priorityId)
         {
             scoped = scoped.Where(t => t.PriorityId == priorityId);
+            closureBase = closureBase.Where(t => t.PriorityId == priorityId);
         }
 
         // The four closure KPIs always represent Closed tickets, so they take
-        // every filter except the status one.
-        var closureBase = scoped;
+        // every filter except the status one (closureBase, built above).
 
         if (query.TicketStatus is { } ticketStatus)
         {
