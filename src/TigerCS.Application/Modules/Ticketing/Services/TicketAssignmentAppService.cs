@@ -221,11 +221,14 @@ public sealed class TicketAssignmentAppService(
 
         ticket.AssignTo(request.AssignedEmployeeId);
 
+        var correlationId = Guid.NewGuid();
+        // Reassignment never changes an existing Original Human Agent; it only fills the gap when the first eligible agent is assigned.
+        await autoAssignmentService.RecordOriginalHumanAgentAsync(ticket, request.AssignedEmployeeId, "ManualAssign", correlationId, cancellationToken);
+
         await ticketAssignmentRepository.AddAsync(
             new TicketAssignment(ticketId, request.AssignedEmployeeId, ticket.CurrentDepartmentId, now, callerEmployeeId),
             cancellationToken);
 
-        var correlationId = Guid.NewGuid();
         await auditWriter.WriteAsync(
             callerEmployeeId, "Assign", "Ticket", ticketId.ToString(),
             beforeValue: previousOwnerEmployeeId?.ToString(), afterValue: request.AssignedEmployeeId.ToString(),
@@ -457,6 +460,7 @@ public sealed class TicketAssignmentAppService(
             currentAssignment?.MarkSuperseded();
 
             ticket.AssignTo(explicitAssignee);
+            await autoAssignmentService.RecordOriginalHumanAgentAsync(ticket, explicitAssignee, "TransferAndAssign", correlationId, cancellationToken);
 
             await ticketAssignmentRepository.AddAsync(
                 new TicketAssignment(ticketId, explicitAssignee, request.TargetDepartmentId, now, callerEmployeeId),
@@ -488,6 +492,15 @@ public sealed class TicketAssignmentAppService(
         {
             // Into Collections: the collector responsible for the unit's tower this month took it, or (unknown tower / nobody assigned) it waits in the Collections queue.
             // Tower routing owns this decision, so neither the department rule nor the CS Agent rotation picks someone for it.
+        }
+        else if (await autoAssignmentService.IsCallCenterDepartmentAsync(request.TargetDepartmentId, cancellationToken)
+            && ticket.OriginalHumanAgentId is not null
+            && (await autoAssignmentService.ReturnToOriginalHumanAgentAsync(ticket, callerEmployeeId, now, correlationId, cancellationToken)).Outcome
+                is TicketAutoAssignmentService.OriginalAgentReturn.Assigned or TicketAutoAssignmentService.OriginalAgentReturn.AlreadyOwned)
+        {
+            // Back to the Call Center: the Original Human Agent takes it again (not the general queue / rotation). OriginalHumanAgentId is untouched.
+            // When that agent is inactive or ineligible the owner carried over from the other department was released and the reason audited by
+            // ReturnToOriginalHumanAgentAsync, and the ordinary Call Center assignment below applies.
         }
         else if (ticket.CurrentOwnerEmployeeId is null)
         {

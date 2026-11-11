@@ -2875,6 +2875,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
+                    b.Property<Guid?>("OriginalHumanAgentId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<int>("OriginatingDepartmentId")
                         .HasColumnType("int");
 
@@ -2950,6 +2953,8 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasFilter("[ExternalCustomerId] IS NOT NULL");
 
                     b.HasIndex(new[] { "CreatedByEmployeeId" }, "IX_Tickets_CreatedByEmployeeId");
+
+                    b.HasIndex(new[] { "OriginalHumanAgentId" }, "IX_Tickets_OriginalHumanAgentId");
 
                     b.ToTable("Tickets", (string)null);
                 });

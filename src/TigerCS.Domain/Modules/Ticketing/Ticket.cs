@@ -65,6 +65,32 @@ public class Ticket
         CreatedByEmployeeId = employeeId;
         return true;
     }
+
+    /// <summary>
+    /// The first eligible Human Agent who owned the ticket: the agent who created it manually, or — for a ticket created by Genesys AI / a
+    /// system integration, which starts with null — the first Call Center CS Agent who accepted or was assigned it. <b>Write-once</b>: department
+    /// transfers, reassignment, repeated customer calls and background jobs never change it. It is what a ticket returning to the Call Center
+    /// is routed back to. Distinct from <see cref="CreatedByEmployeeId"/> (for a Genesys ticket that is the integration account, not a person)
+    /// and from <see cref="CurrentOwnerEmployeeId"/> (which moves with every assignment).
+    /// </summary>
+    public Guid? OriginalHumanAgentId { get; private set; }
+
+    /// <summary>Records the Original Human Agent. Write-once: returns false and changes nothing when one is already recorded.</summary>
+    public bool RecordOriginalHumanAgent(Guid employeeId)
+    {
+        if (employeeId == Guid.Empty)
+        {
+            throw new ArgumentException("OriginalHumanAgentId must be a real employee.", nameof(employeeId));
+        }
+
+        if (OriginalHumanAgentId is not null)
+        {
+            return false;
+        }
+
+        OriginalHumanAgentId = employeeId;
+        return true;
+    }
     public int? UnitReferenceId { get; private set; }
     public int? ContactReferenceId { get; private set; }
     /// <summary>
