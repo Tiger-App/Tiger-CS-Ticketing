@@ -24,4 +24,5 @@ ORDER BY t.TicketId, c.Step;
 SELECT t.TicketId, t.TicketNumber, t.OriginalHumanAgentId, t.CurrentOwnerEmployeeId
 FROM Tickets t
 JOIN Departments d ON d.DepartmentId = t.CurrentDepartmentId AND d.Code = N'CC'
-WHERE t.OriginalHumanAgentId IS NOT NULL AND t.CurrentOwnerEmployeeId IS NOT NULL AND t.CurrentOwnerEmployeeId <> t.OriginalHumanAgentId;
+WHERE t.OriginalAgentWorkflowEnabled = 1   -- only tickets created after the feature; legacy tickets never use the Original Human Agent workflow
+  AND t.OriginalHumanAgentId IS NOT NULL AND t.CurrentOwnerEmployeeId IS NOT NULL AND t.CurrentOwnerEmployeeId <> t.OriginalHumanAgentId;

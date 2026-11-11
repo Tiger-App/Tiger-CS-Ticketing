@@ -20,12 +20,13 @@ using PermissionKeys = TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Perm
 namespace TigerCS.Tests.Web;
 
 /// <summary>
-/// Where a person lands after signing in: Collections for anyone with Collections access, the landing they already had for everyone else, and always the page they asked for
+/// Where a person lands after signing in: the Dashboard for every role (unless their Dashboard access was explicitly denied), and always the page they asked for
 /// (a local returnUrl) first. Landing is only a choice of page: it changes no authentication, no route and no authorization.
 /// </summary>
 public sealed class LoginLandingTests
 {
     private const string Collections = "/Collections/CampaignList";
+    private const string Dashboard = "/Dashboard";
 
     private sealed class Api : HttpMessageHandler
     {
@@ -91,26 +92,18 @@ public sealed class LoginLandingTests
     [Theory]
     [InlineData(Roles.CsAgent)]
     [InlineData(Roles.CsSupervisor)]
+    [InlineData(Roles.DepartmentEmployee)]
+    [InlineData(Roles.DepartmentHead)]
     [InlineData(Roles.CsManager)]
     [InlineData(Roles.GeneralManager)]
     [InlineData(Roles.ChairmanCeo)]
-    [InlineData(Roles.SystemAdministrator)]
-    public async Task APersonWithCollectionsAccess_LandsOnCollections(string role)
-    {
-        var (status, location) = await SignInAsync(new Api { Roles = [role] });
-        Assert.Equal(HttpStatusCode.Redirect, status);
-        Assert.Equal(Collections, location);
-    }
-
-    [Theory]
     [InlineData(Roles.ReportingUser)]
-    [InlineData(Roles.DepartmentEmployee)]
-    [InlineData(Roles.DepartmentHead)]
-    public async Task APersonWithoutCollectionsAccess_KeepsTheirExistingLanding(string role)
+    [InlineData(Roles.SystemAdministrator)]
+    public async Task EveryRole_LandsOnTheDashboard_AfterSigningIn(string role)
     {
         var (status, location) = await SignInAsync(new Api { Roles = [role] });
         Assert.Equal(HttpStatusCode.Redirect, status);
-        Assert.Equal("/Tickets", location);                                                          // the landing before this change, untouched
+        Assert.Equal(Dashboard, location);
     }
 
     [Fact]
@@ -118,7 +111,7 @@ public sealed class LoginLandingTests
     {
         Assert.Equal("/Tickets/42?view=mine", (await SignInAsync(new Api { Roles = [Roles.CsAgent] }, "/Tickets/42?view=mine")).Location);
         Assert.Equal("/Customers", (await SignInAsync(new Api { Roles = [Roles.CsManager] }, "/Customers")).Location);
-        Assert.Equal("/Dashboard", (await SignInAsync(new Api { Roles = [Roles.CsAgent] }, "/Dashboard")).Location);   // an explicit Dashboard request is honoured
+        Assert.Equal(Dashboard, (await SignInAsync(new Api { Roles = [Roles.CsAgent] }, "/Dashboard")).Location);   // an explicit Dashboard request is honoured
         Assert.Equal("/Reports/TeamPerformance", (await SignInAsync(new Api { Roles = [Roles.ReportingUser] }, "/Reports/TeamPerformance")).Location);
     }
 
@@ -128,7 +121,29 @@ public sealed class LoginLandingTests
     public async Task AnExternalReturnUrl_IsStillIgnored_NeverFollowed(string returnUrl)
     {
         var (_, location) = await SignInAsync(new Api { Roles = [Roles.CsAgent] }, returnUrl);
-        Assert.Equal(Collections, location);
+        Assert.Equal(Dashboard, location);
+    }
+
+    [Theory]
+    [InlineData("/")]
+    [InlineData("/Login")]
+    [InlineData("/Login?returnUrl=%2FTickets")]
+    public async Task AReturnUrlThatIsTheRootOrTheLoginPage_IsNotFollowed_SoThereIsNoLoopOrExtraHop(string returnUrl)
+    {
+        var (_, location) = await SignInAsync(new Api { Roles = [Roles.CsAgent] }, returnUrl);
+        Assert.Equal(Dashboard, location);
+    }
+
+    [Fact]
+    public void FollowableReturnUrls_AreLocalAndNotTheRootOrLogin()
+    {
+        static bool Local(string u) => u.StartsWith('/') && !u.StartsWith("//") && !u.StartsWith("/\\");
+        Assert.True(TigerCsWeb::TigerCS.Web.Services.Auth.LandingPage.IsFollowable("/Tickets/42?view=mine", Local));
+        Assert.False(TigerCsWeb::TigerCS.Web.Services.Auth.LandingPage.IsFollowable(null, Local));
+        Assert.False(TigerCsWeb::TigerCS.Web.Services.Auth.LandingPage.IsFollowable("  ", Local));
+        Assert.False(TigerCsWeb::TigerCS.Web.Services.Auth.LandingPage.IsFollowable("/", Local));
+        Assert.False(TigerCsWeb::TigerCS.Web.Services.Auth.LandingPage.IsFollowable("/login/", Local));
+        Assert.False(TigerCsWeb::TigerCS.Web.Services.Auth.LandingPage.IsFollowable("//evil.example", Local));
     }
 
     [Fact]
@@ -162,12 +177,21 @@ public sealed class LoginLandingTests
         return (response.StatusCode, response.Headers.Location?.OriginalString);
     }
 
-    [Fact]
-    public async Task TheRoot_SendsACollectionsUserToCollections_AndOthersToTheDashboardAsBefore()
+    [Theory]
+    [InlineData(Roles.CsAgent)]
+    [InlineData(Roles.CsSupervisor)]
+    [InlineData(Roles.DepartmentEmployee)]
+    [InlineData(Roles.DepartmentHead)]
+    [InlineData(Roles.CsManager)]
+    [InlineData(Roles.GeneralManager)]
+    [InlineData(Roles.ChairmanCeo)]
+    [InlineData(Roles.ReportingUser)]
+    [InlineData(Roles.SystemAdministrator)]
+    public async Task TheRoot_SendsEveryAuthenticatedRoleToTheDashboard(string role)
     {
-        Assert.Equal(Collections, (await RootAsync(new Api { Roles = [Roles.CsAgent] }, Roles.CsAgent)).Location);
-        Assert.Equal("/Dashboard", (await RootAsync(new Api { Roles = [Roles.ReportingUser] }, Roles.ReportingUser)).Location);
-        Assert.Equal("/Dashboard", (await RootAsync(new Api { Roles = [Roles.DepartmentHead] }, Roles.DepartmentHead)).Location);
+        var (status, location) = await RootAsync(new Api { Roles = [role] }, role);
+        Assert.Equal(HttpStatusCode.Redirect, status);
+        Assert.Equal(Dashboard, location);
     }
 
     [Fact]
@@ -179,10 +203,39 @@ public sealed class LoginLandingTests
     }
 
     [Fact]
-    public async Task APersonDeniedCollections_IsNotSentThere_AndAGrantOpensIt()
+    public async Task AnAnonymousDeepLink_IsSentToLogin_WithTheRequestedPageKept()
     {
-        Assert.Equal("/Dashboard", (await RootAsync(new Api { Roles = [Roles.CsAgent], Denied = [PermissionKeys.CollectionsView] }, Roles.CsAgent)).Location);
-        Assert.Equal(Collections, (await RootAsync(new Api { Roles = [Roles.ReportingUser], Granted = [PermissionKeys.CollectionsView] }, Roles.ReportingUser)).Location);
+        using var factory = Factory(new Api(), fakeSession: false);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        var response = await client.GetAsync("/Tickets/42?view=mine");
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        var target = response.Headers.Location!;
+        var location = target.IsAbsoluteUri ? target.PathAndQuery : target.OriginalString;
+        Assert.StartsWith("/Login", location);
+        Assert.Equal("/Tickets/42?view=mine", Uri.UnescapeDataString(location[(location.IndexOf("ReturnUrl=", StringComparison.OrdinalIgnoreCase) + "ReturnUrl=".Length)..]));
+    }
+
+    [Fact]
+    public async Task TheDashboard_IsNotARedirectLoop_ForAnAuthenticatedPerson()
+    {
+        using var factory = Factory(new Api { Roles = [Roles.CsAgent] }, fakeSession: true);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        client.DefaultRequestHeaders.Add("X-Test-Role", Roles.CsAgent);
+        var root = await client.GetAsync("/");
+        Assert.Equal(Dashboard, root.Headers.Location?.OriginalString);
+        var dashboard = await client.GetAsync(Dashboard);
+        Assert.Equal(HttpStatusCode.OK, dashboard.StatusCode);                  // lands and stays: the Dashboard never redirects back to "/"
+        Assert.Null(dashboard.Headers.Location);
+    }
+
+    [Fact]
+    public async Task APersonDeniedTheDashboard_IsNotSentThere_ButToTheirPreviousLanding()
+    {
+        // Denied Dashboard: Collections when they can reach it, otherwise the Tickets landing - never a page they cannot open, never a loop back to "/".
+        Assert.Equal(Collections, (await RootAsync(new Api { Roles = [Roles.CsAgent], Denied = [PermissionKeys.DashboardView] }, Roles.CsAgent)).Location);
+        Assert.Equal("/Tickets", (await RootAsync(new Api { Roles = [Roles.DepartmentEmployee], Denied = [PermissionKeys.DashboardView] }, Roles.DepartmentEmployee)).Location);
+        // A Collections denial does not change the new default.
+        Assert.Equal(Dashboard, (await RootAsync(new Api { Roles = [Roles.CsAgent], Denied = [PermissionKeys.CollectionsView] }, Roles.CsAgent)).Location);
     }
 
     // ------------------------------------------------------------ the Dashboard stays reachable
