@@ -45,7 +45,10 @@ public enum AutoAssignmentOutcome
     PreservedCsAgent,
 
     /// <summary>The ticket is closed or resolved, so no assignment applies.</summary>
-    NotApplicable
+    NotApplicable,
+
+    /// <summary>The ticket came back to the Call Center but its Original Human Agent cannot take it: it waits unassigned in the Call Center queue and no automatic path (rotation, reconciler, backfill, Genesys update) may assign it until an authorized person acts.</summary>
+    HeldForManualAssignment
 }
 
 /// <summary>
@@ -253,6 +256,11 @@ public sealed class TicketAutoAssignmentService(
     public async Task<AutoAssignmentResult> AssignCallCenterIntakeAsync(
         Ticket ticket, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default, string? requiredRole = null)
     {
+        if (await IsHeldForManualAssignmentAsync(ticket, cancellationToken))
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.HeldForManualAssignment);
+        }
+
         var settings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(ticket.CurrentDepartmentId, cancellationToken);
         if (settings is { AllowAssignment: false })
         {
@@ -435,11 +443,24 @@ public sealed class TicketAutoAssignmentService(
 
         var callCenter = await ResolveCallCenterAsync(cancellationToken);
 
+        // An exceptional return (Original Human Agent ineligible) is assigned only by an explicit authorized action: the authorized retry
+        // (ManualRetry) or a manual assignment. Every automatic trigger leaves it in the Call Center queue.
+        if (trigger != AutoAssignmentTrigger.ManualRetry && await IsHeldForManualAssignmentAsync(ticket, cancellationToken))
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.HeldForManualAssignment);
+        }
+
         // A ticket waiting in the Call Center that has an Original Human Agent goes back to them (when still eligible) before the shared
-        // rotation is consulted, so a retry, the reconciler or the backfill never deals it to someone else. An ineligible original agent
-        // falls through to the rotation (RestorePreviousCsAgentAsync re-checks eligibility and returns null).
-        var preferred = preferredOwnerEmployeeId
-            ?? (callCenter is not null && ticket.CurrentDepartmentId == callCenter.DepartmentId ? ticket.OriginalHumanAgentId : null);
+        // rotation is consulted, so a retry, the reconciler or the backfill never deals it to someone else.
+        var preferred = preferredOwnerEmployeeId;
+        if (preferred is null
+            && callCenter is not null
+            && ticket.CurrentDepartmentId == callCenter.DepartmentId
+            && ticket.OriginalHumanAgentId is { } originalAgent
+            && await CheckOriginalAgentAsync(originalAgent, callCenter.DepartmentId, cancellationToken) == AnsweringAgentIssue.None)
+        {
+            preferred = originalAgent;
+        }
 
         if (await RestorePreviousCsAgentAsync(ticket, preferred, trigger, nowUtc, correlationId, cancellationToken) is { } restored)
         {
@@ -554,7 +575,7 @@ public sealed class TicketAutoAssignmentService(
 
         if (ticket.OriginalHumanAgentId is not null
             || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
-            || await CheckAnsweringAgentAsync(employeeId, callCenter.DepartmentId, cancellationToken) != AnsweringAgentIssue.None
+            || await CheckOriginalAgentAsync(employeeId, callCenter.DepartmentId, cancellationToken) != AnsweringAgentIssue.None
             || !ticket.RecordOriginalHumanAgent(employeeId))
         {
             return false;
@@ -581,7 +602,7 @@ public sealed class TicketAutoAssignmentService(
             || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
             || ticket.CurrentDepartmentId != callCenter.DepartmentId
             || await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(callCenter.DepartmentId, cancellationToken) is { AllowAssignment: false }
-            || await CheckAnsweringAgentAsync(creatorEmployeeId, callCenter.DepartmentId, cancellationToken) != AnsweringAgentIssue.None)
+            || await CheckOriginalAgentAsync(creatorEmployeeId, callCenter.DepartmentId, cancellationToken) != AnsweringAgentIssue.None)
         {
             return false;
         }
@@ -597,6 +618,53 @@ public sealed class TicketAutoAssignmentService(
             correlationId, cancellationToken);
         await NotifyAssignedAsync(ticket, previousOwnerEmployeeId: null, creatorEmployeeId, actorEmployeeId: creatorEmployeeId, correlationId, nowUtc, cancellationToken);
         return true;
+    }
+
+    /// <summary>Marker inside the Manual Assignment Required event note that records a Call Center return whose Original Human Agent was ineligible.</summary>
+    public const string OriginalAgentHoldMarker = "OriginalAgentUnavailable";
+
+    /// <summary>
+    /// Whether the Original Human Agent may take Call Center work NOW. Everything <see cref="CheckAnsweringAgentAsync"/> checks (not a service identity,
+    /// account not locked out, Call Center member, CS Agent role), plus the one thing it does not: a DEACTIVATED employee keeps their department
+    /// membership, so deactivation is checked against the department's active members. Used only for the Original Human Agent paths.
+    /// </summary>
+    private async Task<AnsweringAgentIssue> CheckOriginalAgentAsync(Guid employeeId, int callCenterDepartmentId, CancellationToken cancellationToken)
+    {
+        var issue = await CheckAnsweringAgentAsync(employeeId, callCenterDepartmentId, cancellationToken);
+        if (issue != AnsweringAgentIssue.None)
+        {
+            return issue;
+        }
+
+        var active = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(callCenterDepartmentId, activeEmployeesOnly: true, cancellationToken);
+        return active.Any(a => a.EmployeeId == employeeId) ? AnsweringAgentIssue.None : AnsweringAgentIssue.Inactive;
+    }
+
+    /// <summary>
+    /// True while an unowned ticket is held for an explicit, authorized assignment: its last Call Center return found the Original Human Agent
+    /// ineligible (<see cref="OriginalAgentHoldMarker"/>) and nobody has been assigned since. Automatic paths (rotation, intake, reconciler, backfill,
+    /// Genesys update) must not assign it; a person's assignment, a claim or the authorized retry clears it by assigning (the hold is then moot).
+    /// </summary>
+    public async Task<bool> IsHeldForManualAssignmentAsync(Ticket ticket, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        if (ticket.CurrentOwnerEmployeeId is not null || ticket.OriginalHumanAgentId is null || workflowEventRepository is null)
+        {
+            return false;
+        }
+
+        var hold = (await workflowEventRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken))
+            .Where(e => e.EventType == WorkflowEventType.ManualAssignmentRequired
+                && e.Note is not null && e.Note.Contains(OriginalAgentHoldMarker, StringComparison.Ordinal))
+            .OrderByDescending(e => e.OccurredAtUtc)
+            .FirstOrDefault();
+        if (hold is null)
+        {
+            return false;
+        }
+
+        return !(await ticketAssignmentRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Any(a => a.AssignedAtUtc > hold.OccurredAtUtc);
     }
 
     /// <summary>How <see cref="ReturnToOriginalHumanAgentAsync"/> ended.</summary>
@@ -641,10 +709,13 @@ public sealed class TicketAutoAssignmentService(
             return (OriginalAgentReturn.AlreadyOwned, original);
         }
 
-        var issue = await CheckAnsweringAgentAsync(original, callCenter.DepartmentId, cancellationToken);
+        var issue = await CheckOriginalAgentAsync(original, callCenter.DepartmentId, cancellationToken);
         var current = await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken);
         if (issue != AnsweringAgentIssue.None)
         {
+            // Exceptional return: the ticket waits UNASSIGNED in the Call Center queue (no rotation is run here) until an authorized person assigns it.
+            // The owner carried over from the other department is released (its row superseded, never deleted), the reason is audited, and a
+            // Manual Assignment Required event carrying OriginalAgentHoldMarker suspends every automatic assignment path for this ticket.
             if (previousOwner is not null)
             {
                 current?.MarkSuperseded();
@@ -654,8 +725,22 @@ public sealed class TicketAutoAssignmentService(
             await auditWriter.WriteAsync(
                 actorEmployeeId, "ReturnToCallCenterQueue", "Ticket", ticket.TicketId.ToString(),
                 beforeValue: previousOwner?.ToString() ?? "DepartmentQueue",
-                afterValue: $"DepartmentQueue;DepartmentId={callCenter.DepartmentId};OriginalHumanAgentId={original};Reason=OriginalAgentIneligible({issue})",
+                afterValue: $"DepartmentQueue;DepartmentId={callCenter.DepartmentId};OriginalHumanAgentId={original};Reason=OriginalAgentIneligible({issue});"
+                    + "AutomaticAssignmentSuspended=true;RequiresAuthorizedAssignment=true",
                 correlationId, cancellationToken);
+
+            if (workflowEventRepository is not null)
+            {
+                await workflowEventRepository.AddAsync(
+                    new TicketWorkflowEvent(
+                        ticket.TicketId, WorkflowEventType.ManualAssignmentRequired, nowUtc, actorEmployeeId,
+                        ticketApprovalId: null,
+                        $"Returned to the Call Center but its Original Human Agent cannot take it ({Describe(issue)}). Left in the Call Center queue; automatic "
+                        + $"assignment is suspended until an authorized person assigns it. [{OriginalAgentHoldMarker};OriginalHumanAgentId={original};Issue={issue}]",
+                        correlationId),
+                    cancellationToken);
+            }
+
             return (OriginalAgentReturn.OriginalAgentIneligible, null);
         }
 
@@ -1002,6 +1087,11 @@ public sealed class TicketAutoAssignmentService(
         if (ticket.CurrentOwnerEmployeeId is { } existing)
         {
             return new AutoAssignmentResult(AutoAssignmentOutcome.AlreadyAssigned, existing);
+        }
+
+        if (await IsHeldForManualAssignmentAsync(ticket, cancellationToken))
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.HeldForManualAssignment);
         }
 
         if (await ResolveCallCenterAsync(cancellationToken) is not { } callCenter

@@ -1,10 +1,11 @@
-using TigerCS.Application.Modules.GenesysIntegration.Dto;
+﻿using TigerCS.Application.Modules.GenesysIntegration.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
+using TigerCS.Tests.Administration.Services;
 using TigerCS.Tests.CustomerVerification.Fakes;
 using TigerCS.Tests.IdentityAndAccess.Fakes;
 using TigerCS.Tests.Notifications.Fakes;
@@ -52,6 +53,7 @@ public class OriginalHumanAgentOwnershipTests
         public FakeRequestTypeRepository RequestTypes { get; } = new();
         public FakeTicketWorkflowEventRepository Events { get; } = new();
         public FakeRotation Rotation { get; } = new();
+        public FakeUserAccountManager Accounts { get; } = new();
         public FakeTicketingUnitOfWork UnitOfWork { get; } = new();
         public TicketAutoAssignmentService AutoAssignment { get; }
         public TicketCreationAppService Creation { get; }
@@ -66,7 +68,8 @@ public class OriginalHumanAgentOwnershipTests
             Collections = Departments.AddDepartment("Collections", "COL");
             CallCenter = Departments.AddDepartment("Call Center", "CC");
 
-            AutoAssignment = new TicketAutoAssignmentService(Rules, Settings, Members, Assignments, Audit, Rotation, Departments);
+            AutoAssignment = new TicketAutoAssignmentService(
+                Rules, Settings, Members, Assignments, Audit, Rotation, Departments, roleReader: Accounts, accountManager: Accounts, workflowEventRepository: Events);
 
             var outbox = new FakeOutboxWriter();
             UnitOfWork.OutboxWriter = outbox;
@@ -89,6 +92,7 @@ public class OriginalHumanAgentOwnershipTests
             foreach (var id in ids)
             {
                 Members.Assignments.Add(new UserDepartmentAssignment(id, CallCenter.DepartmentId, isPrimary: true, Now, assignedByEmployeeId: null));
+                Accounts.Add(id, $"agent-{id:N}", Roles.CsAgent);
             }
 
             return ids;
@@ -98,6 +102,7 @@ public class OriginalHumanAgentOwnershipTests
         {
             var id = Guid.NewGuid();
             Members.Assignments.Add(new UserDepartmentAssignment(id, department.DepartmentId, isPrimary: true, Now, assignedByEmployeeId: null));
+            Accounts.Add(id, $"user-{id:N}", Roles.DepartmentEmployee);
             return id;
         }
 
@@ -116,6 +121,17 @@ public class OriginalHumanAgentOwnershipTests
 
         public Task<TicketMutationResult> TransferAsync(Ticket ticket, Department target, Guid? caller = null) =>
             Assignment.TransferAsync(caller ?? Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new TransferTicketRequestDto(target.DepartmentId, "handoff", []));
+
+        /// <summary>Deactivates an employee the way administration does: the account and department membership stay, only <c>DeactivatedAtUtc</c> is set.</summary>
+        public void Deactivate(Guid employee)
+        {
+            var emp = new Employee(employee, "Former", false, Now);
+            emp.Deactivate(DateTime.UtcNow);
+            foreach (var membership in Members.Assignments.Where(a => a.EmployeeId == employee))
+            {
+                typeof(UserDepartmentAssignment).GetProperty(nameof(UserDepartmentAssignment.Employee))!.SetValue(membership, emp);
+            }
+        }
 
         /// <summary>Simulates the destination department's own assignment (a Collections collector taking the ticket).</summary>
         public async Task TakenByAsync(Ticket ticket, Guid employee)
@@ -271,8 +287,8 @@ public class OriginalHumanAgentOwnershipTests
         Assert.Equal(kawthar, ticket.OriginalHumanAgentId);
     }
 
-    [Fact]
-    public async Task ReturnToCallCenter_WhenTheOriginalAgentIsNoLongerACallCenterMember_GoesToTheQueue_WithTheReasonRecorded()
+    /// <summary>Kawthar creates it, Collections takes it, then Kawthar becomes ineligible; returns the ticket back in the Call Center.</summary>
+    private static async Task<(Env Env, Ticket Ticket, Guid Kawthar, Guid Bader, Guid Collector)> ReturnedWithIneligibleOriginalAsync(Action<Env, Guid> makeIneligible)
     {
         var env = new Env();
         var agents = env.AddCallCenterAgents(2);
@@ -282,16 +298,117 @@ public class OriginalHumanAgentOwnershipTests
         await env.TransferAsync(ticket, env.Collections, kawthar);
         await env.TakenByAsync(ticket, collector);
 
-        env.Members.Assignments.RemoveAll(a => a.EmployeeId == kawthar);   // Kawthar left the Call Center
-
+        makeIneligible(env, kawthar);
         await env.TransferAsync(ticket, env.CallCenter, collector);
+        return (env, ticket, kawthar, bader, collector);
+    }
 
-        Assert.NotEqual(kawthar, ticket.CurrentOwnerEmployeeId);
-        Assert.NotEqual(collector, ticket.CurrentOwnerEmployeeId);          // the collector does not keep a Call Center ticket
-        Assert.Equal(bader, ticket.CurrentOwnerEmployeeId);                 // the ordinary Call Center assignment applies
-        Assert.Equal(kawthar, ticket.OriginalHumanAgentId);                 // still recorded
+    public static TheoryData<string> IneligibleReasons => new() { "left the Call Center", "deactivated", "locked out", "lost the CS Agent role" };
+
+    private static void MakeIneligible(Env env, Guid kawthar, string reason)
+    {
+        switch (reason)
+        {
+            case "left the Call Center": env.Members.Assignments.RemoveAll(a => a.EmployeeId == kawthar); break;
+            case "deactivated": env.Deactivate(kawthar); break;
+            case "locked out": env.Accounts.LockOut(kawthar); break;
+            default: env.Accounts.Add(kawthar, "kawthar", Roles.DepartmentEmployee); break;
+        }
+    }
+
+    [Theory]
+    [MemberData(nameof(IneligibleReasons))]
+    public async Task ReturnToCallCenter_WhenTheOriginalAgentIsIneligible_LeavesTheOwnerNull_NoRoundRobin_AndAuditsTheReason(string reason)
+    {
+        var (env, ticket, kawthar, _, collector) = await ReturnedWithIneligibleOriginalAsync((e, k) => MakeIneligible(e, k, reason));
+
+        Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                          // in the Call Center queue: not the collector, not the rotation's pick
+        Assert.NotEqual(collector, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(kawthar, ticket.OriginalHumanAgentId);                  // still recorded
+        Assert.DoesNotContain(env.Rotation.Rows.Keys, id => id == env.CallCenter.DepartmentId);   // the rotation was never consulted or advanced
+        Assert.DoesNotContain(env.Assignments.Added, a => a.IsCurrent && a.AssignedDepartmentId == env.CallCenter.DepartmentId && a.TicketId == ticket.TicketId);
         Assert.Contains(env.Audit.Entries, e =>
-            e.Action == "ReturnToCallCenterQueue" && e.AfterValue!.Contains("Reason=OriginalAgentIneligible") && e.AfterValue.Contains($"OriginalHumanAgentId={kawthar}"));
+            e.Action == "ReturnToCallCenterQueue" && e.AfterValue!.Contains("Reason=OriginalAgentIneligible")
+            && e.AfterValue.Contains("RequiresAuthorizedAssignment=true") && e.AfterValue.Contains($"OriginalHumanAgentId={kawthar}"));
+        Assert.Contains(env.Events.All, e =>
+            e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note!.Contains(TicketAutoAssignmentService.OriginalAgentHoldMarker));
+        Assert.True(await env.AutoAssignment.IsHeldForManualAssignmentAsync(ticket));
+    }
+
+    [Fact]
+    public async Task HeldReturn_IsNeverAssignedByBackgroundJobsOrAutomaticTriggers_UntilAnAuthorizedActionAssignsIt()
+    {
+        var (env, ticket, kawthar, bader, _) = await ReturnedWithIneligibleOriginalAsync((e, k) => MakeIneligible(e, k, "left the Call Center"));
+        var rows = env.Assignments.Added.Count;
+
+        // Every automatic route: shared rotation under each automatic trigger, Call Center intake (reconciler / handoff), the backfill's confirmed handler.
+        foreach (var trigger in new[] { AutoAssignmentTrigger.Backfill, AutoAssignmentTrigger.CallCenterIntake, AutoAssignmentTrigger.CategoryRouted, AutoAssignmentTrigger.DepartmentTransfer, AutoAssignmentTrigger.TicketCreated })
+        {
+            var result = await env.AutoAssignment.EnsureCsAgentAsync(ticket, null, trigger, Now, Guid.NewGuid());
+            Assert.Equal(AutoAssignmentOutcome.HeldForManualAssignment, result.Outcome);
+        }
+
+        Assert.Equal(AutoAssignmentOutcome.HeldForManualAssignment, (await env.AutoAssignment.AssignCallCenterIntakeAsync(ticket, Now, Guid.NewGuid())).Outcome);
+        Assert.Equal(AutoAssignmentOutcome.HeldForManualAssignment,
+            (await env.AutoAssignment.AssignConfirmedHandlerAsync(ticket, bader, AutoAssignmentTrigger.Backfill, Now, Guid.NewGuid()))!.Outcome);
+        Assert.Equal(AutoAssignmentOutcome.HeldForManualAssignment,
+            (await env.AutoAssignment.ApplyRoundRobinFallbackAsync(ticket, new AutoAssignmentResult(AutoAssignmentOutcome.NoRuleConfigured), AutoAssignmentTrigger.CategoryRouted, Now, Guid.NewGuid())).Outcome);
+
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(rows, env.Assignments.Added.Count);                      // nothing written
+        Assert.Empty(env.Rotation.Rows);                                      // the cursor was never touched
+
+        // A person (authorized) assigns it explicitly: that works, and the hold is then moot.
+        await Task.Delay(20);
+        var assigned = await env.Assignment.AssignAsync(Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new AssignTicketRequestDto(bader, []));
+        Assert.Equal(TicketMutationOutcome.Success, assigned.Outcome);
+        Assert.Equal(bader, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(kawthar, ticket.OriginalHumanAgentId);                   // reassignment never changes it
+        Assert.False(await env.AutoAssignment.IsHeldForManualAssignmentAsync(ticket));
+    }
+
+    [Fact]
+    public async Task HeldReturn_TheAuthorizedRetry_IsAnExplicitAction_AndMayAssign()
+    {
+        var (env, ticket, _, bader, _) = await ReturnedWithIneligibleOriginalAsync((e, k) => MakeIneligible(e, k, "locked out"));
+
+        var retry = await env.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.ManualRetry, Now, Guid.NewGuid());
+
+        Assert.Equal(AutoAssignmentOutcome.AssignedRoundRobin, retry.Outcome);
+        Assert.Equal(bader, ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task HeldReturn_WhenTheOriginalAgentIsEligibleAgain_ItStillWaitsForAnExplicitAction_ThenTheRetryGivesItBackToThem()
+    {
+        var (env, ticket, kawthar, _, _) = await ReturnedWithIneligibleOriginalAsync((e, k) => MakeIneligible(e, k, "locked out"));
+        env.Accounts.Add(kawthar, "kawthar", Roles.CsAgent);   // reinstated
+
+        var automatic = await env.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.Backfill, Now, Guid.NewGuid());
+        Assert.Equal(AutoAssignmentOutcome.HeldForManualAssignment, automatic.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+
+        var retry = await env.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.ManualRetry, Now, Guid.NewGuid());
+        Assert.Equal(kawthar, retry.AssignedEmployeeId);
+    }
+
+    [Fact]
+    public async Task HeldReturn_DoesNotBlockALaterNormalReturn_AfterSomeoneWasAssignedExplicitly()
+    {
+        var (env, ticket, kawthar, bader, collector) = await ReturnedWithIneligibleOriginalAsync((e, k) => MakeIneligible(e, k, "left the Call Center"));
+        await Task.Delay(20);
+        await env.Assignment.AssignAsync(Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new AssignTicketRequestDto(bader, []));
+        Assert.Equal(bader, ticket.CurrentOwnerEmployeeId);
+
+        // Release the owner later (e.g. closed work moves on): an automatic assignment is NOT held by the stale marker any more.
+        (await env.Assignments.GetCurrentAsync(ticket.TicketId))!.MarkSuperseded();
+        ticket.ReleaseOwner();
+        var result = await env.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.Backfill, Now, Guid.NewGuid());
+
+        Assert.NotEqual(AutoAssignmentOutcome.HeldForManualAssignment, result.Outcome);
+        Assert.NotEqual(collector, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(kawthar, ticket.OriginalHumanAgentId);
     }
 
     [Fact]

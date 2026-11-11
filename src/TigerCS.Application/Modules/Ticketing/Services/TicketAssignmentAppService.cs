@@ -496,11 +496,11 @@ public sealed class TicketAssignmentAppService(
         else if (await autoAssignmentService.IsCallCenterDepartmentAsync(request.TargetDepartmentId, cancellationToken)
             && ticket.OriginalHumanAgentId is not null
             && (await autoAssignmentService.ReturnToOriginalHumanAgentAsync(ticket, callerEmployeeId, now, correlationId, cancellationToken)).Outcome
-                is TicketAutoAssignmentService.OriginalAgentReturn.Assigned or TicketAutoAssignmentService.OriginalAgentReturn.AlreadyOwned)
+                is not TicketAutoAssignmentService.OriginalAgentReturn.NoOriginalAgent)
         {
             // Back to the Call Center: the Original Human Agent takes it again (not the general queue / rotation). OriginalHumanAgentId is untouched.
-            // When that agent is inactive or ineligible the owner carried over from the other department was released and the reason audited by
-            // ReturnToOriginalHumanAgentAsync, and the ordinary Call Center assignment below applies.
+            // When that agent is inactive or ineligible the carried-over owner was released, the reason audited and the ticket left UNASSIGNED in the
+            // Call Center queue with automatic assignment suspended (ReturnToOriginalHumanAgentAsync). No department rule and no rotation runs here.
         }
         else if (ticket.CurrentOwnerEmployeeId is null)
         {
