@@ -146,7 +146,8 @@ public sealed class DashboardAppService(
             DepartmentId: request.DepartmentId,
             CreatedOnlyScope: ticketQueryAppService.IsGenesysIntegration(callerEmployeeId, callerRoles),
             OwnerVisibilityEmployeeId: callerEmployeeId,
-            IncludeGenesysIntake: await ticketQueryAppService.SeesGenesysIntakeAsync(callerEmployeeId, callerRoles, cancellationToken));
+            IncludeGenesysIntake: await ticketQueryAppService.SeesGenesysIntakeAsync(callerEmployeeId, callerRoles, cancellationToken),
+            ClosedAssigneeEmployeeId: ticketQueryAppService.ResolveClosureAssigneeScope(callerEmployeeId, callerRoles));
 
         var snapshot = await dashboardQueryRepository.GetOverviewAsync(query, cancellationToken);
 

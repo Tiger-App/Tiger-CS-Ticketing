@@ -94,7 +94,9 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
 
         if (query.OwnerEmployeeId is { } ownerEmployeeId)
         {
-            filtered = filtered.Where(t => t.CurrentOwnerEmployeeId == ownerEmployeeId);
+            filtered = query.ClosureCategory is not null || query.ClosedFromUtc is not null || query.ClosedToUtc is not null
+                ? filtered.AssignedToIncludingClosed(dbContext, ownerEmployeeId) // closure clears the owner: judge a closed ticket by its last assignee, as the card does
+                : filtered.Where(t => t.CurrentOwnerEmployeeId == ownerEmployeeId);
         }
 
         if (!string.IsNullOrWhiteSpace(query.Search))
@@ -191,6 +193,12 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
         if (query.PendingApprovalFor is { } approverScope)
         {
             filtered = filtered.WithPendingApprovalActionableBy(dbContext, approverScope);
+        }
+
+        if (query.ClosedAssigneeEmployeeId is { } closedAssignee && (query.ClosureCategory is not null || query.ClosedFromUtc is not null || query.ClosedToUtc is not null))
+        {
+            // A closure drill-down (the Dashboard closure cards) lists exactly what the card counted: an employee sees only their own closed tickets.
+            filtered = filtered.AssignedToIncludingClosed(dbContext, closedAssignee);
         }
 
         if (query.ClosureCategory is { } closureCategory)

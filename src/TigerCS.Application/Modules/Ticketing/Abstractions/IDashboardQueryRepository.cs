@@ -53,6 +53,7 @@ namespace TigerCS.Application.Modules.Ticketing.Abstractions;
 /// <param name="ReviewsAreTest">Which reviews count as customer feedback for the Reviewed / Not Reviewed KPIs: Test-mode reviews while customer notifications run in test mode (UAT), real reviews otherwise. Production satisfaction statistics are unaffected.</param>
 /// <param name="CreatedOnlyScope">The Genesys integration account: with <paramref name="AgentScopeEmployeeId"/>, only tickets that employee created.</param>
 /// <param name="IncludeGenesysIntake">An eligible Call Center CS Agent: also include the unassigned Genesys-originated tickets of the CS intake / classification queue (<c>TicketQueryFilters.GenesysIntake</c>).</param>
+/// <param name="ClosedAssigneeEmployeeId">Server-resolved from the authenticated caller, never client-supplied: when set (an employee, not a manager), the four closure KPIs count only Closed tickets assigned to this employee (current owner, or the last assignee of a Closed ticket).</param>
 /// <param name="OwnerVisibilityEmployeeId">The caller: a department-scoped viewer additionally sees every ticket currently assigned to them, whatever department it is in now. Never client-supplied.</param>
 public sealed record DashboardOverviewQuery(
     IReadOnlyCollection<int>? ScopeDepartmentIds,
@@ -74,7 +75,8 @@ public sealed record DashboardOverviewQuery(
     int? DepartmentId = null,
     bool CreatedOnlyScope = false,
     Guid? OwnerVisibilityEmployeeId = null,
-    bool IncludeGenesysIntake = false);
+    bool IncludeGenesysIntake = false,
+    Guid? ClosedAssigneeEmployeeId = null);
 
 /// <summary>One aggregated row: a dimension value (null key = the value is not recorded on the ticket, e.g. no originating channel, no request type, Unclassified priority) with its display label and count. <paramref name="Code"/> is the stable master-data code where the dimension has one (channels), so the UI can pick a glyph without comparing names.</summary>
 public sealed record DashboardCountRow<TKey>(TKey? Key, string Label, int Count, string? Code = null) where TKey : struct;
