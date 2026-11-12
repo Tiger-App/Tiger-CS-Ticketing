@@ -390,7 +390,7 @@ jobs:
             "TicketAssignments.TicketAssignmentId=NO" "TicketAssignments.TicketId=NO" \
             "TicketAssignments.AssignedEmployeeId=NO" "TicketAssignments.AssignedDepartmentId=NO" \
             "TicketAssignments.AssignedAtUtc=NO" "TicketAssignments.AssigningActorEmployeeId=YES" \
-            "TicketAssignments.IsCurrent=NO" \
+            "TicketAssignments.IsCurrent=NO" "TicketAssignments.SupersededAtUtc=YES" \
             "TicketResolutions.TicketResolutionId=NO" "TicketResolutions.TicketId=NO" \
             "TicketResolutions.ResolutionOutcome=NO" "TicketResolutions.ResolutionNote=NO" \
             "TicketResolutions.ReasonCode=YES" "TicketResolutions.DuplicateOfTicketId=YES" \
@@ -406,7 +406,7 @@ jobs:
             diff <(echo "$expected") <(echo "$actual_sorted") || true
             exit 1
           fi
-          echo "Column nullability matches the confirmed design exactly (22 columns; TicketResolutions.ClosedForCustomerInactivity added by AddResolutionClosedForCustomerInactivity — NOT NULL, default 0, set only by the system inactivity closure)."
+          echo "Column nullability matches the confirmed design exactly (23 columns; TicketResolutions.ClosedForCustomerInactivity added by AddResolutionClosedForCustomerInactivity — NOT NULL, default 0, set only by the system inactivity closure; TicketAssignments.SupersededAtUtc added by AddTicketAssignmentSupersededAt — NULL while the assignment is current, stamped when it ends)."
 
       - name: Verify schema — foreign keys on new Ticketing tables (senior review item 12)
         run: |

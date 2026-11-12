@@ -23,14 +23,15 @@ namespace TigerCS.Api.Controllers;
 [RequirePermission(Permissions.ReportsView)]
 public class ReportsController(TeamPerformanceAppService teamPerformanceAppService) : ControllerBase
 {
-    /// <summary>The Team Performance report: one row per active CS Agent with Currently Assigned, Tickets Worked, Completed Follow-ups and SLA Breaches, a totals row and the picker options.</summary>
+    /// <summary>The Team Performance report: one row per active employee in every department with Currently Assigned, Tickets Worked, Completed Follow-ups and SLA Breaches, a totals row and the picker options.</summary>
     /// <remarks>
-    /// Eligible employees are the active holders of the CS Agent role; the
-    /// agent type is "Call Center Agent" for members of the Call Center
-    /// department (code CC) and "CS Agent" otherwise. Every filter is
-    /// optional. The period is UTC calendar days, inclusive, defaulting to
-    /// the last 30 days; Currently Assigned is current-state and ignores it.
-    /// Employees with no activity in the period are included with zeros.
+    /// Every active employee is listed (service identities excepted) with
+    /// their roles and department memberships, read from the database. Every
+    /// filter is optional: <c>role</c> is an Identity role name,
+    /// <c>departmentId</c> any department the employee is a member of. The
+    /// period is UTC calendar days, inclusive, defaulting to the last 30
+    /// days; Currently Assigned is current-state and ignores it. Employees
+    /// with no activity in the period are included with zeros.
     /// </remarks>
     /// <response code="200">The report.</response>
     /// <response code="403">The caller is not a CS Manager, General Manager, Chairman/CEO or System Administrator.</response>
@@ -51,7 +52,7 @@ public class ReportsController(TeamPerformanceAppService teamPerformanceAppServi
     /// </remarks>
     /// <response code="200">The records.</response>
     /// <response code="400">The metric is not one of the four counts.</response>
-    /// <response code="404">The employee is not on the report (not an active CS Agent).</response>
+    /// <response code="404">The employee is not on the report (inactive, or a service identity).</response>
     [HttpGet("team-performance/records")]
     [ProducesResponseType<TeamPerformanceRecordsDto>(StatusCodes.Status200OK)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status400BadRequest)]
@@ -69,7 +70,39 @@ public class ReportsController(TeamPerformanceAppService teamPerformanceAppServi
             TeamPerformanceRecordsOutcome.EmployeeNotEligible => Problem(
                 statusCode: StatusCodes.Status404NotFound,
                 title: "Employee not on the report.",
-                detail: "The employee is not an active holder of a reported role."),
+                detail: "The employee is not an active employee on the report."),
+            _ => Problem(statusCode: StatusCodes.Status500InternalServerError)
+        };
+    }
+
+    /// <summary>The SLA evaluations behind one employee's SLA Breaches number: a summary (total / met / breached / pending / compliance %), the SLA rules in force, and one sorted page of evaluations.</summary>
+    /// <remarks>
+    /// Read-only: it restates what the SLA engine recorded and decides
+    /// nothing. The Breached evaluations are produced by the same predicate
+    /// the report's SLA Breaches count uses, so their number equals that
+    /// count for the same period. <c>role</c> and <c>departmentId</c> are the
+    /// report's filters: the employee must satisfy them, as a row on the
+    /// report would. <c>status</c> (Met, Breached or Pending; omitted = all)
+    /// narrows the list only — the summary always covers every status.
+    /// <c>sortBy</c> is one of event, ticket, department, type, created,
+    /// started, target, due, actual, status, breach, policy; <c>sortDir</c>
+    /// is asc or desc. <c>pageSize</c> is 1–100 (default 25).
+    /// </remarks>
+    /// <response code="200">The SLA details.</response>
+    /// <response code="404">The employee is not on the report (inactive, a service identity, or excluded by the role / department filter).</response>
+    [HttpGet("team-performance/sla-details")]
+    [ProducesResponseType<TeamPerformanceSlaDetailsDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetTeamPerformanceSlaDetails([FromQuery] TeamPerformanceSlaDetailsRequestDto request, CancellationToken cancellationToken)
+    {
+        var result = await teamPerformanceAppService.GetSlaDetailsAsync(request, cancellationToken);
+        return result.Outcome switch
+        {
+            TeamPerformanceSlaDetailsOutcome.Success => Ok(result.Details),
+            TeamPerformanceSlaDetailsOutcome.EmployeeNotEligible => Problem(
+                statusCode: StatusCodes.Status404NotFound,
+                title: "Employee not on the report.",
+                detail: "The employee is not an active employee on the report under these filters."),
             _ => Problem(statusCode: StatusCodes.Status500InternalServerError)
         };
     }

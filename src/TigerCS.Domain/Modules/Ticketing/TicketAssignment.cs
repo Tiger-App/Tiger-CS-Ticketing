@@ -16,6 +16,14 @@ public class TicketAssignment
     public Guid? AssigningActorEmployeeId { get; private set; }
     public bool IsCurrent { get; private set; }
 
+    /// <summary>
+    /// When this assignment stopped being current — replaced by a later one, or released (returned to a queue, closed). Null while it is
+    /// current, and null on rows superseded before this column existed (their end time is not recorded; when a later assignment exists it
+    /// is that assignment's <see cref="AssignedAtUtc"/>). Stamped by the DbContext at save for every supersede, so no call site can forget it.
+    /// SLA reporting uses it to tell who held a ticket at a given moment, in particular that nobody did after a release.
+    /// </summary>
+    public DateTime? SupersededAtUtc { get; private set; }
+
     private TicketAssignment() { }
 
     public TicketAssignment(
@@ -39,5 +47,10 @@ public class TicketAssignment
     }
 
     /// <summary>Flipped when a later assignment supersedes this one — append-only, this row is never deleted (MVP-ERD.md §2.12).</summary>
-    public void MarkSuperseded() => IsCurrent = false;
+    /// <param name="atUtc">When it ended, if the caller knows; otherwise the DbContext stamps the save time.</param>
+    public void MarkSuperseded(DateTime? atUtc = null)
+    {
+        IsCurrent = false;
+        SupersededAtUtc ??= atUtc;
+    }
 }

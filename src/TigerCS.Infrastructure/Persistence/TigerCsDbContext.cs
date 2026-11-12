@@ -188,6 +188,33 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
 
     public DbSet<RequestTypeApprovalRequirement> RequestTypeApprovalRequirements => Set<RequestTypeApprovalRequirement>();
 
+    // Every code path that ends an assignment calls TicketAssignment.MarkSuperseded(); stamping the end time here, once, means a new
+    // path cannot forget it. SLA reporting needs the moment to tell "held at the deadline" from "released before it".
+    public override int SaveChanges(bool acceptAllChangesOnSuccess)
+    {
+        StampSupersededAssignments();
+        return base.SaveChanges(acceptAllChangesOnSuccess);
+    }
+
+    public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
+    {
+        StampSupersededAssignments();
+        return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    private void StampSupersededAssignments()
+    {
+        foreach (var entry in ChangeTracker.Entries<TicketAssignment>().Where(e => e.State == EntityState.Modified))
+        {
+            var isCurrent = entry.Property(a => a.IsCurrent);
+            var superseded = entry.Property(a => a.SupersededAtUtc);
+            if (isCurrent.IsModified && isCurrent.OriginalValue && !isCurrent.CurrentValue && superseded.CurrentValue is null)
+            {
+                superseded.CurrentValue = DateTime.UtcNow;
+            }
+        }
+    }
+
     protected override void OnModelCreating(ModelBuilder builder)
     {
         base.OnModelCreating(builder);

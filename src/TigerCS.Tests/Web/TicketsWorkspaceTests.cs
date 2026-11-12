@@ -226,6 +226,21 @@ public sealed class TicketsWorkspaceTests
     }
 
     [Fact]
+    public void TicketListView_DepartmentIsAPrimaryFilter_InTheMainBar_NotTheFiltersDrawer()
+    {
+        var list = View("Shared", "_TicketListView.cshtml");
+
+        var select = list.IndexOf("id=\"departmentId\"", StringComparison.Ordinal);
+        var drawer = list.IndexOf("id=\"ticketFilterDrawer\"", StringComparison.Ordinal);
+        Assert.True(select >= 0 && drawer >= 0 && select < drawer, "The Department select must sit in the main filter bar, before the Filters drawer.");
+        Assert.Single(System.Text.RegularExpressions.Regex.Matches(list, "id=\"departmentId\""));
+        Assert.Contains("<option value=\"\">All Departments</option>", list, StringComparison.Ordinal);
+        Assert.DoesNotContain("All my departments", list, StringComparison.Ordinal);
+        Assert.Contains("AccessibleDepartments", list, StringComparison.Ordinal);
+        Assert.Contains("[\"departmentId\"] = Model.DepartmentId?.ToString()", list, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TicketList_HasNoPriorityVerificationOrSlaColumns_ButTheirFiltersRemain_AndDetailsStillShowThem()
     {
         var list = View("Shared", "_TicketListView.cshtml");

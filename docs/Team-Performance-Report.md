@@ -1,8 +1,11 @@
 # Team Performance Report (CS Manager)
 
 The Team Performance report (`/Reports/TeamPerformance`) gives a CS Manager
-one row per agent with four counts, a totals row, and — behind every count
-— the list of tickets it was computed from. Every number comes from one
+one row per **active employee in every department** with four counts, a
+totals row, and — behind every count — the list of tickets it was computed
+from. The **Tickets with SLA Breach** count (and the other SLA figures) opens a dedicated SLA details page
+(`/Reports/TeamPerformanceSla`) that shows how the number was calculated
+(see [SLA details](#sla-details-behind-the-sla-breaches-count)). Every number comes from one
 read, `GET /api/reports/team-performance`, computed in the database by
 `TeamPerformanceQueryRepository`; every list from
 `GET /api/reports/team-performance/records`, produced by the very same
@@ -22,25 +25,20 @@ predicate the count used, so a number and its list always agree.
 
 ## Who is listed
 
-- Every **active** employee (`Employees.DeactivatedAtUtc IS NULL`) holding
-  the **CS Agent** role in Identity (`AspNetUserRoles`). The role set is the
-  single constant `TeamPerformanceAppService.EligibleRoles`, so adding a role
-  (e.g. CS Supervisor) is a one-line change.
-- There is no "Call Center Agent" role. Per
-  `docs/Genesys/Genesys-Cloud-Configuration.md` §4, call-centre agents are
-  CS Agents who belong to the **Call Center** department (code `CC`,
-  `WorkflowReferenceData.CallCenterCode`). The report derives an **agent
-  type** per employee from department membership:
-
-  | Agent type | Rule |
-  | --- | --- |
-  | Call Center Agent | Any membership is the department whose code is `CC`. |
-  | CS Agent | Otherwise. |
-
+- Every **active** employee (`Employees.DeactivatedAtUtc IS NULL`) in
+  **every department** — Customer Service, Call Center, Collections and any
+  other department configured in the system. Nothing is hardcoded: employees,
+  roles (`AspNetUserRoles` / `AspNetRoles`) and department memberships
+  (`UserDepartmentAssignments` / `Departments`) are all read from the
+  database. A configured service identity (the Genesys integration account)
+  is not a person and is not listed.
 - **One row per employee**, however many roles or departments they hold.
-  Departments are shown comma-joined, primary first.
+  Roles are shown comma-joined (alphabetical); departments comma-joined,
+  primary first.
 - Employees with **no activity** in the period are included with zeros.
 - Rows are sorted by display name.
+- There is no "agent type" any more: a Call Center agent is simply an
+  employee whose departments include Call Center — filter by Department.
 
 ## Filters
 
@@ -49,13 +47,21 @@ All optional, kept in the page URL (a GET form):
 | Parameter | Meaning |
 | --- | --- |
 | `dateFrom`, `dateTo` | UTC calendar days, inclusive. Default: the last 30 days, today included (the Dashboard's `ResolvePeriod`). A reversed range is swapped. |
-| `employeeId` | One eligible employee. An employee who is not on the report yields no rows. |
-| `agentType` | `CS Agent` or `Call Center Agent` (case-insensitive). An unknown value is ignored. |
+| `employeeId` | One active employee. An employee who is not on the report yields no rows. |
+| `role` | An Identity role name (case-insensitive); employees holding it. An unknown value is ignored. |
 | `departmentId` | Employees who are members (primary or not) of that department. |
 
-The pickers always offer the whole eligible team, the departments any of
-them belongs to, and the two agent types — not only what the current
-filters left.
+The pickers always offer **everyone**, **every configured (active) department**
+— including one with no members yet — and **every role held by an active
+employee**, not only what the current filters left. Filters combine (AND).
+
+## Authorization and visibility
+
+Unchanged by the department/employee extension: the report is for the CS
+Manager tier only (see *Who may open it*). Nothing is scoped by the
+caller's departments, because the roles that may open it already see every
+department; a CS Agent, Supervisor, Department Head/Employee or Reporting
+User receives **403** on every report endpoint, including the SLA details.
 
 ## Metric definitions
 
@@ -64,15 +70,24 @@ filters left.
 | **Currently Assigned** | Current state, **not period-bound**: tickets whose `CurrentOwnerEmployeeId` is the employee and whose `TicketStatus` is not `Closed`. |
 | **Tickets Worked** | **Distinct ticket ids** on which the employee appears as the actor of at least one recorded action within the period: a `TicketAssignment` assigned to them (`AssignedAtUtc` in period); a `TicketStatusHistory` row with `ActorEmployeeId` = them; a `TicketNote` they authored; a `TicketResolution` with `ResolvingEmployeeId` = them; a `TicketWorkflowEvent` with `ActorEmployeeId` = them; or a `TicketAgentHandoff` assigned to them whose `AssignedAtUtc` or `CompletedAtUtc` is in the period. Measured from history — **not** from current ownership: a ticket the employee holds now but did nothing on in the period does not count. |
 | **Completed Follow-ups** | `TicketAgentHandoff` rows with `Status = Completed`, `AssignedEmployeeId` = the employee and `CompletedAtUtc` in the period. Counts **work items, not tickets**: a ticket with two completed follow-ups counts twice. |
-| **SLA Breaches** | **Distinct tickets** whose breach was recorded in the period — a `TicketStatusHistory` row with `Dimension = SlaState (4)` and `NewValue = Breached (4)`, `OccurredAtUtc` in period — attributed to the employee who **held the ticket at breach time**: the latest `TicketAssignment` for that ticket with `AssignedAtUtc <= OccurredAtUtc`. Each breach is attributed to at most one employee; a breach on a ticket nobody held is attributed to nobody; two breach rows on one ticket (first response, then resolution) count once. The current owner is irrelevant. |
+| **Tickets with SLA Breach** | **Distinct tickets** with at least one *genuine SLA breach event* in the period, attributed to the employee. See [What counts as a breach](#what-counts-as-a-breach) and [attribution](#who-a-breach-belongs-to). |
+| **Breach Events** | The genuine breach events themselves: one per (ticket, clock, deadline), so a ticket whose First Response *and* Resolution both breached is two events (and a reopened ticket's new Resolution cycle breaching is another). |
+| **SLA Evaluated** | Finalized SLA clock cycles in the period: **SLA Met + Breach Events**. Pending and not-applicable clocks are excluded. |
+| **SLA Met** | Clock cycles achieved on time in the period (a first human response, or a resolution, on or before its due time with no breach flagged), credited to the holder at that moment. |
+| **SLA Compliance %** | **SLA Met ÷ SLA Evaluated × 100** (one decimal); blank when nothing was evaluated. |
 
 "In the period" means `OccurredAtUtc >= dateFrom 00:00 UTC` and
 `< dateTo + 1 day 00:00 UTC`.
 
 ### Totals row
 
-Every figure is the sum of the rows shown (after filters). Tickets Worked
-and SLA Breaches are summed per employee, so a ticket two agents both
+Every figure is the sum of the rows shown (after the Date, Employee, Role
+and Department filters), with two exceptions that are not sums:
+**Tickets with SLA Breach** is the number of *distinct tickets across the
+employees shown* (a ticket whose First Response breached under one employee and
+Resolution under another is one ticket), and **SLA Compliance %** is the combined
+Met ÷ combined Evaluated — never an average of the rows' percentages. Tickets Worked
+is summed per employee, so a ticket two agents both
 worked counts once for each of them — the total is the team's effort, not a
 ticket count.
 
@@ -84,9 +99,13 @@ with `metric` one of `CurrentlyAssigned`, `TicketsWorked`,
 report. Each record carries the ticket id, number, summary, status,
 priority, current department name and creation time, plus:
 
-- `breachedAtUtc` for SLA Breaches (the earliest breach in the period for
+- `breachedAtUtc` for SLA Breaches = Tickets with SLA Breach (the earliest genuine breach event in the period for
   that ticket);
 - `completedAtUtc` for Completed Follow-ups (one row per follow-up).
+
+On the page, the Tickets with SLA Breach number does **not** open this panel; it opens
+the SLA details page below, which lists the same tickets with the full
+calculation. (`metric=SlaBreaches` still works on the API and by URL.)
 
 Outcomes: `400` for an unknown metric, `404` for an employee who is not on
 the report (expressed as `TeamPerformanceRecordsOutcome`, never an
@@ -95,14 +114,188 @@ exception). On the page the records render as a panel under the report
 `/Tickets/{id}`; the report above it is narrowed to that employee, with a
 "Show all agents" link back.
 
+## SLA details behind the SLA numbers
+
+`GET /api/reports/team-performance/sla-details?employeeId=&dateFrom=&dateTo=&role=&departmentId=&status=&sortBy=&sortDir=&page=&pageSize=`
+— page: `/Reports/TeamPerformanceSla` (same query string; the report's link
+carries the period, role and department filters and opens on `status=Breached`).
+
+**It changes no SLA rule.** It restates what the SLA engine recorded and
+decides nothing; targets, due dates, breach detection and attribution are
+exactly those documented in `docs/architecture/SLA-Architecture.md` and
+implemented by `SlaDueDateService`, `SlaBreachProcessor`,
+`FirstHumanResponseRecorder` and `SlaPauseService`.
+
+### What counts as a breach
+
+Only a **genuine SLA breach event**: a `TicketStatusHistory` row on the SlaState
+dimension (new value Breached) that `SlaBreachProcessor` wrote for a clock, recognised by
+its note — `FirstResponse SLA breached (due …)` or `Resolution SLA breached (due …)`.
+The two prefixes are constants shared by the processor (which writes the note) and the
+report (which reads it): `SlaBreachNotes`. `SlaBreachNoteContractTests` pins both exact
+prefixes and runs the real processor and recorder to prove what each writes.
+
+- **Not a breach:** the `First human response recorded …` row that `FirstHumanResponseRecorder`
+  writes on *every* first response. On a ticket that is already Breached it is a
+  `Breached → Breached` row; the old report counted it, which re-counted a breached ticket in
+  every later period in which somebody answered it. It is bookkeeping, not a missed deadline.
+- **Is a breach:** a `Breached → Breached` row that carries a breach note — the *second* clock
+  breaching on an already-Breached ticket (or a reopened ticket's new Resolution cycle).
+- *Why the note and not a structured source.* The deadline-missed fact has no dedicated column.
+  Alternatives considered: the `DetectSlaBreach` audit entry (structured JSON, written in the same
+  transaction) would need JSON parsing in SQL on a large generic table and gives the clock only
+  through a flag name; the `TicketSlaInstances` breach flags say *whether* but not *when*, so
+  they cannot date a breach to a period; the idempotency key is a pruned string. The history note is
+  one indexed row per event, covers all history since the engine existed, is written and read from the
+  same constants, and is contract-tested.
+
+### Who a breach belongs to
+
+The employee who held the ticket at the **breach deadline** — the due time of the clock's SLA period —
+*not* at the moment the scheduler happened to record it. A delayed write therefore cannot move a breach
+to a later holder. Holder = the latest `TicketAssignment` at or before the deadline, unless that
+assignment had already **ended** (reassigned-away is handled by "latest at or before"; **released** to a
+queue or closed) by then, in which case nobody held it and the breach belongs to nobody. If a breach has no
+SLA period to read a deadline from, the recorded moment is used. Met cycles use the moment of the action.
+
+An assignment holds the ticket over the half-open interval **[AssignedAtUtc, SupersededAtUtc)**: a deadline
+exactly at an assignment's end belongs to the next holder (or nobody), and an assignment that is **current now** is
+never treated as ended, whatever its `SupersededAtUtc` says (the Call Center backlog *Rollback* script flips a retired
+row back to current with SQL and leaves any end time in place).
+
+Assignment end times come from `TicketAssignments.SupersededAtUtc` (migration
+`AddTicketAssignmentSupersededAt`), stamped by `TigerCsDbContext.SaveChanges` for **every** code path that ends an
+assignment, with the first value kept for good:
+
+| Path | How it ends the assignment | Covered |
+| --- | --- | --- |
+| Reassignment / manual assign / transfer-and-assign | `GetCurrentAsync()` → `MarkSuperseded()` → new row | yes |
+| Auto-assignment, round robin, rule, restore, Call Center return | same | yes |
+| Release (owner cleared: `ReleaseOwner`, owner-clearing `TransferToDepartment`, Collections queue) | `MarkSuperseded()` with no new row | yes |
+| Closure (system or person) | `ReleaseAssignmentOnClosureAsync` → `MarkSuperseded()` | yes |
+| Genesys hand-off / answer routing | `MarkSuperseded()` | yes |
+| Person-initiated "unassign" | no such endpoint exists; the only `Unassign` writer is the system's automatic release above | n/a |
+| One-off operational SQL scripts (`Execute_/Rollback_…CallCenterBacklogDistribution`, `Backfill_…ClosedTickets_ClearOwner`) | direct `UPDATE … IsCurrent` — **bypasses the hook** | no — see limitations |
+
+All of the C# paths take the row from `TicketAssignmentRepository.GetCurrentAsync` (a *tracked* entity) and call
+`MarkSuperseded`, so the hook sees the change; no code updates `TicketAssignments` with raw SQL or `ExecuteUpdate`.
+`MarkSuperseded(DateTime? atUtc)` and the hook only ever set a value when it is empty, so the first end time survives later
+calls and saves.
+
+### Historical limitations (read before trusting old periods)
+
+- **Releases before deployment have no end time.** For a row that was *replaced*, "latest assignment at or before the
+  deadline" is exact without any stored value (the successor's start is the end). For a row *released with no successor*
+  while the ticket was open, the moment was never recorded; it is **not** backfilled and the holder is treated as still
+  holding (the pre-existing behaviour). Closure releases cannot matter: no SLA deadline passes after closure.
+- **Not reconstructed on purpose.** Audit entries (`Unassign`, `ReturnToCallCenterQueue`, `CollectionsAutoAssignSkipped`)
+  record when an audit row was written, several can exist per ticket, their names are heterogeneous, and nothing ties one to
+  a specific assignment row — a guess would silently change who a breach belongs to.
+- **Operational SQL scripts do not stamp the column.** Running them after deployment leaves `SupersededAtUtc` NULL for the
+  rows they retire. For the backlog distribution the retired row always has a successor (exact); for the closed-ticket
+  clean-up it is irrelevant (closed). If a script is ever changed or added that releases owners, it should set
+  `SupersededAtUtc = <the moment>` itself.
+- Run `Diagnose_TigerCS_AssignmentEndTimes_ReadOnly.sql` (read-only) to see the real numbers: assignment rows by class
+  (current / stamped / replaced-exact / ended-on-closure / **released-end-unknown**), stale "current" rows on ownerless
+  tickets, and how many genuine breach events in a period sit on a holder row whose end is unknown.
+- A tiny window remains where an assignment's end is stamped with the server clock while its successor carries the
+  application's clock: both come from the same host clock, so the gap is a few milliseconds at most.
+
+The period still means "recorded in the period" for breaches and "action happened in the period" for Met.
+
+### Evaluations
+
+| Status | Population (all attributed to one employee, within the period) |
+| --- | --- |
+| **Breached** | One record per **breach event** (above). Employee = holder at the deadline. |
+| **Met** | A first human response (`Ticket.FirstHumanResponseAtUtc`) or a resolution (`TicketResolution.ResolvedAtUtc`) recorded in the period, **on or before** the SLA period's due time, with that clock's breach flag not set. One Resolution cycle per SLA period (a reopen starts a new one); First Response is carried across periods and counted once. Employee = holder at the moment of the action. |
+| **Pending** | A clock still open on a non-Closed ticket the employee holds **now**: no first human response / resolution in the current period and not breached. Current state, like Currently Assigned. **Not evaluated** — shown for context only. |
+
+`SLA Evaluated = Met + Breach Events`; `SLA Compliance % = Met ÷ Evaluated × 100`. The main table's rows,
+its totals row and the employee-details summary all call the same aggregation (`SlaCounts.Of`), and the
+details list is the same set of events enriched with the facts they were decided from (`GetSlaEventsAsync`).
+The employee details also split Breach Events into First Response and Resolution.
+
+**Why Evaluated is unique clock cycles, not history rows.** A cycle is (ticket, clock, deadline). Breach events are
+de-duplicated on exactly that key (a stray repeated history row for the same deadline counts once), the SLA engine writes
+one breach per key (the breach flag, the `IdempotencyRecords` row and its **unique index** make a repeated or concurrent run a
+no-op — a second worker's whole transaction is rejected), First Response is counted once per ticket (it is carried across
+periods and never restarted), and Resolution once per SLA period (a reopen starts a new cycle with its own deadline).
+A cycle is either Met (flag clear, action on time) or a Breach Event (flag set) — never both.
+
+**Impact on past numbers.** Wherever a breached ticket was answered later (or a first response was recorded
+on a ticket already Breached) in a later period, the old count included that ticket again; the corrected count
+does not. Past periods will read lower by that amount. The size is not known from the code alone — run the
+read-only query in the PR description against production to quantify it.
+
+### Fields
+
+Ticket number (link to Ticket Details), department responsible (the department
+of the holder's assignment), SLA type, ticket created, SLA started, SLA target
+(configured duration + clock basis), SLA due, actual response / resolution,
+status, breach duration, assigned employee, SLA policy applied and a
+plain-language reason. All timestamps are **UTC**, formatted
+`yyyy-MM-dd HH:mm`.
+
+- *SLA started*: First Response = the first SLA period's clock start (it is never restarted); Resolution = the start of the period in force.
+- *SLA due*: the due time the system holds, pauses already added (`TicketSlaInstances`).
+- *Actual*: first human response / the first resolution recorded in that period.
+- *Breach duration*: actual − due; while the action has not happened yet, now − due, marked "(ongoing)".
+- *SLA policy*: the priority, whether a request-type SLA row or the priority policy governed it, the target and clock basis, any paused time, and why a configured request-type SLA was not applied (all from the snapshot on the SLA period).
+
+### The rules block
+
+The page shows the rules the system actually applies — when the timer starts
+and stops, what counts as a first response, business hours / weekends /
+holidays, pausing, reassignment, reopened tickets, how a breach is recorded
+and how it is attributed — together with the live configuration read from the
+database: the per-priority targets and clock basis (`SlaPolicies`) and the
+active business calendar (`BusinessCalendars`, working days, holiday count).
+In short: reassignment never changes a clock, it only changes who is
+accountable; a reopen starts a new Resolution cycle and carries First Response
+unchanged; a breach belongs to whoever held the ticket when it was recorded.
+
+### Paging, sorting, filtering
+
+`status` (`Met`/`Breached`/`Pending`, omitted = all) narrows the list only — the
+summary always covers every status. `sortBy` ∈ `event` (default: breach /
+achievement time), `ticket`, `department`, `type`, `created`, `started`,
+`target`, `due`, `actual`, `status`, `breach`, `policy`; `sortDir` `asc`/`desc`
+(default `desc`; missing values sort last; ties break on ticket, then type, so
+paging is stable). `pageSize` 1–100 (default 25), `page` is clamped to the last
+page. The employee's evaluations are computed in set-based queries limited to
+that employee and period and then sorted and paged on the server; only one page
+travels to the browser.
+
+The employee must satisfy the same `role` / `departmentId` filters as a row on
+the report, otherwise **404** (a deactivated employee or service identity also
+404). Rows are highlighted red (Breached) and green (Met). The main table's SLA numbers link here: Tickets with
+SLA Breach and Breach Events open the breach events, SLA Evaluated opens all cycles, SLA Met opens the Met ones.
+
 ## Where it lives
 
 | Layer | Files |
 | --- | --- |
-| Application | `Modules/Reporting/Dto/TeamPerformanceDtos.cs`, `Modules/Reporting/Abstractions/ITeamPerformanceQueryRepository.cs`, `Modules/Reporting/Services/TeamPerformanceAppService.cs` |
+| Application | `Modules/Reporting/Dto/TeamPerformanceDtos.cs`, `Modules/Reporting/Abstractions/ITeamPerformanceQueryRepository.cs`, `Modules/Reporting/Services/TeamPerformanceAppService.cs`, `Modules/Reporting/Services/TeamPerformanceSlaPresentation.cs` (wording, durations, rules, sorting) |
 | Infrastructure | `Modules/Reporting/Repositories/TeamPerformanceQueryRepository.cs` |
-| Api | `Controllers/ReportsController.cs` (`api/reports/team-performance`, `…/records`) |
-| Web | `Pages/Reports/TeamPerformance.cshtml(.cs)`, `Services/Api/ReportsApiClient.cs`, `Services/Auth/ReportsPolicy.cs`, nav item in `Pages/Shared/_Nav.cshtml` |
-| Tests | `Tests/Reporting/TeamPerformanceReportTests.cs` (SQLite, real SQL), `Tests/Reporting/Integration/TeamPerformanceEndpointsTests.cs` (authorization), `Tests/Web/TeamPerformanceRenderTests.cs` (Razor render) |
+| Api | `Controllers/ReportsController.cs` (`api/reports/team-performance`, `…/records`, `…/sla-details`) |
+| Web | `Pages/Reports/TeamPerformance.cshtml(.cs)`, `Pages/Reports/TeamPerformanceSla.cshtml(.cs)`, `Services/Api/ReportsApiClient.cs`, `Services/Auth/ReportsPolicy.cs`, nav item in `Pages/Shared/_Nav.cshtml`, styles in `wwwroot/css/site.css` |
+| Tests | `Tests/Reporting/TeamPerformanceReportTests.cs` and `TeamPerformanceSlaDetailsTests.cs` (SQLite, real SQL), `Tests/Reporting/Integration/TeamPerformanceEndpointsTests.cs` (authorization), `Tests/Web/TeamPerformanceRenderTests.cs` (Razor render) |
 
 The report is read-only: no state changes, so no audit entry is written.
+
+## Deployment
+
+One schema change: `TicketAssignments.SupersededAtUtc datetime2 NULL` (no data change, no backfill).
+
+- **The EF migration and the standalone script are alternatives, not two steps.** `AddTicketAssignmentSupersededAt.sql`
+  is exactly what EF generates for the migration (idempotent form), and both are guarded by the `__EFMigrationsHistory`
+  row `20261112071745_AddTicketAssignmentSupersededAt`. Whichever runs first records that row; the other then does
+  nothing. Use the script where `dotnet ef database update` is not run (as with the other `Add*.sql` scripts at the repository
+  root); use `database update` elsewhere.
+- Idempotent: running the script (or the migration) twice is a no-op. (It is guarded by the history row, not by a column
+  check — adding the column by hand without the history row would make it fail, like every other script here.)
+- **Order:** apply it **before** the new build starts. The new code selects the column; the old code simply ignores it, so
+  the old build keeps working against the migrated database (roll back by redeploying the old build; leave the column).
+- CI: `validate-migration` applies the migrations and the EF-generated idempotent script to a real SQL Server and pins the
+  exact column list of `TicketAssignments` (the new nullable column is part of that list).

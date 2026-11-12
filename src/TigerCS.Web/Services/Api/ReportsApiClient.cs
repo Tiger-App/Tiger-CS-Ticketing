@@ -20,7 +20,7 @@ public sealed class ReportsApiClient(HttpClient httpClient, ILogger<ReportsApiCl
         if (request.DateFrom is DateOnly from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (request.DateTo is DateOnly to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (request.EmployeeId is Guid employeeId) query["employeeId"] = employeeId.ToString();
-        if (!string.IsNullOrWhiteSpace(request.AgentType)) query["agentType"] = request.AgentType;
+        if (!string.IsNullOrWhiteSpace(request.Role)) query["role"] = request.Role;
         if (request.DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
 
         return GetAsync<TeamPerformanceReportDto>(
@@ -36,5 +36,22 @@ public sealed class ReportsApiClient(HttpClient httpClient, ILogger<ReportsApiCl
         if (request.DateTo is DateOnly to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
 
         return GetAsync<TeamPerformanceRecordsDto>($"api/reports/team-performance/records?{query}", cancellationToken);
+    }
+
+    public Task<ApiResult<TeamPerformanceSlaDetailsDto>> GetTeamPerformanceSlaDetailsAsync(TeamPerformanceSlaDetailsRequestDto request, CancellationToken cancellationToken)
+    {
+        var query = HttpUtility.ParseQueryString(string.Empty);
+        query["employeeId"] = request.EmployeeId.ToString();
+        if (request.DateFrom is DateOnly from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (request.DateTo is DateOnly to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(request.Role)) query["role"] = request.Role;
+        if (request.DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(request.Status)) query["status"] = request.Status;
+        if (!string.IsNullOrWhiteSpace(request.SortBy)) query["sortBy"] = request.SortBy;
+        if (!string.IsNullOrWhiteSpace(request.SortDir)) query["sortDir"] = request.SortDir;
+        query["page"] = request.Page.ToString(CultureInfo.InvariantCulture);
+        query["pageSize"] = request.PageSize.ToString(CultureInfo.InvariantCulture);
+
+        return GetAsync<TeamPerformanceSlaDetailsDto>($"api/reports/team-performance/sla-details?{query}", cancellationToken);
     }
 }

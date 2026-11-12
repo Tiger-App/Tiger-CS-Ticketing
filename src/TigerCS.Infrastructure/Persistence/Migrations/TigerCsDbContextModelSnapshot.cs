@@ -3158,6 +3158,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<bool>("IsCurrent")
                         .HasColumnType("bit");
 
+                    b.Property<DateTime?>("SupersededAtUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<long>("TicketId")
                         .HasColumnType("bigint");
 

@@ -18,6 +18,7 @@ public class TicketAssignmentConfiguration : IEntityTypeConfiguration<TicketAssi
         builder.Property(a => a.AssignedDepartmentId).IsRequired();
         builder.Property(a => a.AssignedAtUtc).IsRequired();
         builder.Property(a => a.IsCurrent).IsRequired();
+        builder.Property(a => a.SupersededAtUtc).IsRequired(false);
 
         // MVP-Data-Dictionary.md §2.12: "Exactly one true row per TicketId"
         // (app-enforced; filtered unique index recommended).
