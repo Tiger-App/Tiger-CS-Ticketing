@@ -3384,3 +3384,4 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .ad-option:hover { background: var(--color-neutral-tint, #f2f4f7); }
 .ad-option--primary { cursor: default; color: var(--tw-muted, #667085); }
 .ad-empty { margin: 0; padding: 12px; font-size: 13px; color: var(--tw-muted, #667085); }
+.kpi-card__detail { color: var(--text-muted, inherit); font-size: .85em; }
