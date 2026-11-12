@@ -67,6 +67,8 @@ public class TicketAssignmentHistoryEntryConfiguration : IEntityTypeConfiguratio
         builder.Property(e => e.TowerName).HasMaxLength(200);
         builder.Property(e => e.UnitNumber).HasMaxLength(100);
         builder.Property(e => e.Reason).HasMaxLength(500);
+        builder.Property(e => e.Source).HasConversion<byte?>();
+        builder.Property(e => e.GenesysConversationId).HasMaxLength(64);
         builder.HasIndex(e => new { e.TicketId, e.ChangedAtUtc }).HasDatabaseName("IX_TicketAssignmentHistory_Ticket_Changed");
 
         builder.HasOne<Ticket>().WithMany().HasForeignKey(e => e.TicketId).OnDelete(DeleteBehavior.Restrict);

@@ -128,7 +128,8 @@ public sealed class TicketAutoAssignmentService(
     ITicketWorkflowEventRepository? workflowEventRepository = null,
     ITicketNoteRepository? ticketNoteRepository = null,
     TigerCS.Application.Modules.Collections.CollectionsOptions? collectionsOptions = null,
-    IOutboxWriter? outboxWriter = null)
+    IOutboxWriter? outboxWriter = null,
+    ITicketAssignmentHistoryRepository? assignmentHistoryRepository = null)
 {
     /// <summary>
     /// Notification events for every assignment made here (rule, Round Robin, preserved agent, confirmed handler, answering agent,
@@ -892,7 +893,7 @@ public sealed class TicketAutoAssignmentService(
     public async Task<AnswerAssignmentResult> ApplyAnsweringAgentAsync(
         Ticket ticket, AnsweringAgent agent, string source, DateTime nowUtc, Guid correlationId, Guid? reportedByEmployeeId,
         bool routeToCallCenterIfAgentUnavailable, CancellationToken cancellationToken = default,
-        bool firstResponseIsFromTheAnsweringAgent = false)
+        bool firstResponseIsFromTheAnsweringAgent = false, GenesysAnswerEvent? genesysEvent = null)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         ArgumentNullException.ThrowIfNull(agent);
@@ -915,6 +916,30 @@ public sealed class TicketAutoAssignmentService(
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "A person transferred the ticket; it is left as they placed it.");
         }
 
+        // Genesys history of this ticket (empty without a history store or a Genesys event), read once.
+        var genesysHistory = genesysEvent is not null && assignmentHistoryRepository is not null
+            ? (await assignmentHistoryRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Where(h => h.Source is not null).ToList()
+            : [];
+        var eventAtUtc = genesysEvent?.EventAtUtc is { } reported && reported < nowUtc ? reported : nowUtc;
+
+        // An event older than (or as old as) the last human assignment Genesys already made is stale or out of order: it must never overwrite a
+        // newer valid assignment. The same agent again is a duplicate and is answered as AlreadyOwned below, so only a DIFFERENT agent is stale.
+        if (genesysEvent is not null
+            && agent.EmployeeId != ticket.CurrentOwnerEmployeeId
+            && genesysHistory.Where(h => h.Source is TicketAssignmentSource.GenesysDirectCall or TicketAssignmentSource.GenesysCallTransfer)
+                .Select(h => h.SourceEventAtUtc ?? h.ChangedAtUtc).DefaultIfEmpty().Max() is var lastHumanEventAt
+            && lastHumanEventAt != default
+            && eventAtUtc <= lastHumanEventAt)
+        {
+            return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "A newer Genesys assignment already exists; this older or duplicate event is ignored.");
+        }
+
+        AnsweringAgentIssue? computedIssue = null;
+        async Task<AnsweringAgentIssue> IssueAsync() => computedIssue ??=
+            agent.Issue != AnsweringAgentIssue.None || agent.EmployeeId is null
+                ? (agent.Issue != AnsweringAgentIssue.None ? agent.Issue : AnsweringAgentIssue.NotMapped)
+                : await CheckAnsweringAgentAsync(agent.EmployeeId.Value, callCenter.DepartmentId, cancellationToken);
+
         // Ownership first: never move or flag a ticket somebody already owns.
         var previousOwner = ticket.CurrentOwnerEmployeeId;
         if (previousOwner is not null)
@@ -924,15 +949,18 @@ public sealed class TicketAutoAssignmentService(
                 return new AnswerAssignmentResult(AnswerAssignmentOutcome.AlreadyOwnedByAnsweringAgent, previousOwner);
             }
 
-            if (!await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken, ticketNoteRepository, firstResponseIsFromTheAnsweringAgent))
+            if (!await TicketOwnershipRules.IsAutomaticPreAssignmentAsync(ticketAssignmentRepository, ticket, cancellationToken, ticketNoteRepository, firstResponseIsFromTheAnsweringAgent)
+                && !(genesysEvent is { AllowOwnerTransfer: true }
+                    && await IssueAsync() == AnsweringAgentIssue.None
+                    && await OwnerWasSetByGenesysAsync(ticket, previousOwner.Value, genesysHistory, cancellationToken)))
             {
+                // A person's ownership (manual / supervisor assignment, Take Ownership) stands. Only an owner Genesys itself set may be moved
+                // by the next human agent Genesys connects (a call transfer), and only to an eligible agent.
                 return new AnswerAssignmentResult(AnswerAssignmentOutcome.HumanOwnerKept, previousOwner);
             }
         }
 
-        var issue = agent.Issue != AnsweringAgentIssue.None || agent.EmployeeId is null
-            ? (agent.Issue != AnsweringAgentIssue.None ? agent.Issue : AnsweringAgentIssue.NotMapped)
-            : await CheckAnsweringAgentAsync(agent.EmployeeId.Value, callCenter.DepartmentId, cancellationToken);
+        var issue = await IssueAsync();
 
         if (issue != AnsweringAgentIssue.None && ticket.CurrentDepartmentId != callCenter.DepartmentId && !routeToCallCenterIfAgentUnavailable)
         {
@@ -993,6 +1021,19 @@ public sealed class TicketAutoAssignmentService(
                     + (previousOwner is not null && ticket.CurrentDepartmentId == callCenter.DepartmentId && !wrote ? $";ReplacedAutomaticPreAssignment={previousOwner}" : string.Empty),
                 correlationId, cancellationToken);
             await NotifyAssignedAsync(ticket, previousOwner, agentId, actorEmployeeId: agentId, correlationId, nowUtc, cancellationToken);
+
+            if (genesysEvent is not null && assignmentHistoryRepository is not null)
+            {
+                // The previous assignee is the owner being replaced, else the AI Agent when it was the last recorded assignee.
+                var previousAssignee = previousOwner ?? (genesysHistory.LastOrDefault() is { Source: TicketAssignmentSource.GenesysAiAgent } ai ? ai.NewEmployeeId : null);
+                await assignmentHistoryRepository.AddAsync(
+                    TicketAssignmentHistoryEntry.ForGenesys(
+                        ticket.TicketId, callCenter.DepartmentId, previousAssignee, agentId,
+                        previousAssignee is null ? TicketAssignmentSource.GenesysDirectCall : TicketAssignmentSource.GenesysCallTransfer,
+                        changedByEmployeeId: null, nowUtc, eventAtUtc, genesysEvent.ConversationId,
+                        previousAssignee is null ? "Genesys direct call: answered by the human agent" : "Genesys call transfer: the next human agent answered"),
+                    cancellationToken);
+            }
 
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedToAnsweringAgent, agentId, Wrote: true);
         }
@@ -1055,6 +1096,55 @@ public sealed class TicketAutoAssignmentService(
         return fallbackAgent is { } assigned
             ? new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedByRoundRobinFallback, assigned, issue, Wrote: true)
             : new AnswerAssignmentResult(AnswerAssignmentOutcome.QueuedForManualAssignment, Issue: issue, Wrote: true);
+    }
+
+    /// <summary>
+    /// True when the current owner got the ticket from a Genesys connect event (the answering agent's own act, mirrored by the latest human Genesys
+    /// history entry). A manual or supervisor assignment - even to the same person - carries another actor or is newer, so it is never "set by Genesys".
+    /// Legacy tickets with no Genesys history are treated as person-owned: nothing is moved on a guess.
+    /// </summary>
+    private async Task<bool> OwnerWasSetByGenesysAsync(
+        Ticket ticket, Guid owner, IReadOnlyList<TicketAssignmentHistoryEntry> genesysHistory, CancellationToken cancellationToken)
+    {
+        var lastHuman = genesysHistory.LastOrDefault(h => h.Source is TicketAssignmentSource.GenesysDirectCall or TicketAssignmentSource.GenesysCallTransfer);
+        if (lastHuman is null || lastHuman.NewEmployeeId != owner)
+        {
+            return false;
+        }
+
+        var current = await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken);
+        return current is { IsCurrent: true } && current.AssignedEmployeeId == owner && current.AssigningActorEmployeeId == owner
+            && current.AssignedAtUtc <= lastHuman.ChangedAtUtc;
+    }
+
+    /// <summary>
+    /// <b>The AI Agent is the initial assignee - in the history only.</b> Records that the AI Agent (the Genesys integration service account) handled
+    /// the conversation first. The ticket keeps NO owner (an ownerless AI ticket is how the rest of the system recognises AI handling: round robin,
+    /// AI auto-close, the reconciler, dashboards and performance all rely on it), and the creator and audit trail are untouched. Idempotent: written
+    /// once per ticket. Runs in the caller's transaction. Returns whether it wrote.
+    /// </summary>
+    public async Task<bool> RecordAiAgentAssignmentAsync(
+        Ticket ticket, Guid aiAgentEmployeeId, string? genesysConversationId, DateTime? eventAtUtc, DateTime nowUtc, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        if (assignmentHistoryRepository is null || aiAgentEmployeeId == Guid.Empty)
+        {
+            return false;
+        }
+
+        var existing = await assignmentHistoryRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken);
+        if (existing.Any(h => h.Source is not null))
+        {
+            return false;   // already recorded (a redelivery), or a human assignment already exists
+        }
+
+        await assignmentHistoryRepository.AddAsync(
+            TicketAssignmentHistoryEntry.ForGenesys(
+                ticket.TicketId, ticket.CurrentDepartmentId, previousEmployeeId: null, aiAgentEmployeeId, TicketAssignmentSource.GenesysAiAgent,
+                changedByEmployeeId: null, nowUtc, eventAtUtc, genesysConversationId, "AI Agent handled the conversation"),
+            cancellationToken);
+        return true;
     }
 
     /// <summary>Shared-rotation fallback for a ticket still without an owner; returns the agent, or null when none could be assigned (the failure is then recorded by the engine).</summary>
