@@ -322,8 +322,9 @@ WHERE c.object_id = OBJECT_ID(N'dbo.TicketAssignmentHistory')
 SELECT COUNT(*) AS ColumnCount FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.TicketAssignmentHistory');
 
 -- 6.4 No backfill (expect 0 right after deployment; grows only as the new application build records Genesys assignments)
-SELECT COUNT_BIG(*) AS RowsWithGenesysSource FROM dbo.TicketAssignmentHistory WITH (NOLOCK)
-WHERE Source IS NOT NULL;
+--     Dynamic SQL: [Source] does not exist when this batch is compiled (dry run / before the commit), so it must not be referenced statically.
+EXEC sp_executesql
+    N'SELECT COUNT_BIG(*) AS RowsWithGenesysSource FROM dbo.TicketAssignmentHistory WHERE Source IS NOT NULL;';
 
 -- 6.5 Existing data sanity (compare with the row counts shown above; none of these are modified)
 SELECT (SELECT COUNT_BIG(*) FROM dbo.Tickets) AS Tickets,
