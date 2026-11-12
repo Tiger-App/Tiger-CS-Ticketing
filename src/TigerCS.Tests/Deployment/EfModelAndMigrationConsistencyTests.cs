@@ -25,6 +25,34 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
             .UseSqlServer("Server=offline;Database=TigerCS_Offline;Trusted_Connection=True;TrustServerCertificate=True")
             .Options);
 
+    /// <summary>
+    /// The Original Human Agent feature applies to tickets created after deployment only: no migration or standalone script may populate
+    /// <c>OriginalHumanAgentId</c> (or anything else) for existing tickets - the two migrations are pure schema changes.
+    /// </summary>
+    [Fact]
+    public void TheOriginalHumanAgentMigrations_AndScripts_ContainNoBackfillOfExistingTickets()
+    {
+        foreach (var file in new[] { "AddTicketOriginalHumanAgent.sql", "AddOriginalAgentWorkflowCutoff.sql" })
+        {
+            var script = File.ReadAllText(FindRepositoryFile(file));
+            Assert.DoesNotContain("UPDATE", script, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("EXEC(", script, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("INSERT INTO [Tickets]", script, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("TicketAssignments", script, StringComparison.OrdinalIgnoreCase);
+        }
+
+        using var context = CreateSqlServerContext();
+        var migrator = context.GetService<IMigrator>();
+        var ef = migrator.GenerateScript(
+            fromMigration: "20261110070152_AddUserTransferDepartments",
+            toMigration: "20261111132429_AddOriginalAgentWorkflowCutoff",
+            options: MigrationsSqlGenerationOptions.Idempotent);
+        Assert.DoesNotContain("UPDATE", ef, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("TicketAssignments", ef, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[OriginalAgentWorkflowEnabled] bit NOT NULL DEFAULT CAST(0 AS bit)", ef);
+        Assert.Contains("ALTER TABLE [Tickets] ADD [OriginalHumanAgentId] uniqueidentifier NULL", ef);
+    }
+
     [Fact]
     public void TheEfModel_HasNoChangesThatAreMissingFromTheMigrations()
     {
@@ -47,16 +75,18 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         // AddManualGenesysDispatchItemFields (two columns on CollectionsDispatchItems for the Manual Genesys contact list) is the newest and is deployed by its own script.
         // AddUserTransferDepartments (one new table: the departments an employee may transfer tickets to, separate from membership) is the newest and is deployed by its own script.
         // AddTicketOriginalHumanAgent (one nullable column + index on Tickets: the first eligible Human Agent, used to route a ticket back to the Call Center) is the newest and is deployed by its own script.
-        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^1]);
-        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^2]);
-        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^3]);
-        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^4]);
-        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^5]);
-        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^6]);
-        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^7]);
-        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^8]);
-        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^9]);
-        Assert.Equal(FourPendingMigrations, migrations.SkipLast(9).TakeLast(4));
+        // AddOriginalAgentWorkflowCutoff (one NOT NULL bit column defaulting to 0: the deployment cutoff that keeps every pre-existing ticket on the legacy workflow) is the newest and is deployed by its own script.
+        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^1]);
+        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^2]);
+        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^3]);
+        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^4]);
+        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^5]);
+        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^6]);
+        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^7]);
+        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^8]);
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^9]);
+        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^10]);
+        Assert.Equal(FourPendingMigrations, migrations.SkipLast(10).TakeLast(4));
     }
 
     [Fact]

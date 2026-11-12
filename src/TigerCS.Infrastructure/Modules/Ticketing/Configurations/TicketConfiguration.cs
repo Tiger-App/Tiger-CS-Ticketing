@@ -88,6 +88,11 @@ public class TicketConfiguration : IEntityTypeConfiguration<Ticket>
         builder.Property(t => t.OriginalHumanAgentId);
         builder.HasIndex(t => t.OriginalHumanAgentId, "IX_Tickets_OriginalHumanAgentId");
 
+        // Deployment cutoff for the Original Human Agent workflow: false (the column default) for every ticket that existed before the feature, true only for a ticket the
+        // creation service made afterwards. Adding the column with a default does not modify existing rows' data; nothing backfills it.
+        builder.Property(t => t.OriginalAgentWorkflowEnabled).IsRequired().HasDefaultValue(false);
+        builder.Ignore(t => t.ActiveOriginalHumanAgentId);
+
         builder.HasOne<Department>()
             .WithMany()
             .HasForeignKey(t => t.OriginatingDepartmentId)

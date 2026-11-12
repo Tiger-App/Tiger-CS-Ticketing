@@ -456,7 +456,7 @@ public sealed class TicketAutoAssignmentService(
         if (preferred is null
             && callCenter is not null
             && ticket.CurrentDepartmentId == callCenter.DepartmentId
-            && ticket.OriginalHumanAgentId is { } originalAgent
+            && ticket.ActiveOriginalHumanAgentId is { } originalAgent
             && await CheckOriginalAgentAsync(originalAgent, callCenter.DepartmentId, cancellationToken) == AnsweringAgentIssue.None)
         {
             preferred = originalAgent;
@@ -573,7 +573,8 @@ public sealed class TicketAutoAssignmentService(
     {
         ArgumentNullException.ThrowIfNull(ticket);
 
-        if (ticket.OriginalHumanAgentId is not null
+        if (!ticket.OriginalAgentWorkflowEnabled
+            || ticket.OriginalHumanAgentId is not null
             || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
             || await CheckOriginalAgentAsync(employeeId, callCenter.DepartmentId, cancellationToken) != AnsweringAgentIssue.None
             || !ticket.RecordOriginalHumanAgent(employeeId))
@@ -649,7 +650,7 @@ public sealed class TicketAutoAssignmentService(
     {
         ArgumentNullException.ThrowIfNull(ticket);
 
-        if (ticket.CurrentOwnerEmployeeId is not null || ticket.OriginalHumanAgentId is null || workflowEventRepository is null)
+        if (ticket.CurrentOwnerEmployeeId is not null || ticket.ActiveOriginalHumanAgentId is null || workflowEventRepository is null)
         {
             return false;
         }
@@ -695,7 +696,7 @@ public sealed class TicketAutoAssignmentService(
     {
         ArgumentNullException.ThrowIfNull(ticket);
 
-        if (ticket.OriginalHumanAgentId is not { } original
+        if (ticket.ActiveOriginalHumanAgentId is not { } original
             || ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed
             || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
             || ticket.CurrentDepartmentId != callCenter.DepartmentId)

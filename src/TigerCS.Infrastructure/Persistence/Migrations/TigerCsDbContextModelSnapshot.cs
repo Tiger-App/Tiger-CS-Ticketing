@@ -2875,6 +2875,11 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(50)
                         .HasColumnType("nvarchar(50)");
 
+                    b.Property<bool>("OriginalAgentWorkflowEnabled")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bit")
+                        .HasDefaultValue(false);
+
                     b.Property<Guid?>("OriginalHumanAgentId")
                         .HasColumnType("uniqueidentifier");
 

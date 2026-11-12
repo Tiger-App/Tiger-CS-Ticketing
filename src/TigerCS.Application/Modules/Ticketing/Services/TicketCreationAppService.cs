@@ -356,6 +356,9 @@ public sealed class TicketCreationAppService(
 
             ticket.RecordCreator(callerEmployeeId);
 
+            // Deployment cutoff: only a ticket created now follows the Original Human Agent workflow. Tickets that existed before stay legacy.
+            ticket.EnableOriginalAgentWorkflow();
+
             // Manual creation by an authenticated person: they are the Original Human Agent from the first moment. A ticket created by Genesys AI or
             // any integration (no caller roles = the ingestion; or a configured service identity) starts with none - the first eligible agent to
             // accept or be assigned it becomes the original (TicketAutoAssignmentService.RecordOriginalHumanAgentAsync).
@@ -471,7 +474,7 @@ public sealed class TicketCreationAppService(
             }
             else if (request.GenesysContext is null
                 && callerRoles is not null
-                && ticket.OriginalHumanAgentId == callerEmployeeId
+                && ticket.ActiveOriginalHumanAgentId == callerEmployeeId
                 && await autoAssignmentService.TryAssignManualCreatorInCallCenterAsync(ticket, callerEmployeeId, now, correlationId, cancellationToken))
             {
                 // A Human Agent who creates the ticket by hand owns it: the Call Center rotation is not consulted (it would hand a ticket Kawthar

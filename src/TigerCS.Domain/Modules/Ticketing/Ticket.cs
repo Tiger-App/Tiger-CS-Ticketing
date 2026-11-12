@@ -75,7 +75,27 @@ public class Ticket
     /// </summary>
     public Guid? OriginalHumanAgentId { get; private set; }
 
-    /// <summary>Records the Original Human Agent. Write-once: returns false and changes nothing when one is already recorded.</summary>
+    /// <summary>
+    /// The deployment cutoff for the Original Human Agent workflow. <b>True only for a ticket created after the feature was deployed</b> - it is set once, by
+    /// the ticket creation service, and never by a migration, a backfill or a job; the column defaults to false, so every ticket that already existed is a
+    /// legacy ticket and keeps its previous routing and assignment behaviour forever, even when it is transferred again. It is deliberately separate from
+    /// <see cref="OriginalHumanAgentId"/>, which is also NULL on a new AI-created ticket until the first eligible agent takes it.
+    /// </summary>
+    public bool OriginalAgentWorkflowEnabled { get; private set; }
+
+    /// <summary>Marks a ticket created from now on as following the Original Human Agent workflow. Idempotent; called only at creation.</summary>
+    public void EnableOriginalAgentWorkflow() => OriginalAgentWorkflowEnabled = true;
+
+    /// <summary>
+    /// The Original Human Agent for routing purposes: <see cref="OriginalHumanAgentId"/> on a ticket that follows the workflow, and always null on a legacy
+    /// ticket (whatever its column holds). Every routing decision reads this, never the raw column.
+    /// </summary>
+    public Guid? ActiveOriginalHumanAgentId => OriginalAgentWorkflowEnabled ? OriginalHumanAgentId : null;
+
+    /// <summary>
+    /// Records the Original Human Agent. Write-once: returns false and changes nothing when one is already recorded, and always false for a legacy ticket
+    /// (<see cref="OriginalAgentWorkflowEnabled"/> false), whose original agent is never inferred.
+    /// </summary>
     public bool RecordOriginalHumanAgent(Guid employeeId)
     {
         if (employeeId == Guid.Empty)
@@ -83,7 +103,7 @@ public class Ticket
             throw new ArgumentException("OriginalHumanAgentId must be a real employee.", nameof(employeeId));
         }
 
-        if (OriginalHumanAgentId is not null)
+        if (!OriginalAgentWorkflowEnabled || OriginalHumanAgentId is not null)
         {
             return false;
         }
