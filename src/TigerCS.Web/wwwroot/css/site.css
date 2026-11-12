@@ -2265,7 +2265,7 @@ a.badge:hover { text-decoration: underline; }
 .report-load-state { padding: var(--space-6) var(--space-4); }
 
 /* SLA details (Team Performance drill-down). */
-.kpi-grid--five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+
 .sla-formula { margin: 0 0 var(--space-4); font-size: var(--text-sm); line-height: 1.55; color: var(--color-text-secondary); }
 .sla-rules { margin-top: 0; margin-bottom: var(--space-4); }
 .sla-caption { caption-side: top; text-align: left; padding: var(--space-3) 0 var(--space-2); font-weight: var(--weight-strong); font-size: var(--text-sm); }
@@ -2287,7 +2287,7 @@ a.badge:hover { text-decoration: underline; }
 .sla-breach-duration { color: var(--color-critical); font-weight: 600; white-space: nowrap; }
 .sla-policy, .sla-why { min-width: 240px; max-width: 360px; font-size: 12px; line-height: 1.5; }
 .sla-why__extra { display: block; margin-top: 4px; color: var(--color-text-secondary); }
-@media (max-width: 900px) { .kpi-grid--five { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
 .report-help { margin-top: var(--space-4); }
 .report-help__body { padding: var(--space-4) var(--space-5); margin-bottom: 0; }
 .report-help__list { display: grid; grid-template-columns: minmax(140px, max-content) minmax(0, 1fr); gap: var(--space-2) var(--space-4); margin: 0; font-size: var(--text-sm); line-height: 1.55; }

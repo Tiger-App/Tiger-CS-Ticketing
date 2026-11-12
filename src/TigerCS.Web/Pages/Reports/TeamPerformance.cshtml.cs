@@ -94,7 +94,7 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
     /// and the report's role / department filters travel with it, so the
     /// details are computed under exactly the filters the number was.
     /// </summary>
-    public string SlaDetailsHref(Guid employeeId)
+    public string SlaDetailsHref(Guid employeeId, string status = TeamPerformanceSlaStatuses.Breached)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["employeeId"] = employeeId.ToString();
@@ -102,7 +102,7 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
         if (DateTo is DateOnly to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (!string.IsNullOrWhiteSpace(Role)) query["role"] = Role;
         if (DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
-        query["status"] = TeamPerformanceSlaStatuses.Breached;
+        if (status.Length > 0) query["status"] = status;
         return $"/Reports/TeamPerformanceSla?{query}";
     }
 
@@ -126,10 +126,14 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
                 TeamPerformanceMetric.CurrentlyAssigned => "Currently Assigned",
                 TeamPerformanceMetric.TicketsWorked => "Tickets Worked",
                 TeamPerformanceMetric.CompletedFollowUps => "Completed Follow-ups",
-                TeamPerformanceMetric.SlaBreaches => "SLA Breaches",
+                TeamPerformanceMetric.SlaBreaches => "Tickets with SLA Breach",
                 _ => parsed.ToString()
             }
             : metric ?? string.Empty;
+
+    /// <summary>"66.7%", or an em dash when nothing was evaluated.</summary>
+    public static string ComplianceText(decimal? percent) =>
+        percent is decimal value ? value.ToString("0.#", CultureInfo.InvariantCulture) + "%" : "—";
 
     /// <summary>The roles cell: a comma-joined list (the Api already orders it).</summary>
     public static string RolesText(IReadOnlyList<string> roles) => roles.Count == 0 ? "—" : string.Join(", ", roles);

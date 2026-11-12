@@ -74,6 +74,13 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
         return await CreateService(context).GetSlaDetailsAsync(configure is null ? request : configure(request));
     }
 
+    private async Task<TeamPerformanceRecordsDto> RecordsAsync(Guid employeeId, TeamPerformanceMetric metric)
+    {
+        using var context = _db.CreateContext();
+        var result = await CreateService(context).GetRecordsAsync(new TeamPerformanceRecordsRequestDto(employeeId, metric.ToString()));
+        return result.Records!;
+    }
+
     private static void Assign(TigerCsDbContext context, Ticket ticket, Guid employeeId, DateTime atUtc, int? departmentId = null)
     {
         foreach (var current in context.TicketAssignments.Where(a => a.TicketId == ticket.TicketId && a.IsCurrent))
@@ -185,16 +192,21 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
         var amina = report.Rows.Single(r => r.EmployeeId == _aminaId);
         var details = await DetailsAsync(_aminaId);
 
-        // The number on the report is the number of Breached records, and the summary says the same.
-        Assert.Equal(3, amina.SlaBreaches);
-        Assert.Equal(amina.SlaBreaches, details.Summary.Breached);
+        // Three tickets, four genuine events (the ticket whose two clocks both breached is two events). Table and details say the same.
+        Assert.Equal(3, amina.TicketsWithSlaBreach);
+        Assert.Equal(4, amina.SlaBreachEvents);
+        Assert.Equal(amina.TicketsWithSlaBreach, details.Summary.TicketsWithBreach);
+        Assert.Equal(amina.SlaBreachEvents, details.Summary.BreachEvents);
+        Assert.Equal(details.Summary.BreachEvents, details.Summary.FirstResponseBreaches + details.Summary.ResolutionBreaches);
         var breached = details.Records.Where(r => r.Status == TeamPerformanceSlaStatuses.Breached).ToList();
-        Assert.Equal(amina.SlaBreaches, breached.Count);
-        Assert.Equal(breached.Count, breached.Select(r => r.TicketId).Distinct().Count());
+        Assert.Equal(amina.SlaBreachEvents, breached.Count);
+        Assert.Equal(amina.TicketsWithSlaBreach, breached.Select(r => r.TicketId).Distinct().Count());
+        Assert.Equal(2, details.Summary.FirstResponseBreaches);     // tickets a and c
+        Assert.Equal(2, details.Summary.ResolutionBreaches);        // tickets b and c
 
-        // Bilal holds ticket 2 now but did not hold it when it breached.
-        Assert.Equal(0, report.Rows.Single(r => r.EmployeeId == _bilalId).SlaBreaches);
-        Assert.Equal(0, (await DetailsAsync(_bilalId)).Summary.Breached);
+        // Bilal holds ticket 2 now but did not hold it at the deadline.
+        Assert.Equal(0, report.Rows.Single(r => r.EmployeeId == _bilalId).TicketsWithSlaBreach);
+        Assert.Equal(0, (await DetailsAsync(_bilalId)).Summary.BreachEvents);
 
         // Each record carries the facts it was decided from.
         var first = Assert.Single(breached, r => r.SlaType == "First Response" && r.TicketId != bothId);
@@ -212,16 +224,15 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
         Assert.Contains("Medium priority", first.Policy);
         Assert.Contains("priority SLA policy", first.Policy);
         Assert.Contains("No first human response", first.Explanation);
-        Assert.Contains("Amina Agent held the ticket", first.Explanation);
+        Assert.Contains("Amina Agent held the ticket at the deadline", first.Explanation);
 
         var reassigned = Assert.Single(breached, r => r.TicketId == reassignedId);
         Assert.Equal("Resolution", reassigned.SlaType);
         Assert.Equal("Amina Agent", reassigned.AssignedEmployeeName);
 
-        var both = Assert.Single(breached, r => r.TicketId == bothId);
-        Assert.Equal("First Response", both.SlaType);          // the earliest event is the counted one
-        Assert.NotNull(both.AdditionalBreachNote);
-        Assert.Contains("Resolution SLA breached", both.AdditionalBreachNote);
+        // The ticket whose clocks both breached: one record per clock.
+        var both = breached.Where(r => r.TicketId == bothId).OrderBy(r => r.SlaType).ToList();
+        Assert.Equal(["First Response", "Resolution"], both.Select(r => r.SlaType).ToArray());
     }
 
     [Fact]
@@ -245,15 +256,15 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
         var report = await ReportAsync(new TeamPerformanceRequestDto(DateFrom: from, DateTo: to));
         var details = await DetailsAsync(_aminaId, r => r with { DateFrom = from, DateTo = to });
 
-        Assert.Equal(2, report.Rows.Single(r => r.EmployeeId == _aminaId).SlaBreaches);
-        Assert.Equal(2, details.Summary.Breached);
+        Assert.Equal(2, report.Rows.Single(r => r.EmployeeId == _aminaId).SlaBreachEvents);
+        Assert.Equal(2, details.Summary.BreachEvents);
         Assert.Equal(from, details.DateFrom);
         Assert.Equal(to, details.DateTo);
 
         // Widening the range by one day picks up the next one on both.
         var wide = await DetailsAsync(_aminaId, r => r with { DateFrom = from, DateTo = to.AddDays(1) });
-        Assert.Equal(3, wide.Summary.Breached);
-        Assert.Equal(3, (await ReportAsync(new TeamPerformanceRequestDto(DateFrom: from, DateTo: to.AddDays(1)))).Rows.Single(r => r.EmployeeId == _aminaId).SlaBreaches);
+        Assert.Equal(3, wide.Summary.BreachEvents);
+        Assert.Equal(3, (await ReportAsync(new TeamPerformanceRequestDto(DateFrom: from, DateTo: to.AddDays(1)))).Rows.Single(r => r.EmployeeId == _aminaId).SlaBreachEvents);
     }
 
     [Fact]
@@ -290,18 +301,24 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
                     DateFrom = filter.DateFrom, DateTo = filter.DateTo, DepartmentId = filter.DepartmentId, Status = TeamPerformanceSlaStatuses.Breached
                 });
 
-                Assert.Equal(row.SlaBreaches, details.Summary.Breached);
-                Assert.Equal(row.SlaBreaches, details.TotalRecords);
-                Assert.Equal(row.SlaBreaches, details.Records.Count);
+                // The table row and the details are the same aggregation.
+                Assert.Equal(row.SlaBreachEvents, details.Summary.BreachEvents);
+                Assert.Equal(row.TicketsWithSlaBreach, details.Summary.TicketsWithBreach);
+                Assert.Equal(row.SlaMet, details.Summary.Met);
+                Assert.Equal(row.SlaEvaluated, details.Summary.Evaluated);
+                Assert.Equal(row.SlaCompliancePercent, details.Summary.CompliancePercent);
+                Assert.Equal(row.SlaBreachEvents, details.TotalRecords);
+                Assert.Equal(row.SlaBreachEvents, details.Records.Count);
             }
         }
     }
 
     [Fact]
-    public async Task ABreachedStateRowThatIsNotAClockBreach_IsStillCounted_AndLabelledAsWhatItIs()
+    public async Task ARepeatedBreachedStateRow_IsNotABreach_AndNeverInflatesTheCounts()
     {
-        // The report counts every SlaState row whose new value is Breached. Recording the first human response on a ticket that is already
-        // Breached writes such a row, so the report counts it. The details must list it too — and say what it is — or the numbers diverge.
+        // Regression. Recording the first human response on a ticket that is already Breached writes a Breached -> Breached history row
+        // ("First human response recorded ..."). It is bookkeeping, not a missed deadline, and used to be counted as a breach — re-counting
+        // a ticket in every later period in which someone answered it.
         using (var context = _db.CreateContext())
         {
             var ticket = NewTicket(context, _aminaId, Now.AddDays(-9));
@@ -313,14 +330,14 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
         }
 
         var report = await ReportAsync();
+        var row = report.Rows.Single(r => r.EmployeeId == _aminaId);
         var details = await DetailsAsync(_aminaId);
 
-        Assert.Equal(1, report.Rows.Single(r => r.EmployeeId == _aminaId).SlaBreaches);
-        var record = Assert.Single(details.Records, r => r.Status == TeamPerformanceSlaStatuses.Breached);
-        Assert.Equal("Breached state recorded", record.SlaType);
-        Assert.Contains("First human response recorded", record.Explanation);
-        Assert.Null(record.DueAtUtc);
-        Assert.Null(record.BreachMinutes);
+        Assert.Equal((0, 0, 0), (row.TicketsWithSlaBreach, row.SlaBreachEvents, row.SlaEvaluated));
+        Assert.Equal(0, report.Totals.TicketsWithSlaBreach);
+        Assert.Equal(0, details.Summary.BreachEvents);
+        Assert.DoesNotContain(details.Records, r => r.Status == TeamPerformanceSlaStatuses.Breached);
+        Assert.Empty((await RecordsAsync(_aminaId, TeamPerformanceMetric.SlaBreaches)).Records);
     }
 
     // ---------------------------------------------------------------
@@ -354,14 +371,15 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
 
         var details = await DetailsAsync(_aminaId);
 
-        // Met: first response (met), resolution (met), first response (late ticket answered in time).  Breached: 1.  Pending: first response + resolution of the open ticket.
+        // Met: first response (met), resolution (met), first response (late ticket answered in time).  Breach events: 1.  Pending: first response + resolution of the open ticket.
         Assert.Equal(3, details.Summary.Met);
-        Assert.Equal(1, details.Summary.Breached);
+        Assert.Equal(1, details.Summary.BreachEvents);
+        Assert.Equal(1, details.Summary.TicketsWithBreach);
         Assert.Equal(2, details.Summary.Pending);
-        Assert.Equal(6, details.Summary.TotalEvaluations);
-        Assert.Equal(details.Summary.TotalEvaluations, details.Summary.Met + details.Summary.Breached + details.Summary.Pending);
+        Assert.Equal(4, details.Summary.Evaluated);                       // Met + Breach Events; pending is not evaluated
+        Assert.Equal(details.Summary.Met + details.Summary.BreachEvents, details.Summary.Evaluated);
 
-        // 3 / (3 + 1) = 75.0 — the two Pending evaluations are not in the denominator.
+        // 3 / 4 = 75.0 — the two Pending clocks are not in the denominator.
         Assert.Equal(75.0m, details.Summary.CompliancePercent);
 
         var pending = details.Records.Where(r => r.Status == TeamPerformanceSlaStatuses.Pending).ToList();
@@ -385,7 +403,7 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
         }
 
         var details = await DetailsAsync(_aminaId);
-        Assert.Equal(0, details.Summary.Met + details.Summary.Breached);
+        Assert.Equal(0, details.Summary.Evaluated);
         Assert.Equal(2, details.Summary.Pending);
         Assert.Null(details.Summary.CompliancePercent);
 
@@ -492,7 +510,7 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
 
         var all = page1.Records.Concat(page2.Records).Concat(page3.Records).Select(r => r.TicketId).ToList();
         Assert.Equal(7, all.Distinct().Count());   // no row repeated or lost across pages
-        Assert.Equal(7, page1.Summary.Breached);   // the summary is for the whole employee, not the page
+        Assert.Equal(7, page1.Summary.BreachEvents);   // the summary is for the whole employee, not the page
 
         // A page past the end shows the last page; a nonsense page size falls back to a sane one.
         var beyond = await DetailsAsync(_aminaId, r => r with { Status = status, PageSize = 3, Page = 99 });
@@ -633,6 +651,7 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
 
         // The formula is stated, with Pending excluded.
         Assert.Contains("Pending", TeamPerformanceSlaSummaryDto.Formula);
-        Assert.Contains("(Met + Breached)", TeamPerformanceSlaSummaryDto.Formula);
+        Assert.Contains("Evaluated = Met + Breach Events", TeamPerformanceSlaSummaryDto.Formula);
+        Assert.Contains("What counts as a breach", topics);
     }
 }

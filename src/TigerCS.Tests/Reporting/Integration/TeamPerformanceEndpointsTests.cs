@@ -125,13 +125,13 @@ public class TeamPerformanceEndpointsTests(TigerCsApiFactory factory) : IClassFi
         Assert.Equal("due", details.SortBy);
         Assert.Equal("asc", details.SortDir);
         Assert.Equal(10, details.PageSize);
-        Assert.Equal(0, details.Summary.Breached);
+        Assert.Equal(0, details.Summary.BreachEvents);
         Assert.Empty(details.Records);
         Assert.Contains(details.Rules.Rules, r => r.Topic == "How breaches are attributed to employees");
 
         // The same number as the report says.
         var report = await manager.GetFromJsonAsync<TeamPerformanceReportDto>("/api/reports/team-performance?dateFrom=2026-08-01&dateTo=2026-09-01");
-        Assert.Equal(report!.Rows.Single(r => r.EmployeeId == agentId).SlaBreaches, details.Summary.Breached);
+        Assert.Equal(report!.Rows.Single(r => r.EmployeeId == agentId).TicketsWithSlaBreach, details.Summary.TicketsWithBreach);
 
         Assert.Equal(HttpStatusCode.NotFound,
             (await manager.GetAsync($"/api/reports/team-performance/sla-details?employeeId={Guid.NewGuid()}")).StatusCode);

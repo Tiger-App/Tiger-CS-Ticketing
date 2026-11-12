@@ -44,21 +44,24 @@
     else
     {
         @* ---- Summary: the evaluation counts and the compliance formula. ---- *@
-        <div class="kpi-grid kpi-grid--five sla-summary" aria-label="SLA summary">
-            <div class="kpi-card"><strong>@d.Summary.TotalEvaluations</strong><span>Total SLA evaluations</span></div>
+        <div class="kpi-grid kpi-grid--six sla-summary" aria-label="SLA summary">
+            <div class="kpi-card"><strong>@d.Summary.Evaluated</strong><span>SLA evaluated</span></div>
             <div class="kpi-card kpi-card--attention tone-success"><strong>@d.Summary.Met</strong><span>SLA met</span></div>
-            <div class="kpi-card kpi-card--attention tone-critical"><strong>@d.Summary.Breached</strong><span>SLA breached</span></div>
-            <div class="kpi-card kpi-card--attention tone-warning"><strong>@d.Summary.Pending</strong><span>Pending SLA</span></div>
+            <div class="kpi-card kpi-card--attention tone-critical"><strong>@d.Summary.BreachEvents</strong><span>Breach events</span></div>
+            <div class="kpi-card kpi-card--attention tone-critical"><strong>@d.Summary.TicketsWithBreach</strong><span>Tickets with SLA breach</span></div>
             <div class="kpi-card kpi-card--attention tone-info"><strong>@TeamPerformanceSlaModel.ComplianceText(d.Summary)</strong><span>SLA compliance</span></div>
+            <div class="kpi-card kpi-card--attention tone-warning"><strong>@d.Summary.Pending</strong><span>Pending (not evaluated)</span></div>
         </div>
+        <p class="sla-formula"><strong>Breach events by clock.</strong> First Response: @d.Summary.FirstResponseBreaches · Resolution: @d.Summary.ResolutionBreaches
+            (a ticket that breached both clocks is two events but one ticket).</p>
         <p class="sla-formula"><strong>Formula.</strong> @TeamPerformanceSlaSummaryDto.Formula
             @if (d.Summary.CompliancePercent is decimal)
             {
-                <text> Here: @d.Summary.Met / (@d.Summary.Met + @d.Summary.Breached) × 100 = @TeamPerformanceSlaModel.ComplianceText(d.Summary).</text>
+                <text> Here: @d.Summary.Met / (@d.Summary.Met + @d.Summary.BreachEvents) × 100 = @TeamPerformanceSlaModel.ComplianceText(d.Summary).</text>
             }
             else
             {
-                <text> Nothing has been decided yet in this period (Met + Breached = 0), so there is no percentage.</text>
+                <text> Nothing has been evaluated yet in this period (Met + Breach Events = 0), so there is no percentage.</text>
             }
         </p>
 
@@ -118,8 +121,8 @@
                     <div class="dash-card__subtitle">@d.TotalRecords @(d.TotalRecords == 1 ? "record" : "records")@(d.StatusFilter is null ? "" : $" · {d.StatusFilter} only") · red = breached, green = met</div>
                 </div>
                 <nav class="sla-tabs" aria-label="Filter by SLA status">
-                    <a class="sla-tab @(d.StatusFilter is null ? "is-active" : "")" href="@Model.Href(1, status: "")">All (@d.Summary.TotalEvaluations)</a>
-                    <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Breached ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Breached)">Breached (@d.Summary.Breached)</a>
+                    <a class="sla-tab @(d.StatusFilter is null ? "is-active" : "")" href="@Model.Href(1, status: "")">All (@(d.Summary.Evaluated + d.Summary.Pending))</a>
+                    <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Breached ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Breached)">Breach events (@d.Summary.BreachEvents)</a>
                     <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Met ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Met)">Met (@d.Summary.Met)</a>
                     <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Pending ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Pending)">Pending (@d.Summary.Pending)</a>
                 </nav>
@@ -172,10 +175,6 @@
                                     <td class="sla-policy">@r.Policy</td>
                                     <td class="sla-why">
                                         @r.Explanation
-                                        @if (r.AdditionalBreachNote is not null)
-                                        {
-                                            <span class="sla-why__extra">@r.AdditionalBreachNote</span>
-                                        }
                                     </td>
                                 </tr>
                             }

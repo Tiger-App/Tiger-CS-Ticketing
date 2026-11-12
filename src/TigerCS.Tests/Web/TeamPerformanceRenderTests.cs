@@ -138,14 +138,28 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         Assert.Contains($"href=\"/Reports/TeamPerformance?employeeId={BilalId}&amp;metric=TicketsWorked\"", html, StringComparison.Ordinal);
         Assert.Contains("class=\"report-count report-count--critical\"", html, StringComparison.Ordinal);
 
+        // The SLA columns: the distinct-ticket metric is labelled as such, the events are separate, and the rest of the SLA figures follow.
+        Assert.Contains("<th scope=\"col\" class=\"cell-num\">Tickets with SLA Breach</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<th scope=\"col\" class=\"cell-num\">Breach Events</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<th scope=\"col\" class=\"cell-num\">SLA Evaluated</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<th scope=\"col\" class=\"cell-num\">SLA Met</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<th scope=\"col\" class=\"cell-num\">SLA Compliance %</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"cell-num\">60%</td>", html, StringComparison.Ordinal);       // Amina: 3 / 5
+        Assert.Contains("<td class=\"cell-num\">100%</td>", html, StringComparison.Ordinal);      // Bilal: 4 / 4
+        Assert.Contains("<td class=\"cell-num\">&#x2014;</td>", html, StringComparison.Ordinal);         // Cora: nothing evaluated
+
         // Totals at the bottom.
         Assert.Contains("<tr class=\"report-totals\">", html, StringComparison.Ordinal);
         Assert.Contains("3 employees</td>", html, StringComparison.Ordinal);
         Assert.Contains("<td class=\"cell-num\">9</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"cell-num\">77.8%</td>", html, StringComparison.Ordinal);     // combined 7 / 9, not an average of the rows
 
         // The definitions travel with the page.
         Assert.Contains("How these numbers are calculated", html, StringComparison.Ordinal);
-        Assert.Contains("<dt>SLA Breaches</dt>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>Tickets with SLA Breach</dt>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>Breach Events</dt>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>SLA Evaluated</dt>", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>SLA Compliance %</dt>", html, StringComparison.Ordinal);
 
         // No records panel until a count is clicked; no inline styles ever.
         Assert.DoesNotContain("id=\"records\"", html, StringComparison.Ordinal);
@@ -159,7 +173,7 @@ public sealed class TeamPerformanceRenderTests : IDisposable
             $"/Reports/TeamPerformance?employeeId={AminaId}&metric=SlaBreaches&dateFrom=2026-08-13&dateTo=2026-09-12"));
 
         Assert.Contains("id=\"records\"", html, StringComparison.Ordinal);
-        Assert.Contains("SLA Breaches · Amina Agent", html, StringComparison.Ordinal);
+        Assert.Contains("Tickets with SLA Breach · Amina Agent", html, StringComparison.Ordinal);
         Assert.Contains("<th scope=\"col\">Breached</th>", html, StringComparison.Ordinal);
         Assert.DoesNotContain("<th scope=\"col\">Completed</th>", html, StringComparison.Ordinal);
         Assert.Contains("data-href=\"/Tickets/5\"", html, StringComparison.Ordinal);
@@ -182,13 +196,15 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         Assert.Contains("aria-current=\"page\">Team Performance</a>", html, StringComparison.Ordinal);
 
         // Summary tiles, the formula, and the worked numbers.
-        Assert.Contains("<span>Total SLA evaluations</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span>SLA evaluated</span>", html, StringComparison.Ordinal);
         Assert.Contains("<span>SLA met</span>", html, StringComparison.Ordinal);
-        Assert.Contains("<span>SLA breached</span>", html, StringComparison.Ordinal);
-        Assert.Contains("<span>Pending SLA</span>", html, StringComparison.Ordinal);
-        Assert.Contains("<strong>66.7%</strong>", html, StringComparison.Ordinal);
-        Assert.Contains("Pending evaluations are excluded from the denominator.", html, StringComparison.Ordinal);
-        Assert.Contains("Here: 2 / (2 + 1) × 100 = 66.7%.", html, StringComparison.Ordinal);
+        Assert.Contains("<span>Breach events</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span>Tickets with SLA breach</span>", html, StringComparison.Ordinal);
+        Assert.Contains("First Response: 1 · Resolution: 1", html, StringComparison.Ordinal);
+        Assert.Contains("<span>Pending (not evaluated)</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<strong>60%</strong>", html, StringComparison.Ordinal);
+        Assert.Contains("Pending clocks are not evaluated and are excluded.", html, StringComparison.Ordinal);
+        Assert.Contains("Here: 3 / (3 + 2) × 100 = 60%.", html, StringComparison.Ordinal);
 
         // The rules, read from the Api, and the configured policy table.
         Assert.Contains("How SLA is calculated", html, StringComparison.Ordinal);
@@ -217,7 +233,7 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         Assert.Contains("departmentId=2", html, StringComparison.Ordinal);
 
         // The status tabs carry the counts; the way back keeps the filters; no inline styles.
-        Assert.Contains("Breached (1)", html, StringComparison.Ordinal);
+        Assert.Contains("Breach events (2)", html, StringComparison.Ordinal);
         Assert.Contains("href=\"/Reports/TeamPerformance?dateFrom=2026-08-13&amp;dateTo=2026-09-12&amp;role=CS&#x2B;Agent&amp;departmentId=2\">Back to Team Performance</a>", html, StringComparison.Ordinal);
         Assert.DoesNotContain("style=\"", html, StringComparison.Ordinal);
     }
@@ -307,17 +323,19 @@ public sealed class TeamPerformanceRenderTests : IDisposable
             TeamPerformanceRowDto[] all =
             [
                 new(AminaId, "Amina Agent", ["CS Agent"],
-                    [new TeamPerformanceDepartmentDto(2, "Customer Service", true)], 3, 9, 2, 1),
+                    [new TeamPerformanceDepartmentDto(2, "Customer Service", true)], 3, 9, 2, 1, 2, 5, 3, 60.0m),
                 new(BilalId, "Bilal Caller", ["CS Agent"],
-                    [new TeamPerformanceDepartmentDto(4, "Call Center", true), new TeamPerformanceDepartmentDto(2, "Customer Service", false)], 4, 6, 5, 0),
+                    [new TeamPerformanceDepartmentDto(4, "Call Center", true), new TeamPerformanceDepartmentDto(2, "Customer Service", false)], 4, 6, 5, 0, 0, 4, 4, 100.0m),
                 new(CoraId, "Cora Collector", ["Collections Officer", "CS Supervisor"],
-                    [new TeamPerformanceDepartmentDto(3, "Collections", true)], 2, 3, 1, 0),
+                    [new TeamPerformanceDepartmentDto(3, "Collections", true)], 2, 3, 1, 0, 0, 0, 0, null),
             ];
             var rows = all.Where(r => onlyEmployee is null || r.EmployeeId == onlyEmployee).ToList();
             return new TeamPerformanceReportDto(
                 new TeamPerformanceAppliedFiltersDto(new DateOnly(2026, 8, 13), new DateOnly(2026, 9, 12), onlyEmployee, null, null),
                 rows,
-                new TeamPerformanceTotalsDto(rows.Count, rows.Sum(r => r.CurrentlyAssigned), rows.Sum(r => r.TicketsWorked), rows.Sum(r => r.CompletedFollowUps), rows.Sum(r => r.SlaBreaches)),
+                new TeamPerformanceTotalsDto(rows.Count, rows.Sum(r => r.CurrentlyAssigned), rows.Sum(r => r.TicketsWorked), rows.Sum(r => r.CompletedFollowUps),
+                    rows.Sum(r => r.TicketsWithSlaBreach), rows.Sum(r => r.SlaBreachEvents), rows.Sum(r => r.SlaEvaluated), rows.Sum(r => r.SlaMet),
+                    rows.Sum(r => r.SlaEvaluated) == 0 ? null : Math.Round(rows.Sum(r => r.SlaMet) * 100m / rows.Sum(r => r.SlaEvaluated), 1)),
                 new TeamPerformanceFilterOptionsDto(
                     all.Select(r => new TeamPerformanceOptionDto(r.EmployeeId.ToString(), r.DisplayName, string.Join(", ", r.Roles))).ToList(),
                     [new TeamPerformanceOptionDto("4", "Call Center"), new TeamPerformanceOptionDto("3", "Collections"), new TeamPerformanceOptionDto("2", "Customer Service")],
@@ -331,13 +349,13 @@ public sealed class TeamPerformanceRenderTests : IDisposable
                 id, number, "Customer Service", "Resolution", due.AddDays(-5), due.AddDays(-5), 1800, "30 h · Business hours", due, actual,
                 status, status == "Pending" ? null : due, breachText is null ? null : 3000, breachText, breachText?.Contains("ongoing") == true,
                 AminaId, "Amina Agent", "Medium priority · priority SLA policy · 30 h · Business hours",
-                status == "Breached" ? "Breach recorded because the deadline passed." : "Recorded in time.", null);
+                status == "Breached" ? "Breach recorded because the deadline passed." : "Recorded in time.");
 
             return new TeamPerformanceSlaDetailsDto(
                 AminaId, "Amina Agent", ["CS Agent"], [new TeamPerformanceDepartmentDto(2, "Customer Service", true)],
                 new DateOnly(2026, 8, 13), new DateOnly(2026, 9, 12), query["status"], query["sortBy"] ?? "event", query["sortDir"] ?? "desc",
                 Page: 1, PageSize: 25, TotalRecords: 42, TotalPages: 2,
-                new TeamPerformanceSlaSummaryDto(5, 2, 1, 2, 66.7m),
+                new TeamPerformanceSlaSummaryDto(Evaluated: 5, Met: 3, BreachEvents: 2, TicketsWithBreach: 1, FirstResponseBreaches: 1, ResolutionBreaches: 1, Pending: 2, CompliancePercent: 60.0m),
                 new TeamPerformanceSlaRulesDto(
                     [new TeamPerformanceSlaRuleDto("When the timer starts", "At ticket creation.")],
                     [new TeamPerformanceSlaPolicyDto("Medium", 240, 1800, "Business hours", true)],

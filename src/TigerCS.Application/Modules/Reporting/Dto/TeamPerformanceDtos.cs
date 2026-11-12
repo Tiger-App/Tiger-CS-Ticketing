@@ -57,7 +57,11 @@ public sealed record TeamPerformanceAppliedFiltersDto(
 /// <param name="CurrentlyAssigned">Current state, not period-bound: tickets whose <c>CurrentOwnerEmployeeId</c> is this employee and whose status is not Closed.</param>
 /// <param name="TicketsWorked">Distinct tickets on which the employee performed at least one recorded action within the period (assignment to them, a status change, a note, a resolution, a workflow event, or a customer follow-up assigned to or completed by them). Measured from history, not from current ownership.</param>
 /// <param name="CompletedFollowUps">Customer follow-ups (<c>TicketAgentHandoffs</c>) assigned to the employee and completed within the period. Counts work items, not tickets.</param>
-/// <param name="SlaBreaches">Distinct tickets whose SLA breach was recorded within the period while this employee held the ticket (the latest assignment at or before the breach). Each breach is attributed to at most one employee. The SLA details view lists exactly these tickets.</param>
+/// <param name="TicketsWithSlaBreach">Distinct tickets with at least one genuine SLA breach event (First Response or Resolution) in the period, attributed to this employee. A ticket whose two clocks both breached counts once here and twice in <paramref name="SlaBreachEvents"/>.</param>
+/// <param name="SlaBreachEvents">Genuine SLA breach events in the period attributed to this employee: one per (ticket, clock, deadline). "First human response recorded" rows on an already-Breached ticket are not breaches and are not counted. A breach belongs to whoever held the ticket at the breach deadline, not at the moment the scheduler recorded it.</param>
+/// <param name="SlaEvaluated">Finalized SLA clock cycles: <paramref name="SlaMet"/> + <paramref name="SlaBreachEvents"/>. Pending and not-applicable clocks are excluded.</param>
+/// <param name="SlaMet">Clock cycles achieved on time in the period (first human response, or resolution) by this employee.</param>
+/// <param name="SlaCompliancePercent">Met / Evaluated × 100 (one decimal); null when nothing was evaluated.</param>
 public sealed record TeamPerformanceRowDto(
     Guid EmployeeId,
     string DisplayName,
@@ -66,18 +70,31 @@ public sealed record TeamPerformanceRowDto(
     int CurrentlyAssigned,
     int TicketsWorked,
     int CompletedFollowUps,
-    int SlaBreaches);
+    int TicketsWithSlaBreach,
+    int SlaBreachEvents,
+    int SlaEvaluated,
+    int SlaMet,
+    decimal? SlaCompliancePercent);
 
 /// <summary>One department membership of an employee on the report.</summary>
 public sealed record TeamPerformanceDepartmentDto(int DepartmentId, string Name, bool IsPrimary);
 
-/// <summary>The totals row: every figure is the sum of the rows shown. Tickets worked and SLA breaches are summed per employee, so a ticket two agents both worked counts twice here — by design, this is the team's effort, not a ticket count.</summary>
+/// <summary>
+/// The totals row: every figure is the sum of the rows shown, with two exceptions that are not sums. Tickets worked is summed per employee,
+/// so a ticket two agents both worked counts twice — the team's effort, not a ticket count. <see cref="TicketsWithSlaBreach"/> is the number of
+/// DISTINCT tickets across the shown employees (a ticket whose First Response breached under one employee and Resolution under another is one
+/// ticket). <see cref="SlaCompliancePercent"/> is computed from the combined Met and Evaluated, never an average of the rows' percentages.
+/// </summary>
 public sealed record TeamPerformanceTotalsDto(
     int Employees,
     int CurrentlyAssigned,
     int TicketsWorked,
     int CompletedFollowUps,
-    int SlaBreaches);
+    int TicketsWithSlaBreach,
+    int SlaBreachEvents,
+    int SlaEvaluated,
+    int SlaMet,
+    decimal? SlaCompliancePercent);
 
 /// <summary>A filter picker option; <see cref="GroupLabel"/> carries the employee's roles on the employee picker.</summary>
 public sealed record TeamPerformanceOptionDto(string Id, string Label, string? GroupLabel = null);
@@ -248,39 +265,49 @@ public sealed record TeamPerformanceSlaDetailsDto(
     IReadOnlyList<TeamPerformanceSlaRecordDto> Records);
 
 /// <summary>
-/// The evaluation counts for the employee and period. <see cref="CompliancePercent"/> =
-/// Met / (Met + Breached) × 100, pending evaluations excluded from the
-/// denominator; null when there is nothing to measure.
+/// The SLA counts for the employee and period, derived by the same aggregation as the main table's row. Evaluated = Met + BreachEvents
+/// (finalized clock cycles); Pending clocks are shown for context but are not evaluated. <see cref="CompliancePercent"/> =
+/// Met / Evaluated × 100; null when nothing was evaluated.
 /// </summary>
+/// <param name="Evaluated">Met + BreachEvents.</param>
+/// <param name="Met">Clock cycles achieved on time in the period.</param>
+/// <param name="BreachEvents">Genuine breach events = <see cref="FirstResponseBreaches"/> + <see cref="ResolutionBreaches"/>.</param>
+/// <param name="TicketsWithBreach">Distinct tickets with at least one breach event.</param>
+/// <param name="FirstResponseBreaches">First Response breach events.</param>
+/// <param name="ResolutionBreaches">Resolution breach events.</param>
+/// <param name="Pending">Open clocks on tickets the employee holds now (not evaluated).</param>
+/// <param name="CompliancePercent">Met / Evaluated × 100, one decimal.</param>
 public sealed record TeamPerformanceSlaSummaryDto(
-    int TotalEvaluations,
+    int Evaluated,
     int Met,
-    int Breached,
+    int BreachEvents,
+    int TicketsWithBreach,
+    int FirstResponseBreaches,
+    int ResolutionBreaches,
     int Pending,
     decimal? CompliancePercent)
 {
-    public const string Formula = "SLA Compliance % = (Met / (Met + Breached)) × 100 — Pending evaluations are excluded from the denominator.";
+    public const string Formula = "SLA Compliance % = (Met / Evaluated) × 100, where Evaluated = Met + Breach Events. Pending clocks are not evaluated and are excluded.";
 }
 
 /// <summary>
-/// One SLA evaluation: a single SLA clock of a single ticket attributed to
-/// the employee. A ticket whose First Response and Resolution clocks are
-/// both evaluated appears once per clock — except that, exactly as the
-/// report counts SLA Breaches, a ticket is a Breached record once however
-/// many breach events it has (see <see cref="AdditionalBreachNote"/>).
+/// One SLA evaluation: a single SLA clock cycle of a single ticket attributed
+/// to the employee — a breach event, an on-time achievement, or a clock still
+/// pending. A ticket whose two clocks both breached is two Breached records
+/// (two breach events) but one ticket in "Tickets with SLA breach".
 /// </summary>
 /// <param name="TicketId">Links to Ticket Details.</param>
 /// <param name="TicketNumber">The human-facing ticket number.</param>
 /// <param name="DepartmentName">The department responsible: the one the responsible employee was assigned in at the moment (falling back to the ticket's department).</param>
-/// <param name="SlaType"><c>First Response</c>, <c>Resolution</c>, or <c>Breached state recorded</c> when the history row that the report counts is not one of the two clock breaches (see <see cref="Explanation"/>).</param>
+/// <param name="SlaType"><c>First Response</c> or <c>Resolution</c>.</param>
 /// <param name="TicketCreatedAtUtc">When the ticket was created.</param>
 /// <param name="SlaStartedAtUtc">When this SLA clock started (the SLA period's clock-start moment).</param>
 /// <param name="TargetMinutes">The configured SLA duration in minutes (business minutes when the clock basis is Business hours); null when it was not recorded.</param>
 /// <param name="TargetText">The target in readable form, with the clock basis, e.g. "4 h · Business hours".</param>
-/// <param name="DueAtUtc">The deadline the system holds for this clock (pauses already added).</param>
+/// <param name="DueAtUtc">The deadline the system holds for this clock (pauses already added). For a breach it is the moment the breach happened, and who held the ticket then is who it is attributed to.</param>
 /// <param name="ActualAtUtc">The relevant action time: the first human response (First Response) or the resolution (Resolution); null when it has not happened.</param>
 /// <param name="Status"><c>Met</c>, <c>Breached</c> or <c>Pending</c>.</param>
-/// <param name="EventAtUtc">When the evaluation became part of the period: the breach recorded, or the on-time achievement; null for Pending.</param>
+/// <param name="EventAtUtc">The breach as recorded by the SLA engine, or the on-time achievement; null for Pending.</param>
 /// <param name="BreachMinutes">Whole minutes past the due moment (actual − due, or — while still unachieved — now − due); null unless Breached.</param>
 /// <param name="BreachText">The same, readable ("3 h 20 m"), with " (ongoing)" when the action has not happened yet.</param>
 /// <param name="IsOngoing">Breached with no actual action yet.</param>
@@ -288,7 +315,6 @@ public sealed record TeamPerformanceSlaSummaryDto(
 /// <param name="AssignedEmployeeName">That employee's display name.</param>
 /// <param name="Policy">The SLA rule applied, in words: priority, request-type policy when one governed it, targets and clock basis.</param>
 /// <param name="Explanation">Why this evaluation is counted under this status and employee.</param>
-/// <param name="AdditionalBreachNote">When the ticket has further breach events in the period that are not separate Breached records, a one-line description of them.</param>
 public sealed record TeamPerformanceSlaRecordDto(
     long TicketId,
     string TicketNumber,
@@ -308,8 +334,7 @@ public sealed record TeamPerformanceSlaRecordDto(
     Guid AssignedEmployeeId,
     string AssignedEmployeeName,
     string Policy,
-    string Explanation,
-    string? AdditionalBreachNote);
+    string Explanation);
 
 /// <summary>The SLA rules in force, read from the system: the explanatory statements and the live configuration they refer to.</summary>
 public sealed record TeamPerformanceSlaRulesDto(

@@ -3,6 +3,7 @@ using TigerCS.Application.Modules.Reporting.Abstractions;
 using TigerCS.Application.Modules.Reporting.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.SlaAndEscalation;
 
 namespace TigerCS.Application.Modules.Reporting.Services;
 
@@ -78,15 +79,31 @@ public sealed class TeamPerformanceAppService(
                 RangeEndUtc(dateTo),
                 cancellationToken);
 
-        var rows = selected.Select(e => new TeamPerformanceRowDto(
-            e.EmployeeId,
-            e.DisplayName,
-            e.Roles,
-            e.Departments.Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, d.IsPrimary)).ToList(),
-            metrics.CurrentlyAssigned.GetValueOrDefault(e.EmployeeId),
-            metrics.TicketsWorked.GetValueOrDefault(e.EmployeeId),
-            metrics.CompletedFollowUps.GetValueOrDefault(e.EmployeeId),
-            metrics.SlaBreaches.GetValueOrDefault(e.EmployeeId))).ToList();
+        var slaEvents = selected.Count == 0
+            ? new TeamPerformanceSlaEvents([], [])
+            : await repository.GetSlaEventsAsync(
+                selected.Select(e => e.EmployeeId).ToList(), RangeStartUtc(dateFrom), RangeEndUtc(dateTo), cancellationToken);
+        var slaByEmployee = slaEvents.Breaches.Select(e => (e.EmployeeId, Fact: new SlaOutcomeFact(e.TicketId, e.SlaType, true)))
+            .Concat(slaEvents.Met.Select(e => (e.EmployeeId, Fact: new SlaOutcomeFact(e.TicketId, e.SlaType, false))))
+            .ToLookup(x => x.EmployeeId, x => x.Fact);
+
+        var rows = selected.Select(e =>
+        {
+            var sla = SlaCounts.Of(slaByEmployee[e.EmployeeId]);
+            return new TeamPerformanceRowDto(
+                e.EmployeeId,
+                e.DisplayName,
+                e.Roles,
+                e.Departments.Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, d.IsPrimary)).ToList(),
+                metrics.CurrentlyAssigned.GetValueOrDefault(e.EmployeeId),
+                metrics.TicketsWorked.GetValueOrDefault(e.EmployeeId),
+                metrics.CompletedFollowUps.GetValueOrDefault(e.EmployeeId),
+                sla.TicketsWithBreach, sla.BreachEvents, sla.Evaluated, sla.Met, sla.CompliancePercent);
+        }).ToList();
+
+        // The totals' SLA figures come from the same aggregation over every shown employee's cycles together: distinct tickets are distinct
+        // across employees, and compliance is the combined Met over the combined Evaluated.
+        var overall = SlaCounts.Of(slaByEmployee.SelectMany(g => g));
 
         return new TeamPerformanceReportDto(
             new TeamPerformanceAppliedFiltersDto(dateFrom, dateTo, request.EmployeeId, role, request.DepartmentId),
@@ -96,7 +113,7 @@ public sealed class TeamPerformanceAppService(
                 rows.Sum(r => r.CurrentlyAssigned),
                 rows.Sum(r => r.TicketsWorked),
                 rows.Sum(r => r.CompletedFollowUps),
-                rows.Sum(r => r.SlaBreaches)),
+                overall.TicketsWithBreach, overall.BreachEvents, overall.Evaluated, overall.Met, overall.CompliancePercent),
             new TeamPerformanceFilterOptionsDto(
                 everyone.Select(e => new TeamPerformanceOptionDto(e.EmployeeId.ToString(), e.DisplayName, RolesText(e.Roles))).ToList(),
                 await repository.GetDepartmentsAsync(cancellationToken),
@@ -166,11 +183,14 @@ public sealed class TeamPerformanceAppService(
             .Select(e => TeamPerformanceSlaPresentation.ToRecord(e, employee, nowUtc))
             .ToList();
 
-        var met = evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Met);
-        var breached = evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Breached);
-        var pending = evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending);
+        // Same aggregation as the table row (SlaCounts.Of); only Breached and Met are finalized cycles, Pending is shown beside them.
+        var counts = SlaCounts.Of(evaluations
+            .Where(r => r.Status != TeamPerformanceSlaStatuses.Pending)
+            .Select(r => new SlaOutcomeFact(r.TicketId, r.SlaType == "First Response" ? SlaDeadlineType.FirstResponse : SlaDeadlineType.Resolution,
+                r.Status == TeamPerformanceSlaStatuses.Breached)));
         var summary = new TeamPerformanceSlaSummaryDto(
-            evaluations.Count, met, breached, pending, CompliancePercent(met, breached));
+            counts.Evaluated, counts.Met, counts.BreachEvents, counts.TicketsWithBreach, counts.FirstResponseBreaches, counts.ResolutionBreaches,
+            evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending), counts.CompliancePercent);
 
         var statusFilter = TeamPerformanceSlaStatuses.Normalize(request.Status);
         var filtered = statusFilter is null
@@ -211,9 +231,9 @@ public sealed class TeamPerformanceAppService(
     public const int DefaultPageSize = 25;
     public const int MaxPageSize = 100;
 
-    /// <summary>Met / (Met + Breached) × 100, rounded to one decimal; null when nothing has been decided. Pending is not in the denominator.</summary>
-    public static decimal? CompliancePercent(int met, int breached) =>
-        met + breached == 0 ? null : Math.Round(met * 100m / (met + breached), 1, MidpointRounding.AwayFromZero);
+    /// <summary>Met / Evaluated × 100 where Evaluated = Met + breach events, rounded to one decimal; null when nothing was evaluated. Pending is not evaluated.</summary>
+    public static decimal? CompliancePercent(int met, int breachEvents) =>
+        met + breachEvents == 0 ? null : Math.Round(met * 100m / (met + breachEvents), 1, MidpointRounding.AwayFromZero);
 
     // ---- employees and filters ----
 
@@ -249,5 +269,5 @@ public sealed class TeamPerformanceAppService(
     public static DateTime RangeEndUtc(DateOnly dateTo) => dateTo.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
 
     private static readonly TeamPerformanceMetricsSnapshot EmptyMetrics = new(
-        new Dictionary<Guid, int>(), new Dictionary<Guid, int>(), new Dictionary<Guid, int>(), new Dictionary<Guid, int>());
+        new Dictionary<Guid, int>(), new Dictionary<Guid, int>(), new Dictionary<Guid, int>());
 }

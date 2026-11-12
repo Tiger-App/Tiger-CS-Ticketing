@@ -121,7 +121,11 @@
                                 <th scope="col" class="cell-num">Currently Assigned</th>
                                 <th scope="col" class="cell-num">Tickets Worked</th>
                                 <th scope="col" class="cell-num">Completed Follow-ups</th>
-                                <th scope="col" class="cell-num">SLA Breaches</th>
+                                <th scope="col" class="cell-num">Tickets with SLA Breach</th>
+                                <th scope="col" class="cell-num">Breach Events</th>
+                                <th scope="col" class="cell-num">SLA Evaluated</th>
+                                <th scope="col" class="cell-num">SLA Met</th>
+                                <th scope="col" class="cell-num">SLA Compliance %</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -134,7 +138,11 @@
                                     <td class="cell-num"><a class="report-count" href="@Model.RecordsHref(row.EmployeeId, TeamPerformanceMetric.CurrentlyAssigned)" title="Open @row.DisplayName's currently assigned tickets">@row.CurrentlyAssigned</a></td>
                                     <td class="cell-num"><a class="report-count" href="@Model.RecordsHref(row.EmployeeId, TeamPerformanceMetric.TicketsWorked)" title="Open the tickets @row.DisplayName worked in the period">@row.TicketsWorked</a></td>
                                     <td class="cell-num"><a class="report-count" href="@Model.RecordsHref(row.EmployeeId, TeamPerformanceMetric.CompletedFollowUps)" title="Open the follow-ups @row.DisplayName completed in the period">@row.CompletedFollowUps</a></td>
-                                    <td class="cell-num"><a class="report-count @(row.SlaBreaches > 0 ? "report-count--critical" : "")" href="@Model.SlaDetailsHref(row.EmployeeId)" title="Open how @row.DisplayName's SLA breaches were calculated">@row.SlaBreaches</a></td>
+                                    <td class="cell-num"><a class="report-count @(row.TicketsWithSlaBreach > 0 ? "report-count--critical" : "")" href="@Model.SlaDetailsHref(row.EmployeeId)" title="Open how @row.DisplayName's SLA breaches were calculated">@row.TicketsWithSlaBreach</a></td>
+                                    <td class="cell-num"><a class="report-count @(row.SlaBreachEvents > 0 ? "report-count--critical" : "")" href="@Model.SlaDetailsHref(row.EmployeeId)" title="Open the breach events behind @row.DisplayName's count, split by First Response and Resolution">@row.SlaBreachEvents</a></td>
+                                    <td class="cell-num"><a class="report-count" href="@Model.SlaDetailsHref(row.EmployeeId, TeamPerformanceSlaModel.AllStatuses)" title="Open @row.DisplayName's evaluated SLA clock cycles">@row.SlaEvaluated</a></td>
+                                    <td class="cell-num"><a class="report-count" href="@Model.SlaDetailsHref(row.EmployeeId, TeamPerformanceSlaStatuses.Met)" title="Open the SLA clock cycles @row.DisplayName met">@row.SlaMet</a></td>
+                                    <td class="cell-num">@TeamPerformanceModel.ComplianceText(row.SlaCompliancePercent)</td>
                                 </tr>
                             }
                         </tbody>
@@ -146,7 +154,11 @@
                                 <td class="cell-num">@Model.Report.Totals.CurrentlyAssigned</td>
                                 <td class="cell-num">@Model.Report.Totals.TicketsWorked</td>
                                 <td class="cell-num">@Model.Report.Totals.CompletedFollowUps</td>
-                                <td class="cell-num">@Model.Report.Totals.SlaBreaches</td>
+                                <td class="cell-num">@Model.Report.Totals.TicketsWithSlaBreach</td>
+                                <td class="cell-num">@Model.Report.Totals.SlaBreachEvents</td>
+                                <td class="cell-num">@Model.Report.Totals.SlaEvaluated</td>
+                                <td class="cell-num">@Model.Report.Totals.SlaMet</td>
+                                <td class="cell-num">@TeamPerformanceModel.ComplianceText(Model.Report.Totals.SlaCompliancePercent)</td>
                             </tr>
                         </tfoot>
                     </table>
@@ -269,10 +281,18 @@
                     <dd>Distinct tickets on which the agent did at least one recorded thing in the period: was assigned the ticket, changed its status or another lifecycle dimension, wrote a note, recorded a resolution, raised a workflow event, or was assigned / completed a customer follow-up. Measured from the ticket's history, not from who holds it now.</dd>
                     <dt>Completed Follow-ups</dt>
                     <dd>Customer follow-ups (pending customer interactions) assigned to the agent and completed in the period. Counts work items — a ticket with two completed follow-ups counts twice.</dd>
-                    <dt>SLA Breaches</dt>
-                    <dd>Distinct tickets whose SLA breach was recorded in the period while the agent held the ticket — the holder is the latest assignment at or before the moment of the breach, not whoever holds it now. Each breach is attributed to at most one employee; a breach on an unassigned ticket is attributed to nobody. Click the number to see every SLA evaluation behind it and the rules used.</dd>
+                    <dt>Tickets with SLA Breach</dt>
+                    <dd>Distinct tickets with at least one genuine SLA breach event (First Response or Resolution) in the period, attributed to the employee. A ticket whose two clocks both breached counts once here. Click it to see how the number was calculated.</dd>
+                    <dt>Breach Events</dt>
+                    <dd>The genuine SLA breach events themselves — one per ticket, clock and deadline, so a ticket that breached both clocks is two events. Rows that only carry the Breached state (such as recording the first human response on an already-breached ticket) are not breaches. A breach belongs to whoever held the ticket at the breach deadline, not whoever held it when the scheduler recorded it; a ticket released before the deadline belongs to nobody.</dd>
+                    <dt>SLA Evaluated</dt>
+                    <dd>Finalized SLA clock cycles in the period: SLA Met + Breach Events. Pending clocks are not evaluated.</dd>
+                    <dt>SLA Met</dt>
+                    <dd>Clock cycles achieved on time in the period: a first human response, or a resolution, on or before its due time with no breach recorded, credited to whoever held the ticket at that moment.</dd>
+                    <dt>SLA Compliance %</dt>
+                    <dd>SLA Met ÷ SLA Evaluated × 100. The totals row uses the combined Met and Evaluated of every employee shown, not an average of the percentages.</dd>
                     <dt>Totals</dt>
-                    <dd>The sum of the rows shown. A ticket two employees both worked counts once for each of them.</dd>
+                    <dd>The sum of the rows shown. A ticket two employees both worked counts once for each of them. Tickets with SLA Breach is the number of distinct tickets across the employees shown, and SLA Compliance % is computed from the combined Met and Evaluated.</dd>
                 </dl>
             </div>
         </details>

@@ -212,7 +212,7 @@ public sealed class TeamPerformanceReportTests : IDisposable
         Assert.Equal(["Registration"], rana.Departments.Select(d => d.Name).ToArray());
 
         var dana = Row(report, _danaId);
-        Assert.Equal((0, 0, 0, 0), (dana.CurrentlyAssigned, dana.TicketsWorked, dana.CompletedFollowUps, dana.SlaBreaches));
+        Assert.Equal((0, 0, 0, 0), (dana.CurrentlyAssigned, dana.TicketsWorked, dana.CompletedFollowUps, dana.TicketsWithSlaBreach));
     }
 
     [Fact]
@@ -363,10 +363,11 @@ public sealed class TeamPerformanceReportTests : IDisposable
 
         var report = await ReportAsync();
 
-        Assert.Equal(2, Row(report, _aminaId).SlaBreaches);
-        Assert.Equal(0, Row(report, _bilalId).SlaBreaches);
-        Assert.Equal(0, Row(report, _danaId).SlaBreaches);
-        Assert.Equal(2, report.Totals.SlaBreaches);
+        Assert.Equal(2, Row(report, _aminaId).TicketsWithSlaBreach);
+        Assert.Equal(3, Row(report, _aminaId).SlaBreachEvents);   // the ticket with two breach rows is two events but one ticket
+        Assert.Equal(0, Row(report, _bilalId).TicketsWithSlaBreach);
+        Assert.Equal(0, Row(report, _danaId).TicketsWithSlaBreach);
+        Assert.Equal(2, report.Totals.TicketsWithSlaBreach);
     }
 
     // ---------------------------------------------------------------
@@ -435,7 +436,7 @@ public sealed class TeamPerformanceReportTests : IDisposable
         Assert.Equal(2, all.Totals.CurrentlyAssigned);
         Assert.Equal(1, collectionsOnly.Totals.CurrentlyAssigned);
         Assert.Equal(1, collectionsOnly.Totals.TicketsWorked);
-        Assert.Equal(collectionsOnly.Rows.Sum(r => r.SlaBreaches), collectionsOnly.Totals.SlaBreaches);
+        Assert.Equal(collectionsOnly.Rows.Sum(r => r.TicketsWithSlaBreach), collectionsOnly.Totals.TicketsWithSlaBreach);
         Assert.Equal(collectionsOnly.Rows.Count, collectionsOnly.Totals.Employees);
     }
 
@@ -491,7 +492,7 @@ public sealed class TeamPerformanceReportTests : IDisposable
                 TeamPerformanceMetric.CurrentlyAssigned => amina.CurrentlyAssigned,
                 TeamPerformanceMetric.TicketsWorked => amina.TicketsWorked,
                 TeamPerformanceMetric.CompletedFollowUps => amina.CompletedFollowUps,
-                _ => amina.SlaBreaches
+                _ => amina.TicketsWithSlaBreach
             };
             Assert.Equal(expected, result.Records!.Records.Count);
             Assert.Equal("Amina Agent", result.Records.DisplayName);

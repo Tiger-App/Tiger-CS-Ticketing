@@ -25,7 +25,7 @@ public interface ITeamPerformanceQueryRepository
     /// <summary>Every configured, active department (<c>Departments.IsActive</c>), whether or not anyone is currently a member — the Department filter offers all of them.</summary>
     Task<IReadOnlyList<TeamPerformanceOptionDto>> GetDepartmentsAsync(CancellationToken cancellationToken = default);
 
-    /// <summary>The four metrics for the given employees over [<paramref name="rangeStartUtc"/>, <paramref name="rangeEndUtc"/>). An employee absent from a dictionary has a count of zero.</summary>
+    /// <summary>The three activity metrics for the given employees over [<paramref name="rangeStartUtc"/>, <paramref name="rangeEndUtc"/>). An employee absent from a dictionary has a count of zero.</summary>
     Task<TeamPerformanceMetricsSnapshot> GetMetricsAsync(
         IReadOnlyCollection<Guid> employeeIds, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken = default);
 
@@ -34,10 +34,17 @@ public interface ITeamPerformanceQueryRepository
         Guid employeeId, TeamPerformanceMetric metric, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The finalized SLA clock cycles attributed to the given employees in the window: genuine breach events and on-time achievements.
+    /// This is the ONE source of every SLA number — the table, the records behind it and the employee details are all derived from it, so
+    /// they cannot disagree.
+    /// </summary>
+    Task<TeamPerformanceSlaEvents> GetSlaEventsAsync(
+        IReadOnlyCollection<Guid> employeeIds, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Every SLA evaluation attributed to one employee for the window, of
-    /// all three statuses. The Breached ones come from the same predicate
-    /// <see cref="GetMetricsAsync"/> counts SLA Breaches with, so their
-    /// number always equals that count.
+    /// all three statuses: the Breached and Met ones are exactly the
+    /// <see cref="GetSlaEventsAsync"/> events, enriched with the facts they were decided from, plus the Pending clocks.
     /// </summary>
     Task<IReadOnlyList<TeamPerformanceSlaEvaluationRow>> GetSlaEvaluationsAsync(
         Guid employeeId, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken = default);
@@ -56,12 +63,38 @@ public sealed record TeamPerformanceEmployeeRow(
 /// <summary>One department membership: id, display name, the department code (the Call Center department is recognised by its code) and whether it is the primary membership.</summary>
 public sealed record TeamPerformanceDepartmentRow(int DepartmentId, string Name, string Code, bool IsPrimary);
 
-/// <summary>The four metric counts keyed by employee. Missing key = zero.</summary>
+/// <summary>The three activity metric counts keyed by employee. Missing key = zero. SLA numbers come from <see cref="TeamPerformanceSlaEvents"/>.</summary>
 public sealed record TeamPerformanceMetricsSnapshot(
     IReadOnlyDictionary<Guid, int> CurrentlyAssigned,
     IReadOnlyDictionary<Guid, int> TicketsWorked,
-    IReadOnlyDictionary<Guid, int> CompletedFollowUps,
-    IReadOnlyDictionary<Guid, int> SlaBreaches);
+    IReadOnlyDictionary<Guid, int> CompletedFollowUps);
+
+/// <summary>
+/// One finalized SLA clock cycle attributed to an employee: a breach event (at the moment it was recorded; <paramref name="DueAtUtc"/> is
+/// the deadline) or an on-time achievement (at the moment the action happened).
+/// </summary>
+/// <param name="EmployeeId">The employee who held the ticket at the breach deadline / at the achievement.</param>
+/// <param name="TicketId">The ticket.</param>
+/// <param name="SlaType">Which clock.</param>
+/// <param name="AtUtc">Breach recorded at, or achieved at.</param>
+/// <param name="DueAtUtc">The clock's due time, when its SLA period is known.</param>
+/// <param name="HolderDepartmentId">The department of the holder's assignment.</param>
+/// <param name="PeriodId">The SLA period the achievement belongs to (Met only).</param>
+/// <param name="SourceId">The history / resolution / ticket row it came from.</param>
+public sealed record TeamPerformanceSlaEventRow(
+    Guid EmployeeId,
+    long TicketId,
+    SlaDeadlineType SlaType,
+    DateTime AtUtc,
+    DateTime? DueAtUtc,
+    int? HolderDepartmentId,
+    long? PeriodId,
+    long SourceId);
+
+/// <summary>The breach events and the on-time achievements of a set of employees in a window. Evaluated = Met + Breaches.</summary>
+public sealed record TeamPerformanceSlaEvents(
+    IReadOnlyList<TeamPerformanceSlaEventRow> Breaches,
+    IReadOnlyList<TeamPerformanceSlaEventRow> Met);
 
 /// <summary>One record row with the ticket's facts resolved in-query, plus the metric-specific instant (breach or completion time).</summary>
 public sealed record TeamPerformanceRecordRow(
@@ -94,7 +127,7 @@ public enum TeamPerformanceSlaEvaluationKind
 /// <param name="TicketStatus">The ticket's current status.</param>
 /// <param name="TicketCreatedAtUtc">When the ticket was created.</param>
 /// <param name="DepartmentName">The department the responsible employee was assigned in at the moment (the ticket's department for Pending).</param>
-/// <param name="SlaType">The deadline type, or null for a counted history row that records the Breached state without being a clock breach (see the report docs).</param>
+/// <param name="SlaType">The clock.</param>
 /// <param name="SlaStartedAtUtc">When this clock started (the first period for First Response, which is never restarted; the period in force for Resolution).</param>
 /// <param name="TargetMinutes">The applied target for this clock, or the priority policy's when the period predates the snapshot.</param>
 /// <param name="ClockBasis">The basis this clock's due moment was computed on, or null when unknown.</param>
@@ -108,8 +141,6 @@ public enum TeamPerformanceSlaEvaluationKind
 /// <param name="RequestTypeSlaNote">Why a configured request-type SLA was not applied, or null.</param>
 /// <param name="PausedMinutes">Resolution only: whole minutes of closed pause periods in the SLA period (already inside the due time).</param>
 /// <param name="ClockPausedNow">Resolution only: a pause is open now.</param>
-/// <param name="BreachNote">Breached only: the note of the history row that is counted.</param>
-/// <param name="AdditionalBreachNotes">Breached only: the notes (with time) of the ticket's other breach history rows in the window, which the report does not count again.</param>
 public sealed record TeamPerformanceSlaEvaluationRow(
     TeamPerformanceSlaEvaluationKind Kind,
     long TicketId,
@@ -117,7 +148,7 @@ public sealed record TeamPerformanceSlaEvaluationRow(
     TicketStatus TicketStatus,
     DateTime TicketCreatedAtUtc,
     string? DepartmentName,
-    SlaDeadlineType? SlaType,
+    SlaDeadlineType SlaType,
     DateTime? SlaStartedAtUtc,
     int? TargetMinutes,
     SlaClockBasis? ClockBasis,
@@ -130,9 +161,7 @@ public sealed record TeamPerformanceSlaEvaluationRow(
     string? RequestTypeName,
     string? RequestTypeSlaNote,
     int PausedMinutes,
-    bool ClockPausedNow,
-    string? BreachNote,
-    IReadOnlyList<string> AdditionalBreachNotes);
+    bool ClockPausedNow);
 
 /// <summary>The SLA configuration the explanation refers to.</summary>
 public sealed record TeamPerformanceSlaConfiguration(

@@ -53,6 +53,27 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         Assert.Contains("ALTER TABLE [Tickets] ADD [OriginalHumanAgentId] uniqueidentifier NULL", ef);
     }
 
+    /// <summary>
+    /// The assignment-end column is a pure schema change: no backfill of existing rows (a historical release has no recorded end time, and none
+    /// is invented), and the standalone script matches what EF generates.
+    /// </summary>
+    [Fact]
+    public void TheSupersededAtMigration_IsAPureNullableColumn_WithNoBackfill_AndItsScriptMatchesEf()
+    {
+        var script = File.ReadAllText(FindRepositoryFile("AddTicketAssignmentSupersededAt.sql"));
+        Assert.DoesNotContain("UPDATE", script, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("EXEC(", script, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ALTER TABLE [TicketAssignments] ADD [SupersededAtUtc] datetime2 NULL;", script);
+
+        using var context = CreateSqlServerContext();
+        var ef = context.GetService<IMigrator>().GenerateScript(
+            fromMigration: "20261111132429_AddOriginalAgentWorkflowCutoff",
+            toMigration: "20261112071745_AddTicketAssignmentSupersededAt",
+            options: MigrationsSqlGenerationOptions.Idempotent);
+        Assert.DoesNotContain("UPDATE", ef, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("ALTER TABLE [TicketAssignments] ADD [SupersededAtUtc] datetime2 NULL;", ef);
+    }
+
     [Fact]
     public void TheEfModel_HasNoChangesThatAreMissingFromTheMigrations()
     {
@@ -76,17 +97,19 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         // AddUserTransferDepartments (one new table: the departments an employee may transfer tickets to, separate from membership) is the newest and is deployed by its own script.
         // AddTicketOriginalHumanAgent (one nullable column + index on Tickets: the first eligible Human Agent, used to route a ticket back to the Call Center) is the newest and is deployed by its own script.
         // AddOriginalAgentWorkflowCutoff (one NOT NULL bit column defaulting to 0: the deployment cutoff that keeps every pre-existing ticket on the legacy workflow) is the newest and is deployed by its own script.
-        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^1]);
-        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^2]);
-        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^3]);
-        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^4]);
-        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^5]);
-        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^6]);
-        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^7]);
-        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^8]);
-        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^9]);
-        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^10]);
-        Assert.Equal(FourPendingMigrations, migrations.SkipLast(10).TakeLast(4));
+        // AddTicketAssignmentSupersededAt (one nullable datetime2 column on TicketAssignments: when an assignment ended, so SLA reporting can tell who held a ticket at a past moment) is the newest and is deployed by its own script.
+        Assert.Equal("20261112071745_AddTicketAssignmentSupersededAt", migrations[^1]);
+        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^2]);
+        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^3]);
+        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^4]);
+        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^5]);
+        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^6]);
+        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^7]);
+        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^8]);
+        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^9]);
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^10]);
+        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^11]);
+        Assert.Equal(FourPendingMigrations, migrations.SkipLast(11).TakeLast(4));
     }
 
     [Fact]

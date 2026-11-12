@@ -121,8 +121,10 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
         _ => "running"
     };
 
-    public static string ComplianceText(TeamPerformanceSlaSummaryDto summary) =>
-        summary.CompliancePercent is decimal percent ? percent.ToString("0.#", CultureInfo.InvariantCulture) + "%" : "—";
+    public static string ComplianceText(TeamPerformanceSlaSummaryDto summary) => TeamPerformanceModel.ComplianceText(summary.CompliancePercent);
+
+    /// <summary>The empty status: every evaluation, whatever its status.</summary>
+    public const string AllStatuses = "";
 
     public string LoadFailureMessage => Outcome switch
     {

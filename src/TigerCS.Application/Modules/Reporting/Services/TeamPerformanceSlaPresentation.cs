@@ -24,7 +24,6 @@ internal static class TeamPerformanceSlaPresentation
 {
     private const string FirstResponseLabel = "First Response";
     private const string ResolutionLabel = "Resolution";
-    private const string BreachedStateLabel = "Breached state recorded";
 
     public static TeamPerformanceSlaRecordDto ToRecord(
         TeamPerformanceSlaEvaluationRow row, TeamPerformanceEmployeeRow employee, DateTime nowUtc)
@@ -36,12 +35,7 @@ internal static class TeamPerformanceSlaPresentation
             _ => TeamPerformanceSlaStatuses.Pending
         };
 
-        var slaType = row.SlaType switch
-        {
-            SlaDeadlineType.FirstResponse => FirstResponseLabel,
-            SlaDeadlineType.Resolution => ResolutionLabel,
-            _ => BreachedStateLabel
-        };
+        var slaType = row.SlaType == SlaDeadlineType.FirstResponse ? FirstResponseLabel : ResolutionLabel;
 
         int? breachMinutes = null;
         string? breachText = null;
@@ -73,10 +67,7 @@ internal static class TeamPerformanceSlaPresentation
             employee.EmployeeId,
             employee.DisplayName,
             PolicyText(row),
-            Explain(row, employee, slaType, nowUtc),
-            row.AdditionalBreachNotes.Count == 0
-                ? null
-                : $"Also recorded on this ticket in the period (not counted again): {string.Join("; ", row.AdditionalBreachNotes)}");
+            Explain(row, employee, slaType, nowUtc));
     }
 
     // ---------------------------------------------------------------
@@ -127,10 +118,7 @@ internal static class TeamPerformanceSlaPresentation
             : "priority SLA policy";
 
         var text = $"{row.PriorityName ?? $"Priority {row.PriorityId}"} priority · {source}";
-        if (row.SlaType is not null)
-        {
-            text += $" · {TargetText(row.TargetMinutes, row.ClockBasis)}";
-        }
+        text += $" · {TargetText(row.TargetMinutes, row.ClockBasis)}";
 
         if (row.PausedMinutes > 0)
         {
@@ -154,16 +142,13 @@ internal static class TeamPerformanceSlaPresentation
 
         switch (row.Kind)
         {
-            case TeamPerformanceSlaEvaluationKind.Breached when row.SlaType is null:
-                return $"Counted as a breach because the ticket's SLA state was recorded as Breached at {Utc(row.EventAtUtc)} "
-                    + $"(\"{row.BreachNote}\"). {employee.DisplayName} held the ticket at that moment (latest assignment at or before it).";
-
             case TeamPerformanceSlaEvaluationKind.Breached:
                 var outcome = row.ActualAtUtc is { } actual
                     ? $"The {action} was recorded at {Utc(actual)}, after the due time."
                     : $"No {action} has been recorded yet.";
-                return $"The SLA engine recorded this {slaType} breach at {Utc(row.EventAtUtc)} (due {Utc(row.DueAtUtc)}). {outcome} "
-                    + $"{employee.DisplayName} held the ticket at the moment of the breach (latest assignment at or before it).";
+                return $"The SLA engine recorded this {slaType} breach at {Utc(row.EventAtUtc)}; the deadline was {Utc(row.DueAtUtc)}. {outcome} "
+                    + $"{employee.DisplayName} held the ticket at the deadline (latest assignment at or before it, not yet ended), so the breach is theirs "
+                    + "whenever it was recorded.";
 
             case TeamPerformanceSlaEvaluationKind.Met:
                 return $"The {action} was recorded at {Utc(row.ActualAtUtc)}, on or before the due time {Utc(row.DueAtUtc)}, with no breach recorded. "
@@ -246,8 +231,13 @@ internal static class TeamPerformanceSlaPresentation
         var rules = new List<TeamPerformanceSlaRuleDto>
         {
             new("What is evaluated",
-                "Every classified ticket carries two independent SLA clocks: First Response and Resolution. Each clock is one evaluation: Met (the action happened in time), "
-                + "Breached (it was late, or the due time passed without it) or Pending (still running)."),
+                "Every classified ticket carries two independent SLA clocks: First Response and Resolution. SLA Evaluated counts finalized clock cycles: Met (the action "
+                + "happened in time) plus Breach Events (it was late, or the due time passed without it). Pending clocks are still running, are not evaluated and are shown "
+                + "separately. A reopen starts a new Resolution cycle, which is evaluated on its own."),
+            new("What counts as a breach",
+                "Only a genuine SLA breach event: the SLA engine marking a clock's deadline as missed (one per ticket, clock and deadline). A ticket whose First Response and "
+                + "Resolution both breached has two breach events but is one ticket in \"Tickets with SLA Breach\". Bookkeeping rows that merely carry the Breached state — "
+                + "for example recording the first human response on a ticket that is already Breached — are not breaches and are not counted."),
             new("When the timer starts",
                 "At ticket creation. The clock is never restarted by a later classification: when the request type is classified the governing policy is re-applied to the running period, "
                 + "measured from the original start. A ticket created without a priority starts its SLA when it is classified. A request-type SLA whose trigger is not \"ticket created\" "
@@ -273,13 +263,15 @@ internal static class TeamPerformanceSlaPresentation
                 "When a clock's due time passes without the action, or the action lands after the due time, the SLA engine marks that clock Breached once (it cannot be undone), "
                 + "writes an SLA-state history entry and raises the automatic Level 2 escalation. An action recorded exactly at the due time is on time."),
             new("How breaches are attributed to employees",
-                "To the employee who held the ticket at the moment the breach was recorded: the latest assignment at or before it. The current owner is irrelevant, "
-                + "and a breach recorded while nobody held the ticket belongs to nobody. A Met evaluation belongs to whoever held the ticket when the action was recorded; "
-                + "a Pending one to the employee who holds the ticket now."),
+                "To the employee who held the ticket at the breach DEADLINE: the latest assignment at or before it, if that assignment had not already ended (released to a "
+                + "queue, closed) by then — otherwise to nobody. The moment the scheduler recorded the breach does not matter, so a delayed write cannot move a breach to a "
+                + "later holder, and the current owner is irrelevant. A Met cycle belongs to whoever held the ticket when the action was recorded; a Pending one to the employee "
+                + "who holds the ticket now. Assignment end times are recorded from the release of this feature onward; a release made before then has no recorded end time and is "
+                + "treated as still held."),
             new("How the report counts",
-                "SLA Breaches is the number of distinct tickets with at least one breach entry recorded in the period and attributed to the employee — so a ticket whose two clocks both "
-                + "breached is one Breached record here (the other entry is shown on its row). Met and Pending are listed beside it for context: Met = on-time actions recorded in the period; "
-                + "Pending = clocks still open on tickets the employee holds now (Closed tickets excluded)."),
+                "In the period, by when the breach was recorded (breaches) or the action happened (Met): Breach Events and Met per employee; SLA Evaluated = Met + Breach Events; "
+                + "Compliance = Met / Evaluated. The table's totals row uses the combined Met and Evaluated of the employees shown (not an average of percentages) and counts a ticket "
+                + "once even when two employees share its breaches. Pending = clocks still open on tickets the employee holds now (Closed tickets excluded)."),
             new("Period",
                 "UTC calendar days, inclusive, exactly as on the report. Timestamps on this view are UTC.")
         };

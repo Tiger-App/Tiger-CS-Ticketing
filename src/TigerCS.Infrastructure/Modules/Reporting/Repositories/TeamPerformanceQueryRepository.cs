@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using TigerCS.Application.Modules.Reporting.Abstractions;
 using TigerCS.Application.Modules.Reporting.Dto;
+using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Infrastructure.Persistence;
@@ -39,22 +40,18 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
         public long TicketId { get; init; }
     }
 
-    /// <summary>One SLA breach with the employee who held the ticket when it was recorded (null when the ticket was unassigned at that moment).</summary>
-    private sealed class AttributedBreach
+    /// <summary>
+    /// One SLA event on a clock — a genuine breach, or an on-time achievement — with the employee who held the ticket at the relevant
+    /// moment (null when nobody did, including after a release). <see cref="SourceId"/> is the history / resolution / ticket row it came from.
+    /// </summary>
+    private sealed class SlaMoment
     {
-        public long TicketStatusHistoryId { get; init; }
+        public long SourceId { get; init; }
         public long TicketId { get; init; }
-        public DateTime OccurredAtUtc { get; init; }
-        public string? Note { get; init; }
-        public Guid? HolderEmployeeId { get; init; }
-        public int? HolderDepartmentId { get; init; }
-    }
-
-    /// <summary>An SLA achievement (first human response, resolution) with the employee who held the ticket at that moment.</summary>
-    private sealed class AttributedMoment
-    {
-        public long TicketId { get; init; }
+        public bool IsFirstResponse { get; init; }
         public DateTime AtUtc { get; init; }
+        public DateTime? DueAtUtc { get; init; }
+        public long? PeriodId { get; init; }
         public Guid? HolderEmployeeId { get; init; }
         public int? HolderDepartmentId { get; init; }
     }
@@ -149,15 +146,7 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
             .Select(g => new { g.Key, Count = g.Count() })
             .ToDictionaryAsync(x => x.Key, x => x.Count, cancellationToken);
 
-        var slaBreaches = await AttributedBreaches(rangeStartUtc, rangeEndUtc)
-            .Where(b => b.HolderEmployeeId != null && ids.Contains(b.HolderEmployeeId!.Value))
-            .Select(b => new { EmployeeId = b.HolderEmployeeId!.Value, b.TicketId })
-            .Distinct()
-            .GroupBy(x => x.EmployeeId)
-            .Select(g => new { g.Key, Count = g.Count() })
-            .ToDictionaryAsync(x => x.Key, x => x.Count, cancellationToken);
-
-        return new TeamPerformanceMetricsSnapshot(currentlyAssigned, ticketsWorked, completedFollowUps, slaBreaches);
+        return new TeamPerformanceMetricsSnapshot(currentlyAssigned, ticketsWorked, completedFollowUps);
     }
 
     public async Task<IReadOnlyList<TeamPerformanceRecordRow>> GetRecordsAsync(
@@ -183,13 +172,12 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                     completedAt: true)
                 .ToListAsync(cancellationToken),
 
-            // Distinct tickets, each with the earliest breach recorded in the
-            // period while this employee held it.
+            // Distinct tickets with at least one genuine breach event in the period attributed to this employee, each with the earliest one.
             TeamPerformanceMetric.SlaBreaches => await WithTicketFacts(
-                    AttributedBreaches(rangeStartUtc, rangeEndUtc)
+                    BreachMoments(rangeStartUtc, rangeEndUtc)
                         .Where(b => b.HolderEmployeeId == employeeId)
                         .GroupBy(b => b.TicketId)
-                        .Select(g => new RecordKey { TicketId = g.Key, Instant = g.Min(b => b.OccurredAtUtc) }),
+                        .Select(g => new RecordKey { TicketId = g.Key, Instant = g.Min(b => b.AtUtc) }),
                     breachedAt: true)
                 .ToListAsync(cancellationToken),
 
@@ -258,38 +246,170 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 && h.AssignedEmployeeId != null && ids.Contains(h.AssignedEmployeeId!.Value)
                 && h.CompletedAtUtc != null && h.CompletedAtUtc >= start && h.CompletedAtUtc < end);
 
+    private const byte BreachedStateValue = (byte)SlaState.Breached;
+
     /// <summary>
-    /// Every SLA breach recorded in the window (a <c>TicketStatusHistory</c>
-    /// row on the SlaState dimension whose new value is Breached), each
-    /// attributed to the employee named by the latest assignment at or
-    /// before the moment of the breach — the person who held the ticket
-    /// when it breached, not whoever holds it now.
+    /// The genuine SLA breach events recorded in the window: <c>SlaState</c> history rows that SlaBreachProcessor wrote for a clock
+    /// (First Response or Resolution — recognised by the processor's own note prefixes, shared as <see cref="SlaBreachNotes"/>). Other rows
+    /// that merely carry the Breached state — "First human response recorded" on a ticket already Breached — are not breaches and are not
+    /// counted. A second clock breaching on an already-Breached ticket IS one (Breached→Breached with its own note).
+    ///
+    /// <para>
+    /// Each event is attributed to whoever held the ticket at the breach DEADLINE (the due time of that clock's SLA period), not at the
+    /// moment the scheduler happened to record it: a delayed write cannot move the breach to a later holder. The holder is the latest
+    /// assignment at or before the deadline, unless that assignment had already ended (released to a queue, closed) by then — then nobody.
+    /// With no SLA period to read the deadline from, the recorded moment is used.
+    /// </para>
     /// </summary>
-    private IQueryable<AttributedBreach> AttributedBreaches(DateTime start, DateTime end)
-    {
-        const byte breached = (byte)SlaState.Breached;
-        return dbContext.TicketStatusHistoryEntries.AsNoTracking()
-            .Where(h => h.Dimension == TicketStatusDimension.SlaState && h.NewValue == breached
-                && h.OccurredAtUtc >= start && h.OccurredAtUtc < end)
-            .Select(h => new AttributedBreach
+    private IQueryable<SlaMoment> BreachMoments(DateTime start, DateTime end) =>
+        dbContext.TicketStatusHistoryEntries.AsNoTracking()
+            .Where(h => h.Dimension == TicketStatusDimension.SlaState && h.NewValue == BreachedStateValue
+                && h.OccurredAtUtc >= start && h.OccurredAtUtc < end
+                && h.Note != null
+                && (h.Note.StartsWith(SlaBreachNotes.FirstResponsePrefix) || h.Note.StartsWith(SlaBreachNotes.ResolutionPrefix)))
+            .Select(h => new
             {
-                TicketStatusHistoryId = h.TicketStatusHistoryId,
-                TicketId = h.TicketId,
-                OccurredAtUtc = h.OccurredAtUtc,
-                Note = h.Note,
+                Row = h,
+                IsFirstResponse = h.Note!.StartsWith(SlaBreachNotes.FirstResponsePrefix),
+                Due = dbContext.TicketSlaInstances
+                    .Where(i => i.TicketId == h.TicketId && i.PeriodStartAtUtc <= h.OccurredAtUtc
+                        && (i.PeriodEndAtUtc == null || h.OccurredAtUtc < i.PeriodEndAtUtc))
+                    .OrderByDescending(i => i.PeriodStartAtUtc)
+                    .Select(i => h.Note!.StartsWith(SlaBreachNotes.FirstResponsePrefix) ? i.FirstResponseDueAtUtc : i.ResolutionDueAtUtc)
+                    .Select(d => (DateTime?)d)
+                    .FirstOrDefault()
+            })
+            .Select(x => new
+            {
+                x.Row,
+                x.IsFirstResponse,
+                x.Due,
+                // The moment the breach happened: the deadline, never later than the moment it was recorded.
+                Deadline = x.Due != null && x.Due < x.Row.OccurredAtUtc ? x.Due.Value : x.Row.OccurredAtUtc
+            })
+            .Select(x => new SlaMoment
+            {
+                SourceId = x.Row.TicketStatusHistoryId,
+                TicketId = x.Row.TicketId,
+                IsFirstResponse = x.IsFirstResponse,
+                AtUtc = x.Row.OccurredAtUtc,
+                DueAtUtc = x.Due,
                 HolderEmployeeId = dbContext.TicketAssignments
-                    .Where(a => a.TicketId == h.TicketId && a.AssignedAtUtc <= h.OccurredAtUtc)
-                    .OrderByDescending(a => a.AssignedAtUtc)
-                    .ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => (Guid?)a.AssignedEmployeeId)
+                    .Where(a => a.TicketId == x.Row.TicketId && a.AssignedAtUtc <= x.Deadline)
+                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
+                    .Select(a => a.SupersededAtUtc == null || a.SupersededAtUtc > x.Deadline ? (Guid?)a.AssignedEmployeeId : null)
                     .FirstOrDefault(),
                 HolderDepartmentId = dbContext.TicketAssignments
-                    .Where(a => a.TicketId == h.TicketId && a.AssignedAtUtc <= h.OccurredAtUtc)
-                    .OrderByDescending(a => a.AssignedAtUtc)
-                    .ThenByDescending(a => a.TicketAssignmentId)
+                    .Where(a => a.TicketId == x.Row.TicketId && a.AssignedAtUtc <= x.Deadline)
+                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
                     .Select(a => (int?)a.AssignedDepartmentId)
                     .FirstOrDefault()
             });
+
+    /// <summary>First Response achieved on time in the window: the first human response is on or before the due time and no breach was flagged on that clock. Holder at the moment of the response.</summary>
+    private IQueryable<SlaMoment> FirstResponseMetMoments(DateTime start, DateTime end) =>
+        dbContext.Tickets.AsNoTracking()
+            .Where(t => t.FirstHumanResponseAtUtc != null && t.FirstHumanResponseAtUtc >= start && t.FirstHumanResponseAtUtc < end)
+            .Select(t => new
+            {
+                t.TicketId,
+                At = t.FirstHumanResponseAtUtc!.Value,
+                // First Response is carried across periods, so the latest period holds its due time and breach flag.
+                Due = dbContext.TicketSlaInstances.Where(i => i.TicketId == t.TicketId)
+                    .OrderByDescending(i => i.PeriodStartAtUtc).ThenByDescending(i => i.TicketSlaInstanceId)
+                    .Select(i => (DateTime?)i.FirstResponseDueAtUtc).FirstOrDefault(),
+                Breached = dbContext.TicketSlaInstances.Where(i => i.TicketId == t.TicketId)
+                    .OrderByDescending(i => i.PeriodStartAtUtc).ThenByDescending(i => i.TicketSlaInstanceId)
+                    .Select(i => (bool?)i.FirstResponseBreached).FirstOrDefault(),
+                PeriodId = dbContext.TicketSlaInstances.Where(i => i.TicketId == t.TicketId)
+                    .OrderByDescending(i => i.PeriodStartAtUtc).ThenByDescending(i => i.TicketSlaInstanceId)
+                    .Select(i => (long?)i.TicketSlaInstanceId).FirstOrDefault()
+            })
+            .Where(x => x.Due != null && x.Breached == false && x.At <= x.Due)
+            .Select(x => new SlaMoment
+            {
+                SourceId = x.TicketId,
+                TicketId = x.TicketId,
+                IsFirstResponse = true,
+                AtUtc = x.At,
+                DueAtUtc = x.Due,
+                PeriodId = x.PeriodId,
+                HolderEmployeeId = dbContext.TicketAssignments
+                    .Where(a => a.TicketId == x.TicketId && a.AssignedAtUtc <= x.At)
+                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
+                    .Select(a => a.SupersededAtUtc == null || a.SupersededAtUtc > x.At ? (Guid?)a.AssignedEmployeeId : null)
+                    .FirstOrDefault(),
+                HolderDepartmentId = dbContext.TicketAssignments
+                    .Where(a => a.TicketId == x.TicketId && a.AssignedAtUtc <= x.At)
+                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
+                    .Select(a => (int?)a.AssignedDepartmentId)
+                    .FirstOrDefault()
+            });
+
+    /// <summary>Resolution recorded on time in the window: inside the SLA period in force, on or before that period's due time, with no breach flagged on that period. Holder at the moment of the resolution. A period can appear more than once if it has several resolution rows; the caller keeps the earliest.</summary>
+    private IQueryable<SlaMoment> ResolutionMetMoments(DateTime start, DateTime end) =>
+        dbContext.TicketResolutions.AsNoTracking()
+            .Where(r => r.ResolvedAtUtc >= start && r.ResolvedAtUtc < end)
+            .Join(dbContext.TicketSlaInstances.AsNoTracking(), r => r.TicketId, i => i.TicketId, (r, i) => new { Resolution = r, Period = i })
+            .Where(x => x.Period.PeriodStartAtUtc <= x.Resolution.ResolvedAtUtc
+                && (x.Period.PeriodEndAtUtc == null || x.Resolution.ResolvedAtUtc < x.Period.PeriodEndAtUtc)
+                && !x.Period.ResolutionBreached && x.Resolution.ResolvedAtUtc <= x.Period.ResolutionDueAtUtc)
+            .Select(x => new SlaMoment
+            {
+                SourceId = x.Resolution.TicketResolutionId,
+                TicketId = x.Resolution.TicketId,
+                IsFirstResponse = false,
+                AtUtc = x.Resolution.ResolvedAtUtc,
+                DueAtUtc = x.Period.ResolutionDueAtUtc,
+                PeriodId = x.Period.TicketSlaInstanceId,
+                HolderEmployeeId = dbContext.TicketAssignments
+                    .Where(a => a.TicketId == x.Resolution.TicketId && a.AssignedAtUtc <= x.Resolution.ResolvedAtUtc)
+                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
+                    .Select(a => a.SupersededAtUtc == null || a.SupersededAtUtc > x.Resolution.ResolvedAtUtc ? (Guid?)a.AssignedEmployeeId : null)
+                    .FirstOrDefault(),
+                HolderDepartmentId = dbContext.TicketAssignments
+                    .Where(a => a.TicketId == x.Resolution.TicketId && a.AssignedAtUtc <= x.Resolution.ResolvedAtUtc)
+                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
+                    .Select(a => (int?)a.AssignedDepartmentId)
+                    .FirstOrDefault()
+            });
+
+    public async Task<TeamPerformanceSlaEvents> GetSlaEventsAsync(
+        IReadOnlyCollection<Guid> employeeIds, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken = default)
+    {
+        var ids = employeeIds.ToList();
+        if (ids.Count == 0)
+        {
+            return new TeamPerformanceSlaEvents([], []);
+        }
+
+        var breaches = await BreachMoments(rangeStartUtc, rangeEndUtc)
+            .Where(m => m.HolderEmployeeId != null && ids.Contains(m.HolderEmployeeId!.Value))
+            .ToListAsync(cancellationToken);
+        var firstResponses = await FirstResponseMetMoments(rangeStartUtc, rangeEndUtc)
+            .Where(m => m.HolderEmployeeId != null && ids.Contains(m.HolderEmployeeId!.Value))
+            .ToListAsync(cancellationToken);
+        var resolutions = await ResolutionMetMoments(rangeStartUtc, rangeEndUtc)
+            .Where(m => m.HolderEmployeeId != null && ids.Contains(m.HolderEmployeeId!.Value))
+            .ToListAsync(cancellationToken);
+
+        TeamPerformanceSlaEventRow ToRow(SlaMoment m) => new(
+            m.HolderEmployeeId!.Value, m.TicketId, m.IsFirstResponse ? SlaDeadlineType.FirstResponse : SlaDeadlineType.Resolution,
+            m.AtUtc, m.DueAtUtc, m.HolderDepartmentId, m.PeriodId, m.SourceId);
+
+        // One event per (ticket, clock, deadline): the SLA engine's idempotency already guarantees it; this keeps a stray repeat from counting twice.
+        var breachRows = breaches
+            .GroupBy(m => (m.TicketId, m.IsFirstResponse, Deadline: m.DueAtUtc ?? m.AtUtc))
+            .Select(g => g.OrderBy(m => m.SourceId).First())
+            .Select(ToRow)
+            .ToList();
+
+        // One Resolution evaluation per SLA period (the first resolution in it); one First Response per ticket.
+        var metRows = firstResponses.Select(ToRow)
+            .Concat(resolutions.GroupBy(m => (m.TicketId, m.PeriodId)).Select(g => g.OrderBy(m => m.AtUtc).ThenBy(m => m.SourceId).First()).Select(ToRow))
+            .ToList();
+
+        return new TeamPerformanceSlaEvents(breachRows, metRows);
     }
 
     /// <summary>
@@ -320,7 +440,7 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 completedAt ? x.Instant : null));
     }
 
-    // ---- SLA evaluations behind the SLA Breaches count. ----
+    // ---- SLA evaluations behind the counts. ----
 
     private sealed class TicketFacts
     {
@@ -338,64 +458,21 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
         public DateTime ResolvedAtUtc { get; init; }
     }
 
-    private const string FirstResponseBreachPrefix = "FirstResponse SLA breached";
-    private const string ResolutionBreachPrefix = "Resolution SLA breached";
+    private sealed record RequestTypeSlaPolicyFacts(bool HasFirstResponse);
 
     public async Task<IReadOnlyList<TeamPerformanceSlaEvaluationRow>> GetSlaEvaluationsAsync(
         Guid employeeId, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken = default)
     {
         List<Guid> one = [employeeId];
 
-        // 1. Breached — the very predicate the SLA Breaches count uses, kept as events so the explanation can name them.
-        var breachEvents = await AttributedBreaches(rangeStartUtc, rangeEndUtc)
-            .Where(b => b.HolderEmployeeId == employeeId)
-            .ToListAsync(cancellationToken);
+        // Breached and Met come from the very method the table's counts come from, so a count and its list cannot disagree.
+        var events = await GetSlaEventsAsync(one, rangeStartUtc, rangeEndUtc, cancellationToken);
 
-        // 2. Met — achievements in the window by the employee who held the ticket at that moment.
-        var firstResponses = await dbContext.Tickets.AsNoTracking()
-            .Where(t => t.FirstHumanResponseAtUtc != null && t.FirstHumanResponseAtUtc >= rangeStartUtc && t.FirstHumanResponseAtUtc < rangeEndUtc
-                && dbContext.TicketAssignments.Any(a => a.TicketId == t.TicketId && a.AssignedEmployeeId == employeeId))
-            .Select(t => new AttributedMoment
-            {
-                TicketId = t.TicketId,
-                AtUtc = t.FirstHumanResponseAtUtc!.Value,
-                HolderEmployeeId = dbContext.TicketAssignments
-                    .Where(a => a.TicketId == t.TicketId && a.AssignedAtUtc <= t.FirstHumanResponseAtUtc)
-                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => (Guid?)a.AssignedEmployeeId).FirstOrDefault(),
-                HolderDepartmentId = dbContext.TicketAssignments
-                    .Where(a => a.TicketId == t.TicketId && a.AssignedAtUtc <= t.FirstHumanResponseAtUtc)
-                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => (int?)a.AssignedDepartmentId).FirstOrDefault()
-            })
-            .Where(m => m.HolderEmployeeId == employeeId)
-            .ToListAsync(cancellationToken);
-
-        var resolutions = await dbContext.TicketResolutions.AsNoTracking()
-            .Where(r => r.ResolvedAtUtc >= rangeStartUtc && r.ResolvedAtUtc < rangeEndUtc
-                && dbContext.TicketAssignments.Any(a => a.TicketId == r.TicketId && a.AssignedEmployeeId == employeeId))
-            .Select(r => new AttributedMoment
-            {
-                TicketId = r.TicketId,
-                AtUtc = r.ResolvedAtUtc,
-                HolderEmployeeId = dbContext.TicketAssignments
-                    .Where(a => a.TicketId == r.TicketId && a.AssignedAtUtc <= r.ResolvedAtUtc)
-                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => (Guid?)a.AssignedEmployeeId).FirstOrDefault(),
-                HolderDepartmentId = dbContext.TicketAssignments
-                    .Where(a => a.TicketId == r.TicketId && a.AssignedAtUtc <= r.ResolvedAtUtc)
-                    .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => (int?)a.AssignedDepartmentId).FirstOrDefault()
-            })
-            .Where(m => m.HolderEmployeeId == employeeId)
-            .ToListAsync(cancellationToken);
-
-        // 3. Pending — clocks still open on the tickets the employee holds now (the same set as Currently Assigned).
+        // Pending — clocks still open on the tickets the employee holds now (the same set as Currently Assigned).
         var openTicketIds = await CurrentlyAssigned(one).Select(t => t.TicketId).ToListAsync(cancellationToken);
 
-        var ticketIds = breachEvents.Select(b => b.TicketId)
-            .Concat(firstResponses.Select(m => m.TicketId))
-            .Concat(resolutions.Select(m => m.TicketId))
+        var ticketIds = events.Breaches.Select(e => e.TicketId)
+            .Concat(events.Met.Select(e => e.TicketId))
             .Concat(openTicketIds)
             .Distinct().ToList();
         if (ticketIds.Count == 0)
@@ -461,17 +538,9 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
         string? DepartmentName(int? departmentId, TicketFacts ticket) =>
             departmentNames.GetValueOrDefault(departmentId ?? ticket.CurrentDepartmentId);
 
-        // The period in force at a moment; a moment before the first period falls to the first.
-        static TicketSlaInstance? Covering(List<TicketSlaInstance>? periods, DateTime at)
-        {
-            if (periods is null || periods.Count == 0)
-            {
-                return null;
-            }
-
-            return periods.LastOrDefault(i => i.PeriodStartAtUtc <= at && (i.PeriodEndAtUtc == null || at < i.PeriodEndAtUtc))
-                ?? (at < periods[0].PeriodStartAtUtc ? periods[0] : null);
-        }
+        // The period in force at a moment.
+        static TicketSlaInstance? Covering(List<TicketSlaInstance>? periods, DateTime at) =>
+            periods?.LastOrDefault(i => i.PeriodStartAtUtc <= at && (i.PeriodEndAtUtc == null || at < i.PeriodEndAtUtc));
 
         DateTime? ResolutionIn(long ticketId, TicketSlaInstance period) =>
             resolutionsByTicket.GetValueOrDefault(ticketId)?
@@ -480,8 +549,8 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 .FirstOrDefault();
 
         TeamPerformanceSlaEvaluationRow Build(
-            TeamPerformanceSlaEvaluationKind kind, TicketFacts ticket, int? holderDepartmentId, SlaDeadlineType? type,
-            TicketSlaInstance? period, List<TicketSlaInstance>? allPeriods, DateTime? eventAt, string? breachNote, IReadOnlyList<string> additionalNotes)
+            TeamPerformanceSlaEvaluationKind kind, TicketFacts ticket, int? holderDepartmentId, SlaDeadlineType type,
+            TicketSlaInstance? period, List<TicketSlaInstance>? allPeriods, DateTime? eventAt)
         {
             policies.TryGetValue(period?.PriorityId ?? 0, out var priorityPolicy);
             var rt = period?.RequestTypeSlaPolicyId is { } rtId && requestTypePolicies.TryGetValue(rtId, out var found) ? found : default;
@@ -490,23 +559,25 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
             DateTime? start = null, due = null, actual = null;
             int? target = null;
             SlaClockBasis? basis = null;
-            switch (type)
+            if (period is not null)
             {
-                case SlaDeadlineType.FirstResponse when period is not null:
+                if (type == SlaDeadlineType.FirstResponse)
+                {
                     // First Response is carried, never restarted, so it runs from the first period's clock start.
                     start = allPeriods![0].PeriodStartAtUtc;
                     due = period.FirstResponseDueAtUtc;
                     actual = ticket.FirstHumanResponseAtUtc;
                     target = period.AppliedFirstResponseTargetMinutes ?? priorityPolicy?.FirstResponseTargetMinutes;
                     basis = rt.Policy is { HasFirstResponse: true } ? period.ResolutionClockBasis ?? priorityPolicy?.ClockBasis : priorityPolicy?.ClockBasis;
-                    break;
-                case SlaDeadlineType.Resolution when period is not null:
+                }
+                else
+                {
                     start = period.PeriodStartAtUtc;
                     due = period.ResolutionDueAtUtc;
                     actual = ResolutionIn(ticket.TicketId, period);
                     target = period.AppliedResolutionTargetMinutes ?? priorityPolicy?.ResolutionTargetMinutes;
                     basis = period.ResolutionClockBasis ?? priorityPolicy?.ClockBasis;
-                    break;
+                }
             }
 
             return new TeamPerformanceSlaEvaluationRow(
@@ -515,67 +586,28 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 period?.PriorityId, period is null ? null : priorityNames.GetValueOrDefault(period.PriorityId),
                 period?.RequestTypeSlaPolicyId, rt.Name, period?.RequestTypeSlaNote,
                 type == SlaDeadlineType.Resolution ? pause.Minutes : 0,
-                type == SlaDeadlineType.Resolution && pause.Open,
-                breachNote, additionalNotes);
+                type == SlaDeadlineType.Resolution && pause.Open);
         }
 
         var rows = new List<TeamPerformanceSlaEvaluationRow>();
 
-        // ---- Breached: one record per ticket, the earliest breach event in the window (the report's own rule). ----
-        foreach (var group in breachEvents.GroupBy(b => b.TicketId))
+        // Breached: one row per breach event, on the SLA period whose deadline it was.
+        foreach (var e in events.Breaches)
         {
-            var ordered = group.OrderBy(b => b.OccurredAtUtc).ThenBy(b => b.TicketStatusHistoryId).ToList();
-            var counted = ordered[0];
-            var ticket = tickets[group.Key];
-            SlaDeadlineType? type =
-                counted.Note?.StartsWith(FirstResponseBreachPrefix, StringComparison.OrdinalIgnoreCase) == true ? SlaDeadlineType.FirstResponse
-                : counted.Note?.StartsWith(ResolutionBreachPrefix, StringComparison.OrdinalIgnoreCase) == true ? SlaDeadlineType.Resolution
-                : null;
-
-            instancesByTicket.TryGetValue(group.Key, out var periods);
-            var period = Covering(periods, counted.OccurredAtUtc);
-            var additional = ordered.Skip(1)
-                .Select(b => $"{b.OccurredAtUtc:yyyy-MM-dd HH:mm} UTC — {b.Note ?? "SLA state recorded as Breached"}")
-                .ToList();
-
-            rows.Add(Build(TeamPerformanceSlaEvaluationKind.Breached, ticket, counted.HolderDepartmentId, type, period, periods,
-                counted.OccurredAtUtc, counted.Note, additional));
+            instancesByTicket.TryGetValue(e.TicketId, out var periods);
+            rows.Add(Build(TeamPerformanceSlaEvaluationKind.Breached, tickets[e.TicketId], e.HolderDepartmentId, e.SlaType,
+                Covering(periods, e.AtUtc), periods, e.AtUtc));
         }
 
-        // ---- Met: First Response answered on time. ----
-        foreach (var moment in firstResponses)
+        // Met: on-time First Response (the latest period carries it) and Resolution (the period it was recorded in).
+        foreach (var e in events.Met)
         {
-            if (!instancesByTicket.TryGetValue(moment.TicketId, out var periods) || periods.Count == 0)
-            {
-                continue;
-            }
-
-            var current = periods[^1];
-            if (current.FirstResponseBreached || moment.AtUtc > current.FirstResponseDueAtUtc)
-            {
-                continue;
-            }
-
-            rows.Add(Build(TeamPerformanceSlaEvaluationKind.Met, tickets[moment.TicketId], moment.HolderDepartmentId,
-                SlaDeadlineType.FirstResponse, current, periods, moment.AtUtc, null, []));
+            instancesByTicket.TryGetValue(e.TicketId, out var periods);
+            var period = periods?.FirstOrDefault(i => i.TicketSlaInstanceId == e.PeriodId);
+            rows.Add(Build(TeamPerformanceSlaEvaluationKind.Met, tickets[e.TicketId], e.HolderDepartmentId, e.SlaType, period, periods, e.AtUtc));
         }
 
-        // ---- Met: Resolution recorded on time (one per SLA period — the first resolution in it). ----
-        foreach (var moment in resolutions.GroupBy(m => m.TicketId).SelectMany(g => g.OrderBy(m => m.AtUtc)))
-        {
-            instancesByTicket.TryGetValue(moment.TicketId, out var periods);
-            var period = Covering(periods, moment.AtUtc);
-            if (period is null || period.ResolutionBreached || moment.AtUtc > period.ResolutionDueAtUtc
-                || ResolutionIn(moment.TicketId, period) != moment.AtUtc)
-            {
-                continue;
-            }
-
-            rows.Add(Build(TeamPerformanceSlaEvaluationKind.Met, tickets[moment.TicketId], moment.HolderDepartmentId,
-                SlaDeadlineType.Resolution, period, periods, moment.AtUtc, null, []));
-        }
-
-        // ---- Pending: open clocks of the tickets held now. ----
+        // Pending: open clocks of the tickets held now.
         foreach (var ticketId in openTicketIds)
         {
             if (!instancesByTicket.TryGetValue(ticketId, out var periods) || periods.Count == 0)
@@ -592,19 +624,17 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
 
             if (ticket.FirstHumanResponseAtUtc is null && !current.FirstResponseBreached)
             {
-                rows.Add(Build(TeamPerformanceSlaEvaluationKind.Pending, ticket, null, SlaDeadlineType.FirstResponse, current, periods, null, null, []));
+                rows.Add(Build(TeamPerformanceSlaEvaluationKind.Pending, ticket, null, SlaDeadlineType.FirstResponse, current, periods, null));
             }
 
             if (!current.ResolutionBreached && ResolutionIn(ticketId, current) is null)
             {
-                rows.Add(Build(TeamPerformanceSlaEvaluationKind.Pending, ticket, null, SlaDeadlineType.Resolution, current, periods, null, null, []));
+                rows.Add(Build(TeamPerformanceSlaEvaluationKind.Pending, ticket, null, SlaDeadlineType.Resolution, current, periods, null));
             }
         }
 
         return rows;
     }
-
-    private sealed record RequestTypeSlaPolicyFacts(bool HasFirstResponse);
 
     public async Task<TeamPerformanceSlaConfiguration> GetSlaConfigurationAsync(CancellationToken cancellationToken = default)
     {
