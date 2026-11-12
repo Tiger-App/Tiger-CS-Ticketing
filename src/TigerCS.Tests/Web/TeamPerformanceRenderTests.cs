@@ -21,9 +21,11 @@ namespace TigerCS.Tests.Web;
 
 /// <summary>
 /// The Team Performance report page rendered end to end through the real
-/// Razor pipeline: a CS Manager sees the filter form, one row per agent
-/// with clickable counts, the totals row and the help block; opening a
-/// count renders the records panel; the nav item is offered to the CS
+/// Razor pipeline: a CS Manager sees the filter form, one row per employee
+/// (every department) with clickable counts, the totals row and the help
+/// block; opening a count renders the records panel; the SLA Breaches count
+/// opens the SLA details page (summary, rules, highlighted, sortable,
+/// paged evaluations); the nav item is offered to the CS
 /// Manager tier only; a CS Agent is refused by the folder policy; and an
 /// Api 403 renders as a "no permission" state, never an empty table.
 /// </summary>
@@ -32,6 +34,7 @@ public sealed class TeamPerformanceRenderTests : IDisposable
     private static readonly Guid ViewerId = Guid.NewGuid();
     private static readonly Guid AminaId = new("11111111-1111-1111-1111-111111111111");
     private static readonly Guid BilalId = new("22222222-2222-2222-2222-222222222222");
+    private static readonly Guid CoraId = new("33333333-3333-3333-3333-333333333333");
     private static readonly DateTime Now = new(2026, 9, 12, 9, 0, 0, DateTimeKind.Utc);
 
     private readonly WebApplicationFactory<TigerCsWeb::Program> _factory;
@@ -117,23 +120,28 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         // The GET filter form, built from the Api's own options.
         Assert.Contains("class=\"filter-bar report-filters\"", html, StringComparison.Ordinal);
         Assert.Contains("name=\"employeeId\"", html, StringComparison.Ordinal);
-        Assert.Contains("name=\"agentType\"", html, StringComparison.Ordinal);
+        Assert.Contains("name=\"role\"", html, StringComparison.Ordinal);
         Assert.Contains("name=\"departmentId\"", html, StringComparison.Ordinal);
-        Assert.Contains("<option value=\"Call Center Agent\"", html, StringComparison.Ordinal);
-        Assert.Contains("Amina Agent (CS Agent)</option>", html, StringComparison.Ordinal);
+        Assert.Contains("<option value=\"Collections Officer\"", html, StringComparison.Ordinal);
+        Assert.Contains("<option value=\"3\"", html, StringComparison.Ordinal);            // Collections, a configured department
+        Assert.Contains("Amina Agent — CS Agent</option>", html, StringComparison.Ordinal);
 
-        // One row per agent, departments comma-joined (primary first), each count a link.
+        // One row per employee in every department, roles and departments comma-joined (primary first), each count a link.
         Assert.Contains("class=\"table-scroll\"", html, StringComparison.Ordinal);
         Assert.Contains("<td class=\"cell-primary\">Amina Agent</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"cell-primary\">Cora Collector</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td>Collections Officer, CS Supervisor</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td>Collections</td>", html, StringComparison.Ordinal);
         Assert.Contains("<td>Call Center, Customer Service</td>", html, StringComparison.Ordinal);
-        Assert.Contains($"href=\"/Reports/TeamPerformance?employeeId={AminaId}&amp;metric=SlaBreaches\"", html, StringComparison.Ordinal);
+        // SLA Breaches opens the SLA details page, carrying the period and filters; the other counts open the records panel.
+        Assert.Contains($"href=\"/Reports/TeamPerformanceSla?employeeId={AminaId}&amp;status=Breached\"", html, StringComparison.Ordinal);
         Assert.Contains($"href=\"/Reports/TeamPerformance?employeeId={BilalId}&amp;metric=TicketsWorked\"", html, StringComparison.Ordinal);
         Assert.Contains("class=\"report-count report-count--critical\"", html, StringComparison.Ordinal);
 
         // Totals at the bottom.
         Assert.Contains("<tr class=\"report-totals\">", html, StringComparison.Ordinal);
-        Assert.Contains("2 agents</td>", html, StringComparison.Ordinal);
-        Assert.Contains("<td class=\"cell-num\">7</td>", html, StringComparison.Ordinal);
+        Assert.Contains("3 employees</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"cell-num\">9</td>", html, StringComparison.Ordinal);
 
         // The definitions travel with the page.
         Assert.Contains("How these numbers are calculated", html, StringComparison.Ordinal);
@@ -161,7 +169,74 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         // The report above it is narrowed to the opened employee and offers the way back.
         Assert.Contains("<td class=\"cell-primary\">Amina Agent</td>", html, StringComparison.Ordinal);
         Assert.DoesNotContain("<td class=\"cell-primary\">Bilal Caller</td>", html, StringComparison.Ordinal);
-        Assert.Contains("href=\"/Reports/TeamPerformance?dateFrom=2026-08-13&amp;dateTo=2026-09-12\">Show all agents</a>", html, StringComparison.Ordinal);
+        Assert.Contains("href=\"/Reports/TeamPerformance?dateFrom=2026-08-13&amp;dateTo=2026-09-12\">Show all employees</a>", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SlaDetailsPage_RendersSummaryRules_HighlightedRecords_SortHeadersAndPager()
+    {
+        var html = await Ok(await Client(Roles.CsManager).GetAsync(
+            $"/Reports/TeamPerformanceSla?employeeId={AminaId}&dateFrom=2026-08-13&dateTo=2026-09-12&status=Breached&role=CS%20Agent&departmentId=2"));
+
+        Assert.Contains("SLA Details · Amina Agent", html, StringComparison.Ordinal);
+        Assert.Contains("aria-current=\"page\">Team Performance</a>", html, StringComparison.Ordinal);
+
+        // Summary tiles, the formula, and the worked numbers.
+        Assert.Contains("<span>Total SLA evaluations</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span>SLA met</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span>SLA breached</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span>Pending SLA</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<strong>66.7%</strong>", html, StringComparison.Ordinal);
+        Assert.Contains("Pending evaluations are excluded from the denominator.", html, StringComparison.Ordinal);
+        Assert.Contains("Here: 2 / (2 + 1) × 100 = 66.7%.", html, StringComparison.Ordinal);
+
+        // The rules, read from the Api, and the configured policy table.
+        Assert.Contains("How SLA is calculated", html, StringComparison.Ordinal);
+        Assert.Contains("<dt>When the timer starts</dt>", html, StringComparison.Ordinal);
+        Assert.Contains("SLA targets by priority, as configured", html, StringComparison.Ordinal);
+
+        // Table: ticket links, red / green highlighting, UTC stamps, breach duration, policy and the reason.
+        Assert.Contains("href=\"/Tickets/5\">TG-CS-00005</a>", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"sla-row sla-row--breached\"", html, StringComparison.Ordinal);
+        Assert.Contains("class=\"sla-row sla-row--met\"", html, StringComparison.Ordinal);
+        Assert.Contains("badge badge-sla-breached\">Breached</span>", html, StringComparison.Ordinal);
+        Assert.Contains("badge badge-sla-met\">Met</span>", html, StringComparison.Ordinal);
+        Assert.Contains("2026-09-01 08:00", html, StringComparison.Ordinal);
+        Assert.Contains("2 d 1 h (ongoing)", html, StringComparison.Ordinal);
+        Assert.Contains("Medium priority", html, StringComparison.Ordinal);
+        Assert.Contains("priority SLA policy", html, StringComparison.Ordinal);
+        Assert.Contains("Breach recorded because the deadline passed.", html, StringComparison.Ordinal);
+
+        // Server-side sorting + paging links keep the employee, period, filters and status.
+        Assert.Contains("sortBy=due&amp;sortDir=desc", html, StringComparison.Ordinal);
+        Assert.Contains("aria-sort=\"descending\"", html, StringComparison.Ordinal);
+        Assert.Contains("Showing 1–2 of 42 · page 1 of 2", html, StringComparison.Ordinal);
+        Assert.Contains("page=2", html, StringComparison.Ordinal);
+        Assert.Contains($"employeeId={AminaId}", html, StringComparison.Ordinal);
+        Assert.Contains("role=CS&#x2B;Agent", html, StringComparison.Ordinal);
+        Assert.Contains("departmentId=2", html, StringComparison.Ordinal);
+
+        // The status tabs carry the counts; the way back keeps the filters; no inline styles.
+        Assert.Contains("Breached (1)", html, StringComparison.Ordinal);
+        Assert.Contains("href=\"/Reports/TeamPerformance?dateFrom=2026-08-13&amp;dateTo=2026-09-12&amp;role=CS&#x2B;Agent&amp;departmentId=2\">Back to Team Performance</a>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("style=\"", html, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task SlaDetailsPage_IsRefusedForACsAgent_AndRendersStatesForApiFailures()
+    {
+        Assert.Equal(HttpStatusCode.Forbidden, (await Client(Roles.CsAgent).GetAsync($"/Reports/TeamPerformanceSla?employeeId={AminaId}")).StatusCode);
+
+        var notFound = await Ok(await Client(Roles.CsManager).GetAsync($"/Reports/TeamPerformanceSla?employeeId={Guid.NewGuid()}"));
+        Assert.Contains("This employee is not on the report under the selected filters.", notFound, StringComparison.Ordinal);
+        Assert.DoesNotContain("class=\"sla-table", notFound, StringComparison.Ordinal);
+
+        FakeReportsApi.Forbidden = true;
+        string forbidden;
+        try { forbidden = await Ok(await Client(Roles.CsManager).GetAsync($"/Reports/TeamPerformanceSla?employeeId={AminaId}")); }
+        finally { FakeReportsApi.Forbidden = false; }
+        Assert.Contains("No permission", forbidden, StringComparison.Ordinal);
+        Assert.DoesNotContain("class=\"sla-table", forbidden, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -213,8 +288,15 @@ public sealed class TeamPerformanceRenderTests : IDisposable
             {
                 "/api/reports/team-performance" => Report(query["employeeId"] is { } id ? Guid.Parse(id) : null),
                 "/api/reports/team-performance/records" => Records(Guid.Parse(query["employeeId"]!), query["metric"]!),
+                "/api/reports/team-performance/sla-details" when Guid.Parse(query["employeeId"]!) == AminaId => SlaDetails(query),
+                "/api/reports/team-performance/sla-details" => null,
                 _ => null,
             };
+            if (path == "/api/reports/team-performance/sla-details" && body is null)
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+            }
+
             return Task.FromResult(body is null
                 ? new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)
                 : new HttpResponseMessage(HttpStatusCode.OK) { Content = JsonContent.Create(body, body.GetType()) });
@@ -224,10 +306,12 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         {
             TeamPerformanceRowDto[] all =
             [
-                new(AminaId, "Amina Agent", TeamPerformanceAgentTypes.CsAgent,
+                new(AminaId, "Amina Agent", ["CS Agent"],
                     [new TeamPerformanceDepartmentDto(2, "Customer Service", true)], 3, 9, 2, 1),
-                new(BilalId, "Bilal Caller", TeamPerformanceAgentTypes.CallCenterAgent,
+                new(BilalId, "Bilal Caller", ["CS Agent"],
                     [new TeamPerformanceDepartmentDto(4, "Call Center", true), new TeamPerformanceDepartmentDto(2, "Customer Service", false)], 4, 6, 5, 0),
+                new(CoraId, "Cora Collector", ["Collections Officer", "CS Supervisor"],
+                    [new TeamPerformanceDepartmentDto(3, "Collections", true)], 2, 3, 1, 0),
             ];
             var rows = all.Where(r => onlyEmployee is null || r.EmployeeId == onlyEmployee).ToList();
             return new TeamPerformanceReportDto(
@@ -235,14 +319,38 @@ public sealed class TeamPerformanceRenderTests : IDisposable
                 rows,
                 new TeamPerformanceTotalsDto(rows.Count, rows.Sum(r => r.CurrentlyAssigned), rows.Sum(r => r.TicketsWorked), rows.Sum(r => r.CompletedFollowUps), rows.Sum(r => r.SlaBreaches)),
                 new TeamPerformanceFilterOptionsDto(
-                    all.Select(r => new TeamPerformanceOptionDto(r.EmployeeId.ToString(), r.DisplayName, r.AgentType)).ToList(),
-                    [new TeamPerformanceOptionDto("4", "Call Center"), new TeamPerformanceOptionDto("2", "Customer Service")],
-                    TeamPerformanceAgentTypes.All));
+                    all.Select(r => new TeamPerformanceOptionDto(r.EmployeeId.ToString(), r.DisplayName, string.Join(", ", r.Roles))).ToList(),
+                    [new TeamPerformanceOptionDto("4", "Call Center"), new TeamPerformanceOptionDto("3", "Collections"), new TeamPerformanceOptionDto("2", "Customer Service")],
+                    ["Collections Officer", "CS Agent", "CS Supervisor"]));
+        }
+
+        private static TeamPerformanceSlaDetailsDto SlaDetails(System.Collections.Specialized.NameValueCollection query)
+        {
+            var due = new DateTime(2026, 9, 1, 8, 0, 0, DateTimeKind.Utc);
+            TeamPerformanceSlaRecordDto Record(long id, string number, string status, string? breachText, DateTime? actual) => new(
+                id, number, "Customer Service", "Resolution", due.AddDays(-5), due.AddDays(-5), 1800, "30 h · Business hours", due, actual,
+                status, status == "Pending" ? null : due, breachText is null ? null : 3000, breachText, breachText?.Contains("ongoing") == true,
+                AminaId, "Amina Agent", "Medium priority · priority SLA policy · 30 h · Business hours",
+                status == "Breached" ? "Breach recorded because the deadline passed." : "Recorded in time.", null);
+
+            return new TeamPerformanceSlaDetailsDto(
+                AminaId, "Amina Agent", ["CS Agent"], [new TeamPerformanceDepartmentDto(2, "Customer Service", true)],
+                new DateOnly(2026, 8, 13), new DateOnly(2026, 9, 12), query["status"], query["sortBy"] ?? "event", query["sortDir"] ?? "desc",
+                Page: 1, PageSize: 25, TotalRecords: 42, TotalPages: 2,
+                new TeamPerformanceSlaSummaryDto(5, 2, 1, 2, 66.7m),
+                new TeamPerformanceSlaRulesDto(
+                    [new TeamPerformanceSlaRuleDto("When the timer starts", "At ticket creation.")],
+                    [new TeamPerformanceSlaPolicyDto("Medium", 240, 1800, "Business hours", true)],
+                    null),
+                [
+                    Record(5, "TG-CS-00005", "Breached", "2 d 1 h (ongoing)", null),
+                    Record(6, "TG-CS-00006", "Met", null, due.AddHours(-3))
+                ]);
         }
 
         private static TeamPerformanceRecordsDto Records(Guid employeeId, string metric) => new(
             employeeId, employeeId == AminaId ? "Amina Agent" : "Bilal Caller",
-            employeeId == AminaId ? TeamPerformanceAgentTypes.CsAgent : TeamPerformanceAgentTypes.CallCenterAgent,
+            ["CS Agent"],
             metric, new DateOnly(2026, 8, 13), new DateOnly(2026, 9, 12),
             [
                 new TeamPerformanceRecordDto(5, "TG-CS-00005", "Water leak in kitchen", "InProgress", 1, "Customer Service", Now.AddDays(-6),

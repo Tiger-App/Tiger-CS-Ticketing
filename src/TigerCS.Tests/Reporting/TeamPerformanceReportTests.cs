@@ -14,10 +14,12 @@ namespace TigerCS.Tests.Reporting;
 /// <summary>
 /// The Team Performance report end to end from the application service
 /// down to real SQL (SQLite in-memory over the real EF Core schema, the
-/// same fixture the Dashboard uses): who is listed and how they are typed,
-/// each of the four metrics, the zero-activity inclusion, the one-row-per-
-/// employee rule, breach attribution to the holder at breach time, and
-/// that every records list matches the count it was opened from.
+/// same fixture the Dashboard uses): who is listed (every active employee in
+/// every department), each of the four metrics, the zero-activity inclusion,
+/// the one-row-per-employee rule, breach attribution to the holder at
+/// breach time, and that every records list matches the count it was opened
+/// from. The SLA details (Breached / Met / Pending evaluations behind the
+/// SLA Breaches count) are covered in <see cref="TeamPerformanceSlaDetailsTests"/>.
 /// </summary>
 public sealed class TeamPerformanceReportTests : IDisposable
 {
@@ -31,23 +33,31 @@ public sealed class TeamPerformanceReportTests : IDisposable
     private readonly Guid _aminaId = Guid.NewGuid();   // CS Agent, Customer Service
     private readonly Guid _bilalId = Guid.NewGuid();   // CS Agent, Call Center (primary) + Customer Service
     private readonly Guid _danaId = Guid.NewGuid();    // CS Agent, Customer Service, no activity
-    private readonly Guid _hadiId = Guid.NewGuid();    // CS Supervisor only — not listed
+    private readonly Guid _hadiId = Guid.NewGuid();    // CS Supervisor, Customer Service
+    private readonly Guid _coraId = Guid.NewGuid();    // Collections Officer + CS Supervisor, Collections
     private readonly Guid _retiredId = Guid.NewGuid(); // Deactivated CS Agent — not listed
     private int _callCenterId;
+    private int _legalId;      // active department nobody belongs to yet
+    private int _archivedId;   // inactive department
 
     public TeamPerformanceReportTests()
     {
         using var context = _db.CreateContext();
 
         var callCenter = new Department("Call Center", WorkflowReferenceData.CallCenterCode);
-        context.Departments.Add(callCenter);
+        var legal = new Department("Legal", "LGL");
+        var archived = new Department("Archived Unit", "ARC", isActive: false);
+        context.Departments.AddRange(callCenter, legal, archived);
         context.SaveChanges();
         _callCenterId = callCenter.DepartmentId;
+        _legalId = legal.DepartmentId;
+        _archivedId = archived.DepartmentId;
 
         AddEmployee(context, _aminaId, "Amina Agent", [Roles.CsAgent], [(_db.CustomerServiceId, true)]);
         AddEmployee(context, _bilalId, "Bilal Caller", [Roles.CsAgent], [(_callCenterId, true), (_db.CustomerServiceId, false)]);
         AddEmployee(context, _danaId, "Dana Quiet", [Roles.CsAgent], [(_db.CustomerServiceId, true)]);
         AddEmployee(context, _hadiId, "Hadi Supervisor", [Roles.CsSupervisor], [(_db.CustomerServiceId, true)]);
+        AddEmployee(context, _coraId, "Cora Collector", ["Collections Officer", Roles.CsSupervisor], [(_db.CollectionsId, true)]);
         AddEmployee(context, _retiredId, "Rami Retired", [Roles.CsAgent], [(_db.CustomerServiceId, true)], deactivated: true);
     }
 
@@ -163,44 +173,71 @@ public sealed class TeamPerformanceReportTests : IDisposable
     // ---------------------------------------------------------------
 
     [Fact]
-    public async Task Rows_ListEveryActiveCsAgentExactlyOnce_SortedByName_TypedByCallCenterMembership()
+    public async Task Rows_ListEveryActiveEmployeeInEveryDepartmentExactlyOnce_SortedByName()
     {
         var report = await ReportAsync();
 
-        // Amina, Bilal, Dana — not the supervisor, not the deactivated agent,
-        // not the fixture's role-less employees. Dana has no activity at all
-        // and is still a row.
-        Assert.Equal(["Amina Agent", "Bilal Caller", "Dana Quiet"], report.Rows.Select(r => r.DisplayName).ToArray());
-        Assert.Equal(3, report.Totals.Employees);
+        var names = report.Rows.Select(r => r.DisplayName).ToList();
+        Assert.Equal(names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList(), names);
+        Assert.Equal(report.Rows.Count, report.Rows.Select(r => r.EmployeeId).Distinct().Count());
+        Assert.Equal(report.Rows.Count, report.Totals.Employees);
+
+        // Customer Service, Call Center, Collections (by role-holders and by a role-less fixture employee),
+        // Registration, the supervisor — all there. The deactivated agent is not.
+        foreach (var name in new[] { "Amina Agent", "Bilal Caller", "Dana Quiet", "Hadi Supervisor", "Cora Collector", "Amal Agent", "Hadi Head", "Rana Registrar", "Walid Worker" })
+        {
+            Assert.Contains(name, names);
+        }
+
+        Assert.DoesNotContain("Rami Retired", names);
 
         var amina = Row(report, _aminaId);
-        Assert.Equal(TeamPerformanceAgentTypes.CsAgent, amina.AgentType);
+        Assert.Equal([Roles.CsAgent], amina.Roles);
         Assert.Equal(["Customer Service"], amina.Departments.Select(d => d.Name).ToArray());
 
         // Two departments, ONE row — primary first.
         var bilal = Row(report, _bilalId);
-        Assert.Equal(TeamPerformanceAgentTypes.CallCenterAgent, bilal.AgentType);
         Assert.Equal(["Call Center", "Customer Service"], bilal.Departments.Select(d => d.Name).ToArray());
         Assert.True(bilal.Departments[0].IsPrimary);
         Assert.Single(report.Rows, r => r.EmployeeId == _bilalId);
 
+        // A Collections employee with two roles shows both, alphabetically, and their department.
+        var cora = Row(report, _coraId);
+        Assert.Equal(["Collections Officer", Roles.CsSupervisor], cora.Roles);
+        Assert.Equal(["Collections"], cora.Departments.Select(d => d.Name).ToArray());
+
+        // A role-less fixture employee in Registration is still a row.
+        var rana = report.Rows.Single(r => r.DisplayName == "Rana Registrar");
+        Assert.Empty(rana.Roles);
+        Assert.Equal(["Registration"], rana.Departments.Select(d => d.Name).ToArray());
+
         var dana = Row(report, _danaId);
         Assert.Equal((0, 0, 0, 0), (dana.CurrentlyAssigned, dana.TicketsWorked, dana.CompletedFollowUps, dana.SlaBreaches));
+    }
 
-        // The pickers offer the whole team and every department any of them belongs to.
-        Assert.Equal(3, report.FilterOptions.Employees.Count);
-        Assert.Equal(["Call Center", "Customer Service"], report.FilterOptions.Departments.Select(d => d.Label).ToArray());
-        Assert.Equal(TeamPerformanceAgentTypes.All, report.FilterOptions.AgentTypes);
+    [Fact]
+    public async Task FilterOptions_OfferEveryConfiguredDepartmentEveryEmployeeAndEveryHeldRole()
+    {
+        var report = await ReportAsync();
+
+        // Every ACTIVE configured department — including Legal, which has no members — and not the inactive one.
+        var departments = report.FilterOptions.Departments.Select(d => d.Label).ToArray();
+        Assert.Equal(["Call Center", "Collections", "Customer Service", "Legal", "Registration"], departments);
+        Assert.Contains(report.FilterOptions.Departments, d => d.Id == _legalId.ToString());
+        Assert.DoesNotContain(report.FilterOptions.Departments, d => d.Id == _archivedId.ToString());
+
+        Assert.Equal(report.Rows.Count, report.FilterOptions.Employees.Count);
+        Assert.Contains(report.FilterOptions.Employees, e => e.Id == _coraId.ToString() && e.GroupLabel == "Collections Officer, CS Supervisor");
+
+        Assert.Equal(["Collections Officer", Roles.CsAgent, Roles.CsSupervisor], report.FilterOptions.Roles);
     }
 
     [Fact]
     public void CallCenterDepartmentCode_IsTheSameCodeTheReferenceDataSeeds()
     {
-        // The agent type is derived from this code; if the seed ever changes
-        // the report must change with it, not silently stop recognising
-        // Call Center agents.
+        // The routing and Genesys services reference this constant; if the
+        // seed ever changes they must change with it.
         Assert.Equal(WorkflowReferenceData.CallCenterCode, TeamPerformanceAppService.CallCenterDepartmentCode);
-        Assert.Equal([Roles.CsAgent], TeamPerformanceAppService.EligibleRoles);
     }
 
     // ---------------------------------------------------------------
@@ -337,31 +374,69 @@ public sealed class TeamPerformanceReportTests : IDisposable
     // ---------------------------------------------------------------
 
     [Fact]
-    public async Task Filters_NarrowTheRows_WhileThePickersStillOfferTheWholeTeam()
+    public async Task Filters_NarrowTheRows_WhileThePickersStillOfferEveryone()
     {
-        var byType = await ReportAsync(new TeamPerformanceRequestDto(AgentType: "call center agent"));
-        Assert.Equal([_bilalId], byType.Rows.Select(r => r.EmployeeId).ToArray());
-        Assert.Equal(TeamPerformanceAgentTypes.CallCenterAgent, byType.Filters.AgentType);
-        Assert.Equal(3, byType.FilterOptions.Employees.Count);
+        var allCount = (await ReportAsync()).Rows.Count;
+
+        var byRole = await ReportAsync(new TeamPerformanceRequestDto(Role: "cs agent"));
+        Assert.Equal([_aminaId, _bilalId, _danaId], byRole.Rows.Select(r => r.EmployeeId).ToArray());
+        Assert.Equal(Roles.CsAgent, byRole.Filters.Role);
+        Assert.Equal(allCount, byRole.FilterOptions.Employees.Count);
+
+        // A multi-role employee is found by either of their roles.
+        Assert.Equal([_coraId], (await ReportAsync(new TeamPerformanceRequestDto(Role: "Collections Officer"))).Rows.Select(r => r.EmployeeId).ToArray());
+        Assert.Contains(_coraId, (await ReportAsync(new TeamPerformanceRequestDto(Role: Roles.CsSupervisor))).Rows.Select(r => r.EmployeeId));
 
         // Membership of the department, primary or not: Bilal is in Customer Service too.
         var byDepartment = await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _db.CustomerServiceId));
-        Assert.Equal([_aminaId, _bilalId, _danaId], byDepartment.Rows.Select(r => r.EmployeeId).ToArray());
+        Assert.Contains(_bilalId, byDepartment.Rows.Select(r => r.EmployeeId));
+        Assert.DoesNotContain(_coraId, byDepartment.Rows.Select(r => r.EmployeeId));
         var byCallCenter = await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _callCenterId));
         Assert.Equal([_bilalId], byCallCenter.Rows.Select(r => r.EmployeeId).ToArray());
+
+        // Collections employees appear, and department + role combine.
+        var byCollections = await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _db.CollectionsId));
+        Assert.Equal(["Cora Collector", "Hadi Head"], byCollections.Rows.Select(r => r.DisplayName).ToArray());
+        var collectionsOfficers = await ReportAsync(new TeamPerformanceRequestDto(Role: "Collections Officer", DepartmentId: _db.CollectionsId));
+        Assert.Equal([_coraId], collectionsOfficers.Rows.Select(r => r.EmployeeId).ToArray());
+        Assert.Empty((await ReportAsync(new TeamPerformanceRequestDto(Role: "Collections Officer", DepartmentId: _callCenterId))).Rows);
+
+        // A configured department nobody belongs to filters to an empty report, not an error.
+        var empty = await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _legalId));
+        Assert.Empty(empty.Rows);
+        Assert.Equal(0, empty.Totals.Employees);
 
         var byEmployee = await ReportAsync(new TeamPerformanceRequestDto(EmployeeId: _danaId));
         Assert.Equal([_danaId], byEmployee.Rows.Select(r => r.EmployeeId).ToArray());
 
-        // An employee who is not on the report yields no rows, never an error.
-        var supervisor = await ReportAsync(new TeamPerformanceRequestDto(EmployeeId: _hadiId));
-        Assert.Empty(supervisor.Rows);
-        Assert.Equal(0, supervisor.Totals.Employees);
+        // A supervisor is on the report now; a deactivated employee still yields no rows, never an error.
+        Assert.Single((await ReportAsync(new TeamPerformanceRequestDto(EmployeeId: _hadiId))).Rows);
+        Assert.Empty((await ReportAsync(new TeamPerformanceRequestDto(EmployeeId: _retiredId))).Rows);
 
-        // An unknown agent type is ignored rather than refused.
-        var unknownType = await ReportAsync(new TeamPerformanceRequestDto(AgentType: "Wizard"));
-        Assert.Equal(3, unknownType.Rows.Count);
-        Assert.Null(unknownType.Filters.AgentType);
+        // An unknown role is ignored rather than refused.
+        var unknownRole = await ReportAsync(new TeamPerformanceRequestDto(Role: "Wizard"));
+        Assert.Equal(allCount, unknownRole.Rows.Count);
+        Assert.Null(unknownRole.Filters.Role);
+    }
+
+    [Fact]
+    public async Task Totals_AreTheSumOfTheFilteredEmployeesOnly()
+    {
+        using (var context = _db.CreateContext())
+        {
+            var collections = _db.AddTicket(context, _db.CollectionsId, owner: _coraId);
+            Assign(context, collections, _coraId, Now.AddDays(-2));
+            _db.AddTicket(context, _db.CustomerServiceId, owner: _aminaId);
+        }
+
+        var all = await ReportAsync();
+        var collectionsOnly = await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _db.CollectionsId));
+
+        Assert.Equal(2, all.Totals.CurrentlyAssigned);
+        Assert.Equal(1, collectionsOnly.Totals.CurrentlyAssigned);
+        Assert.Equal(1, collectionsOnly.Totals.TicketsWorked);
+        Assert.Equal(collectionsOnly.Rows.Sum(r => r.SlaBreaches), collectionsOnly.Totals.SlaBreaches);
+        Assert.Equal(collectionsOnly.Rows.Count, collectionsOnly.Totals.Employees);
     }
 
     [Fact]
@@ -446,7 +521,9 @@ public sealed class TeamPerformanceReportTests : IDisposable
     public async Task Records_RefuseAnUnknownMetric_AndAnEmployeeWhoIsNotOnTheReport()
     {
         Assert.Equal(TeamPerformanceRecordsOutcome.UnknownMetric, (await RecordsAsync(_aminaId, "Velocity")).Outcome);
-        Assert.Equal(TeamPerformanceRecordsOutcome.EmployeeNotEligible, (await RecordsAsync(_hadiId, "TicketsWorked")).Outcome);
+        Assert.Equal(TeamPerformanceRecordsOutcome.Success, (await RecordsAsync(_hadiId, "TicketsWorked")).Outcome);
+        Assert.Equal(TeamPerformanceRecordsOutcome.Success, (await RecordsAsync(_coraId, "TicketsWorked")).Outcome);
         Assert.Equal(TeamPerformanceRecordsOutcome.EmployeeNotEligible, (await RecordsAsync(_retiredId, "TicketsWorked")).Outcome);
+        Assert.Equal(TeamPerformanceRecordsOutcome.EmployeeNotEligible, (await RecordsAsync(Guid.NewGuid(), "TicketsWorked")).Outcome);
     }
 }

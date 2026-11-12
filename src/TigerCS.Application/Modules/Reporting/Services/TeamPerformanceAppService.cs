@@ -7,20 +7,18 @@ using TigerCS.Domain.Modules.IdentityAndAccess;
 namespace TigerCS.Application.Modules.Reporting.Services;
 
 /// <summary>
-/// The CS Manager's Team Performance report: one row per eligible agent
-/// with four counts, and the records behind any one count.
+/// The CS Manager's Team Performance report: one row per active employee
+/// with four counts, the records behind any one count, and the SLA details
+/// behind the SLA Breaches count.
 ///
 /// <para>
-/// <b>Who is on the report.</b> Every ACTIVE employee holding one of
-/// <see cref="EligibleRoles"/> in Identity — today exactly the "CS Agent"
-/// role. There is no separate "Call Center Agent" role: per
-/// <c>docs/Genesys/Genesys-Cloud-Configuration.md</c> §4, call-centre agents
-/// are CS Agents who belong to the Call Center department (code
-/// <see cref="CallCenterDepartmentCode"/>). The report therefore derives an
-/// <b>agent type</b> per employee from department membership rather than
-/// from a role, and shows one row per employee however many roles or
-/// departments they hold. Employees with no activity in the period are
-/// included with zeros.
+/// <b>Who is on the report.</b> Every ACTIVE employee in every department
+/// (Customer Service, Call Center, Collections, ... — whatever is configured
+/// in Identity), except a configured service identity (the Genesys
+/// integration account), which is not a person to measure. Departments and
+/// roles are read from the database, never listed here. One row per
+/// employee however many roles or departments they hold; employees with no
+/// activity in the period are included with zeros.
 /// </para>
 ///
 /// <para>
@@ -28,6 +26,14 @@ namespace TigerCS.Application.Modules.Reporting.Services;
 /// days exactly as the Dashboard does
 /// (<see cref="DashboardAppService.ResolvePeriod"/>). Currently Assigned is
 /// the one current-state figure and ignores the period.
+/// </para>
+///
+/// <para>
+/// <b>SLA details.</b> The report only makes the existing SLA behaviour
+/// visible: it computes no deadline and decides no breach. Breaches are the
+/// ones the SLA engine recorded; this service lists them, with the facts the
+/// engine decided them from, and the SLA evaluations that were met or are
+/// still pending, so the number on the report can be audited.
 /// </para>
 ///
 /// <para>
@@ -42,20 +48,10 @@ public sealed class TeamPerformanceAppService(
     IServiceIdentityRegistry? serviceIdentities = null)
 {
     /// <summary>
-    /// The Identity roles whose holders appear on the report. A single
-    /// place to extend (e.g. to add CS Supervisor) — deliberately only
-    /// "CS Agent" for now, because the report is about the agents a CS
-    /// Manager supervises, and supervisors are not measured on the same
-    /// four counts.
-    /// </summary>
-    public static readonly IReadOnlyList<string> EligibleRoles = [Roles.CsAgent];
-
-    /// <summary>
     /// The Call Center department's code — the same code
-    /// <c>WorkflowReferenceData.CallCenterCode</c> seeds. Membership of the
-    /// department with this code is what makes a CS Agent a "Call Center
-    /// Agent" on this report; a rename of the department keeps the code,
-    /// so the classification survives it.
+    /// <c>WorkflowReferenceData.CallCenterCode</c> seeds. Not used by the
+    /// report itself any more (it lists every department alike); kept here
+    /// because the routing and Genesys services reference it.
     /// </summary>
     public const string CallCenterDepartmentCode = "CC";
 
@@ -64,52 +60,36 @@ public sealed class TeamPerformanceAppService(
     {
         var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
         var (dateFrom, dateTo) = DashboardAppService.ResolvePeriod(request.DateFrom, request.DateTo, today);
-        var agentType = TeamPerformanceAgentTypes.Normalize(request.AgentType);
 
-        // A configured service identity (Genesys integration account) holds the CS Agent role
-        // but is not a person to measure.
-        var everyone = (await repository.GetEmployeesInRolesAsync(EligibleRoles, cancellationToken))
-            .Where(e => serviceIdentities is null || !serviceIdentities.IsServiceIdentity(e.EmployeeId))
-            .Select(e => (Employee: e, AgentType: AgentTypeOf(e)))
-            .OrderBy(e => e.Employee.DisplayName, StringComparer.OrdinalIgnoreCase)
-            .ThenBy(e => e.Employee.EmployeeId)
-            .ToList();
+        var everyone = await LoadReportedEmployeesAsync(cancellationToken);
+        var roleOptions = RoleOptions(everyone);
+        var role = NormalizeRole(request.Role, roleOptions);
 
-        // Filters narrow the rows; the picker options always offer the whole
-        // eligible team so a manager can move between filters freely.
-        var selected = everyone
-            .Where(e => request.EmployeeId is not { } employeeId || e.Employee.EmployeeId == employeeId)
-            .Where(e => agentType is null || e.AgentType == agentType)
-            .Where(e => request.DepartmentId is not { } departmentId || e.Employee.Departments.Any(d => d.DepartmentId == departmentId))
-            .ToList();
+        // Filters narrow the rows; the picker options always offer everyone,
+        // every configured department and every role, so a manager can move
+        // between filters freely.
+        var selected = ApplyFilters(everyone, request.EmployeeId, role, request.DepartmentId).ToList();
 
         var metrics = selected.Count == 0
             ? EmptyMetrics
             : await repository.GetMetricsAsync(
-                selected.Select(e => e.Employee.EmployeeId).ToList(),
+                selected.Select(e => e.EmployeeId).ToList(),
                 RangeStartUtc(dateFrom),
                 RangeEndUtc(dateTo),
                 cancellationToken);
 
         var rows = selected.Select(e => new TeamPerformanceRowDto(
-            e.Employee.EmployeeId,
-            e.Employee.DisplayName,
-            e.AgentType,
-            e.Employee.Departments.Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, d.IsPrimary)).ToList(),
-            metrics.CurrentlyAssigned.GetValueOrDefault(e.Employee.EmployeeId),
-            metrics.TicketsWorked.GetValueOrDefault(e.Employee.EmployeeId),
-            metrics.CompletedFollowUps.GetValueOrDefault(e.Employee.EmployeeId),
-            metrics.SlaBreaches.GetValueOrDefault(e.Employee.EmployeeId))).ToList();
-
-        var departments = everyone
-            .SelectMany(e => e.Employee.Departments)
-            .GroupBy(d => d.DepartmentId)
-            .Select(g => new TeamPerformanceOptionDto(g.Key.ToString(), g.First().Name))
-            .OrderBy(o => o.Label, StringComparer.OrdinalIgnoreCase)
-            .ToList();
+            e.EmployeeId,
+            e.DisplayName,
+            e.Roles,
+            e.Departments.Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, d.IsPrimary)).ToList(),
+            metrics.CurrentlyAssigned.GetValueOrDefault(e.EmployeeId),
+            metrics.TicketsWorked.GetValueOrDefault(e.EmployeeId),
+            metrics.CompletedFollowUps.GetValueOrDefault(e.EmployeeId),
+            metrics.SlaBreaches.GetValueOrDefault(e.EmployeeId))).ToList();
 
         return new TeamPerformanceReportDto(
-            new TeamPerformanceAppliedFiltersDto(dateFrom, dateTo, request.EmployeeId, agentType, request.DepartmentId),
+            new TeamPerformanceAppliedFiltersDto(dateFrom, dateTo, request.EmployeeId, role, request.DepartmentId),
             rows,
             new TeamPerformanceTotalsDto(
                 rows.Count,
@@ -118,9 +98,9 @@ public sealed class TeamPerformanceAppService(
                 rows.Sum(r => r.CompletedFollowUps),
                 rows.Sum(r => r.SlaBreaches)),
             new TeamPerformanceFilterOptionsDto(
-                everyone.Select(e => new TeamPerformanceOptionDto(e.Employee.EmployeeId.ToString(), e.Employee.DisplayName, e.AgentType)).ToList(),
-                departments,
-                TeamPerformanceAgentTypes.All));
+                everyone.Select(e => new TeamPerformanceOptionDto(e.EmployeeId.ToString(), e.DisplayName, RolesText(e.Roles))).ToList(),
+                await repository.GetDepartmentsAsync(cancellationToken),
+                roleOptions));
     }
 
     public async Task<TeamPerformanceRecordsResult> GetRecordsAsync(
@@ -133,9 +113,7 @@ public sealed class TeamPerformanceAppService(
 
         // The same eligibility rule as the report: a count can only be
         // opened for an employee who has a row.
-        var employee = (await repository.GetEmployeesInRolesAsync(EligibleRoles, cancellationToken))
-            .FirstOrDefault(e => e.EmployeeId == request.EmployeeId
-                && (serviceIdentities is null || !serviceIdentities.IsServiceIdentity(e.EmployeeId)));
+        var employee = (await LoadReportedEmployeesAsync(cancellationToken)).FirstOrDefault(e => e.EmployeeId == request.EmployeeId);
         if (employee is null)
         {
             return new TeamPerformanceRecordsResult(TeamPerformanceRecordsOutcome.EmployeeNotEligible);
@@ -152,7 +130,7 @@ public sealed class TeamPerformanceAppService(
             new TeamPerformanceRecordsDto(
                 employee.EmployeeId,
                 employee.DisplayName,
-                AgentTypeOf(employee),
+                employee.Roles,
                 metric.ToString(),
                 dateFrom,
                 dateTo,
@@ -161,11 +139,108 @@ public sealed class TeamPerformanceAppService(
                     r.DepartmentName, r.CreatedAtUtc, r.BreachedAtUtc, r.CompletedAtUtc)).ToList()));
     }
 
-    /// <summary>"Call Center Agent" when any membership is the department whose code is <see cref="CallCenterDepartmentCode"/>; otherwise "CS Agent".</summary>
-    public static string AgentTypeOf(TeamPerformanceEmployeeRow employee) =>
-        employee.Departments.Any(d => string.Equals(d.Code, CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase))
-            ? TeamPerformanceAgentTypes.CallCenterAgent
-            : TeamPerformanceAgentTypes.CsAgent;
+    /// <summary>
+    /// The SLA evaluations behind one employee's numbers: a summary of every
+    /// status, the rules in force, and one sorted page of evaluations. The
+    /// employee must have a row under the same role / department filters
+    /// as the report, so the details can never be opened for someone the
+    /// report would not show.
+    /// </summary>
+    public async Task<TeamPerformanceSlaDetailsResult> GetSlaDetailsAsync(
+        TeamPerformanceSlaDetailsRequestDto request, CancellationToken cancellationToken = default)
+    {
+        var everyone = await LoadReportedEmployeesAsync(cancellationToken);
+        var role = NormalizeRole(request.Role, RoleOptions(everyone));
+        var employee = ApplyFilters(everyone, request.EmployeeId, role, request.DepartmentId).FirstOrDefault();
+        if (employee is null)
+        {
+            return new TeamPerformanceSlaDetailsResult(TeamPerformanceSlaDetailsOutcome.EmployeeNotEligible);
+        }
+
+        var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
+        var today = DateOnly.FromDateTime(nowUtc);
+        var (dateFrom, dateTo) = DashboardAppService.ResolvePeriod(request.DateFrom, request.DateTo, today);
+
+        var evaluations = (await repository.GetSlaEvaluationsAsync(
+                employee.EmployeeId, RangeStartUtc(dateFrom), RangeEndUtc(dateTo), cancellationToken))
+            .Select(e => TeamPerformanceSlaPresentation.ToRecord(e, employee, nowUtc))
+            .ToList();
+
+        var met = evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Met);
+        var breached = evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Breached);
+        var pending = evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending);
+        var summary = new TeamPerformanceSlaSummaryDto(
+            evaluations.Count, met, breached, pending, CompliancePercent(met, breached));
+
+        var statusFilter = TeamPerformanceSlaStatuses.Normalize(request.Status);
+        var filtered = statusFilter is null
+            ? evaluations
+            : evaluations.Where(r => r.Status == statusFilter).ToList();
+
+        var sortBy = TeamPerformanceSlaSortKeys.Normalize(request.SortBy);
+        var descending = !string.Equals(request.SortDir?.Trim(), "asc", StringComparison.OrdinalIgnoreCase);
+        var sorted = TeamPerformanceSlaPresentation.Sort(filtered, sortBy, descending);
+
+        var pageSize = Math.Clamp(request.PageSize <= 0 ? DefaultPageSize : request.PageSize, 1, MaxPageSize);
+        var totalPages = Math.Max(1, (int)Math.Ceiling(sorted.Count / (double)pageSize));
+        var page = Math.Clamp(request.Page, 1, totalPages);
+
+        var configuration = await repository.GetSlaConfigurationAsync(cancellationToken);
+
+        return new TeamPerformanceSlaDetailsResult(
+            TeamPerformanceSlaDetailsOutcome.Success,
+            new TeamPerformanceSlaDetailsDto(
+                employee.EmployeeId,
+                employee.DisplayName,
+                employee.Roles,
+                employee.Departments.Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, d.IsPrimary)).ToList(),
+                dateFrom,
+                dateTo,
+                statusFilter,
+                sortBy,
+                descending ? "desc" : "asc",
+                page,
+                pageSize,
+                sorted.Count,
+                totalPages,
+                summary,
+                TeamPerformanceSlaPresentation.BuildRules(configuration),
+                sorted.Skip((page - 1) * pageSize).Take(pageSize).ToList()));
+    }
+
+    public const int DefaultPageSize = 25;
+    public const int MaxPageSize = 100;
+
+    /// <summary>Met / (Met + Breached) × 100, rounded to one decimal; null when nothing has been decided. Pending is not in the denominator.</summary>
+    public static decimal? CompliancePercent(int met, int breached) =>
+        met + breached == 0 ? null : Math.Round(met * 100m / (met + breached), 1, MidpointRounding.AwayFromZero);
+
+    // ---- employees and filters ----
+
+    /// <summary>Every active employee except a configured service identity, sorted by name.</summary>
+    private async Task<List<TeamPerformanceEmployeeRow>> LoadReportedEmployeesAsync(CancellationToken cancellationToken) =>
+        (await repository.GetActiveEmployeesAsync(cancellationToken))
+            .Where(e => serviceIdentities is null || !serviceIdentities.IsServiceIdentity(e.EmployeeId))
+            .OrderBy(e => e.DisplayName, StringComparer.OrdinalIgnoreCase)
+            .ThenBy(e => e.EmployeeId)
+            .ToList();
+
+    private static IEnumerable<TeamPerformanceEmployeeRow> ApplyFilters(
+        IEnumerable<TeamPerformanceEmployeeRow> employees, Guid? employeeId, string? role, int? departmentId) =>
+        employees
+            .Where(e => employeeId is not { } id || e.EmployeeId == id)
+            .Where(e => role is null || e.Roles.Contains(role, StringComparer.OrdinalIgnoreCase))
+            .Where(e => departmentId is not { } department || e.Departments.Any(d => d.DepartmentId == department));
+
+    private static List<string> RoleOptions(IEnumerable<TeamPerformanceEmployeeRow> employees) =>
+        employees.SelectMany(e => e.Roles).Distinct(StringComparer.OrdinalIgnoreCase)
+            .OrderBy(r => r, StringComparer.OrdinalIgnoreCase).ToList();
+
+    /// <summary>The canonical spelling of a known role, or null when the value is empty or not a role anyone holds.</summary>
+    private static string? NormalizeRole(string? value, IReadOnlyList<string> options) =>
+        options.FirstOrDefault(r => string.Equals(r, value?.Trim(), StringComparison.OrdinalIgnoreCase));
+
+    private static string RolesText(IReadOnlyList<string> roles) => roles.Count == 0 ? "No role" : string.Join(", ", roles);
 
     /// <summary>The inclusive start of the first period day, as a UTC instant.</summary>
     public static DateTime RangeStartUtc(DateOnly dateFrom) => dateFrom.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
