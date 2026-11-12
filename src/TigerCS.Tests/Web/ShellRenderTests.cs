@@ -202,6 +202,88 @@ public sealed class ShellRenderTests : IDisposable
         Assert.Contains("class=\"error-state\"", html, StringComparison.Ordinal);
     }
 
+    private async Task<string> DashboardWithKpisAsync(DashboardKpisDto kpis)
+    {
+        var client = Client();
+        client.DefaultRequestHeaders.Add("X-Test-Populated", "true");
+        FakeApi.Populated = true;
+        FakeApi.KpisOverride = kpis;
+        try { return await Ok(await client.GetAsync("/Dashboard")); }
+        finally { FakeApi.Populated = false; FakeApi.KpisOverride = null; }
+    }
+
+    [Fact]
+    public async Task Dashboard_ClosureSection_ShowsTheProminentTotal_TheOriginalIcons_AndOneGoldStarForAOnePointZeroScore()
+    {
+        var html = await DashboardWithKpisAsync(new DashboardKpisDto(42, 6, 11, 3, 4, 2,
+            ReviewedTickets: 1, NotReviewedTickets: 118, ClosedByAiTickets: 0, ClosedByAgentTickets: 119, AverageReviewRating: 1.0));
+
+        // The total leads the heading, as its own large element, and the sentence still reads whole.
+        Assert.Contains("<span class=\"dash-closure__count\">119</span>", html, StringComparison.Ordinal);
+        Assert.Contains("Tickets Closed in Selected Period</span>", html, StringComparison.Ordinal);
+
+        // Each of the four counts: its own coloured chip (the stylesheet's per-card colour key), the glyph it always had, the number, the label — in that order, in one link.
+        foreach (var (key, glyph) in new[]
+        {
+            ("reviewed", "M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8-4.3-4.1 5.9-.9L12 3.5Z"),
+            ("notreviewed", "stroke-dasharray=\"2.4 2.4\""),
+            ("agent", "M15.5 17.5l1.6 1.6 3-3"),
+            ("ai", "M12 8V4.5M9.5 12.5h.01M14.5 12.5h.01M9.5 15.5h5"),
+        })
+        {
+            Assert.Contains($"data-closure=\"{key}\" data-kpi=\"{key}\"", html, StringComparison.Ordinal);
+            var row = html[html.IndexOf($"data-closure=\"{key}\"", StringComparison.Ordinal)..];
+            row = row[..row.IndexOf("</li>", StringComparison.Ordinal)];
+            Assert.Contains("dash-closure__icon", row, StringComparison.Ordinal);
+            Assert.Contains(glyph, row, StringComparison.Ordinal);
+            Assert.True(row.IndexOf("dash-closure__icon", StringComparison.Ordinal) < row.IndexOf("dash-closure__value", StringComparison.Ordinal)
+                && row.IndexOf("dash-closure__value", StringComparison.Ordinal) < row.IndexOf("dash-closure__label", StringComparison.Ordinal));
+        }
+
+        Assert.Contains("<strong class=\"dash-closure__value\">118</strong>", html, StringComparison.Ordinal);
+
+        // The score: five stars, exactly the first filled, the exact score beside them, and an accessible name.
+        Assert.Contains("role=\"img\" aria-label=\"1.0 out of 5 stars\"", html, StringComparison.Ordinal);
+        Assert.Contains("<strong class=\"dash-closure__score\">1.0 / 5</strong>", html, StringComparison.Ordinal);
+        var stars = html[html.IndexOf("class=\"dash-stars\"", StringComparison.Ordinal)..];
+        stars = stars[..stars.IndexOf("</span>", StringComparison.Ordinal)];
+        Assert.Equal(5, Count(stars, "class=\"dash-stars__star\""));
+        Assert.Equal(5, Count(stars, "class=\"dash-stars__outline\""));      // five outlined stars...
+        Assert.Equal(1, Count(stars, "class=\"dash-stars__fill\""));         // ...exactly one of them filled
+        Assert.Contains("data-fill=\"1\"", stars, StringComparison.Ordinal);
+        Assert.Equal(4, Count(stars, "data-fill=\"0\""));
+        Assert.DoesNotContain("No reviews yet", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("style=", html[html.IndexOf("dash-closure\"", StringComparison.Ordinal)..], StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Dashboard_ClosureSection_FillsPartOfTheLastStarForAFractionalScore_AndKeepsTheExactNumber()
+    {
+        var html = await DashboardWithKpisAsync(new DashboardKpisDto(42, 6, 11, 3, 4, 2,
+            ReviewedTickets: 10, NotReviewedTickets: 5, ClosedByAiTickets: 1, ClosedByAgentTickets: 14, AverageReviewRating: 3.7));
+
+        Assert.Contains("aria-label=\"3.7 out of 5 stars\"", html, StringComparison.Ordinal);
+        Assert.Contains("<strong class=\"dash-closure__score\">3.7 / 5</strong>", html, StringComparison.Ordinal);
+        var stars = html[html.IndexOf("class=\"dash-stars\"", StringComparison.Ordinal)..];
+        stars = stars[..stars.IndexOf("</span>", StringComparison.Ordinal)];
+        Assert.Equal(4, Count(stars, "class=\"dash-stars__fill\""));          // three whole stars and the part of the fourth
+        Assert.Equal(3, Count(stars, "data-fill=\"1\""));
+        Assert.Contains("data-fill=\"0.7\"", stars, StringComparison.Ordinal);
+        Assert.Contains("<rect x=\"0\" y=\"0\" width=\"15.7\" height=\"24\" />", stars, StringComparison.Ordinal);   // 70% of the star glyph's own width (2.75 + 0.7 x 18.5), not of the 24-unit box
+        Assert.Equal(1, Count(stars, "data-fill=\"0\""));
+    }
+
+    [Fact]
+    public async Task Dashboard_ClosureSection_SaysNoReviewsYet_InsteadOfStars_WhenNothingHasAScore()
+    {
+        var html = await DashboardWithKpisAsync(new DashboardKpisDto(42, 6, 11, 3, 4, 2,
+            ReviewedTickets: 0, NotReviewedTickets: 7, ClosedByAiTickets: 0, ClosedByAgentTickets: 7, AverageReviewRating: null));
+
+        Assert.Contains("<span class=\"dash-closure__empty\">No reviews yet</span>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("class=\"dash-stars\"", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("out of 5 stars", html, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task Dashboard_WithData_RendersKpiCards_FilterDisclosure_AttentionTable_AndBreakdowns()
     {
@@ -366,6 +448,9 @@ public sealed class ShellRenderTests : IDisposable
         private static readonly DateTime Now = new(2026, 9, 12, 9, 0, 0, DateTimeKind.Utc);
         public static volatile bool Populated;
 
+        /// <summary>When set, the populated overview carries these KPIs instead of the default ones (a switch like <see cref="Populated"/>).</summary>
+        public static DashboardKpisDto? KpisOverride;
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
@@ -386,7 +471,7 @@ public sealed class ShellRenderTests : IDisposable
             DashboardBreakdownItemDto Item(string key, string label, int count, double pct) => new(key, label, count, pct);
             return new DashboardOverviewDto(
                 filters,
-                new DashboardKpisDto(42, 6, 11, 3, 4, 2),
+                KpisOverride ?? new DashboardKpisDto(42, 6, 11, 3, 4, 2),
                 120,
                 [Item("3", "WhatsApp", 60, 50), Item("1", "Phone", 45, 37.5), Item("4", "Social Media", 15, 12.5)],
                 [Item("9", "Payment Reminder", 70, 58.3), Item("10", "Complaint", 50, 41.7)],

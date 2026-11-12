@@ -11,7 +11,34 @@ namespace TigerCS.Web.Pages;
 public sealed record KpiCard(string Label, int Value, string? Emphasis = null, string? Href = null, string? Hint = null, string? Detail = null);
 
 /// <summary>One line of the Closed in Selected Period section: <see cref="Href"/> is the drill-down into the ticket list (null for the average score, which is a figure, not a list).</summary>
-public sealed record ClosureRow(string Label, string Value, string Key, string? Href = null, string? Hint = null);
+public sealed record ClosureRow(string Label, string Value, string Key, string? Href = null, string? Hint = null, double? Rating = null)
+{
+    /// <summary>The number of stars the rating is shown on — the review's own 1-5 scale.</summary>
+    public const int StarCount = 5;
+
+    /// <summary>
+    /// How much of star <paramref name="index"/> (0-based) is filled for <see cref="Rating"/>: 1 for a whole star, 0 for an empty one, a fraction for
+    /// the star the rating ends in (4.3 fills four stars and 30% of the fifth). Never outside 0..1, whatever the rating.
+    /// </summary>
+    public double StarFill(int index) => Rating is { } rating ? Math.Clamp(rating - index, 0d, 1d) : 0d;
+
+    /// <summary>
+    /// The width, in the star's 24-unit viewBox, of the clip that reveals the filled star for a fill fraction. The glyph (with its stroke) spans x = 2.75 to 21.25,
+    /// so a fraction is measured across THAT, not across the whole box — otherwise 70% would read as roughly 80%. A whole star needs no clip (the full box).
+    /// </summary>
+    public static double StarClipWidth(double fill) => fill >= 1d ? 24d : StarLeft + (StarRight - StarLeft) * Math.Clamp(fill, 0d, 1d);
+
+    private const double StarLeft = 2.75;
+    private const double StarRight = 21.25;
+
+    /// <summary>The accessible name of the star rating, with the same one-decimal score that is printed beside it ("1.0 out of 5 stars").</summary>
+    public string? StarsLabel => Rating is { } rating
+        ? rating.ToString("0.0", CultureInfo.InvariantCulture) + " out of " + StarCount.ToString(CultureInfo.InvariantCulture) + " stars"
+        : null;
+
+    /// <summary>Shown in the score area when no ticket has been reviewed in the period.</summary>
+    public const string NoReviewsText = "No reviews yet";
+}
 
 /// <summary>A titled group of <see cref="ClosureRow"/>s ("Ticket Reviews", "Closed By").</summary>
 public sealed record ClosureGroup(string Title, IReadOnlyList<ClosureRow> Rows);
@@ -19,9 +46,14 @@ public sealed record ClosureGroup(string Title, IReadOnlyList<ClosureRow> Rows);
 /// <summary>The Closed in Selected Period section: one total in the heading and two compact groups beneath it.</summary>
 public sealed record ClosureSummary(int Total, IReadOnlyList<ClosureGroup> Groups)
 {
-    public string Heading => Total == 1
-        ? "1 Ticket Closed in Selected Period"
-        : Total.ToString("N0", CultureInfo.InvariantCulture) + " Tickets Closed in Selected Period";
+    /// <summary>The total as printed, large, at the start of the heading ("119").</summary>
+    public string CountText => Total.ToString("N0", CultureInfo.InvariantCulture);
+
+    /// <summary>The words after the total ("Tickets Closed in Selected Period"; singular for exactly one).</summary>
+    public string TitleText => Total == 1 ? "Ticket Closed in Selected Period" : "Tickets Closed in Selected Period";
+
+    /// <summary>The whole heading as plain text — what a screen reader and a test read.</summary>
+    public string Heading => CountText + " " + TitleText;
 }
 
 /// <summary>One bar row of a breakdown card: label left, bar centre, count and percentage right. <see cref="Href"/> is null for an informational row (a value not recorded on the ticket), which is not a drill-down.</summary>
@@ -179,7 +211,7 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
         var kind = k.ReviewsAreTestMode ? " (test-mode reviews)" : "";
         var score = k.AverageReviewRating is { } average
             ? average.ToString("0.0", CultureInfo.InvariantCulture) + " / " + TigerCS.Domain.Modules.CustomerReviews.TicketReview.MaxRating.ToString(CultureInfo.InvariantCulture)
-            : "—";
+            : ClosureRow.NoReviewsText;
         return new ClosureSummary(
             k.ReviewedTickets + k.NotReviewedTickets,
             [
@@ -187,7 +219,7 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
                 [
                     new ClosureRow("Reviewed", k.ReviewedTickets.ToString(CultureInfo.InvariantCulture), "reviewed", DashboardLinks.Reviewed(f), "Closed tickets with a customer review submitted" + kind),
                     new ClosureRow("Not Reviewed", k.NotReviewedTickets.ToString(CultureInfo.InvariantCulture), "notreviewed", DashboardLinks.NotReviewed(f), "Closed tickets without a customer review" + kind),
-                    new ClosureRow("Average Review Score", score, "score", null, "Mean review score of the Reviewed tickets" + kind)
+                    new ClosureRow("Average Review Score", score, "score", null, "Mean review score of the Reviewed tickets" + kind, k.AverageReviewRating)
                 ]),
                 new ClosureGroup("Closed By",
                 [

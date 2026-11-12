@@ -3411,17 +3411,30 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .ad-empty { margin: 0; padding: 12px; font-size: 13px; color: var(--tw-muted, #667085); }
 .kpi-card__detail { color: var(--text-muted, inherit); font-size: .85em; }
 
-/* Closed in Selected Period: a total heading over two compact groups; stacked on narrow screens. */
-.dashboard-workspace .dash-closure { margin-top: 12px; padding: 12px 16px; border: 1px solid var(--dash-border); border-radius: 12px; background: var(--color-surface, #fff); }
-.dashboard-workspace .dash-closure__heading { margin: 0 0 8px; font-size: var(--text-md, 16px); font-weight: var(--weight-strong); }
-.dashboard-workspace .dash-closure__groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 24px; }
-.dashboard-workspace .dash-closure__title { margin: 0 0 4px; font-size: var(--text-xs); font-weight: var(--weight-strong); text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-secondary); }
-.dashboard-workspace .dash-closure__rows { list-style: none; margin: 0; padding: 0; }
-.dashboard-workspace .dash-closure__row { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; padding: 4px 0; }
-.dashboard-workspace .dash-closure__link { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; width: 100%; color: inherit; text-decoration: none; }
+/* Closed in Selected Period: a prominent total over two compact groups; stacked on narrow screens. Each count keeps the glyph and subtle tinted
+   chip the closure cards always had (colour from the same data-kpi key), with icon, number and label together in one compact row. */
+.dashboard-workspace .dash-closure { margin-top: 8px; padding: 12px 16px 14px; border: 0; border-radius: var(--dash-radius, 12px); background: var(--color-surface, #fff); box-shadow: var(--dash-shadow); }
+.dashboard-workspace .dash-closure__heading { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; font-weight: var(--weight-strong); }
+.dashboard-workspace .dash-closure__count { font-size: 28px; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.dashboard-workspace .dash-closure__heading-text { font-size: var(--text-md, 16px); color: var(--color-text-secondary); }
+.dashboard-workspace .dash-closure__groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 28px; }
+.dashboard-workspace .dash-closure__group { min-width: 0; }
+.dashboard-workspace .dash-closure__title { margin: 0 0 6px; font-size: var(--text-xs); font-weight: var(--weight-strong); text-transform: uppercase; letter-spacing: .04em; color: var(--color-text-secondary); }
+.dashboard-workspace .dash-closure__rows { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 22px; }
+.dashboard-workspace .dash-closure__row { display: inline-flex; align-items: center; gap: 9px; }
+.dashboard-workspace .dash-closure__link { display: inline-flex; align-items: center; gap: 9px; color: inherit; text-decoration: none; }
 .dashboard-workspace .dash-closure__link:hover .dash-closure__label, .dashboard-workspace .dash-closure__link:focus-visible .dash-closure__label { text-decoration: underline; }
-.dashboard-workspace .dash-closure__value { font-size: 18px; font-variant-numeric: tabular-nums; }
-.dashboard-workspace .dash-closure__row--score { border-top: 1px dashed var(--dash-border); margin-top: 4px; padding-top: 8px; }
+.dashboard-workspace .dash-closure__link:focus-visible { outline: 2px solid var(--color-info); outline-offset: 3px; border-radius: 8px; }
+.dashboard-workspace .dash-closure__icon { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px; border-radius: 9px; background: color-mix(in srgb, var(--kc, #6B7280) 10%, #fff); color: var(--kc, #6B7280); transition: background .15s ease; }
+.dashboard-workspace .dash-closure__icon svg { width: 17px; height: 17px; }
+.dashboard-workspace a.dash-closure__link:hover .dash-closure__icon { background: color-mix(in srgb, var(--kc, #6B7280) 16%, #fff); }
+.dashboard-workspace .dash-closure__value { font-size: 20px; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.dashboard-workspace .dash-closure__label { font-size: var(--text-xs); line-height: 1.25; color: var(--color-text-secondary); }
+.dashboard-workspace .dash-closure__row--score { flex-basis: 100%; gap: 10px; padding-top: 8px; border-top: 1px dashed var(--dash-border); }
+.dashboard-workspace .dash-closure__score { font-size: 15px; font-variant-numeric: tabular-nums; color: var(--color-text); }
+.dashboard-workspace .dash-closure__empty { font-size: var(--text-sm); font-style: italic; color: var(--color-text-secondary); }
+.dashboard-workspace .dash-stars { display: inline-flex; align-items: center; gap: 2px; color: #E0A526; }
+.dashboard-workspace .dash-stars__star { width: 18px; height: 18px; flex: none; }
 @media (max-width: 720px) {
   .dashboard-workspace .dash-closure__groups { grid-template-columns: minmax(0, 1fr); }
 }

@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Primitives;
+using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Tests.Web.Fakes;
@@ -226,18 +227,121 @@ public sealed class TicketsWorkspaceTests
     }
 
     [Fact]
-    public void TicketListView_DepartmentIsAPrimaryFilter_InTheMainBar_NotTheFiltersDrawer()
+    public void TicketListView_FiltersAreInTheRequestedOrder_DepartmentThenAssignedToFirst()
     {
         var list = View("Shared", "_TicketListView.cshtml");
-
-        var select = list.IndexOf("id=\"departmentId\"", StringComparison.Ordinal);
-        var drawer = list.IndexOf("id=\"ticketFilterDrawer\"", StringComparison.Ordinal);
-        Assert.True(select >= 0 && drawer >= 0 && select < drawer, "The Department select must sit in the main filter bar, before the Filters drawer.");
+        var order = new[]
+        {
+            "id=\"departmentId\"", "id=\"assignee\"", "id=\"ticketStatus\"", "id=\"priorityId\"", "id=\"sla\"", "id=\"channelId\"",
+            "id=\"verificationStatus\"", "id=\"unclassified\"", "id=\"escalated\"", "id=\"createdByMe\"",
+        };
+        var positions = order.Select(o => list.IndexOf(o, StringComparison.Ordinal)).ToArray();
+        Assert.All(positions, p => Assert.True(p >= 0));
+        Assert.Equal(positions.Order(), positions);
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(list, "id=\"departmentId\""));
         Assert.Contains("<option value=\"\">All Departments</option>", list, StringComparison.Ordinal);
-        Assert.DoesNotContain("All my departments", list, StringComparison.Ordinal);
-        Assert.Contains("AccessibleDepartments", list, StringComparison.Ordinal);
-        Assert.Contains("[\"departmentId\"] = Model.DepartmentId?.ToString()", list, StringComparison.Ordinal);
+        Assert.Contains("<option value=\"\">Anyone</option>", list, StringComparison.Ordinal);
+        Assert.Contains(">Unassigned</option>", list, StringComparison.Ordinal);
+        Assert.Contains("var showAssigneeFilter = !isMyView;", list, StringComparison.Ordinal);
+    }
+
+    private static readonly int Sales = 1, Support = 2;
+    private static readonly Guid Alice = Guid.NewGuid(), Bob = Guid.NewGuid(), Carol = Guid.NewGuid();
+
+    /// <summary>A fake Api: /me reports the given accessible departments; each department lists its members (Alice is in both).</summary>
+    private static (TicketsModel Model, FakeApiHandler Handler) CreateScopedModel(params int[] accessibleDepartments)
+    {
+        var members = new Dictionary<int, DepartmentUserDto[]>
+        {
+            [Sales] = [new(Alice, "Alice", true, []), new(Bob, "Bob", false, [])],
+            [Support] = [new(Alice, "Alice", false, []), new(Carol, "Carol", true, [])],
+        };
+        return CreateModel((request, body) =>
+        {
+            var path = request.RequestUri!.PathAndQuery;
+            if (path.StartsWith("/api/users/me", StringComparison.Ordinal))
+            {
+                var accessible = accessibleDepartments.Select(id => new DepartmentMembershipDto(id, id == Sales ? "Sales" : "Support", false)).ToList();
+                return FakeApiHandler.JsonResponse(HttpStatusCode.OK, new CurrentUserResponseDto(ViewerId, "Viewer", [], [], false, null, null, null, null, accessible));
+            }
+
+            var match = System.Text.RegularExpressions.Regex.Match(path, @"^/api/departments/(\d+)/users");
+            if (match.Success)
+            {
+                var id = int.Parse(match.Groups[1].Value);
+                var items = members.TryGetValue(id, out var m) ? m : [];
+                return FakeApiHandler.JsonResponse(HttpStatusCode.OK, new PagedResultDto<DepartmentUserDto>(items, 1, 100, items.Length));
+            }
+
+            return DefaultResponder(request, body);
+        });
+    }
+
+    [Fact]
+    public async Task Administrator_AllDepartments_OffersEveryDepartmentsEmployees_WithoutNeedingASingleDepartment()
+    {
+        var (model, _) = CreateScopedModel(Sales, Support);
+        GivePageContext(model, Principal(Roles.SystemAdministrator));
+
+        await GetAsync(model);
+
+        Assert.Equal(["Alice", "Bob", "Carol"], model.AssigneeOptions.Select(o => o.DisplayName));
+        Assert.Equal([Sales, Support], model.AssigneeOptions.First(o => o.EmployeeId == Alice).DepartmentIds);
+        Assert.Equal(2, model.NameResolver.AccessibleDepartments.Count);
+    }
+
+    [Fact]
+    public async Task SelectingADepartment_NarrowsTheAssigneeOptions_AndResetsAnIneligibleAssignee()
+    {
+        var (model, handler) = CreateScopedModel(Sales, Support);
+        GivePageContext(model, Principal(Roles.SystemAdministrator));
+
+        // Carol is in Support only; Sales is selected, so she is no longer eligible and the filter is dropped before the query.
+        await GetAsync(model, departmentId: Sales, assignee: Carol.ToString());
+
+        Assert.Equal(["Alice", "Bob"], model.AssigneeOptions.Select(o => o.DisplayName));
+        Assert.Null(model.OwnerEmployeeId);
+        var list = handler.Requests.First(r => r.RequestUri.Contains("/api/tickets?", StringComparison.Ordinal) && r.RequestUri.Contains("pageSize=20", StringComparison.Ordinal));
+        Assert.Equal(Sales.ToString(), Query(list.RequestUri)["departmentId"]);
+        Assert.DoesNotContain("ownerEmployeeId", Query(list.RequestUri).Keys);
+
+        // An eligible assignee is kept and sent together with the department.
+        var (kept, keptHandler) = CreateScopedModel(Sales, Support);
+        GivePageContext(kept, Principal(Roles.SystemAdministrator));
+        await GetAsync(kept, departmentId: Sales, assignee: Bob.ToString());
+        var keptList = keptHandler.Requests.First(r => r.RequestUri.Contains("/api/tickets?", StringComparison.Ordinal) && r.RequestUri.Contains("pageSize=20", StringComparison.Ordinal));
+        Assert.Equal(Bob.ToString(), Query(keptList.RequestUri)["ownerEmployeeId"]);
+        Assert.Equal(Sales.ToString(), Query(keptList.RequestUri)["departmentId"]);
+    }
+
+    [Fact]
+    public async Task RegularUser_IsOnlyOfferedEmployeesOfTheirAuthorizedDepartments_AndNeverAnotherDepartment()
+    {
+        var (model, handler) = CreateScopedModel(Support);
+        GivePageContext(model, Principal(Roles.DepartmentHead));
+
+        await GetAsync(model);
+        Assert.Equal(["Alice", "Carol"], model.AssigneeOptions.Select(o => o.DisplayName));
+
+        // A hand-edited department outside the viewer's scope offers nobody and never fetches that department's members.
+        var (tampered, tamperedHandler) = CreateScopedModel(Support);
+        GivePageContext(tampered, Principal(Roles.DepartmentHead));
+        await GetAsync(tampered, departmentId: Sales);
+        Assert.Empty(tampered.AssigneeOptions);
+        Assert.DoesNotContain(tamperedHandler.Requests, r => r.RequestUri.Contains("/api/departments/1/users", StringComparison.Ordinal));
+        Assert.DoesNotContain(handler.Requests, r => r.RequestUri.Contains("/api/departments/1/users", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task MyTickets_DoesNotOfferTheAssigneeFilter_AndKeepsItsFixedOwner()
+    {
+        var (model, handler) = CreateScopedModel(Sales);
+        GivePageContext(model, Principal(Roles.DepartmentEmployee));
+
+        await GetAsync(model, view: "my");
+
+        Assert.Empty(model.AssigneeOptions);
+        Assert.DoesNotContain(handler.Requests, r => r.RequestUri.Contains("/users", StringComparison.Ordinal) && r.RequestUri.Contains("/api/departments/", StringComparison.Ordinal));
     }
 
     [Fact]

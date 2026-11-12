@@ -561,10 +561,10 @@ public sealed class DashboardUiTests
     }
 
     [Theory]
-    [InlineData(null, "—")]
+    [InlineData(null, "No reviews yet")]
     [InlineData(4.5, "4.5 / 5")]
     [InlineData(4.0, "4.0 / 5")]
-    public void ClosureSection_AverageReviewScore_IsOnItsOwnRow_OrADashWhenNothingIsReviewed(double? average, string expected)
+    public void ClosureSection_AverageReviewScore_IsOnItsOwnRow_OrNoReviewsYetWhenNothingIsReviewed(double? average, string expected)
     {
         var overview = Overview(kpis: new DashboardKpisDto(0, 0, 0, 0, 0, 0, ReviewedTickets: average is null ? 0 : 8, NotReviewedTickets: 2, AverageReviewRating: average));
 
@@ -572,8 +572,69 @@ public sealed class DashboardUiTests
 
         var score = closure.Groups[0].Rows.Single(r => r.Label == "Average Review Score");
         Assert.Equal(expected, score.Value);
+        Assert.Equal(average, score.Rating);
         Assert.Null(score.Href); // a figure, not a drill-down
         Assert.Equal(["Reviewed", "Not Reviewed", "Average Review Score"], closure.Groups[0].Rows.Select(r => r.Label).ToArray());
+    }
+
+    [Theory]
+    [InlineData(1.0, new[] { 1.0, 0, 0, 0, 0 }, "1.0 out of 5 stars")]
+    [InlineData(5.0, new[] { 1.0, 1, 1, 1, 1 }, "5.0 out of 5 stars")]
+    [InlineData(3.0, new[] { 1.0, 1, 1, 0, 0 }, "3.0 out of 5 stars")]
+    [InlineData(4.3, new[] { 1.0, 1, 1, 1, 0.3 }, "4.3 out of 5 stars")]
+    [InlineData(2.5, new[] { 1.0, 1, 0.5, 0, 0 }, "2.5 out of 5 stars")]
+    [InlineData(0.4, new[] { 0.4, 0, 0, 0, 0 }, "0.4 out of 5 stars")]
+    public void ClosureSection_StarRating_FillsWholeStarsAndTheFractionOfTheLast_AndIsLabelledForScreenReaders(double rating, double[] expectedFills, string label)
+    {
+        var row = new ClosureRow("Average Review Score", rating.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " / 5", "score", Rating: rating);
+
+        var fills = Enumerable.Range(0, ClosureRow.StarCount).Select(row.StarFill).ToArray();
+        Assert.Equal(expectedFills.Length, fills.Length);
+        for (var i = 0; i < fills.Length; i++)
+        {
+            Assert.Equal(expectedFills[i], fills[i], precision: 6);
+        }
+
+        Assert.Equal(label, row.StarsLabel);
+    }
+
+    [Theory]
+    [InlineData(-3.0)]
+    [InlineData(9.0)]
+    public void ClosureSection_StarRating_NeverFillsOutsideZeroToOne_WhateverTheRating(double rating)
+    {
+        var row = new ClosureRow("Average Review Score", "x", "score", Rating: rating);
+        Assert.All(Enumerable.Range(0, ClosureRow.StarCount), i => Assert.InRange(row.StarFill(i), 0d, 1d));
+    }
+
+    [Theory]
+    [InlineData(0.0, 2.75)]
+    [InlineData(0.5, 12.0)]
+    [InlineData(0.7, 15.7)]
+    [InlineData(1.0, 24.0)]
+    public void ClosureSection_PartialStarFill_IsMeasuredAcrossTheStarGlyph_NotTheWholeBox(double fill, double width)
+    {
+        Assert.Equal(width, ClosureRow.StarClipWidth(fill), precision: 6);
+    }
+
+    [Fact]
+    public void ClosureSection_WithoutAScore_HasNoStarsAndNoLabel()
+    {
+        var row = new ClosureRow("Average Review Score", ClosureRow.NoReviewsText, "score");
+        Assert.Null(row.StarsLabel);
+        Assert.All(Enumerable.Range(0, ClosureRow.StarCount), i => Assert.Equal(0d, row.StarFill(i)));
+    }
+
+    [Theory]
+    [InlineData(119, "119", "Tickets Closed in Selected Period")]
+    [InlineData(1, "1", "Ticket Closed in Selected Period")]
+    [InlineData(12345, "12,345", "Tickets Closed in Selected Period")]
+    public void ClosureSection_TheHeadingSplitsIntoAProminentCountAndItsWords_ButStillReadsAsOneSentence(int total, string count, string words)
+    {
+        var summary = new ClosureSummary(total, []);
+        Assert.Equal(count, summary.CountText);
+        Assert.Equal(words, summary.TitleText);
+        Assert.Equal(count + " " + words, summary.Heading);
     }
 
     [Fact]
@@ -661,6 +722,13 @@ public sealed class DashboardUiTests
         Assert.Contains("Model.Closure", view);
         Assert.Contains("dash-closure__groups", view);
         Assert.Contains("class=\"dash-closure__link\" href=\"@row.Href\"", view);
+        // The score is a figure with stars, never a link; the four counts carry their original glyphs.
+        Assert.Contains("class=\"dash-stars\" role=\"img\" aria-label=\"@row.StarsLabel\"", view);
+        Assert.Contains("dash-closure__empty", view);
+        foreach (var key in new[] { "\"reviewed\" =>", "\"notreviewed\" =>", "\"agent\" =>", "\"ai\" =>" })
+        {
+            Assert.Contains(key, view);
+        }
     }
 
     [Fact]

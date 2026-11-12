@@ -132,7 +132,9 @@ public class DepartmentPrimaryAssignmentTests
 
         // "Unassigned" would claim the ticket has no responsible owner, which
         // is never true: it is always at least its department's queue.
-        Assert.DoesNotContain("Unassigned", html, StringComparison.Ordinal);
+        // The one sanctioned use is the Assigned To filter's "Unassigned" choice in the ticket list (it filters the department queue; it labels no ticket).
+        var withoutFilterOption = html.Replace("<option value=\"queue\" selected=\"@(Model.AssigneeFilterValue == \"queue\")\">Unassigned</option>", string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("Unassigned", withoutFilterOption, StringComparison.Ordinal);
 
         // The user-facing label is "Assigned To", never the old "Owner".
         Assert.DoesNotContain(">Owner<", html, StringComparison.Ordinal);
