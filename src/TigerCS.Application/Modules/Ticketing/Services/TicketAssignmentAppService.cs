@@ -494,7 +494,7 @@ public sealed class TicketAssignmentAppService(
             // Tower routing owns this decision, so neither the department rule nor the CS Agent rotation picks someone for it.
         }
         else if (await autoAssignmentService.IsCallCenterDepartmentAsync(request.TargetDepartmentId, cancellationToken)
-            && ticket.OriginalHumanAgentId is not null
+            && ticket.ActiveOriginalHumanAgentId is not null
             && (await autoAssignmentService.ReturnToOriginalHumanAgentAsync(ticket, callerEmployeeId, now, correlationId, cancellationToken)).Outcome
                 is not TicketAutoAssignmentService.OriginalAgentReturn.NoOriginalAgent)
         {

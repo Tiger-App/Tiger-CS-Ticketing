@@ -122,6 +122,21 @@ public class OriginalHumanAgentOwnershipTests
         public Task<TicketMutationResult> TransferAsync(Ticket ticket, Department target, Guid? caller = null) =>
             Assignment.TransferAsync(caller ?? Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new TransferTicketRequestDto(target.DepartmentId, "handoff", []));
 
+        /// <summary>A ticket that existed before the feature: created without the cutoff flag, owned by <paramref name="owner"/> in the Call Center, with an ordinary assignment row.</summary>
+        public async Task<Ticket> LegacyTicketOwnedInCallCenterAsync(Guid owner)
+        {
+            var ticket = Ticket.CreateUnverified($"TG-CS-LEGACY-{Guid.NewGuid():N}"[..24], Cs.DepartmentId, 5, (byte)PriorityLevel.High, "AC", DateTime.UtcNow, null, null);
+            await Tickets.AddAsync(ticket);
+            ticket.TransferToDepartment(CallCenter.DepartmentId);
+            ticket.AssignTo(owner);
+            await Assignments.AddAsync(new TicketAssignment(ticket.TicketId, owner, CallCenter.DepartmentId, Now, assigningActorEmployeeId: owner));
+            return ticket;
+        }
+
+        /// <summary>Simulates a value that reached the column of a legacy ticket some other way (e.g. an earlier backfill): it must be ignored.</summary>
+        public static void ForceOriginalColumn(Ticket ticket, Guid value) =>
+            typeof(Ticket).GetProperty(nameof(Ticket.OriginalHumanAgentId))!.SetValue(ticket, value);
+
         /// <summary>Deactivates an employee the way administration does: the account and department membership stay, only <c>DeactivatedAtUtc</c> is set.</summary>
         public void Deactivate(Guid employee)
         {
@@ -491,10 +506,114 @@ public class OriginalHumanAgentOwnershipTests
         Assert.Equal(kawthar, ticket.OriginalHumanAgentId);
     }
 
+    // ---- deployment cutoff: the workflow applies to tickets created after the feature only ----
+
+    [Fact]
+    public async Task NewTickets_AreMarkedAsFollowingTheWorkflow_EvenWhenTheirOriginalAgentIsStillNull()
+    {
+        var env = new Env();
+        var agents = env.AddCallCenterAgents(2);
+
+        var manual = await env.CreateAsync(agents[1], roles: [Roles.CsAgent]);
+        var ai = await env.CreateAsync(Guid.NewGuid(), new GenesysInteractionContextDto("conv-ai"), roles: null);
+
+        Assert.True(manual.OriginalAgentWorkflowEnabled);
+        Assert.True(ai.OriginalAgentWorkflowEnabled);
+        Assert.Null(ai.OriginalHumanAgentId);                       // NULL alone does not mean legacy: the flag distinguishes the two
+        Assert.Equal(agents[1], manual.OriginalHumanAgentId);
+    }
+
+    [Fact]
+    public async Task ALegacyTicket_NeverGetsAnOriginalAgent_FromAssignmentAcceptOrReassignment()
+    {
+        var env = new Env();
+        var agents = env.AddCallCenterAgents(2);
+        var ticket = await env.LegacyTicketOwnedInCallCenterAsync(agents[1]);
+        Assert.False(ticket.OriginalAgentWorkflowEnabled);
+
+        Assert.False(await env.AutoAssignment.RecordOriginalHumanAgentAsync(ticket, agents[1], "test", Guid.NewGuid()));
+        Assert.False(ticket.RecordOriginalHumanAgent(agents[1]));
+        var reassigned = await env.Assignment.AssignAsync(
+            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new AssignTicketRequestDto(agents[0], [], TicketTransferReason.NeedsEscalation, "balance"));
+        Assert.Equal(TicketMutationOutcome.Success, reassigned.Outcome);
+        (await env.Assignments.GetCurrentAsync(ticket.TicketId))!.MarkSuperseded();
+        ticket.ReleaseOwner();
+        await env.AutoAssignment.AssignConfirmedHandlerAsync(ticket, agents[1], AutoAssignmentTrigger.Backfill, Now, Guid.NewGuid());
+
+        Assert.Null(ticket.OriginalHumanAgentId);                   // never inferred from assignment history, handlers, rotation or reassignment
+        Assert.DoesNotContain(env.Audit.Entries, e => e.Action == "SetOriginalHumanAgent");
+    }
+
+    [Fact]
+    public async Task ALegacyTicket_KeepsTheExistingTransferBehaviour_WhenItIsTransferredAfterDeployment()
+    {
+        var env = new Env();
+        var agents = env.AddCallCenterAgents(2);
+        var (bader, kawthar) = (agents[0], agents[1]);
+        var collector = env.AddMember(env.Collections);
+        var ticket = await env.LegacyTicketOwnedInCallCenterAsync(kawthar);
+
+        await env.TransferAsync(ticket, env.Collections, kawthar);
+        await env.TakenByAsync(ticket, collector);
+        await env.TransferAsync(ticket, env.CallCenter, collector);
+
+        // Exactly the pre-feature behaviour: the department moves, the carried-over owner stays (a department transfer never reassigns on its own).
+        Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(collector, ticket.CurrentOwnerEmployeeId);
+        Assert.NotEqual(kawthar, ticket.CurrentOwnerEmployeeId);
+        Assert.NotEqual(bader, ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.OriginalHumanAgentId);
+        Assert.DoesNotContain(env.Audit.Entries, e => e.Action is "ReturnToCallCenterQueue" || (e.AfterValue ?? "").Contains("ReturnToOriginalHumanAgent"));
+        Assert.DoesNotContain(env.Events.All, e => e.Note is not null && e.Note.Contains(TicketAutoAssignmentService.OriginalAgentHoldMarker));
+    }
+
+    [Fact]
+    public async Task ALegacyTicket_WithAStrayColumnValue_IsStillIgnoredByEveryRoutingPath()
+    {
+        var env = new Env();
+        var agents = env.AddCallCenterAgents(2);
+        var (bader, kawthar) = (agents[0], agents[1]);
+        var collector = env.AddMember(env.Collections);
+        var ticket = await env.LegacyTicketOwnedInCallCenterAsync(bader);
+        Env.ForceOriginalColumn(ticket, kawthar);                   // e.g. a value written by an earlier backfill
+        Assert.Null(ticket.ActiveOriginalHumanAgentId);
+
+        await env.TransferAsync(ticket, env.Collections, bader);
+        await env.TakenByAsync(ticket, collector);
+        await env.TransferAsync(ticket, env.CallCenter, collector);
+
+        Assert.Equal(collector, ticket.CurrentOwnerEmployeeId);     // not sent to the stray "original" Kawthar
+
+        // Unowned in the Call Center: the ordinary rotation applies, never the stray value and never a hold.
+        (await env.Assignments.GetCurrentAsync(ticket.TicketId))!.MarkSuperseded();
+        ticket.ReleaseOwner();
+        env.Members.Assignments.RemoveAll(a => a.EmployeeId == kawthar);
+        Assert.False(await env.AutoAssignment.IsHeldForManualAssignmentAsync(ticket));
+        var result = await env.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.Backfill, Now, Guid.NewGuid());
+        Assert.Equal(AutoAssignmentOutcome.AssignedRoundRobin, result.Outcome);
+        Assert.Equal(bader, ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public void TheCutoffFlag_DefaultsToLegacy_AndOnlyEnablingItLetsAnOriginalAgentBeRecorded()
+    {
+        var ticket = Ticket.CreateUnverified("TG-CS-20261111-0002", 1, 5, (byte)PriorityLevel.High, "AC", DateTime.UtcNow, null, null);
+        Assert.False(ticket.OriginalAgentWorkflowEnabled);
+        Assert.False(ticket.RecordOriginalHumanAgent(Guid.NewGuid()));
+        Assert.Null(ticket.OriginalHumanAgentId);
+
+        ticket.EnableOriginalAgentWorkflow();
+        ticket.EnableOriginalAgentWorkflow();                       // idempotent
+        var agent = Guid.NewGuid();
+        Assert.True(ticket.RecordOriginalHumanAgent(agent));
+        Assert.Equal(agent, ticket.ActiveOriginalHumanAgentId);
+    }
+
     [Fact]
     public void OriginalHumanAgent_IsWriteOnce()
     {
         var ticket = Ticket.CreateUnverified("TG-CS-20261111-0001", 1, 5, (byte)PriorityLevel.High, "AC", DateTime.UtcNow, null, null);
+        ticket.EnableOriginalAgentWorkflow();
         var first = Guid.NewGuid();
 
         Assert.True(ticket.RecordOriginalHumanAgent(first));
