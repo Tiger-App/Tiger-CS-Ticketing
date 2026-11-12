@@ -205,28 +205,38 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         Assert.Contains("SLA Details · Amina Agent", html, StringComparison.Ordinal);
         Assert.Contains("aria-current=\"page\">Team Performance</a>", html, StringComparison.Ordinal);
 
-        // Summary tiles, the formula, and the worked numbers.
-        Assert.Contains("<span>SLA evaluated</span>", html, StringComparison.Ordinal);
-        Assert.Contains("<span>SLA met</span>", html, StringComparison.Ordinal);
-        Assert.Contains("<span>Breach events</span>", html, StringComparison.Ordinal);
-        Assert.Contains("<span>Tickets with SLA breach</span>", html, StringComparison.Ordinal);
-        Assert.Contains("First Response: 1 · Resolution: 1", html, StringComparison.Ordinal);
-        Assert.Contains("<span>Pending (not evaluated)</span>", html, StringComparison.Ordinal);
+        // Four KPI cards, the compliance bar, and the secondary metrics.
+        Assert.Contains("<span>SLA Evaluated</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span>On Time (SLA Met)</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span>Late (SLA Breached)</span>", html, StringComparison.Ordinal);
+        Assert.Contains("<span>SLA Compliance %</span>", html, StringComparison.Ordinal);
         Assert.Contains("<strong>60%</strong>", html, StringComparison.Ordinal);
+        Assert.Contains("<progress class=\"sla-bar\" max=\"5\" value=\"3\"", html, StringComparison.Ordinal);
+        Assert.Contains("Tickets with SLA Breach: <strong>1</strong>", html, StringComparison.Ordinal);
+        Assert.Contains("Pending (running, not evaluated): <strong>2</strong>", html, StringComparison.Ordinal);
+
+        // The SLA type breakdown, from the Api's own numbers.
+        Assert.Contains("SLA type breakdown", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"cell-primary\">First Response</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"cell-num\">66.7%</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<td class=\"cell-num\">50%</td>", html, StringComparison.Ordinal);
+
+        // The long explanation is a COLLAPSED accordion (no "open" attribute) holding the formula, the rules, the targets and the calendar.
+        Assert.Contains("How is SLA calculated?", html, StringComparison.Ordinal);
+        Assert.Matches("<details class=\"filter-disclosure report-help sla-rules\" id=\"sla-how\">", html);
         Assert.Contains("Pending clocks are not evaluated and are excluded.", html, StringComparison.Ordinal);
         Assert.Contains("Here: 3 / (3 + 2) × 100 = 60%.", html, StringComparison.Ordinal);
-
-        // The rules, read from the Api, and the configured policy table.
-        Assert.Contains("How SLA is calculated", html, StringComparison.Ordinal);
         Assert.Contains("<dt>When the timer starts</dt>", html, StringComparison.Ordinal);
         Assert.Contains("SLA targets by priority, as configured", html, StringComparison.Ordinal);
+        Assert.Contains("not to the current ticket owner", html, StringComparison.Ordinal);
 
         // Table: ticket links, red / green highlighting, UTC stamps, breach duration, policy and the reason.
         Assert.Contains("href=\"/Tickets/5\">TG-CS-00005</a>", html, StringComparison.Ordinal);
         Assert.Contains("class=\"sla-row sla-row--breached\"", html, StringComparison.Ordinal);
         Assert.Contains("class=\"sla-row sla-row--met\"", html, StringComparison.Ordinal);
-        Assert.Contains("badge badge-sla-breached\">Breached</span>", html, StringComparison.Ordinal);
-        Assert.Contains("badge badge-sla-met\">Met</span>", html, StringComparison.Ordinal);
+        Assert.Contains("badge badge-sla-breached\">Late</span>", html, StringComparison.Ordinal);
+        Assert.Contains("badge badge-sla-met\">On Time</span>", html, StringComparison.Ordinal);
+        Assert.Contains("Assigned employee (at SLA deadline)", html, StringComparison.Ordinal);
         Assert.Contains("2026-09-01 08:00", html, StringComparison.Ordinal);
         Assert.Contains("2 d 1 h (ongoing)", html, StringComparison.Ordinal);
         Assert.Contains("Medium priority", html, StringComparison.Ordinal);
@@ -243,7 +253,12 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         Assert.Contains("departmentId=2", html, StringComparison.Ordinal);
 
         // The status tabs carry the counts; the way back keeps the filters; no inline styles.
-        Assert.Contains("Breach events (2)", html, StringComparison.Ordinal);
+        Assert.Contains("All (7)", html, StringComparison.Ordinal);
+        Assert.Contains("Late (2)", html, StringComparison.Ordinal);
+        Assert.Contains("On Time (3)", html, StringComparison.Ordinal);
+        Assert.Contains("Pending (2)", html, StringComparison.Ordinal);
+        Assert.Contains("All Types", html, StringComparison.Ordinal);
+        Assert.Contains("slaType=Resolution", html, StringComparison.Ordinal);
         Assert.Contains("href=\"/Reports/TeamPerformance?dateFrom=2026-08-13&amp;dateTo=2026-09-12&amp;role=CS&#x2B;Agent&amp;departmentId=2\">Back to Team Performance</a>", html, StringComparison.Ordinal);
         Assert.DoesNotContain("style=\"", html, StringComparison.Ordinal);
     }
@@ -373,7 +388,13 @@ public sealed class TeamPerformanceRenderTests : IDisposable
                 [
                     Record(5, "TG-CS-00005", "Breached", "2 d 1 h (ongoing)", null),
                     Record(6, "TG-CS-00006", "Met", null, due.AddHours(-3))
-                ]);
+                ],
+                query["slaType"],
+                [
+                    new TeamPerformanceSlaTypeBreakdownDto("First Response", 3, 2, 1, 0, 66.7m),
+                    new TeamPerformanceSlaTypeBreakdownDto("Resolution", 2, 1, 1, 2, 50.0m)
+                ],
+                new TeamPerformanceSlaStatusCountsDto(All: 7, Late: 2, OnTime: 3, Pending: 2));
         }
 
         private static TeamPerformanceRecordsDto Records(Guid employeeId, string metric) => new(

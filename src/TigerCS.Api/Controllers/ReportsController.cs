@@ -84,6 +84,9 @@ public class ReportsController(TeamPerformanceAppService teamPerformanceAppServi
     /// report's filters: the employee must satisfy them, as a row on the
     /// report would. <c>status</c> (Met, Breached or Pending; omitted = all)
     /// narrows the list only — the summary always covers every status.
+    /// <c>slaType</c> (First Response or Resolution; omitted = both) also
+    /// narrows the list, and the status counts follow it; the summary and the
+    /// per-type breakdown always cover both clocks and add up to each other.
     /// <c>sortBy</c> is one of event, ticket, department, type, created,
     /// started, target, due, actual, status, breach, policy; <c>sortDir</c>
     /// is asc or desc. <c>pageSize</c> is 1–100 (default 25).

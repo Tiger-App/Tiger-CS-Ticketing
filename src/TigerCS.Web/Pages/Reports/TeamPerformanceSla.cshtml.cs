@@ -26,6 +26,7 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
     public string? Role { get; private set; }
     public int? DepartmentId { get; private set; }
     public string? Status { get; private set; }
+    public string? SlaType { get; private set; }
     public string? SortBy { get; private set; }
     public string? SortDir { get; private set; }
     public int PageNumber { get; private set; } = 1;
@@ -36,7 +37,7 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
 
     public async Task OnGetAsync(
         Guid employeeId, DateOnly? dateFrom, DateOnly? dateTo, string? role, int? departmentId,
-        string? status, string? sortBy, string? sortDir, int? page, int? pageSize, CancellationToken cancellationToken)
+        string? status, string? slaType, string? sortBy, string? sortDir, int? page, int? pageSize, CancellationToken cancellationToken)
     {
         EmployeeId = employeeId;
         DateFrom = dateFrom;
@@ -44,6 +45,7 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
         Role = string.IsNullOrWhiteSpace(role) ? null : role;
         DepartmentId = departmentId;
         Status = string.IsNullOrWhiteSpace(status) ? null : status;
+        SlaType = string.IsNullOrWhiteSpace(slaType) ? null : slaType;
         SortBy = string.IsNullOrWhiteSpace(sortBy) ? null : sortBy;
         SortDir = string.IsNullOrWhiteSpace(sortDir) ? null : sortDir;
         PageNumber = Math.Max(1, page ?? 1);
@@ -51,7 +53,7 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
 
         var result = await reportsApiClient.GetTeamPerformanceSlaDetailsAsync(
             new TeamPerformanceSlaDetailsRequestDto(
-                EmployeeId, DateFrom, DateTo, Role, DepartmentId, Status, SortBy, SortDir, PageNumber, PageSize),
+                EmployeeId, DateFrom, DateTo, Role, DepartmentId, Status, SortBy, SortDir, PageNumber, PageSize, SlaType),
             cancellationToken);
         Outcome = result.Outcome;
         Details = result.IsSuccess ? result.Value : null;
@@ -79,9 +81,10 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
     /// is the status tab (<c>""</c> = all); changing the tab or the sort
     /// returns to page 1.
     /// </summary>
-    public string Href(int? page = null, string? sortBy = null, string? sortDir = null, string? status = null)
+    public string Href(int? page = null, string? sortBy = null, string? sortDir = null, string? status = null, string? slaType = null)
     {
         var effectiveStatus = status is null ? Details?.StatusFilter : (status.Length == 0 ? null : status);
+        var effectiveSlaType = slaType is null ? Details?.SlaTypeFilter : (slaType.Length == 0 ? null : slaType);
         var effectiveSortBy = sortBy ?? Details?.SortBy;
         var effectiveSortDir = sortDir ?? Details?.SortDir;
 
@@ -92,6 +95,7 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
         if (!string.IsNullOrWhiteSpace(Role)) query["role"] = Role;
         if (DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
         if (effectiveStatus is not null) query["status"] = effectiveStatus;
+        if (effectiveSlaType is not null) query["slaType"] = effectiveSlaType;
         if (effectiveSortBy is not null) query["sortBy"] = effectiveSortBy;
         if (effectiveSortDir is not null) query["sortDir"] = effectiveSortDir;
         query["page"] = (page ?? 1).ToString(CultureInfo.InvariantCulture);
@@ -114,12 +118,23 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
     public static string Stamp(DateTime? value) =>
         value is DateTime v ? v.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) : "—";
 
+    /// <summary>What a manager reads for a status: Late (breached), On Time (met) or Pending.</summary>
+    public static string StatusLabel(string status) => status switch
+    {
+        TeamPerformanceSlaStatuses.Breached => "Late",
+        TeamPerformanceSlaStatuses.Met => "On Time",
+        _ => "Pending"
+    };
+
     public static string StatusCss(string status) => status switch
     {
         TeamPerformanceSlaStatuses.Breached => "breached",
         TeamPerformanceSlaStatuses.Met => "met",
         _ => "running"
     };
+
+    /// <summary>"66.7%" for a breakdown row; "—" when nothing was evaluated.</summary>
+    public static string PercentText(decimal? percent) => TeamPerformanceModel.ComplianceText(percent);
 
     public static string ComplianceText(TeamPerformanceSlaSummaryDto summary) => TeamPerformanceModel.ComplianceText(summary.CompliancePercent);
 

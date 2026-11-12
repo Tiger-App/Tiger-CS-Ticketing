@@ -193,10 +193,32 @@ public sealed class TeamPerformanceAppService(
             counts.Evaluated, counts.Met, counts.BreachEvents, counts.TicketsWithBreach, counts.FirstResponseBreaches, counts.ResolutionBreaches,
             evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending), counts.CompliancePercent);
 
+        // Per-clock breakdown: the same SlaCounts aggregation over each clock's finalized cycles, so the rows add up to the summary above.
+        var typeBreakdown = TeamPerformanceSlaTypes.All.Select(type =>
+        {
+            var ofType = evaluations.Where(r => r.SlaType == type).ToList();
+            var typeCounts = SlaCounts.Of(ofType
+                .Where(r => r.Status != TeamPerformanceSlaStatuses.Pending)
+                .Select(r => new SlaOutcomeFact(r.TicketId, type == TeamPerformanceSlaTypes.FirstResponse ? SlaDeadlineType.FirstResponse : SlaDeadlineType.Resolution,
+                    r.Status == TeamPerformanceSlaStatuses.Breached)));
+            return new TeamPerformanceSlaTypeBreakdownDto(
+                type, typeCounts.Evaluated, typeCounts.Met, typeCounts.BreachEvents,
+                ofType.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending), typeCounts.CompliancePercent);
+        }).ToList();
+
+        // The SLA Type filter narrows the list and the status tab counts; the summary and breakdown above stay whole.
+        var typeFilter = TeamPerformanceSlaTypes.Normalize(request.SlaType);
+        var ofTypeFilter = typeFilter is null ? evaluations : evaluations.Where(r => r.SlaType == typeFilter).ToList();
+        var statusCounts = new TeamPerformanceSlaStatusCountsDto(
+            ofTypeFilter.Count,
+            ofTypeFilter.Count(r => r.Status == TeamPerformanceSlaStatuses.Breached),
+            ofTypeFilter.Count(r => r.Status == TeamPerformanceSlaStatuses.Met),
+            ofTypeFilter.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending));
+
         var statusFilter = TeamPerformanceSlaStatuses.Normalize(request.Status);
         var filtered = statusFilter is null
-            ? evaluations
-            : evaluations.Where(r => r.Status == statusFilter).ToList();
+            ? ofTypeFilter
+            : ofTypeFilter.Where(r => r.Status == statusFilter).ToList();
 
         var sortBy = TeamPerformanceSlaSortKeys.Normalize(request.SortBy);
         var descending = !string.Equals(request.SortDir?.Trim(), "asc", StringComparison.OrdinalIgnoreCase);
@@ -226,7 +248,10 @@ public sealed class TeamPerformanceAppService(
                 totalPages,
                 summary,
                 TeamPerformanceSlaPresentation.BuildRules(configuration),
-                sorted.Skip((page - 1) * pageSize).Take(pageSize).ToList()));
+                sorted.Skip((page - 1) * pageSize).Take(pageSize).ToList(),
+                typeFilter,
+                typeBreakdown,
+                statusCounts));
     }
 
     public const int DefaultPageSize = 25;
