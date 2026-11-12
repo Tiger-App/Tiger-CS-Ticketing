@@ -50,6 +50,18 @@
         _ => "<rect x=\"5\" y=\"4\" width=\"14\" height=\"16\" rx=\"1.5\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M9 9h6M9 13h6M9 17h3\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>",
     };
 
+    // The Closed in Selected Period rows keep the glyphs the closure cards always had (Reviewed Tickets, Not Reviewed, Closed by Agent, Closed by AI),
+    // keyed on the row's key — decoration only; the numbers, labels and links come from the model. The colour comes from the same data-kpi key
+    // the stylesheet already maps to each card's colour.
+    string ClosureIcon(string key) => key switch
+    {
+        "reviewed" => "<path d=\"M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8-4.3-4.1 5.9-.9L12 3.5Z\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linejoin=\"round\"/>",
+        "notreviewed" => "<path d=\"M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8-4.3-4.1 5.9-.9L12 3.5Z\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linejoin=\"round\" stroke-dasharray=\"2.4 2.4\"/>",
+        "agent" => "<circle cx=\"12\" cy=\"8\" r=\"4\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M4 20c1.8-3.2 4.5-5 8-5s6.2 1.8 8 5\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/><path d=\"M15.5 17.5l1.6 1.6 3-3\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
+        "ai" => "<rect x=\"5\" y=\"8\" width=\"14\" height=\"10\" rx=\"3\" stroke=\"currentColor\" stroke-width=\"1.7\"/><path d=\"M12 8V4.5M9.5 12.5h.01M14.5 12.5h.01M9.5 15.5h5\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\"/>",
+        _ => "",
+    };
+
     // The four views of the Tickets workspace — the same links the nav used
     // to carry, now one row of shortcuts that land on the matching tab.
     // Each view keeps the tone it has everywhere else: the queue is general
@@ -158,7 +170,7 @@
         @if (Model.Closure is { } closure)
         {
         <section class="dash-closure" aria-labelledby="closureHeading">
-            <h2 class="dash-closure__heading" id="closureHeading" data-closure-total>@closure.Heading</h2>
+            <h2 class="dash-closure__heading" id="closureHeading" data-closure-total><span class="dash-closure__count">@closure.CountText</span> <span class="dash-closure__heading-text">@closure.TitleText</span></h2>
             <div class="dash-closure__groups">
                 @foreach (var group in closure.Groups)
                 {
@@ -167,16 +179,48 @@
                         <ul class="dash-closure__rows">
                             @foreach (var row in group.Rows)
                             {
-                                <li class="dash-closure__row @(row.Key == "score" ? "dash-closure__row--score" : null)" data-closure="@row.Key" title="@row.Hint">
-                                    @if (row.Href is not null)
-                                    {
-                                        <a class="dash-closure__link" href="@row.Href"><span class="dash-closure__label">@row.Label</span><strong class="dash-closure__value">@row.Value</strong></a>
-                                    }
-                                    else
-                                    {
-                                        <span class="dash-closure__label">@row.Label</span><strong class="dash-closure__value">@row.Value</strong>
-                                    }
-                                </li>
+                                if (row.Key == "score")
+                                {
+                                    @* The average is a figure, not a drill-down: five stars (partly filled for a fractional score) with the exact score beside them. *@
+                                    <li class="dash-closure__row dash-closure__row--score" data-closure="score" title="@row.Hint">
+                                        <span class="dash-closure__label">@row.Label</span>
+                                        @if (row.Rating is not null)
+                                        {
+                                            <span class="dash-stars" role="img" aria-label="@row.StarsLabel" data-rating="@row.Rating.Value.ToString("0.0", CultureInfo.InvariantCulture)">
+                                                @for (var star = 0; star < ClosureRow.StarCount; star++)
+                                                {
+                                                    var fill = row.StarFill(star);
+                                                    <svg class="dash-stars__star" viewBox="0 0 24 24" aria-hidden="true" focusable="false" data-fill="@fill.ToString("0.##", CultureInfo.InvariantCulture)">
+                                                        <path class="dash-stars__outline" d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8-4.3-4.1 5.9-.9L12 3.5Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" />
+                                                        @if (fill > 0)
+                                                        {
+                                                            <clipPath id="closure-star-clip-@star"><rect x="0" y="0" width="@ClosureRow.StarClipWidth(fill).ToString("0.##", CultureInfo.InvariantCulture)" height="24" /></clipPath>
+                                                            <path class="dash-stars__fill" d="M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8-4.3-4.1 5.9-.9L12 3.5Z" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" clip-path="url(#closure-star-clip-@star)" />
+                                                        }
+                                                    </svg>
+                                                }
+                                            </span>
+                                            <strong class="dash-closure__score">@row.Value</strong>
+                                        }
+                                        else
+                                        {
+                                            <span class="dash-closure__empty">@row.Value</span>
+                                        }
+                                    </li>
+                                }
+                                else
+                                {
+                                    <li class="dash-closure__row" data-closure="@row.Key" data-kpi="@row.Key" title="@row.Hint">
+                                        @if (row.Href is not null)
+                                        {
+                                            <a class="dash-closure__link" href="@row.Href"><span class="dash-closure__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none">@Html.Raw(ClosureIcon(row.Key))</svg></span><strong class="dash-closure__value">@row.Value</strong><span class="dash-closure__label">@row.Label</span></a>
+                                        }
+                                        else
+                                        {
+                                            <span class="dash-closure__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none">@Html.Raw(ClosureIcon(row.Key))</svg></span><strong class="dash-closure__value">@row.Value</strong><span class="dash-closure__label">@row.Label</span>
+                                        }
+                                    </li>
+                                }
                             }
                         </ul>
                     </div>
