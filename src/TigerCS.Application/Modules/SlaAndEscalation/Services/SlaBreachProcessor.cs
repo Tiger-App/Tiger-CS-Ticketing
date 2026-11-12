@@ -37,6 +37,26 @@ public enum SlaBreachProcessingOutcome
 }
 
 /// <summary>
+/// The note of the <c>SlaState</c> history row the processor writes for a breach. It is the marker reporting uses to tell a genuine
+/// clock breach from other rows that merely carry the Breached state (for example "First human response recorded" on an already-Breached
+/// ticket). Writer and reader share these constants so they cannot drift; a regression test pins the exact prefixes.
+/// </summary>
+public static class SlaBreachNotes
+{
+    public const string FirstResponsePrefix = "FirstResponse SLA breached";
+    public const string ResolutionPrefix = "Resolution SLA breached";
+
+    public static string For(SlaDeadlineType deadlineType, DateTime dueAtUtc) => $"{deadlineType} SLA breached (due {dueAtUtc:O}).";
+
+    /// <summary>The clock a breach note is about, or null when the note is not a breach note.</summary>
+    public static SlaDeadlineType? TypeOf(string? note) =>
+        note is null ? null
+        : note.StartsWith(FirstResponsePrefix, StringComparison.Ordinal) ? SlaDeadlineType.FirstResponse
+        : note.StartsWith(ResolutionPrefix, StringComparison.Ordinal) ? SlaDeadlineType.Resolution
+        : null;
+}
+
+/// <summary>
 /// The single place a breach is decided and recorded (backlog S-10/S-11,
 /// FR-SLA-01–04, FR-ESC-02).
 ///
@@ -178,7 +198,7 @@ public sealed class SlaBreachProcessor(
             new TicketStatusHistory(
                 ticket.TicketId, TicketStatusDimension.SlaState, (byte)previousSlaState, (byte)ticket.SlaState,
                 actorEmployeeId: null, actorIsSystem: true,
-                note: $"{deadlineType} SLA breached (due {dueAtUtc:O}).", correlationId, nowUtc),
+                note: SlaBreachNotes.For(deadlineType, dueAtUtc), correlationId, nowUtc),
             cancellationToken);
 
         await auditWriter.WriteAsync(

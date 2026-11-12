@@ -9,9 +9,11 @@ namespace TigerCS.Web.Pages.Reports;
 
 /// <summary>
 /// The CS Manager's Team Performance report: a GET filter form (employee,
-/// agent type, department, period), one row per eligible agent with four
-/// counts, a totals row, and — when a count is clicked — a records panel
-/// listing the tickets behind that count. Every number comes from
+/// role, department, period), one row per active employee in every
+/// department with four counts, a totals row, and — when a count is clicked
+/// — a records panel listing the tickets behind that count. The SLA Breaches
+/// count opens the SLA details page (<c>/Reports/TeamPerformanceSla</c>)
+/// instead, which shows how that number was calculated. Every number comes from
 /// <c>GET /api/reports/team-performance</c> and every record list from
 /// <c>GET /api/reports/team-performance/records</c>; the page computes
 /// nothing of its own, and a 403 from the Api renders as a "no permission"
@@ -23,7 +25,7 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
     public DateOnly? DateFrom { get; private set; }
     public DateOnly? DateTo { get; private set; }
     public Guid? EmployeeId { get; private set; }
-    public string? AgentType { get; private set; }
+    public string? Role { get; private set; }
     public int? DepartmentId { get; private set; }
 
     /// <summary>The count being opened, when the URL names one (<c>?employeeId=..&amp;metric=..</c>); null otherwise.</summary>
@@ -38,7 +40,7 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
 
     /// <summary>True when the user narrowed anything — the filter bar then offers "Clear".</summary>
     public bool HasFilters =>
-        DateFrom is not null || DateTo is not null || EmployeeId is not null || !string.IsNullOrWhiteSpace(AgentType) || DepartmentId is not null;
+        DateFrom is not null || DateTo is not null || EmployeeId is not null || !string.IsNullOrWhiteSpace(Role) || DepartmentId is not null;
 
     /// <summary>The effective period, as the Api applied it ("Aug 12 – Sep 10, 2026").</summary>
     public string PeriodLabel => Report is null
@@ -46,14 +48,14 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
         : $"{Report.Filters.DateFrom:MMM d} – {Report.Filters.DateTo:MMM d, yyyy}";
 
     public async Task OnGetAsync(
-        DateOnly? dateFrom, DateOnly? dateTo, Guid? employeeId, string? agentType, int? departmentId, string? metric,
+        DateOnly? dateFrom, DateOnly? dateTo, Guid? employeeId, string? role, int? departmentId, string? metric,
         CancellationToken cancellationToken)
     {
         Viewer = CurrentUser.FromPrincipal(User);
         DateFrom = dateFrom;
         DateTo = dateTo;
         EmployeeId = employeeId;
-        AgentType = string.IsNullOrWhiteSpace(agentType) ? null : agentType;
+        Role = string.IsNullOrWhiteSpace(role) ? null : role;
         DepartmentId = departmentId;
         Metric = string.IsNullOrWhiteSpace(metric) ? null : metric;
 
@@ -61,7 +63,7 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
         // one employee, with the records panel beneath it — so the row the
         // number came from stays visible beside its list.
         var result = await reportsApiClient.GetTeamPerformanceAsync(
-            new TeamPerformanceRequestDto(DateFrom, DateTo, EmployeeId, AgentType, DepartmentId), cancellationToken);
+            new TeamPerformanceRequestDto(DateFrom, DateTo, EmployeeId, Role, DepartmentId), cancellationToken);
         Outcome = result.Outcome;
         if (!result.IsSuccess || result.Value is null)
         {
@@ -81,18 +83,36 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
 
     /// <summary>The URL that opens one employee's count — the same page, with the period kept so the list matches the number.</summary>
     public string RecordsHref(Guid employeeId, TeamPerformanceMetric metric) =>
-        BuildHref(employeeId, metric.ToString(), keepAgentTypeAndDepartment: false);
+        BuildHref(employeeId, metric.ToString(), keepRoleAndDepartment: false);
 
-    /// <summary>The URL back to the full report under the current period, role and department filters, with no count open and every agent shown.</summary>
-    public string ReportHref => BuildHref(null, null, keepAgentTypeAndDepartment: true);
+    /// <summary>The URL back to the full report under the current period, role and department filters, with no count open and every employee shown.</summary>
+    public string ReportHref => BuildHref(null, null, keepRoleAndDepartment: true);
 
-    private string BuildHref(Guid? employeeId, string? metric, bool keepAgentTypeAndDepartment)
+    /// <summary>
+    /// The URL of one employee's SLA details, opened on their Breached
+    /// evaluations (the records behind the SLA Breaches number). The period
+    /// and the report's role / department filters travel with it, so the
+    /// details are computed under exactly the filters the number was.
+    /// </summary>
+    public string SlaDetailsHref(Guid employeeId, string status = TeamPerformanceSlaStatuses.Breached)
+    {
+        var query = HttpUtility.ParseQueryString(string.Empty);
+        query["employeeId"] = employeeId.ToString();
+        if (DateFrom is DateOnly from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (DateTo is DateOnly to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(Role)) query["role"] = Role;
+        if (DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
+        if (status.Length > 0) query["status"] = status;
+        return $"/Reports/TeamPerformanceSla?{query}";
+    }
+
+    private string BuildHref(Guid? employeeId, string? metric, bool keepRoleAndDepartment)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         if (DateFrom is DateOnly from) query["dateFrom"] = from.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
         if (DateTo is DateOnly to) query["dateTo"] = to.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
-        if (keepAgentTypeAndDepartment && !string.IsNullOrWhiteSpace(AgentType)) query["agentType"] = AgentType;
-        if (keepAgentTypeAndDepartment && DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
+        if (keepRoleAndDepartment && !string.IsNullOrWhiteSpace(Role)) query["role"] = Role;
+        if (keepRoleAndDepartment && DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
         if (employeeId is Guid employee) query["employeeId"] = employee.ToString();
         if (metric is not null) query["metric"] = metric;
         return query.Count == 0 ? "/Reports/TeamPerformance" : $"/Reports/TeamPerformance?{query}";
@@ -106,10 +126,17 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
                 TeamPerformanceMetric.CurrentlyAssigned => "Currently Assigned",
                 TeamPerformanceMetric.TicketsWorked => "Tickets Worked",
                 TeamPerformanceMetric.CompletedFollowUps => "Completed Follow-ups",
-                TeamPerformanceMetric.SlaBreaches => "SLA Breaches",
+                TeamPerformanceMetric.SlaBreaches => "Tickets with SLA Breach",
                 _ => parsed.ToString()
             }
             : metric ?? string.Empty;
+
+    /// <summary>"66.7%", or an em dash when nothing was evaluated.</summary>
+    public static string ComplianceText(decimal? percent) =>
+        percent is decimal value ? value.ToString("0.#", CultureInfo.InvariantCulture) + "%" : "—";
+
+    /// <summary>The roles cell: a comma-joined list (the Api already orders it).</summary>
+    public static string RolesText(IReadOnlyList<string> roles) => roles.Count == 0 ? "—" : string.Join(", ", roles);
 
     /// <summary>The departments cell: a comma-joined list, primary first (the Api already orders it).</summary>
     public static string DepartmentsText(IReadOnlyList<TeamPerformanceDepartmentDto> departments) =>

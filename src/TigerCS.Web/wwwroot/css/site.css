@@ -2263,6 +2263,31 @@ a.badge:hover { text-decoration: underline; }
 .report-count--critical { color: var(--color-critical); }
 .report-table tfoot td { font-weight: 600; background: var(--tbl-head-bg); border-top: 1px solid var(--tbl-line); border-bottom: 0; }
 .report-load-state { padding: var(--space-6) var(--space-4); }
+
+/* SLA details (Team Performance drill-down). */
+
+.sla-formula { margin: 0 0 var(--space-4); font-size: var(--text-sm); line-height: 1.55; color: var(--color-text-secondary); }
+.sla-rules { margin-top: 0; margin-bottom: var(--space-4); }
+.sla-caption { caption-side: top; text-align: left; padding: var(--space-3) 0 var(--space-2); font-weight: var(--weight-strong); font-size: var(--text-sm); }
+.sla-policies { margin-top: var(--space-4); max-width: 640px; }
+.sla-calendar { margin: var(--space-3) 0 0; font-size: var(--text-sm); color: var(--color-text-secondary); }
+.sla-tabs { display: flex; flex-wrap: wrap; gap: 4px; }
+.sla-tab { padding: 5px 11px; border: 1px solid var(--tbl-line); border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; color: var(--tbl-text); text-decoration: none; }
+.sla-tab:hover { background: var(--tbl-head-bg); }
+.sla-tab.is-active { background: var(--color-gold-tint); border-color: var(--color-gold-line); color: var(--color-gold-dark); font-weight: 600; }
+.sla-table th, .sla-table td { vertical-align: top; }
+.sla-table .sort-link { color: inherit; text-decoration: none; white-space: nowrap; }
+.sla-table .sort-link:hover { text-decoration: underline; }
+.sla-table th[aria-sort="ascending"] .sort-link::after { content: " \25B2"; font-size: 12px; }
+.sla-table th[aria-sort="descending"] .sort-link::after { content: " \25BC"; font-size: 12px; }
+.sla-row--breached td { background: var(--color-critical-pale); }
+.sla-row--breached td:first-child { box-shadow: inset 3px 0 0 var(--color-critical); }
+.sla-row--met td { background: var(--color-success-pale); }
+.sla-row--met td:first-child { box-shadow: inset 3px 0 0 var(--color-success); }
+.sla-breach-duration { color: var(--color-critical); font-weight: 600; white-space: nowrap; }
+.sla-policy, .sla-why { min-width: 240px; max-width: 360px; font-size: 12px; line-height: 1.5; }
+.sla-why__extra { display: block; margin-top: 4px; color: var(--color-text-secondary); }
+
 .report-help { margin-top: var(--space-4); }
 .report-help__body { padding: var(--space-4) var(--space-5); margin-bottom: 0; }
 .report-help__list { display: grid; grid-template-columns: minmax(140px, max-content) minmax(0, 1fr); gap: var(--space-2) var(--space-4); margin: 0; font-size: var(--text-sm); line-height: 1.55; }
