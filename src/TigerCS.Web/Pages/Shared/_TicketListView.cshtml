@@ -49,7 +49,6 @@
     // permission check and backend predicate is unchanged. The badge counts
     // only the controls the drawer actually shows for this view.
     var filterCount = 0;
-    if (Model.DepartmentId is not null && Model.NameResolver.AccessibleDepartments.Count > 0) filterCount++;
     if (!isClosedView && !string.IsNullOrEmpty(Model.TicketStatus)) filterCount++;
     if (Model.PriorityId is not null) filterCount++;
     if (!isClosedView && !string.IsNullOrEmpty(Model.SlaFilterValue)) filterCount++;
@@ -61,7 +60,7 @@
     if (Model.Escalated && TicketActions.CanReviewEscalations(Model.Viewer?.Roles)) filterCount++;
     if (Model.CreatedByMe) filterCount++;
     var dateCount = (Model.CreatedFrom is not null ? 1 : 0) + (Model.CreatedTo is not null ? 1 : 0);
-    var anyActive = filterCount > 0 || dateCount > 0 || !string.IsNullOrWhiteSpace(Model.Search);
+    var anyActive = filterCount > 0 || Model.DepartmentId is not null || dateCount > 0 || !string.IsNullOrWhiteSpace(Model.Search);
     var chevron = "<svg class=\"tkt-pop__chev\" viewBox=\"0 0 24 24\" fill=\"none\" aria-hidden=\"true\"><path d=\"M6 9l6 6 6-6\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/></svg>";
 }
 
@@ -71,6 +70,24 @@
         <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
         <input type="search" name="search" value="@Model.Search" placeholder="Search ticket number, customer, phone, unit or summary…" aria-label="Search tickets" />
     </div>
+
+    @* Department is a primary filter: always visible in the bar, not in the Filters drawer. The options are the departments the Api
+       says the caller may see (AccessibleDepartments - all active departments for a cross-department role, otherwise memberships), and
+       the Api re-applies that scope to any departmentId it receives. Selecting one submits the form, so it combines with every other
+       field and resets paging. *@
+    @if (Model.NameResolver.AccessibleDepartments.Count > 0)
+    {
+        <div class="filter-bar__department">
+            <label class="visually-hidden" for="departmentId">Department</label>
+            <select class="field-select" id="departmentId" name="departmentId" data-autosubmit aria-label="Department">
+                <option value="">All Departments</option>
+                @foreach (var d in Model.NameResolver.AccessibleDepartments.OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
+                {
+                    <option value="@d.DepartmentId" selected="@(Model.DepartmentId == d.DepartmentId)">@d.Name</option>
+                }
+            </select>
+        </div>
+    }
 
     <button type="button" class="btn btn-sm tkt-pop__toggle" id="ticketFiltersToggle" data-drawer-open="ticketFilterDrawer"
             aria-haspopup="dialog" aria-expanded="false" aria-controls="ticketFilterDrawer">
@@ -92,20 +109,6 @@
         </header>
         <div class="drawer__body">
             <div class="drawer__fields">
-
-        @if (Model.NameResolver.AccessibleDepartments.Count > 0)
-        {
-            <div class="field-group">
-                <label class="field-label" for="departmentId">Department</label>
-                <select class="field-select" id="departmentId" name="departmentId">
-                    <option value="">All my departments</option>
-                    @foreach (var d in Model.NameResolver.AccessibleDepartments.OrderBy(d => d.Name, StringComparer.OrdinalIgnoreCase))
-                    {
-                        <option value="@d.DepartmentId" selected="@(Model.DepartmentId == d.DepartmentId)">@d.Name</option>
-                    }
-                </select>
-            </div>
-        }
 
         @if (!isClosedView)
         {
