@@ -115,8 +115,12 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
 
     public async Task<IReadOnlyList<TeamPerformanceOptionDto>> GetDepartmentsAsync(CancellationToken cancellationToken = default)
     {
+        // Every active department, plus any department that is the primary department of an active employee (even if the department
+        // itself has since been deactivated), so an employee's primary department is always selectable.
         var departments = await dbContext.Departments.AsNoTracking()
-            .Where(d => d.IsActive)
+            .Where(d => d.IsActive || dbContext.UserDepartmentAssignments.Any(a =>
+                a.DepartmentId == d.DepartmentId && a.IsPrimary
+                && dbContext.Employees.Any(e => e.EmployeeId == a.EmployeeId && e.DeactivatedAtUtc == null)))
             .Select(d => new { d.DepartmentId, d.Name })
             .ToListAsync(cancellationToken);
 

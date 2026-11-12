@@ -584,6 +584,142 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
     }
 
     // ---------------------------------------------------------------
+    // SLA type breakdown and the SLA Type filter
+    // ---------------------------------------------------------------
+
+    /// <summary>Met (FR + Res), a late Resolution, a late First Response and an open ticket (FR + Res pending) — every type/status combination.</summary>
+    private void SeedMixedEvaluations()
+    {
+        using var context = _db.CreateContext();
+
+        var met = NewTicket(context, _aminaId, Now.AddDays(-10), status: TicketStatus.Resolved);
+        AddPeriod(context, met, met.CreatedAtUtc, met.CreatedAtUtc.AddHours(4), met.CreatedAtUtc.AddDays(3));
+        RecordFirstResponse(context, met, met.CreatedAtUtc.AddHours(1));
+        RecordResolution(context, met, _aminaId, met.CreatedAtUtc.AddDays(2));
+
+        var lateResolution = NewTicket(context, _aminaId, Now.AddDays(-12));
+        var lateResolutionDue = Now.AddDays(-6);
+        AddPeriod(context, lateResolution, lateResolution.CreatedAtUtc, lateResolution.CreatedAtUtc.AddHours(4), lateResolutionDue, resolutionBreached: true);
+        RecordFirstResponse(context, lateResolution, lateResolution.CreatedAtUtc.AddHours(1));
+        RecordBreach(context, lateResolution, SlaDeadlineType.Resolution, lateResolutionDue, lateResolutionDue);
+
+        var lateFirstResponse = NewTicket(context, _aminaId, Now.AddDays(-9));
+        var lateFirstResponseDue = lateFirstResponse.CreatedAtUtc.AddHours(4);
+        AddPeriod(context, lateFirstResponse, lateFirstResponse.CreatedAtUtc, lateFirstResponseDue, Now.AddDays(5), firstResponseBreached: true);
+        RecordBreach(context, lateFirstResponse, SlaDeadlineType.FirstResponse, lateFirstResponseDue, lateFirstResponseDue);
+
+        var open = NewTicket(context, _aminaId, Now.AddHours(-2));
+        AddPeriod(context, open, open.CreatedAtUtc, Now.AddHours(2), Now.AddDays(2));
+    }
+
+    [Fact]
+    public async Task TypeBreakdown_IsCalculatedFromTheEvaluations_AndReconcilesWithTheSummary()
+    {
+        SeedMixedEvaluations();
+
+        var d = await DetailsAsync(_aminaId);
+
+        Assert.Equal(["First Response", "Resolution"], d.TypeBreakdown.Select(t => t.SlaType).ToArray());
+        var fr = d.TypeBreakdown.Single(t => t.SlaType == "First Response");
+        var res = d.TypeBreakdown.Single(t => t.SlaType == "Resolution");
+
+        // Recomputed independently from the detailed records.
+        foreach (var row in d.TypeBreakdown)
+        {
+            var ofType = d.Records.Where(r => r.SlaType == row.SlaType).ToList();
+            var met = ofType.Count(r => r.Status == TeamPerformanceSlaStatuses.Met);
+            var late = ofType.Count(r => r.Status == TeamPerformanceSlaStatuses.Breached);
+            Assert.Equal(met, row.Met);
+            Assert.Equal(late, row.Late);
+            Assert.Equal(met + late, row.Evaluated);
+            Assert.Equal(ofType.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending), row.Pending);
+            Assert.Equal(met + late == 0 ? null : Math.Round(met * 100m / (met + late), 1, MidpointRounding.AwayFromZero), row.CompliancePercent);
+        }
+
+        // First Response: 2 met (met ticket, late-resolution ticket), 1 late.  Resolution: 1 met, 1 late.
+        Assert.Equal((3, 2, 1), (fr.Evaluated, fr.Met, fr.Late));
+        Assert.Equal((2, 1, 1), (res.Evaluated, res.Met, res.Late));
+        Assert.Equal(66.7m, fr.CompliancePercent);
+        Assert.Equal(50.0m, res.CompliancePercent);
+
+        // The two rows add up to the summary exactly.
+        Assert.Equal(d.Summary.Evaluated, d.TypeBreakdown.Sum(t => t.Evaluated));
+        Assert.Equal(d.Summary.Met, d.TypeBreakdown.Sum(t => t.Met));
+        Assert.Equal(d.Summary.BreachEvents, d.TypeBreakdown.Sum(t => t.Late));
+        Assert.Equal(d.Summary.Pending, d.TypeBreakdown.Sum(t => t.Pending));
+        Assert.Equal(d.Summary.FirstResponseBreaches, fr.Late);
+        Assert.Equal(d.Summary.ResolutionBreaches, res.Late);
+        Assert.Equal(d.Summary.CompliancePercent, Math.Round(d.Summary.Met * 100m / d.Summary.Evaluated, 1, MidpointRounding.AwayFromZero));
+
+        // No evaluation is listed twice: one record per (ticket, clock, status/deadline).
+        Assert.Equal(d.Records.Count, d.Records.Select(r => (r.TicketId, r.SlaType, r.DueAtUtc, r.Status)).Distinct().Count());
+        Assert.Equal(d.TotalRecords, d.Summary.Evaluated + d.Summary.Pending);
+    }
+
+    [Fact]
+    public async Task SlaTypeFilter_NarrowsTheListAndStatusCounts_ButNeverTheSummaryOrBreakdown_AndEveryCountEqualsItsRecords()
+    {
+        SeedMixedEvaluations();
+        var all = await DetailsAsync(_aminaId);
+
+        Assert.Null(all.SlaTypeFilter);
+        Assert.Equal(new TeamPerformanceSlaStatusCountsDto(all.TotalRecords, all.Summary.BreachEvents, all.Summary.Met, all.Summary.Pending), all.StatusCounts);
+
+        foreach (var (filter, expected) in new[] { ("First Response", "First Response"), ("resolution", "Resolution"), ("first-response", "First Response"), ("FirstResponse", "First Response") })
+        {
+            var byType = await DetailsAsync(_aminaId, r => r with { SlaType = filter });
+            Assert.Equal(expected, byType.SlaTypeFilter);
+            Assert.All(byType.Records, r => Assert.Equal(expected, r.SlaType));
+            Assert.Equal(all.Summary, byType.Summary);
+            Assert.Equal(all.TypeBreakdown, byType.TypeBreakdown);
+            Assert.Equal(all.Records.Count(r => r.SlaType == expected), byType.TotalRecords);
+
+            // Each status tab's number is exactly what clicking it lists, under the type filter.
+            Assert.Equal(byType.TotalRecords, byType.StatusCounts.All);
+            foreach (var (status, count) in new[]
+            {
+                (TeamPerformanceSlaStatuses.Breached, byType.StatusCounts.Late),
+                (TeamPerformanceSlaStatuses.Met, byType.StatusCounts.OnTime),
+                (TeamPerformanceSlaStatuses.Pending, byType.StatusCounts.Pending)
+            })
+            {
+                var narrowed = await DetailsAsync(_aminaId, r => r with { SlaType = filter, Status = status });
+                Assert.Equal(count, narrowed.TotalRecords);
+                Assert.Equal(count, narrowed.Records.Count);
+            }
+        }
+
+        // An unknown value means "all types".
+        var unknown = await DetailsAsync(_aminaId, r => r with { SlaType = "nonsense" });
+        Assert.Null(unknown.SlaTypeFilter);
+        Assert.Equal(all.TotalRecords, unknown.TotalRecords);
+    }
+
+    [Fact]
+    public async Task EvaluationsStayWithTheEmployeeWhoHeldTheTicketAtTheDeadline_NotTheCurrentOwner()
+    {
+        using (var context = _db.CreateContext())
+        {
+            var ticket = NewTicket(context, _aminaId, Now.AddDays(-12));
+            var due = Now.AddDays(-6);
+            AddPeriod(context, ticket, ticket.CreatedAtUtc, ticket.CreatedAtUtc.AddHours(4), due, resolutionBreached: true);
+            RecordFirstResponse(context, ticket, ticket.CreatedAtUtc.AddHours(1));
+            RecordBreach(context, ticket, SlaDeadlineType.Resolution, due, due);
+
+            // Reassigned to Bilal AFTER the deadline: the breach stays Amina's; Bilal gets none of it.
+            Assign(context, ticket, _bilalId, Now.AddDays(-2));
+        }
+
+        var amina = await DetailsAsync(_aminaId);
+        var bilal = await DetailsAsync(_bilalId);
+
+        Assert.Equal(1, amina.Summary.BreachEvents);
+        Assert.Equal(0, bilal.Summary.BreachEvents);
+        Assert.DoesNotContain(bilal.Records, r => r.Status == TeamPerformanceSlaStatuses.Breached);
+        Assert.All(amina.Records.Where(r => r.Status == TeamPerformanceSlaStatuses.Breached), r => Assert.Equal(_aminaId, r.AssignedEmployeeId));
+    }
+
+    // ---------------------------------------------------------------
     // Eligibility and the rules block
     // ---------------------------------------------------------------
 
