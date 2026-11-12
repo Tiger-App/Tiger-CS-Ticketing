@@ -258,6 +258,8 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
     /// Each event is attributed to whoever held the ticket at the breach DEADLINE (the due time of that clock's SLA period), not at the
     /// moment the scheduler happened to record it: a delayed write cannot move the breach to a later holder. The holder is the latest
     /// assignment at or before the deadline, unless that assignment had already ended (released to a queue, closed) by then — then nobody.
+    /// An assignment holds the ticket over [AssignedAtUtc, SupersededAtUtc): a deadline exactly at its end belongs to the next holder (or nobody), and a row that
+    /// is current now was never ended whatever its SupersededAtUtc says (the Call Center backlog Rollback script flips an old row back to current).
     /// With no SLA period to read the deadline from, the recorded moment is used.
     /// </para>
     /// </summary>
@@ -297,7 +299,7 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 HolderEmployeeId = dbContext.TicketAssignments
                     .Where(a => a.TicketId == x.Row.TicketId && a.AssignedAtUtc <= x.Deadline)
                     .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => a.SupersededAtUtc == null || a.SupersededAtUtc > x.Deadline ? (Guid?)a.AssignedEmployeeId : null)
+                    .Select(a => a.IsCurrent || a.SupersededAtUtc == null || a.SupersededAtUtc > x.Deadline ? (Guid?)a.AssignedEmployeeId : null)
                     .FirstOrDefault(),
                 HolderDepartmentId = dbContext.TicketAssignments
                     .Where(a => a.TicketId == x.Row.TicketId && a.AssignedAtUtc <= x.Deadline)
@@ -337,7 +339,7 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 HolderEmployeeId = dbContext.TicketAssignments
                     .Where(a => a.TicketId == x.TicketId && a.AssignedAtUtc <= x.At)
                     .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => a.SupersededAtUtc == null || a.SupersededAtUtc > x.At ? (Guid?)a.AssignedEmployeeId : null)
+                    .Select(a => a.IsCurrent || a.SupersededAtUtc == null || a.SupersededAtUtc > x.At ? (Guid?)a.AssignedEmployeeId : null)
                     .FirstOrDefault(),
                 HolderDepartmentId = dbContext.TicketAssignments
                     .Where(a => a.TicketId == x.TicketId && a.AssignedAtUtc <= x.At)
@@ -365,7 +367,7 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 HolderEmployeeId = dbContext.TicketAssignments
                     .Where(a => a.TicketId == x.Resolution.TicketId && a.AssignedAtUtc <= x.Resolution.ResolvedAtUtc)
                     .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => a.SupersededAtUtc == null || a.SupersededAtUtc > x.Resolution.ResolvedAtUtc ? (Guid?)a.AssignedEmployeeId : null)
+                    .Select(a => a.IsCurrent || a.SupersededAtUtc == null || a.SupersededAtUtc > x.Resolution.ResolvedAtUtc ? (Guid?)a.AssignedEmployeeId : null)
                     .FirstOrDefault(),
                 HolderDepartmentId = dbContext.TicketAssignments
                     .Where(a => a.TicketId == x.Resolution.TicketId && a.AssignedAtUtc <= x.Resolution.ResolvedAtUtc)

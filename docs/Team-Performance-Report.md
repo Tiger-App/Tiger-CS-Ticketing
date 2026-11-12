@@ -158,12 +158,48 @@ assignment had already **ended** (reassigned-away is handled by "latest at or be
 queue or closed) by then, in which case nobody held it and the breach belongs to nobody. If a breach has no
 SLA period to read a deadline from, the recorded moment is used. Met cycles use the moment of the action.
 
+An assignment holds the ticket over the half-open interval **[AssignedAtUtc, SupersededAtUtc)**: a deadline
+exactly at an assignment's end belongs to the next holder (or nobody), and an assignment that is **current now** is
+never treated as ended, whatever its `SupersededAtUtc` says (the Call Center backlog *Rollback* script flips a retired
+row back to current with SQL and leaves any end time in place).
+
 Assignment end times come from `TicketAssignments.SupersededAtUtc` (migration
-`AddTicketAssignmentSupersededAt`), stamped by `TigerCsDbContext` on save for *every* code path that
-supersedes an assignment. **Historical data:** rows ended before the column existed have no end time. For
-those that were replaced, "latest at or before" is still exact; for those that were *released with no
-successor*, the release moment was never recorded and is not invented — they are treated as still held, i.e.
-as before. The column fills forward from deployment.
+`AddTicketAssignmentSupersededAt`), stamped by `TigerCsDbContext.SaveChanges` for **every** code path that ends an
+assignment, with the first value kept for good:
+
+| Path | How it ends the assignment | Covered |
+| --- | --- | --- |
+| Reassignment / manual assign / transfer-and-assign | `GetCurrentAsync()` → `MarkSuperseded()` → new row | yes |
+| Auto-assignment, round robin, rule, restore, Call Center return | same | yes |
+| Release (owner cleared: `ReleaseOwner`, owner-clearing `TransferToDepartment`, Collections queue) | `MarkSuperseded()` with no new row | yes |
+| Closure (system or person) | `ReleaseAssignmentOnClosureAsync` → `MarkSuperseded()` | yes |
+| Genesys hand-off / answer routing | `MarkSuperseded()` | yes |
+| Person-initiated "unassign" | no such endpoint exists; the only `Unassign` writer is the system's automatic release above | n/a |
+| One-off operational SQL scripts (`Execute_/Rollback_…CallCenterBacklogDistribution`, `Backfill_…ClosedTickets_ClearOwner`) | direct `UPDATE … IsCurrent` — **bypasses the hook** | no — see limitations |
+
+All of the C# paths take the row from `TicketAssignmentRepository.GetCurrentAsync` (a *tracked* entity) and call
+`MarkSuperseded`, so the hook sees the change; no code updates `TicketAssignments` with raw SQL or `ExecuteUpdate`.
+`MarkSuperseded(DateTime? atUtc)` and the hook only ever set a value when it is empty, so the first end time survives later
+calls and saves.
+
+### Historical limitations (read before trusting old periods)
+
+- **Releases before deployment have no end time.** For a row that was *replaced*, "latest assignment at or before the
+  deadline" is exact without any stored value (the successor's start is the end). For a row *released with no successor*
+  while the ticket was open, the moment was never recorded; it is **not** backfilled and the holder is treated as still
+  holding (the pre-existing behaviour). Closure releases cannot matter: no SLA deadline passes after closure.
+- **Not reconstructed on purpose.** Audit entries (`Unassign`, `ReturnToCallCenterQueue`, `CollectionsAutoAssignSkipped`)
+  record when an audit row was written, several can exist per ticket, their names are heterogeneous, and nothing ties one to
+  a specific assignment row — a guess would silently change who a breach belongs to.
+- **Operational SQL scripts do not stamp the column.** Running them after deployment leaves `SupersededAtUtc` NULL for the
+  rows they retire. For the backlog distribution the retired row always has a successor (exact); for the closed-ticket
+  clean-up it is irrelevant (closed). If a script is ever changed or added that releases owners, it should set
+  `SupersededAtUtc = <the moment>` itself.
+- Run `Diagnose_TigerCS_AssignmentEndTimes_ReadOnly.sql` (read-only) to see the real numbers: assignment rows by class
+  (current / stamped / replaced-exact / ended-on-closure / **released-end-unknown**), stale "current" rows on ownerless
+  tickets, and how many genuine breach events in a period sit on a holder row whose end is unknown.
+- A tiny window remains where an assignment's end is stamped with the server clock while its successor carries the
+  application's clock: both come from the same host clock, so the gap is a few milliseconds at most.
 
 The period still means "recorded in the period" for breaches and "action happened in the period" for Met.
 
@@ -179,6 +215,13 @@ The period still means "recorded in the period" for breaches and "action happene
 its totals row and the employee-details summary all call the same aggregation (`SlaCounts.Of`), and the
 details list is the same set of events enriched with the facts they were decided from (`GetSlaEventsAsync`).
 The employee details also split Breach Events into First Response and Resolution.
+
+**Why Evaluated is unique clock cycles, not history rows.** A cycle is (ticket, clock, deadline). Breach events are
+de-duplicated on exactly that key (a stray repeated history row for the same deadline counts once), the SLA engine writes
+one breach per key (the breach flag, the `IdempotencyRecords` row and its **unique index** make a repeated or concurrent run a
+no-op — a second worker's whole transaction is rejected), First Response is counted once per ticket (it is carried across
+periods and never restarted), and Resolution once per SLA period (a reopen starts a new cycle with its own deadline).
+A cycle is either Met (flag clear, action on time) or a Breach Event (flag set) — never both.
 
 **Impact on past numbers.** Wherever a breached ticket was answered later (or a first response was recorded
 on a ticket already Breached) in a later period, the old count included that ticket again; the corrected count
@@ -240,3 +283,19 @@ SLA Breach and Breach Events open the breach events, SLA Evaluated opens all cyc
 | Tests | `Tests/Reporting/TeamPerformanceReportTests.cs` and `TeamPerformanceSlaDetailsTests.cs` (SQLite, real SQL), `Tests/Reporting/Integration/TeamPerformanceEndpointsTests.cs` (authorization), `Tests/Web/TeamPerformanceRenderTests.cs` (Razor render) |
 
 The report is read-only: no state changes, so no audit entry is written.
+
+## Deployment
+
+One schema change: `TicketAssignments.SupersededAtUtc datetime2 NULL` (no data change, no backfill).
+
+- **The EF migration and the standalone script are alternatives, not two steps.** `AddTicketAssignmentSupersededAt.sql`
+  is exactly what EF generates for the migration (idempotent form), and both are guarded by the `__EFMigrationsHistory`
+  row `20261112071745_AddTicketAssignmentSupersededAt`. Whichever runs first records that row; the other then does
+  nothing. Use the script where `dotnet ef database update` is not run (as with the other `Add*.sql` scripts at the repository
+  root); use `database update` elsewhere.
+- Idempotent: running the script (or the migration) twice is a no-op. (It is guarded by the history row, not by a column
+  check — adding the column by hand without the history row would make it fail, like every other script here.)
+- **Order:** apply it **before** the new build starts. The new code selects the column; the old code simply ignores it, so
+  the old build keeps working against the migrated database (roll back by redeploying the old build; leave the column).
+- CI: `validate-migration` applies the migrations and the EF-generated idempotent script to a real SQL Server and pins the
+  exact column list of `TicketAssignments` (the new nullable column is part of that list).
