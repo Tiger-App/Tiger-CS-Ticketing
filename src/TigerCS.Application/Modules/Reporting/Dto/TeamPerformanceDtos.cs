@@ -53,7 +53,8 @@ public sealed record TeamPerformanceAppliedFiltersDto(
 /// <param name="EmployeeId">The employee (AspNetUsers.Id / Employees.EmployeeId).</param>
 /// <param name="DisplayName">The employee's display name.</param>
 /// <param name="Roles">The Identity roles the employee holds, alphabetical (empty when none).</param>
-/// <param name="Departments">The employee's department memberships, primary first.</param>
+/// <param name="Departments">The employee's department memberships (access), primary first. Unchanged; the report's Department column and filter use <paramref name="PrimaryDepartment"/>.</param>
+/// <param name="PrimaryDepartment">The department flagged <c>UserDepartmentAssignments.IsPrimary</c> for this employee; null when none is configured. Never inferred from the other memberships.</param>
 /// <param name="CurrentlyAssigned">Current state, not period-bound: tickets whose <c>CurrentOwnerEmployeeId</c> is this employee and whose status is not Closed.</param>
 /// <param name="TicketsWorked">Distinct tickets on which the employee performed at least one recorded action within the period (assignment to them, a status change, a note, a resolution, a workflow event, or a customer follow-up assigned to or completed by them). Measured from history, not from current ownership.</param>
 /// <param name="CompletedFollowUps">Customer follow-ups (<c>TicketAgentHandoffs</c>) assigned to the employee and completed within the period. Counts work items, not tickets.</param>
@@ -67,6 +68,7 @@ public sealed record TeamPerformanceRowDto(
     string DisplayName,
     IReadOnlyList<string> Roles,
     IReadOnlyList<TeamPerformanceDepartmentDto> Departments,
+    TeamPerformanceDepartmentDto? PrimaryDepartment,
     int CurrentlyAssigned,
     int TicketsWorked,
     int CompletedFollowUps,

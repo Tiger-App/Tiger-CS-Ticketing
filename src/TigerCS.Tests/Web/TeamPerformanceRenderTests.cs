@@ -75,6 +75,13 @@ public sealed class TeamPerformanceRenderTests : IDisposable
     }
 
     [Fact]
+    public void PrimaryDepartmentText_IsThePrimaryName_OrNotAssigned_NeverAnotherDepartment()
+    {
+        Assert.Equal("Not Assigned", TigerCsWeb::TigerCS.Web.Pages.Reports.TeamPerformanceModel.PrimaryDepartmentText(null));
+        Assert.Equal("Legal", TigerCsWeb::TigerCS.Web.Pages.Reports.TeamPerformanceModel.PrimaryDepartmentText(new TeamPerformanceDepartmentDto(1, "Legal", true)));
+    }
+
+    [Fact]
     public void NavItem_IsOfferedToTheCsManagerTierOnly()
     {
         static CurrentUser? User(params string[] roles) => CurrentUser.FromPrincipal(new ClaimsPrincipal(new ClaimsIdentity(
@@ -132,7 +139,10 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         Assert.Contains("<td class=\"cell-primary\">Cora Collector</td>", html, StringComparison.Ordinal);
         Assert.Contains("<td>Collections Officer, CS Supervisor</td>", html, StringComparison.Ordinal);
         Assert.Contains("<td>Collections</td>", html, StringComparison.Ordinal);
-        Assert.Contains("<td>Call Center, Customer Service</td>", html, StringComparison.Ordinal);
+        Assert.Contains("<th scope=\"col\">Primary Department</th>", html, StringComparison.Ordinal);
+        Assert.DoesNotContain("<th scope=\"col\">Departments</th>", html, StringComparison.Ordinal);
+        Assert.Contains("<td>Call Center</td>", html, StringComparison.Ordinal);                       // Bilal: primary only, not "Call Center, Customer Service"
+        Assert.DoesNotContain("<td>Call Center, Customer Service</td>", html, StringComparison.Ordinal);
         // SLA Breaches opens the SLA details page, carrying the period and filters; the other counts open the records panel.
         Assert.Contains($"href=\"/Reports/TeamPerformanceSla?employeeId={AminaId}&amp;status=Breached\"", html, StringComparison.Ordinal);
         Assert.Contains($"href=\"/Reports/TeamPerformance?employeeId={BilalId}&amp;metric=TicketsWorked\"", html, StringComparison.Ordinal);
@@ -323,11 +333,11 @@ public sealed class TeamPerformanceRenderTests : IDisposable
             TeamPerformanceRowDto[] all =
             [
                 new(AminaId, "Amina Agent", ["CS Agent"],
-                    [new TeamPerformanceDepartmentDto(2, "Customer Service", true)], 3, 9, 2, 1, 2, 5, 3, 60.0m),
+                    [new TeamPerformanceDepartmentDto(2, "Customer Service", true)], new TeamPerformanceDepartmentDto(2, "Customer Service", true), 3, 9, 2, 1, 2, 5, 3, 60.0m),
                 new(BilalId, "Bilal Caller", ["CS Agent"],
-                    [new TeamPerformanceDepartmentDto(4, "Call Center", true), new TeamPerformanceDepartmentDto(2, "Customer Service", false)], 4, 6, 5, 0, 0, 4, 4, 100.0m),
+                    [new TeamPerformanceDepartmentDto(4, "Call Center", true), new TeamPerformanceDepartmentDto(2, "Customer Service", false)], new TeamPerformanceDepartmentDto(4, "Call Center", true), 4, 6, 5, 0, 0, 4, 4, 100.0m),
                 new(CoraId, "Cora Collector", ["Collections Officer", "CS Supervisor"],
-                    [new TeamPerformanceDepartmentDto(3, "Collections", true)], 2, 3, 1, 0, 0, 0, 0, null),
+                    [new TeamPerformanceDepartmentDto(3, "Collections", true)], new TeamPerformanceDepartmentDto(3, "Collections", true), 2, 3, 1, 0, 0, 0, 0, null),
             ];
             var rows = all.Where(r => onlyEmployee is null || r.EmployeeId == onlyEmployee).ToList();
             return new TeamPerformanceReportDto(

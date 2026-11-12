@@ -117,7 +117,7 @@
                             <tr>
                                 <th scope="col">Employee</th>
                                 <th scope="col">Roles</th>
-                                <th scope="col">Departments</th>
+                                <th scope="col">Primary Department</th>
                                 <th scope="col" class="cell-num">Currently Assigned</th>
                                 <th scope="col" class="cell-num">Tickets Worked</th>
                                 <th scope="col" class="cell-num">Completed Follow-ups</th>
@@ -134,7 +134,7 @@
                                 <tr>
                                     <td class="cell-primary">@row.DisplayName</td>
                                     <td>@TeamPerformanceModel.RolesText(row.Roles)</td>
-                                    <td>@TeamPerformanceModel.DepartmentsText(row.Departments)</td>
+                                    <td>@TeamPerformanceModel.PrimaryDepartmentText(row.PrimaryDepartment)</td>
                                     <td class="cell-num"><a class="report-count" href="@Model.RecordsHref(row.EmployeeId, TeamPerformanceMetric.CurrentlyAssigned)" title="Open @row.DisplayName's currently assigned tickets">@row.CurrentlyAssigned</a></td>
                                     <td class="cell-num"><a class="report-count" href="@Model.RecordsHref(row.EmployeeId, TeamPerformanceMetric.TicketsWorked)" title="Open the tickets @row.DisplayName worked in the period">@row.TicketsWorked</a></td>
                                     <td class="cell-num"><a class="report-count" href="@Model.RecordsHref(row.EmployeeId, TeamPerformanceMetric.CompletedFollowUps)" title="Open the follow-ups @row.DisplayName completed in the period">@row.CompletedFollowUps</a></td>
@@ -272,7 +272,7 @@
             <div class="panel report-help__body">
                 <dl class="report-help__list">
                     <dt>Who is listed</dt>
-                    <dd>Every active employee in every department — Customer Service, Call Center, Collections and any other department configured in the system. One row per employee, however many roles or departments they hold (all of them are shown); employees with no activity in the period are still listed. Integration service accounts are not people and are not listed.</dd>
+                    <dd>Every active employee in every department — Customer Service, Call Center, Collections and any other department configured in the system. One row per employee, however many roles or departments they hold; the Department column and filter use the employee\'s Primary Department only ("Not Assigned" when none is configured); employees with no activity in the period are still listed. Integration service accounts are not people and are not listed.</dd>
                     <dt>Period</dt>
                     <dd>UTC calendar days, inclusive. With no dates chosen, the last 30 days including today.</dd>
                     <dt>Currently Assigned</dt>

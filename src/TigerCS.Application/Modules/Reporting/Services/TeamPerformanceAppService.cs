@@ -95,6 +95,7 @@ public sealed class TeamPerformanceAppService(
                 e.DisplayName,
                 e.Roles,
                 e.Departments.Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, d.IsPrimary)).ToList(),
+                PrimaryDepartmentOf(e),
                 metrics.CurrentlyAssigned.GetValueOrDefault(e.EmployeeId),
                 metrics.TicketsWorked.GetValueOrDefault(e.EmployeeId),
                 metrics.CompletedFollowUps.GetValueOrDefault(e.EmployeeId),
@@ -250,7 +251,17 @@ public sealed class TeamPerformanceAppService(
         employees
             .Where(e => employeeId is not { } id || e.EmployeeId == id)
             .Where(e => role is null || e.Roles.Contains(role, StringComparer.OrdinalIgnoreCase))
-            .Where(e => departmentId is not { } department || e.Departments.Any(d => d.DepartmentId == department));
+            .Where(e => departmentId is not { } department || PrimaryDepartmentOf(e)?.DepartmentId == department);
+
+    /// <summary>
+    /// The employee's Primary Department: the membership flagged <c>IsPrimary</c> in <c>UserDepartmentAssignments</c> (at most one per employee,
+    /// enforced by a unique filtered index). Null when none is configured — never the first of the other memberships. The row's Department
+    /// column and the Department filter both use this, so an employee with access to several departments is listed once, under their primary.
+    /// </summary>
+    internal static TeamPerformanceDepartmentDto? PrimaryDepartmentOf(TeamPerformanceEmployeeRow employee) =>
+        employee.Departments.Where(d => d.IsPrimary)
+            .Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, true))
+            .FirstOrDefault();
 
     private static List<string> RoleOptions(IEnumerable<TeamPerformanceEmployeeRow> employees) =>
         employees.SelectMany(e => e.Roles).Distinct(StringComparer.OrdinalIgnoreCase)
