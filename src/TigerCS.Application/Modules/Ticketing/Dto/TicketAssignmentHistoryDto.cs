@@ -6,4 +6,4 @@ public sealed record TicketAssignmentHistoryItemDto(
     Guid? PreviousEmployeeId, string? PreviousEmployeeName, Guid NewEmployeeId, string NewEmployeeName,
     int DepartmentId, string DepartmentName,
     string? TowerCode, string? TowerName, string? UnitNumber,
-    Guid? ChangedByEmployeeId, string ChangedByName, string? Reason);
+    Guid? ChangedByEmployeeId, string ChangedByName, string? Reason, string? Source = null, DateTime? SourceEventAtUtc = null, string? GenesysConversationId = null);

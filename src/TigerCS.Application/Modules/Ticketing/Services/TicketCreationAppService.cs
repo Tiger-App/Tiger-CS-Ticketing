@@ -470,7 +470,10 @@ public sealed class TicketCreationAppService(
             {
                 await autoAssignmentService.ApplyAnsweringAgentAsync(
                     ticket, answeringAgent, "Inquiry", now, correlationId, callerEmployeeId,
-                    routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+                    routeToCallCenterIfAgentUnavailable: true, cancellationToken,
+                    genesysEvent: request.GenesysContext is { } answeredContext
+                        ? new GenesysAnswerEvent(answeredContext.InteractionStartedAtUtc, answeredContext.ConversationId, AllowOwnerTransfer: false)
+                        : null);
             }
             else if (request.GenesysContext is null
                 && callerRoles is not null
@@ -530,6 +533,14 @@ public sealed class TicketCreationAppService(
                 await autoAssignmentService.ApplyRoundRobinFallbackAsync(
                     ticket, automatic, AutoAssignmentTrigger.TicketCreated, now, correlationId, cancellationToken);
             }
+        }
+
+        // A Genesys conversation no human had answered when the ticket was created was handled by the AI Agent: it is the initial assignee in the
+        // assignment history (the ticket itself keeps no owner). Atomic with the ticket; a later human connect replaces it as a call transfer.
+        if (request.GenesysContext is { } aiContext && answeringAgent is null)
+        {
+            await autoAssignmentService.RecordAiAgentAssignmentAsync(
+                ticket, callerEmployeeId, aiContext.ConversationId, aiContext.InteractionStartedAtUtc, now, cancellationToken);
         }
 
         // Backlog S-08's corrected acceptance criterion: ticket creation

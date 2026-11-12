@@ -538,39 +538,58 @@ public sealed class DashboardUiTests
     }
 
     // ---------------------------------------------------------------
-    // Closure KPI cards (Reviewed, Not Reviewed, Closed by AI, Closed by Agent)
+    // Closed in Selected Period (Ticket Reviews, Closed By)
     // ---------------------------------------------------------------
 
+    private static string[] ClosureRowValues(ClosureSummary c) => c.Groups.SelectMany(g => g.Rows).Select(r => r.Label + "=" + r.Value).ToArray();
+
     [Fact]
-    public async Task ClosureCards_ShowTheApiCounts_InOrder_BeneathTheSixOriginalCards()
+    public async Task ClosureSection_ShowsTheTotalOnceInTheHeading_AndTwoGroupsWithTheApiValues()
     {
-        var overview = Overview(kpis: new DashboardKpisDto(12, 3, 4, 1, 2, 5, ReviewedTickets: 7, NotReviewedTickets: 9, ClosedByAiTickets: 6, ClosedByAgentTickets: 10));
+        var overview = Overview(kpis: new DashboardKpisDto(12, 3, 4, 1, 2, 5, ReviewedTickets: 1, NotReviewedTickets: 115, ClosedByAiTickets: 0, ClosedByAgentTickets: 116, AverageReviewRating: 1.0));
         var (model, _) = CreateModel((_, _) => FakeApiHandler.JsonResponse(HttpStatusCode.OK, overview));
 
         await model.OnGetAsync(null, null, null, null, null, null, null, null, CancellationToken.None);
 
-        Assert.Equal(["Reviewed Tickets", "Not Reviewed", "Closed by AI", "Closed by Agent"], model.ClosureCards.Select(c => c.Label).ToArray());
-        Assert.Equal([7, 9, 6, 10], model.ClosureCards.Select(c => c.Value).ToArray());
-        // The original six are untouched.
-        Assert.Equal(6, model.Cards.Count);
+        var closure = model.Closure!;
+        Assert.Equal("116 Tickets Closed in Selected Period", closure.Heading);
+        Assert.Equal(["Ticket Reviews", "Closed By"], closure.Groups.Select(g => g.Title).ToArray());
+        Assert.Equal(
+            ["Reviewed=1", "Not Reviewed=115", "Average Review Score=1.0 / 5", "Human Agent=116", "AI Agent=0"],
+            ClosureRowValues(closure));
+        Assert.Equal(6, model.Cards.Count); // the six operational cards are untouched
     }
 
     [Theory]
-    [InlineData(4.5, "· Average Rating 4.5/5")]
-    [InlineData(4.0, "· Average Rating 4.0/5")]
-    [InlineData(null, "· Average Rating —")]
-    public async Task ReviewedCard_ShowsTheCountWithTheAverageRatingOutOfFive_OrADashWhenNothingIsEvaluated(double? average, string expected)
+    [InlineData(null, "—")]
+    [InlineData(4.5, "4.5 / 5")]
+    [InlineData(4.0, "4.0 / 5")]
+    public void ClosureSection_AverageReviewScore_IsOnItsOwnRow_OrADashWhenNothingIsReviewed(double? average, string expected)
     {
-        var reviewed = average is null ? 0 : 8;
-        var overview = Overview(kpis: new DashboardKpisDto(12, 3, 4, 1, 2, 5, ReviewedTickets: reviewed, NotReviewedTickets: 9, AverageReviewRating: average));
-        var (model, _) = CreateModel((_, _) => FakeApiHandler.JsonResponse(HttpStatusCode.OK, overview));
+        var overview = Overview(kpis: new DashboardKpisDto(0, 0, 0, 0, 0, 0, ReviewedTickets: average is null ? 0 : 8, NotReviewedTickets: 2, AverageReviewRating: average));
 
-        await model.OnGetAsync(null, null, null, null, null, null, null, null, CancellationToken.None);
+        var closure = DashboardModel.BuildClosureSummary(overview);
 
-        var card = model.ClosureCards.Single(c => c.Label == "Reviewed Tickets");
-        Assert.Equal(reviewed, card.Value);
-        Assert.Equal(expected, card.Detail);
-        Assert.Null(model.ClosureCards.Single(c => c.Label == "Not Reviewed").Detail);
+        var score = closure.Groups[0].Rows.Single(r => r.Label == "Average Review Score");
+        Assert.Equal(expected, score.Value);
+        Assert.Null(score.Href); // a figure, not a drill-down
+        Assert.Equal(["Reviewed", "Not Reviewed", "Average Review Score"], closure.Groups[0].Rows.Select(r => r.Label).ToArray());
+    }
+
+    [Fact]
+    public void ClosureSection_HeadingIsSingularForOneTicket_AndRowsKeepTheirDrilldownLinks()
+    {
+        var overview = Overview(kpis: new DashboardKpisDto(0, 0, 0, 0, 0, 0, ReviewedTickets: 1, NotReviewedTickets: 0, ClosedByAgentTickets: 1));
+
+        var closure = DashboardModel.BuildClosureSummary(overview);
+
+        Assert.Equal("1 Ticket Closed in Selected Period", closure.Heading);
+        var hrefs = closure.Groups.SelectMany(g => g.Rows).Where(r => r.Href is not null).ToDictionary(r => r.Label, r => r.Href!);
+        var f = overview.Filters;
+        Assert.Equal(DashboardLinks.Reviewed(f), hrefs["Reviewed"]);
+        Assert.Equal(DashboardLinks.NotReviewed(f), hrefs["Not Reviewed"]);
+        Assert.Equal(DashboardLinks.ClosedByAgent(f), hrefs["Human Agent"]);
+        Assert.Equal(DashboardLinks.ClosedByAi(f), hrefs["AI Agent"]);
     }
 
     [Fact]
@@ -627,19 +646,21 @@ public sealed class DashboardUiTests
 
         await model.OnGetAsync(null, null, null, null, null, null, null, null, CancellationToken.None);
 
-        Assert.Contains("test-mode reviews", model.ClosureCards.Single(c => c.Label == "Reviewed Tickets").Hint);
-        Assert.Contains("test-mode reviews", model.ClosureCards.Single(c => c.Label == "Not Reviewed").Hint);
-        Assert.DoesNotContain("test-mode", model.ClosureCards.Single(c => c.Label == "Closed by AI").Hint);
+        var rows = model.Closure!.Groups.SelectMany(g => g.Rows).ToDictionary(r => r.Label);
+        Assert.Contains("test-mode reviews", rows["Reviewed"].Hint);
+        Assert.Contains("test-mode reviews", rows["Not Reviewed"].Hint);
+        Assert.Contains("test-mode reviews", rows["Average Review Score"].Hint);
+        Assert.DoesNotContain("test-mode", rows["AI Agent"].Hint);
     }
 
     [Fact]
-    public void TheDashboardView_RendersTheClosureCards_AsClickableCards_InTheSameCardMarkup()
+    public void TheDashboardView_RendersTheClosureSection_WithLinkedCountsAndAnUnlinkedScore()
     {
         var view = View("Dashboard.cshtml");
 
-        Assert.Contains("Model.ClosureCards", view);
-        Assert.Contains("kpi-grid--four", view);
-        Assert.Contains("class=\"kpi-card kpi-card--icon tone-@KpiTone(card.Label)\" href=\"@card.Href\"", view);
+        Assert.Contains("Model.Closure", view);
+        Assert.Contains("dash-closure__groups", view);
+        Assert.Contains("class=\"dash-closure__link\" href=\"@row.Href\"", view);
     }
 
     [Fact]

@@ -338,7 +338,8 @@ public sealed class GenesysTicketUpdateAppService(
         {
             var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
                 callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken,
-                firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, answeringAgentId));
+                firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, answeringAgentId),
+                connectedAtUtc: request.Routing?.ConnectedAtUtc, allowOwnerTransfer: options.ReassignOnTransfer && !interaction.IsEnded);   // a transfer is only meaningful while the call is live
             if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
             {
                 return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);

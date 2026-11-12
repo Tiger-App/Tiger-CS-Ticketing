@@ -9,6 +9,19 @@ public enum TicketAssignmentKind : byte
     Manual = 2
 }
 
+/// <summary>Where a history entry came from, when it is a Genesys-driven assignment. Null on entries written by Collections routing and by people.</summary>
+public enum TicketAssignmentSource : byte
+{
+    /// <summary>The AI Agent (the Genesys integration service account) handled the conversation first. History only: the ticket keeps no owner.</summary>
+    GenesysAiAgent = 1,
+
+    /// <summary>A human agent answered a call directly, with no previous assignee.</summary>
+    GenesysDirectCall = 2,
+
+    /// <summary>Genesys connected a different human agent: a call transfer (AI to human, or human to human).</summary>
+    GenesysCallTransfer = 3
+}
+
 /// <summary>
 /// Append-only record of one assignment event of a ticket in a department that keeps this richer history (Collections): previous and new assignee, department,
 /// the tower and unit the decision was based on (when known), whether it was automatic or manual, who did it and why. <c>TicketAssignments</c> stays the
@@ -32,7 +45,30 @@ public class TicketAssignmentHistoryEntry
     public DateTime ChangedAtUtc { get; private set; }
     public string? Reason { get; private set; }
 
+    /// <summary>Set only for Genesys-driven entries (see <see cref="TicketAssignmentSource"/>).</summary>
+    public TicketAssignmentSource? Source { get; private set; }
+
+    /// <summary>When the Genesys event happened as Genesys reports it (connected time); used to ignore older, out-of-order events. Not the arrival time, which is <see cref="ChangedAtUtc"/>.</summary>
+    public DateTime? SourceEventAtUtc { get; private set; }
+
+    public string? GenesysConversationId { get; private set; }
+
     private TicketAssignmentHistoryEntry() { }
+
+    /// <summary>A Genesys-driven entry. <paramref name="previousEmployeeId"/> is the AI Agent account for an AI-to-human transfer.</summary>
+    public static TicketAssignmentHistoryEntry ForGenesys(
+        long ticketId, int departmentId, Guid? previousEmployeeId, Guid newEmployeeId, TicketAssignmentSource source, Guid? changedByEmployeeId,
+        DateTime changedAtUtc, DateTime? sourceEventAtUtc, string? genesysConversationId, string? reason)
+    {
+        var entry = new TicketAssignmentHistoryEntry(
+            ticketId, departmentId, previousEmployeeId, newEmployeeId, TicketAssignmentKind.Automatic, changedByEmployeeId, changedAtUtc, reason)
+        {
+            Source = source,
+            SourceEventAtUtc = sourceEventAtUtc,
+            GenesysConversationId = string.IsNullOrWhiteSpace(genesysConversationId) ? null : genesysConversationId.Trim()
+        };
+        return entry;
+    }
 
     public TicketAssignmentHistoryEntry(
         long ticketId, int departmentId, Guid? previousEmployeeId, Guid newEmployeeId, TicketAssignmentKind kind, Guid? changedByEmployeeId,

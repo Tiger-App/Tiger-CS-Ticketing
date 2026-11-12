@@ -96,6 +96,14 @@ public sealed class GenesysOptions
     public bool AssignOnAnswer { get; set; } = true;
 
     /// <summary>
+    /// <b>Call transfers move the owner</b> (<c>Genesys:ReassignOnTransfer</c>, default <b>true</b>): when Genesys reports a DIFFERENT human agent as
+    /// connected (<c>routing.agentId</c>) and the current owner is one Genesys itself set, the same ticket is reassigned to the agent who actually
+    /// answered, with a Genesys-call-transfer entry in the assignment history. A person's assignment is never moved. Set <c>false</c> to restore the
+    /// earlier behaviour (the second agent is only a handler and a call-transfer event) without redeploying. Needs <see cref="AssignOnAnswer"/>.
+    /// </summary>
+    public bool ReassignOnTransfer { get; set; } = true;
+
+    /// <summary>
     /// <b>E-mail-form HumanAgent <c>senderId</c></b> (<c>Genesys:AllowEmailSenderIdFallback</c>, default <b>true</b>). The contract says a transcript
     /// <c>senderId</c> is the agent's Genesys User ID (GUID), and that is always tried first. Genesys has been observed to send the agent's
     /// e-mail there instead (ticket 225: <c>callcenter5@...</c>). With this on, an e-mail-form id resolves to a Ticketing user only when it
