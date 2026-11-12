@@ -347,6 +347,34 @@ public sealed class AssignmentBasedVisibilityEndpointsTests(TigerCsApiFactory fa
     // =====================================================================
 
     [Theory]
+    [InlineData("")]
+    [InlineData("&excludeClosed=true")]
+    [InlineData("&excludeClosed=true&ticketStatus=Open&priorityId=2&verificationStatus=Verified&sortBy=priority&sortDir=asc&search=AC")]
+    [InlineData("&inDepartmentQueue=true&slaBreached=true&unclassified=true&escalated=true&createdByMe=true")]
+    [InlineData("&closureCategory=Reviewed&closedFrom=2026-01-01&closedTo=2026-12-31&createdFrom=2026-01-01&createdTo=2026-12-31&channelId=1")]
+    public async Task SystemAdministrator_EveryTicketsPageQueryShape_LoadsWithoutError_AcrossDepartments_WithDepartmentAndAssigneeFilters(string extra)
+    {
+        var d = await DepartmentsAsync();
+        var (_, employeeId) = await ClientAsync(Roles.DepartmentEmployee, d.Facilities);
+        var assigned = await TicketAsync(d.Facilities, employeeId);
+        var other = await TicketAsync(d.Finance);
+        var (admin, _) = await ClientAsync(Roles.SystemAdministrator);   // a member of no department
+
+        // The page's own request shape (pageSize 20, page 1) never errors, with or without the new Department / Assigned To filters.
+        var plain = await admin.GetAsync("/api/tickets?page=1&pageSize=20" + extra);
+        Assert.Equal(HttpStatusCode.OK, plain.StatusCode);
+
+        var byDepartment = await IdsAsync(admin, $"&departmentId={d.Facilities}");
+        Assert.Contains(assigned, byDepartment);
+        Assert.DoesNotContain(other, byDepartment);
+
+        var byDepartmentAndOwner = await IdsAsync(admin, $"&departmentId={d.Facilities}&ownerEmployeeId={employeeId}");
+        Assert.Equal([assigned], byDepartmentAndOwner);
+        Assert.Empty(await IdsAsync(admin, $"&departmentId={d.Finance}&ownerEmployeeId={employeeId}"));
+        Assert.Contains(other, await IdsAsync(admin, "&inDepartmentQueue=true"));
+    }
+
+    [Theory]
     [InlineData(Roles.CsManager)]
     [InlineData(Roles.SystemAdministrator)]
     [InlineData(Roles.CsSupervisor)]
