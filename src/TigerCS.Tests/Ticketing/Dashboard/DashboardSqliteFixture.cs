@@ -438,7 +438,7 @@ public sealed class DashboardSqliteFixture : IDisposable
     }
 
     /// <summary>A customer review for a ticket cycle (defaults to the ticket's current one), through the real invitation → review path.</summary>
-    public TicketReview AddReview(TigerCsDbContext context, Ticket ticket, bool isTest = false, int? reopenCycle = null, bool submit = true)
+    public TicketReview AddReview(TigerCsDbContext context, Ticket ticket, bool isTest = false, int? reopenCycle = null, bool submit = true, int rating = 5)
     {
         var invitation = new TicketReviewInvitation(
             ticket.TicketId, reopenCycle ?? ticket.ReopenCount, RandomNumberGenerator.GetBytes(TicketReviewInvitation.TokenHashLength),
@@ -446,7 +446,7 @@ public sealed class DashboardSqliteFixture : IDisposable
         context.TicketReviewInvitations.Add(invitation);
         context.SaveChanges();
 
-        var review = new TicketReview(invitation, 5, "Great", Now.AddHours(-1));
+        var review = new TicketReview(invitation, rating, "Great", Now.AddHours(-1));
         if (submit)
         {
             context.TicketReviews.Add(review);
