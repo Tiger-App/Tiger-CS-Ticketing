@@ -71,6 +71,7 @@ public sealed class GenesysServiceFixture
     public FakeTasleehGateway Tasleeh { get; } = new();
     public FakeUserDepartmentAssignmentRepository DepartmentAssignments { get; } = new() { EveryUserIsResponsible = true };
     public FakeTicketAssignmentRepository TicketAssignments { get; } = new();
+    public TigerCS.Tests.Collections.FakeTicketAssignmentHistoryRepository AssignmentHistory { get; } = new();
 
     // Workflow configuration shared by every service below, so a test that
     // seeds a request type, its published workflow, its assignment rule or
@@ -228,9 +229,9 @@ public sealed class GenesysServiceFixture
             ? new TicketAutoAssignmentService(
                 AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, Rotation, Departments,
                 roleReader: Accounts, accountManager: Accounts, serviceIdentities: ServiceIdentities, workflowEventRepository: WorkflowEvents,
-                ticketNoteRepository: TicketNotes, outboxWriter: outbox)
+                ticketNoteRepository: TicketNotes, outboxWriter: outbox, assignmentHistoryRepository: AssignmentHistory)
             : new TicketAutoAssignmentService(
-                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, outboxWriter: outbox);
+                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, outboxWriter: outbox, assignmentHistoryRepository: AssignmentHistory);
         AutoAssignment = autoAssignment;
 
         DefaultClassification = new DefaultClassificationService(

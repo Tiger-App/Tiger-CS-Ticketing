@@ -37,6 +37,30 @@ A fallback owner is **never** recorded as a Genesys handler; when the real agent
 
 Logs carry the opaque Genesys User ID only — no names, e-mails, tokens or secrets.
 
+## 3a. AI Agent assignment and call transfers (supersedes the "owner stays A" rule in §4 and the A→B checklist line in §8)
+
+**AI Agent as assignee — history only.** The AI Agent is the Genesys integration service account. It is *not* an owner: an AI ticket keeps `CurrentOwnerEmployeeId = null`
+(that is how round robin, AI auto-close, the reconciler, the dashboard "queue" count and Team Performance recognise AI handling). Instead, a Genesys conversation no human had
+answered at creation gets one `TicketAssignmentHistory` row: `Source = GenesysAiAgent`, `NewEmployeeId` = the integration account, written in the ticket-creation transaction
+(redelivery adds nothing). `Ticket.CreatedByEmployeeId` and the audit trail are never touched.
+
+**Who answers owns it, every time.** `routing.agentId` (connected — never ringing/offered) now moves the *same* ticket when:
+the agent maps via `AspNetUsers.GenesysUserId` and is eligible, the call is still live, and the current owner was set by Genesys itself (the answering agent's own assignment,
+mirrored by the latest Genesys history row) — or there is no owner / only an automatic pre-assignment. Each move writes a `TicketAssignments` row (old one superseded) and a history row:
+`Source = GenesysCallTransfer`, previous = owner being replaced (or the AI Agent), new = the answering agent, `ChangedAtUtc` = assignment time, `SourceEventAtUtc` = Genesys `connectedAtUtc`,
+reason "Genesys call transfer…". A human answering a phone call directly is `Source = GenesysDirectCall`. AI → A → B → C records every step.
+
+**Never moved:** an owner a person set (manual/supervisor assignment, Take Ownership — even to the same person), a ticket a person transferred out, closed/resolved tickets, a call that already ended,
+and an ineligible/unmapped next agent (flagged as before, current owner kept). Legacy tickets with no Genesys history are treated as person-owned.
+
+**Same conversation only.** Once Genesys has assigned a ticket for a conversation, a connected-agent event from a different conversation changes nothing. The Original Human Agent is set once (first eligible agent to take the ticket on a new-workflow ticket), survives later transfers and is what a return to the Call Center goes back to; legacy tickets are never given one.
+
+**Ordering.** An event whose `connectedAtUtc` is not newer than the last human Genesys assignment is ignored (stale/duplicate); the same agent again writes nothing. Without `connectedAtUtc` arrival time is used.
+
+**Rollback.** `Genesys:ReassignOnTransfer=false` (default `true`) restores "second agent is only a handler + `GenesysCallTransferred` event". Schema: migration `AddGenesysAssignmentHistorySource` (3 nullable columns; script `AddGenesysAssignmentHistorySource.sql`).
+
+**Unchanged and intentional:** an AI conversation that *ends unresolved* is still routed to a human (§5); only an AI-resolved/closed conversation stays AI-only.
+
 ## 4. Transfers — an integration gap, deliberately not guessed
 
 Genesys delivers **no transfer state**. `routing.agentId` says "agent X is connected"; it does not say that agent A *left* (blind/warm transfer) or *stayed* (consultation, conference), nor whether a transfer was offered, accepted, failed or cancelled. With only that, "A→B" and "A consults B" are identical. TigerCS therefore:

@@ -3199,6 +3199,10 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<int>("DepartmentId")
                         .HasColumnType("int");
 
+                    b.Property<string>("GenesysConversationId")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
                     b.Property<byte>("Kind")
                         .HasColumnType("tinyint");
 
@@ -3211,6 +3215,12 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<string>("Reason")
                         .HasMaxLength(500)
                         .HasColumnType("nvarchar(500)");
+
+                    b.Property<byte?>("Source")
+                        .HasColumnType("tinyint");
+
+                    b.Property<DateTime?>("SourceEventAtUtc")
+                        .HasColumnType("datetime2");
 
                     b.Property<long>("TicketId")
                         .HasColumnType("bigint");

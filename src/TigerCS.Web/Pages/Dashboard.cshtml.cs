@@ -10,6 +10,20 @@ namespace TigerCS.Web.Pages;
 /// <summary>One KPI card on the Dashboard. <see cref="Href"/> is the drill-down into the existing ticket queue; emphasis keys map to the fixed palette (critical for breach, gold for attention).</summary>
 public sealed record KpiCard(string Label, int Value, string? Emphasis = null, string? Href = null, string? Hint = null, string? Detail = null);
 
+/// <summary>One line of the Closed in Selected Period section: <see cref="Href"/> is the drill-down into the ticket list (null for the average score, which is a figure, not a list).</summary>
+public sealed record ClosureRow(string Label, string Value, string Key, string? Href = null, string? Hint = null);
+
+/// <summary>A titled group of <see cref="ClosureRow"/>s ("Ticket Reviews", "Closed By").</summary>
+public sealed record ClosureGroup(string Title, IReadOnlyList<ClosureRow> Rows);
+
+/// <summary>The Closed in Selected Period section: one total in the heading and two compact groups beneath it.</summary>
+public sealed record ClosureSummary(int Total, IReadOnlyList<ClosureGroup> Groups)
+{
+    public string Heading => Total == 1
+        ? "1 Ticket Closed in Selected Period"
+        : Total.ToString("N0", CultureInfo.InvariantCulture) + " Tickets Closed in Selected Period";
+}
+
 /// <summary>One bar row of a breakdown card: label left, bar centre, count and percentage right. <see cref="Href"/> is null for an informational row (a value not recorded on the ticket), which is not a drill-down.</summary>
 public sealed record DashboardBarRow(string Label, int Count, double Percentage, string? Href, string? Key = null, string? Code = null)
 {
@@ -80,8 +94,8 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
     public ApiOutcome Outcome { get; private set; }
     public IReadOnlyList<KpiCard> Cards { get; private set; } = [];
 
-    /// <summary>The four closure cards (Reviewed, Not Reviewed, Closed by AI, Closed by Agent), shown as a second row beneath <see cref="Cards"/>.</summary>
-    public IReadOnlyList<KpiCard> ClosureCards { get; private set; } = [];
+    /// <summary>The Closed in Selected Period section (total, Ticket Reviews, Closed By), shown beneath <see cref="Cards"/>.</summary>
+    public ClosureSummary? Closure { get; private set; }
     public IReadOnlyList<DashboardBarCard> BreakdownCards { get; private set; } = [];
 
     /// <summary>True when the user narrowed anything beyond the defaults — the filter bar then offers "Clear".</summary>
@@ -126,7 +140,7 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
 
         Overview = result.Value;
         Cards = BuildCards(Overview, Viewer);
-        ClosureCards = BuildClosureCards(Overview);
+        Closure = BuildClosureSummary(Overview);
         BreakdownCards = BuildBreakdownCards(Overview);
     }
 
@@ -152,28 +166,35 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
     }
 
     /// <summary>
-    /// The four closure KPI cards. Unlike the six above they are not
-    /// current-state: they always count Closed tickets, by latest closure date within the
-    /// dashboard's date range, honouring every other dashboard filter except status, and each links to
-    /// the Tickets list filtered to the same category.
+    /// The Closed in Selected Period section. Unlike the six cards above it is not current-state: it always counts Closed tickets, by latest
+    /// closure date within the dashboard's date range, honouring every other dashboard filter except status. The total is Reviewed + Not
+    /// Reviewed (every scoped closed ticket); each count links to the Tickets list for the same category, period and scope. The average
+    /// score is over exactly the Reviewed tickets, on the review's own 1-5 scale.
     /// </summary>
-    public static IReadOnlyList<KpiCard> BuildClosureCards(DashboardOverviewDto o)
+    public static ClosureSummary BuildClosureSummary(DashboardOverviewDto o)
     {
         var f = o.Filters;
         var k = o.Kpis;
-        // In test mode the review cards evaluate Test-mode reviews (UAT); say so.
+        // In test mode the review rows evaluate Test-mode reviews (UAT); say so.
         var kind = k.ReviewsAreTestMode ? " (test-mode reviews)" : "";
-        return
-        [
-            new KpiCard("Reviewed Tickets", k.ReviewedTickets, null, DashboardLinks.Reviewed(f), "Closed tickets with customer feedback submitted" + kind,
-                // Same tickets, period and scope as the count; the scale's maximum is the review's own.
-                "· Average Rating " + (k.AverageReviewRating is { } average
-                    ? average.ToString("0.0", CultureInfo.InvariantCulture) + "/" + TigerCS.Domain.Modules.CustomerReviews.TicketReview.MaxRating.ToString(CultureInfo.InvariantCulture)
-                    : "—")),
-            new KpiCard("Not Reviewed", k.NotReviewedTickets, null, DashboardLinks.NotReviewed(f), "Closed tickets without customer feedback" + kind),
-            new KpiCard("Closed by AI", k.ClosedByAiTickets, null, DashboardLinks.ClosedByAi(f), "Closed tickets whose closure was recorded as AI"),
-            new KpiCard("Closed by Agent", k.ClosedByAgentTickets, null, DashboardLinks.ClosedByAgent(f), "Closed tickets closed by a person")
-        ];
+        var score = k.AverageReviewRating is { } average
+            ? average.ToString("0.0", CultureInfo.InvariantCulture) + " / " + TigerCS.Domain.Modules.CustomerReviews.TicketReview.MaxRating.ToString(CultureInfo.InvariantCulture)
+            : "—";
+        return new ClosureSummary(
+            k.ReviewedTickets + k.NotReviewedTickets,
+            [
+                new ClosureGroup("Ticket Reviews",
+                [
+                    new ClosureRow("Reviewed", k.ReviewedTickets.ToString(CultureInfo.InvariantCulture), "reviewed", DashboardLinks.Reviewed(f), "Closed tickets with a customer review submitted" + kind),
+                    new ClosureRow("Not Reviewed", k.NotReviewedTickets.ToString(CultureInfo.InvariantCulture), "notreviewed", DashboardLinks.NotReviewed(f), "Closed tickets without a customer review" + kind),
+                    new ClosureRow("Average Review Score", score, "score", null, "Mean review score of the Reviewed tickets" + kind)
+                ]),
+                new ClosureGroup("Closed By",
+                [
+                    new ClosureRow("Human Agent", k.ClosedByAgentTickets.ToString(CultureInfo.InvariantCulture), "agent", DashboardLinks.ClosedByAgent(f), "Closed tickets closed by a person"),
+                    new ClosureRow("AI Agent", k.ClosedByAiTickets.ToString(CultureInfo.InvariantCulture), "ai", DashboardLinks.ClosedByAi(f), "Closed tickets whose closure was recorded as AI")
+                ])
+            ]);
     }
 
     /// <summary>The six breakdown cards in the approved layout order: Channel, Request Type, Status / Department, Backlog Ageing, Priority.</summary>

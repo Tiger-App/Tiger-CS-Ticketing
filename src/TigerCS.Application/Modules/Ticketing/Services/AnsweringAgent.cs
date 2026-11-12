@@ -78,3 +78,10 @@ public sealed record AnswerAssignmentResult(
     AnsweringAgentIssue Issue = AnsweringAgentIssue.None,
     string? Detail = null,
     bool Wrote = false);
+
+/// <summary>
+/// What the Genesys event that reported the agent as connected says about itself. <paramref name="EventAtUtc"/> is when the agent connected as
+/// Genesys reports it (null: arrival time), used to ignore older, out-of-order events. <paramref name="AllowOwnerTransfer"/> lets an agent Genesys
+/// connects LATER take over from an owner Genesys itself set (a call transfer); a person's ownership is never moved either way.
+/// </summary>
+public sealed record GenesysAnswerEvent(DateTime? EventAtUtc, string? ConversationId, bool AllowOwnerTransfer);

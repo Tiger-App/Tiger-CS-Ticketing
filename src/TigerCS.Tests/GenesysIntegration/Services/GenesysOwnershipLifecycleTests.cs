@@ -21,7 +21,7 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// connected; a phone inquiry's <c>agentId</c>; a mapped agent's <c>HumanAgent</c> transcript line), (3) the existing eligible CS Agent,
 /// (4) the shared sequential round robin. What Genesys does NOT deliver today - a transfer's offered / accepted / failed / cancelled state and
 /// whether the sender stays on the call (consult, conference) - is never guessed: a second connected agent is recorded as a handler and a visible
-/// call-transfer event, and the owner only changes through a person (Assign / Transfer) until Genesys sends that state.
+/// call-transfer event; the agent Genesys connects next takes over only from an owner Genesys itself set, and a person's assignment is never moved.
 /// </summary>
 public class GenesysOwnershipLifecycleTests
 {
@@ -238,10 +238,9 @@ public class GenesysOwnershipLifecycleTests
     }
 
     [Fact]
-    public async Task AnotherAgentConnecting_IsRecordedAsAHandlerAndATransferEvent_ButTheOwnerIsNotGuessed()
+    public async Task AnotherAgentConnecting_IsRecordedAsAHandlerAndATransferEvent_AndTakesOverFromAnOwnerGenesysSet()
     {
-        // Genesys sends only "agent X connected". It does not say whether the sender left (blind / warm transfer) or stayed (consult / conference),
-        // so TigerCS cannot know the final owner. It records everything and leaves the owner to a person - see docs for the contract needed.
+        // The agent who ACTUALLY answers after a transfer owns the same ticket (Genesys:ReassignOnTransfer, default on); the earlier owner stays a handler.
         var w = NewWorld();
         var chat = await ChatAsync(w, "c-xfer-accepted");
         var (a, b) = (w.Agents[0], w.Agents[1]);
@@ -249,7 +248,7 @@ public class GenesysOwnershipLifecycleTests
 
         await ConnectAsync(w, chat, b.GenesysId, T0.AddMinutes(2));
 
-        AssertOwner(w, chat.TicketId, a.Id);
+        AssertOwner(w, chat.TicketId, b.Id);
         Assert.Equal(
             new[] { a.Id, b.Id }.Order(),
             w.F.Handlers.All.Where(h => h.TicketId == chat.TicketId).Select(h => h.HandledByUserId).Order());       // both are handlers
