@@ -13,6 +13,9 @@ using TigerCS.Web.Services.Auth;
 
 namespace TigerCS.Web.Pages;
 
+/// <summary>One employee the Assigned To filter offers, with every in-scope department they are an active member of.</summary>
+public sealed record AssigneeOption(Guid EmployeeId, string DisplayName, IReadOnlyCollection<int> DepartmentIds);
+
 public sealed record TicketQueueRow(TicketSummaryDto Ticket, string? DepartmentName, string? OwnerName);
 
 /// <summary>One row of the Pending Interactions view, with the department and channel resolved to names.</summary>
@@ -105,11 +108,8 @@ public sealed class TicketsModel(
     /// <summary>The value of the page's Assignee filter control, derived from ownerEmployeeId/inDepartmentQueue.</summary>
     public string AssigneeFilterValue => InDepartmentQueue ? "queue" : OwnerEmployeeId?.ToString() ?? string.Empty;
 
-    /// <summary>The department whose members the Assignee filter offers: the selected department filter, or the viewer's only department. Null when no single department is in scope.</summary>
-    public int? AssigneeDepartmentId { get; private set; }
-
-    /// <summary>The Assignee filter's options — the active members of <see cref="AssigneeDepartmentId"/>; empty when there is none or the directory call failed.</summary>
-    public IReadOnlyList<DepartmentUserDto> AssigneeOptions { get; private set; } = [];
+    /// <summary>The Assigned To filter's options — the active members of every department the viewer may see (or just the selected one's, once narrowed); empty when the directory call failed.</summary>
+    public IReadOnlyList<AssigneeOption> AssigneeOptions { get; private set; } = [];
 
     /// <summary>True when any dashboard drill-down criterion is active — the page then shows what it is filtering by, with a way to clear it.</summary>
     public bool HasDrilldown =>
@@ -405,7 +405,9 @@ public sealed class TicketsModel(
     private async Task LoadTicketListAsync(CancellationToken cancellationToken)
     {
         var drilldownNamesTask = LoadDrilldownNamesAsync(cancellationToken);
-        var assigneeOptionsTask = LoadAssigneeOptionsAsync(cancellationToken);
+
+        // Before the query is built: an assignee who is not a member of the selected Department is reset, and that decides the request.
+        await LoadAssigneeOptionsAsync(cancellationToken);
 
         var request = new TicketListRequestDto(
             DepartmentId, null, PriorityId, TicketStatus, VerificationStatus, OwnerEmployeeId,
@@ -434,7 +436,6 @@ public sealed class TicketsModel(
         }
 
         await drilldownNamesTask;
-        await assigneeOptionsTask;
     }
 
     /// <summary>The Pending Interactions list — the former page's load, unchanged in what it asks the Api.</summary>
@@ -499,7 +500,12 @@ public sealed class TicketsModel(
         }
     }
 
-    /// <summary>The Assignee filter's member list — only when exactly one department is in scope, and never on My Tickets (where the assignee is fixed).</summary>
+    /// <summary>
+    /// The Assigned To filter's employees: the active members of the departments the viewer is authorized for (the Api's own
+    /// <c>AccessibleDepartments</c> - every active department for a cross-department role such as the System Administrator, otherwise
+    /// memberships), read from the existing department-members endpoint. Never on My Tickets (where the assignee is fixed). When a
+    /// Department is selected an assignee who is not one of its members is dropped, so changing Department never leaves a stale filter.
+    /// </summary>
     private async Task LoadAssigneeOptionsAsync(CancellationToken cancellationToken)
     {
         if (View == TicketsView.My || usersApiClient is null)
@@ -507,15 +513,64 @@ public sealed class TicketsModel(
             return;
         }
 
-        AssigneeDepartmentId = DepartmentId
-            ?? (nameResolver.OwnDepartments.Count == 1 ? nameResolver.OwnDepartments.First().DepartmentId : null);
-        if (AssigneeDepartmentId is not { } departmentId)
+        var scope = nameResolver.AccessibleDepartments.Count > 0 ? nameResolver.AccessibleDepartments : nameResolver.OwnDepartments;
+        var departmentIds = scope.Select(d => d.DepartmentId).Distinct().ToList();
+        if (DepartmentId is { } selected)
         {
-            return;
+            // A department outside the viewer's scope offers nobody; the Api refuses its tickets independently.
+            departmentIds = departmentIds.Where(id => id == selected).ToList();
         }
 
-        var members = await usersApiClient.GetDepartmentUsersAsync(departmentId, 1, 100, cancellationToken);
-        AssigneeOptions = members.IsSuccess ? members.Value?.Items.ToList() ?? [] : [];
+        var lists = await Task.WhenAll(departmentIds.Select(id => LoadDepartmentMembersAsync(id, cancellationToken)));
+        var byEmployee = new Dictionary<Guid, (string Name, HashSet<int> Departments)>();
+        var allSucceeded = true;
+        foreach (var (departmentId, members) in lists)
+        {
+            if (members is null)
+            {
+                allSucceeded = false;
+                continue;
+            }
+
+            foreach (var member in members)
+            {
+                if (!byEmployee.TryGetValue(member.EmployeeId, out var entry))
+                {
+                    entry = (member.DisplayName, []);
+                    byEmployee[member.EmployeeId] = entry;
+                }
+
+                entry.Departments.Add(departmentId);
+            }
+        }
+
+        AssigneeOptions = [.. byEmployee
+            .Select(kv => new AssigneeOption(kv.Key, kv.Value.Name, kv.Value.Departments.Order().ToList()))
+            .OrderBy(o => o.DisplayName, StringComparer.OrdinalIgnoreCase)];
+
+        if (allSucceeded && DepartmentId is not null && OwnerEmployeeId is { } owner && AssigneeOptions.All(o => o.EmployeeId != owner))
+        {
+            OwnerEmployeeId = null;
+        }
+    }
+
+    private async Task<(int DepartmentId, IReadOnlyList<DepartmentUserDto>? Members)> LoadDepartmentMembersAsync(int departmentId, CancellationToken cancellationToken)
+    {
+        var all = new List<DepartmentUserDto>();
+        for (var page = 1; ; page++)
+        {
+            var result = await usersApiClient!.GetDepartmentUsersAsync(departmentId, page, 100, cancellationToken);
+            if (!result.IsSuccess || result.Value is null)
+            {
+                return (departmentId, null);
+            }
+
+            all.AddRange(result.Value.Items);
+            if (result.Value.Items.Count == 0 || all.Count >= result.Value.TotalCount)
+            {
+                return (departmentId, all);
+            }
+        }
     }
 
     private async Task LoadStatsAsync(CancellationToken cancellationToken)
