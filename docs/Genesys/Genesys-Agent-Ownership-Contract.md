@@ -53,6 +53,8 @@ reason "Genesys call transfer…". A human answering a phone call directly is `S
 **Never moved:** an owner a person set (manual/supervisor assignment, Take Ownership — even to the same person), a ticket a person transferred out, closed/resolved tickets, a call that already ended,
 and an ineligible/unmapped next agent (flagged as before, current owner kept). Legacy tickets with no Genesys history are treated as person-owned.
 
+**Same conversation only.** Once Genesys has assigned a ticket for a conversation, a connected-agent event from a different conversation changes nothing. The Original Human Agent is set once (first eligible agent to take the ticket on a new-workflow ticket), survives later transfers and is what a return to the Call Center goes back to; legacy tickets are never given one.
+
 **Ordering.** An event whose `connectedAtUtc` is not newer than the last human Genesys assignment is ignored (stale/duplicate); the same agent again writes nothing. Without `connectedAtUtc` arrival time is used.
 
 **Rollback.** `Genesys:ReassignOnTransfer=false` (default `true`) restores "second agent is only a handler + `GenesysCallTransferred` event". Schema: migration `AddGenesysAssignmentHistorySource` (3 nullable columns; script `AddGenesysAssignmentHistorySource.sql`).

@@ -922,6 +922,15 @@ public sealed class TicketAutoAssignmentService(
             : [];
         var eventAtUtc = genesysEvent?.EventAtUtc is { } reported && reported < nowUtc ? reported : nowUtc;
 
+        // One conversation, one assignment story. Once Genesys has assigned this ticket for a conversation, a connected-agent event from a DIFFERENT
+        // conversation (a new customer call that reached the same ticket) must never change its owner, whatever its timestamp says.
+        if (genesysEvent is { ConversationId: { Length: > 0 } eventConversation }
+            && genesysHistory.LastOrDefault(h => h.GenesysConversationId is not null) is { } lastConversationEntry
+            && !string.Equals(lastConversationEntry.GenesysConversationId, eventConversation, StringComparison.Ordinal))
+        {
+            return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "The event belongs to a different Genesys conversation than the one that assigned this ticket; ownership is left unchanged.");
+        }
+
         // An event older than (or as old as) the last human assignment Genesys already made is stale or out of order: it must never overwrite a
         // newer valid assignment. The same agent again is a duplicate and is answered as AlreadyOwned below, so only a DIFFERENT agent is stale.
         if (genesysEvent is not null
