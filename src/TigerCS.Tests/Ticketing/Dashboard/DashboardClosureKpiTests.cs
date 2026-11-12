@@ -462,6 +462,35 @@ public sealed class DashboardClosureKpiTests : IDisposable
     }
 
     [Fact]
+    public async Task AverageReviewRating_IsTheMeanOfExactlyTheReviewedTicketsInScope_OnePerTicket()
+    {
+        var (alice, bob) = TwoEmployees();
+        var five = ClosedAssignedTo(alice);
+        var three = ClosedAssignedTo(alice);
+        var bobs = ClosedAssignedTo(bob);
+        ClosedAssignedTo(alice);                                                  // unreviewed: no rating
+        var outside = ClosedAssignedTo(alice, closedAtUtc: Now.AddDays(-60));    // outside the period
+        using (var w = _db.CreateContext())
+        {
+            _db.AddReview(w, five, rating: 5);
+            _db.AddReview(w, five, isTest: true, rating: 1);   // other kind: ignored
+            _db.AddReview(w, three, rating: 4);
+            _db.AddReview(w, bobs, rating: 1);
+            _db.AddReview(w, outside, rating: 1);
+        }
+
+        var forAlice = await OverviewAsync(alice, EmployeeRoles);
+        var forBob = await OverviewAsync(bob, EmployeeRoles);
+        var forManager = await OverviewAsync(Guid.NewGuid(), ManagerRoles);
+        var nobody = await OverviewAsync(Guid.NewGuid(), EmployeeRoles);
+
+        Assert.Equal((2, 4.5), (forAlice.Kpis.ReviewedTickets, forAlice.Kpis.AverageReviewRating));
+        Assert.Equal((1, 1.0), (forBob.Kpis.ReviewedTickets, forBob.Kpis.AverageReviewRating));
+        Assert.Equal((3, 3.3), (forManager.Kpis.ReviewedTickets, forManager.Kpis.AverageReviewRating)); // (5+4+1)/3, one decimal
+        Assert.Equal((0, (double?)null), (nobody.Kpis.ReviewedTickets, nobody.Kpis.AverageReviewRating));
+    }
+
+    [Fact]
     public async Task ClosureKpis_CsAgentCountsOnlyTicketsAssignedToThem_NotOnesTheyWereOnlyResponsibleFor()
     {
         Guid agent, bob;

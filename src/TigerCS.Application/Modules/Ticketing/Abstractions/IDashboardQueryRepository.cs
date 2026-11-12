@@ -136,7 +136,8 @@ public sealed record DashboardOverviewSnapshot(
 /// ClosedByAgent is at most that, because inactivity and document-delivery
 /// closures are neither.
 /// </summary>
-public sealed record DashboardClosureCounts(int Reviewed, int NotReviewed, int ClosedByAi, int ClosedByAgent);
+/// <remarks><c>AverageReviewRating</c> is the mean 1-5 rating over exactly the Reviewed tickets (one review per ticket - the current cycle's, of the notification mode's kind); null when none.</remarks>
+public sealed record DashboardClosureCounts(int Reviewed, int NotReviewed, int ClosedByAi, int ClosedByAgent, double? AverageReviewRating = null);
 
 /// <summary>A filter option: the id the filter sends back and the label the picker shows. <see cref="GroupId"/> groups request types under their department.</summary>
 public sealed record DashboardOptionRow<TKey>(TKey Id, string Label, int? GroupId = null, bool IsActive = true);

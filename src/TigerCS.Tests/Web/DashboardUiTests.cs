@@ -555,6 +555,24 @@ public sealed class DashboardUiTests
         Assert.Equal(6, model.Cards.Count);
     }
 
+    [Theory]
+    [InlineData(4.5, "· Average Rating 4.5/5")]
+    [InlineData(4.0, "· Average Rating 4.0/5")]
+    [InlineData(null, "· Average Rating —")]
+    public async Task ReviewedCard_ShowsTheCountWithTheAverageRatingOutOfFive_OrADashWhenNothingIsEvaluated(double? average, string expected)
+    {
+        var reviewed = average is null ? 0 : 8;
+        var overview = Overview(kpis: new DashboardKpisDto(12, 3, 4, 1, 2, 5, ReviewedTickets: reviewed, NotReviewedTickets: 9, AverageReviewRating: average));
+        var (model, _) = CreateModel((_, _) => FakeApiHandler.JsonResponse(HttpStatusCode.OK, overview));
+
+        await model.OnGetAsync(null, null, null, null, null, null, null, null, CancellationToken.None);
+
+        var card = model.ClosureCards.Single(c => c.Label == "Reviewed Tickets");
+        Assert.Equal(reviewed, card.Value);
+        Assert.Equal(expected, card.Detail);
+        Assert.Null(model.ClosureCards.Single(c => c.Label == "Not Reviewed").Detail);
+    }
+
     [Fact]
     public void ClosureCardDrilldowns_OpenTheClosedTab_WithTheCategory_TheClosureDateRange_AndDimensionFilters()
     {

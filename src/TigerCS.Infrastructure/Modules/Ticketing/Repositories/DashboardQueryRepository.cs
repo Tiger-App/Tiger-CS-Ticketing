@@ -100,11 +100,20 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
         // and its list always agree. Four narrow COUNTs, not a row load.
         var closureScope = closureBase.LatestClosureBetween(dbContext, query.RangeStartUtc, query.RangeEndUtc);
         var testReviews = query.ReviewsAreTest;
+        // The average is over the very same Reviewed set as the count: each ticket contributes its one review for the current cycle
+        // (unique per ticket/cycle/kind), so a ticket is never weighted twice.
+        var reviewedTickets = closureScope.InClosureCategory(dbContext, TicketClosureCategory.Reviewed, testReviews);
+        var averageRating = await reviewedTickets
+            .Select(t => dbContext.TicketReviews
+                .Where(r => r.TicketId == t.TicketId && r.ReopenCycle == t.ReopenCount && r.IsTest == testReviews)
+                .Select(r => (double?)r.Rating).FirstOrDefault())
+            .AverageAsync(cancellationToken);
         var closure = new DashboardClosureCounts(
-            await closureScope.InClosureCategory(dbContext, TicketClosureCategory.Reviewed, testReviews).CountAsync(cancellationToken),
+            await reviewedTickets.CountAsync(cancellationToken),
             await closureScope.InClosureCategory(dbContext, TicketClosureCategory.NotReviewed, testReviews).CountAsync(cancellationToken),
             await closureScope.InClosureCategory(dbContext, TicketClosureCategory.ClosedByAi, testReviews).CountAsync(cancellationToken),
-            await closureScope.InClosureCategory(dbContext, TicketClosureCategory.ClosedByAgent, testReviews).CountAsync(cancellationToken));
+            await closureScope.InClosureCategory(dbContext, TicketClosureCategory.ClosedByAgent, testReviews).CountAsync(cancellationToken),
+            averageRating);
 
         // ---- Volume breakdowns (date range) ----
         var statusCounts = await volume

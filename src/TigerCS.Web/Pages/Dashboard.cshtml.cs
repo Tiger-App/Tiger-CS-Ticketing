@@ -8,7 +8,7 @@ using TigerCS.Web.Services.Auth;
 namespace TigerCS.Web.Pages;
 
 /// <summary>One KPI card on the Dashboard. <see cref="Href"/> is the drill-down into the existing ticket queue; emphasis keys map to the fixed palette (critical for breach, gold for attention).</summary>
-public sealed record KpiCard(string Label, int Value, string? Emphasis = null, string? Href = null, string? Hint = null);
+public sealed record KpiCard(string Label, int Value, string? Emphasis = null, string? Href = null, string? Hint = null, string? Detail = null);
 
 /// <summary>One bar row of a breakdown card: label left, bar centre, count and percentage right. <see cref="Href"/> is null for an informational row (a value not recorded on the ticket), which is not a drill-down.</summary>
 public sealed record DashboardBarRow(string Label, int Count, double Percentage, string? Href, string? Key = null, string? Code = null)
@@ -165,7 +165,11 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
         var kind = k.ReviewsAreTestMode ? " (test-mode reviews)" : "";
         return
         [
-            new KpiCard("Reviewed Tickets", k.ReviewedTickets, null, DashboardLinks.Reviewed(f), "Closed tickets with customer feedback submitted" + kind),
+            new KpiCard("Reviewed Tickets", k.ReviewedTickets, null, DashboardLinks.Reviewed(f), "Closed tickets with customer feedback submitted" + kind,
+                // Same tickets, period and scope as the count; the scale's maximum is the review's own.
+                "· Average Rating " + (k.AverageReviewRating is { } average
+                    ? average.ToString("0.0", CultureInfo.InvariantCulture) + "/" + TigerCS.Domain.Modules.CustomerReviews.TicketReview.MaxRating.ToString(CultureInfo.InvariantCulture)
+                    : "—")),
             new KpiCard("Not Reviewed", k.NotReviewedTickets, null, DashboardLinks.NotReviewed(f), "Closed tickets without customer feedback" + kind),
             new KpiCard("Closed by AI", k.ClosedByAiTickets, null, DashboardLinks.ClosedByAi(f), "Closed tickets whose closure was recorded as AI"),
             new KpiCard("Closed by Agent", k.ClosedByAgentTickets, null, DashboardLinks.ClosedByAgent(f), "Closed tickets closed by a person")

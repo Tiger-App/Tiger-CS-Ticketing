@@ -162,6 +162,7 @@ public sealed record DashboardAppliedFiltersDto(
 /// <param name="NotReviewedTickets">Distinct Closed tickets with no customer review for their current cycle. Same range (latest closure date).</param>
 /// <param name="ClosedByAiTickets">Distinct Closed tickets whose latest closure was audited as <c>AutoCloseByAi</c>. Same range (latest closure date).</param>
 /// <param name="ReviewsAreTestMode">True while customer notifications run in test mode: Reviewed / Not Reviewed then evaluate Test-mode reviews (so UAT can validate them); production satisfaction statistics never include those.</param>
+/// <param name="AverageReviewRating">Mean customer rating (1-5 scale, one decimal) over exactly the <c>ReviewedTickets</c>; null when there are none.</param>
 /// <param name="ClosedByAgentTickets">Distinct Closed tickets whose latest closure was audited as <c>Close</c> (a person). Same range (latest closure date).</param>
 public sealed record DashboardKpisDto(
     int OpenTickets,
@@ -177,7 +178,8 @@ public sealed record DashboardKpisDto(
     int NotReviewedTickets = 0,
     int ClosedByAiTickets = 0,
     int ClosedByAgentTickets = 0,
-    bool ReviewsAreTestMode = false);
+    bool ReviewsAreTestMode = false,
+    double? AverageReviewRating = null);
 
 /// <summary>One bar row of a breakdown widget.</summary>
 /// <param name="Key">The dimension value the drill-down filters on (a channel/request type/department/priority id, a status name, or an age bucket name); null when the value is not recorded on the ticket, in which case the row is informational and not a drill-down.</param>

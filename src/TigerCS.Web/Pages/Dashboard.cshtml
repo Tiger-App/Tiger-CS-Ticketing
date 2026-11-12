@@ -177,6 +177,10 @@
                     <span class="kpi-card__body">
                         <strong>@card.Value</strong>
                         <span>@card.Label</span>
+                        @if (card.Detail is not null)
+                        {
+                            <span class="kpi-card__detail" data-kpi-detail>@card.Detail</span>
+                        }
                     </span>
                 </a>
             }
