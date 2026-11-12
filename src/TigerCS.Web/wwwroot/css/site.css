@@ -3425,3 +3425,7 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 @media (max-width: 720px) {
   .dashboard-workspace .dash-closure__groups { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* Tickets: Department is a primary filter, shown beside the search box. */
+.filter-bar__department .field-select { min-width: 170px; max-width: 240px; }
+@media (max-width: 720px) { .filter-bar__department { flex: 1 1 100%; } .filter-bar__department .field-select { width: 100%; max-width: none; } }
