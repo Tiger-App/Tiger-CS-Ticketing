@@ -22,10 +22,6 @@
         "SLA Breached" => "critical",
         "Due Today" => "warning",
         "Pending Approval" => "brand",
-        "Reviewed Tickets" => "success",
-        "Not Reviewed" => "warning",
-        "Closed by AI" => "secondary",
-        "Closed by Agent" => "progress",
         _ => "info",
     };
 
@@ -39,10 +35,6 @@
         "SLA Breached" => "sla",
         "Due Today" => "due",
         "Pending Approval" => "approval",
-        "Reviewed Tickets" => "reviewed",
-        "Not Reviewed" => "notreviewed",
-        "Closed by AI" => "ai",
-        "Closed by Agent" => "agent",
         _ => "other",
     };
 
@@ -55,10 +47,6 @@
         "SLA Breached" => "<path d=\"M12 9v4M12 17h.01M10.3 3.9 2.5 18a1.6 1.6 0 0 0 1.4 2.4h16.2a1.6 1.6 0 0 0 1.4-2.4L13.7 3.9a1.6 1.6 0 0 0-2.8 0Z\" stroke=\"currentColor\" stroke-width=\"1.6\"/>",
         "Due Today" => "<circle cx=\"12\" cy=\"12\" r=\"9\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M12 7v5l3 2\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/>",
         "Pending Approval" => "<path d=\"M9 12l2 2 4-4\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/><rect x=\"4\" y=\"4\" width=\"16\" height=\"16\" rx=\"3\" stroke=\"currentColor\" stroke-width=\"1.8\"/>",
-        "Reviewed Tickets" => "<path d=\"M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8-4.3-4.1 5.9-.9L12 3.5Z\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linejoin=\"round\"/>",
-        "Not Reviewed" => "<path d=\"M12 3.5l2.6 5.3 5.9.9-4.3 4.1 1 5.8L12 16.9 6.8 19.6l1-5.8-4.3-4.1 5.9-.9L12 3.5Z\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linejoin=\"round\" stroke-dasharray=\"2.4 2.4\"/>",
-        "Closed by AI" => "<rect x=\"5\" y=\"8\" width=\"14\" height=\"10\" rx=\"3\" stroke=\"currentColor\" stroke-width=\"1.7\"/><path d=\"M12 8V4.5M9.5 12.5h.01M14.5 12.5h.01M9.5 15.5h5\" stroke=\"currentColor\" stroke-width=\"1.7\" stroke-linecap=\"round\"/>",
-        "Closed by Agent" => "<circle cx=\"12\" cy=\"8\" r=\"4\" stroke=\"currentColor\" stroke-width=\"1.8\"/><path d=\"M4 20c1.8-3.2 4.5-5 8-5s6.2 1.8 8 5\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\"/><path d=\"M15.5 17.5l1.6 1.6 3-3\" stroke=\"currentColor\" stroke-width=\"1.8\" stroke-linecap=\"round\" stroke-linejoin=\"round\"/>",
         _ => "<rect x=\"5\" y=\"4\" width=\"14\" height=\"16\" rx=\"1.5\" stroke=\"currentColor\" stroke-width=\"1.6\"/><path d=\"M9 9h6M9 13h6M9 17h3\" stroke=\"currentColor\" stroke-width=\"1.6\" stroke-linecap=\"round\"/>",
     };
 
@@ -151,7 +139,7 @@
     {
         var f = Model.Overview.Filters;
 
-        @* ---- KPI panel: the six primary counters (current open work in scope) above the four secondary closure counters; every card drills into the ticket queue. ---- *@
+        @* ---- KPI panel: the six primary counters (current open work in scope) above the Closed in Selected Period section; every card drills into the ticket queue. ---- *@
         <div class="dash-kpi-panel">
         <section class="kpi-grid kpi-grid--six" aria-label="Operational counters">
             @foreach (var card in Model.Cards)
@@ -166,26 +154,36 @@
             }
         </section>
 
-        @* ---- Closure KPIs: Closed tickets by latest closure date in the date range, split by customer feedback and by who closed them; same card, same drill-down. ---- *@
-        <div class="dash-kpi-secondary">
-        <span class="dash-kpi-secondary__caption">Closed in period</span>
-        <section class="kpi-grid kpi-grid--four" aria-label="Closed ticket counters">
-            @foreach (var card in Model.ClosureCards)
-            {
-                <a class="kpi-card kpi-card--icon tone-@KpiTone(card.Label)" href="@card.Href" data-kpi="@KpiKey(card.Label)" title="@card.Hint">
-                    <span class="kpi-card__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none">@Html.Raw(KpiIcon(card.Label))</svg></span>
-                    <span class="kpi-card__body">
-                        <strong>@card.Value</strong>
-                        <span>@card.Label</span>
-                        @if (card.Detail is not null)
-                        {
-                            <span class="kpi-card__detail" data-kpi-detail>@card.Detail</span>
-                        }
-                    </span>
-                </a>
-            }
+        @* ---- Closed in Selected Period: one total, then two compact groups (Ticket Reviews / Closed By); each count keeps its drill-down. ---- *@
+        @if (Model.Closure is { } closure)
+        {
+        <section class="dash-closure" aria-labelledby="closureHeading">
+            <h2 class="dash-closure__heading" id="closureHeading" data-closure-total>@closure.Heading</h2>
+            <div class="dash-closure__groups">
+                @foreach (var group in closure.Groups)
+                {
+                    <div class="dash-closure__group" role="group" aria-label="@group.Title">
+                        <h3 class="dash-closure__title">@group.Title</h3>
+                        <ul class="dash-closure__rows">
+                            @foreach (var row in group.Rows)
+                            {
+                                <li class="dash-closure__row @(row.Key == "score" ? "dash-closure__row--score" : null)" data-closure="@row.Key" title="@row.Hint">
+                                    @if (row.Href is not null)
+                                    {
+                                        <a class="dash-closure__link" href="@row.Href"><span class="dash-closure__label">@row.Label</span><strong class="dash-closure__value">@row.Value</strong></a>
+                                    }
+                                    else
+                                    {
+                                        <span class="dash-closure__label">@row.Label</span><strong class="dash-closure__value">@row.Value</strong>
+                                    }
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                }
+            </div>
         </section>
-        </div>
+        }
         </div>
 
         @* ---- Filters: a real GET form over the master data the Api returned for this caller's scope, folded behind a disclosure. ---- *@
