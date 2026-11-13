@@ -3464,3 +3464,11 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 /* Tickets: Department is a primary filter, shown beside the search box. */
 .filter-bar__department .field-select { min-width: 170px; max-width: 240px; }
 @media (max-width: 720px) { .filter-bar__department { flex: 1 1 100%; } .filter-bar__department .field-select { width: 100%; max-width: none; } }
+
+/* Ticket Details: Assign / Reassign dialog - current state summary and the two searchable lists. */
+.reassign-current { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; margin: 0 0 12px; padding: 10px 12px; border: 1px solid var(--tw-line); border-radius: 8px; }
+.reassign-current dt { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--tw-muted); }
+.reassign-current dd { margin: 2px 0 0; font-weight: 600; color: var(--tw-ink); overflow-wrap: anywhere; }
+.reassign-search { margin-bottom: 6px; }
+.reassign-list { width: 100%; height: auto; }
+.reassign-list option[hidden] { display: none; }

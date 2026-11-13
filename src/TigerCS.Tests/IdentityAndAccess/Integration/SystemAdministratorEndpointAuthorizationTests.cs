@@ -1088,6 +1088,24 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     // ---------------------------------------------------------------
 
     [Fact]
+    public async Task ReassignTicket_Returns200()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+        var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
+
+        var (_, _, workerId) = await _factory.SeedEmployeeAsync(Roles.DepartmentEmployee);
+        await _factory.AssignPrimaryDepartmentAsync(workerId, ticket.CurrentDepartmentId);
+
+        var response = await client.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/reassign",
+            new ReassignTicketRequestDto(ticket.CurrentDepartmentId, RowVersionOf(ticket), workerId, "Handing over"));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var updated = await response.Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal(workerId, updated!.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
     public async Task AssignTicket_Returns200()
     {
         var (client, _) = await CreateAdministratorAsync();

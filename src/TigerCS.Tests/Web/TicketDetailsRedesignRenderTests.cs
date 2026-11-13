@@ -156,6 +156,28 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Contains("this ticket has no priority", html);   // the reason, under Additional details
     }
 
+    [Theory]
+    [InlineData(Roles.DepartmentEmployee)]
+    [InlineData(Roles.CsAgent)]
+    [InlineData(Roles.CsManager)]
+    public async Task ActionsMenu_OffersAssignReassignToEveryTicketUser_WithSearchableDepartmentAndEmployeePickers(string role)
+    {
+        var html = Dec(await Page(212, role));
+
+        Assert.Contains("id=\"action-reassign\"", html);
+        Assert.Contains(">Assign / Reassign</summary>", html);
+        var dialog = Section(html, "id=\"action-reassign\"", "</details>");
+        Assert.Contains("Search departments", dialog);                 // searchable Department dropdown
+        Assert.Contains("Search employees", dialog);                   // searchable Employee dropdown
+        Assert.Contains("name=\"Reassign.TargetDepartmentId\"", dialog);
+        Assert.Contains("name=\"Reassign.EmployeeId\"", dialog);
+        Assert.Contains("No specific employee", dialog);               // department-only assignment
+        Assert.Contains("Current department", dialog);                 // current department and assignee shown
+        Assert.Contains("Assigned to", dialog);
+        Assert.Contains("name=\"Reassign.Comment\"", dialog);          // optional transfer comment
+        Assert.Contains("(optional)", dialog);
+    }
+
     [Fact]
     public async Task CollectionsTicket_OffersAssignBesideAssignedTo_OnlyWhenTheServerSaysTheViewerMayAssign()
     {

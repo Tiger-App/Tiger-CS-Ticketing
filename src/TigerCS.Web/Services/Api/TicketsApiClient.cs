@@ -50,6 +50,9 @@ public sealed class TicketsApiClient(HttpClient httpClient, ILogger<TicketsApiCl
     public Task<ApiResult<TicketDetailDto>> AssignAsync(long ticketId, AssignTicketRequestDto request, CancellationToken cancellationToken) =>
         PostAsync<AssignTicketRequestDto, TicketDetailDto>($"api/tickets/{ticketId}/assignment", request, cancellationToken);
 
+    public Task<ApiResult<TicketDetailDto>> ReassignAsync(long ticketId, ReassignTicketRequestDto request, CancellationToken cancellationToken) =>
+        PostAsync<ReassignTicketRequestDto, TicketDetailDto>($"api/tickets/{ticketId}/reassign", request, cancellationToken);
+
     public Task<ApiResult<TicketDetailDto>> TakeOwnershipAsync(long ticketId, TakeOwnershipRequestDto request, CancellationToken cancellationToken) =>
         PostAsync<TakeOwnershipRequestDto, TicketDetailDto>($"api/tickets/{ticketId}/ownership", request, cancellationToken);
 

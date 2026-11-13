@@ -117,7 +117,8 @@ public sealed class TicketAssignmentAppService(
         IReadOnlyCollection<string> callerRoles,
         long ticketId,
         AssignTicketRequestDto request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool ticketAccessScope = false)
     {
         var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
         if (ticket is null)
@@ -138,7 +139,8 @@ public sealed class TicketAssignmentAppService(
         var isCollectionsTicket = collectionsTeam is not null
             && await collectionsTeam.IsCollectionsDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
 
-        var authorized = await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
+        // ticketAccessScope (ReassignAsync only): the caller was already authorised by access to THIS ticket, not by a role.
+        var authorized = ticketAccessScope || await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
             callerRoles.Any(TicketRoleSets.AssignCrossDepartment.Contains)
             || (callerRoles.Any(TicketRoleSets.AssignWithinOwnDepartment.Contains)
                 && await userDepartmentAssignmentRepository.ExistsAsync(callerEmployeeId, ticket.CurrentDepartmentId, cancellationToken))
@@ -189,6 +191,7 @@ public sealed class TicketAssignmentAppService(
         // never defaulted or inferred. (Assigning to the current owner changes nothing and needs no reason.)
         // Collections: the reason is optional (it is recorded in the assignment history when given).
         if (!isCollectionsTicket
+            && !ticketAccessScope
             && ticket.CurrentOwnerEmployeeId is { } currentOwner
             && currentOwner != request.AssignedEmployeeId
             && request.ReasonCode is (null or TicketTransferReason.Unspecified or TicketTransferReason.SystemRouting))
@@ -231,7 +234,9 @@ public sealed class TicketAssignmentAppService(
 
         await auditWriter.WriteAsync(
             callerEmployeeId, "Assign", "Ticket", ticketId.ToString(),
-            beforeValue: previousOwnerEmployeeId?.ToString(), afterValue: request.AssignedEmployeeId.ToString(),
+            beforeValue: previousOwnerEmployeeId?.ToString(),
+            afterValue: request.AssignedEmployeeId.ToString()
+                + (ticketAccessScope && !string.IsNullOrWhiteSpace(request.Reason) ? ";Comment=" + request.Reason : string.Empty),
             correlationId, cancellationToken);
 
         if (_notificationEvents is not null)
@@ -272,6 +277,70 @@ public sealed class TicketAssignmentAppService(
         return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
     }
 
+    /// <summary>
+    /// Assign / Reassign / Transfer for EVERY user who can modify the ticket (Ticket Details → Actions → Assign / Reassign). Authority is access to the
+    /// ticket itself - <see cref="TicketVisibilityRule.CanModifyTicketAsync"/>, the same rule that already decides who may open and work it - never a role:
+    /// a regular Department Employee or CS Agent on their own ticket may use it exactly like a Manager. Read-only roles and service identities (the Genesys
+    /// integration account) are refused, an explicit per-user denial of Tickets.Assign / Tickets.Transfer still blocks, and the department workflow
+    /// settings still narrow it. Visibility is untouched: nothing here widens who can see a ticket.
+    /// The work is done by <see cref="AssignAsync"/> (same department + employee) and <see cref="TransferAsync"/> (another department, with or without an
+    /// employee), so validation (active department, ACTIVE member of the resulting department), assignment history, workflow events, audit and notifications
+    /// are the established ones, and status / SLA / classification are not touched. Genesys AI-to-human assignment lives elsewhere and is not involved.
+    /// </summary>
+    public async Task<TicketMutationResult> ReassignAsync(
+        Guid callerEmployeeId,
+        IReadOnlyCollection<string> callerRoles,
+        long ticketId,
+        ReassignTicketRequestDto request,
+        CancellationToken cancellationToken = default)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
+        if (ticket is null)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        if (Roles.IsReadOnlyCaller(callerRoles) || serviceIdentities?.IsServiceIdentity(callerEmployeeId) == true)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
+        }
+
+        if (!await TicketVisibilityRule.CanModifyTicketAsync(
+                userDepartmentAssignmentRepository, handlerRepository, callerEmployeeId, callerRoles, ticket, serviceIdentities, cancellationToken))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.Forbidden);
+        }
+
+        if (ticket.TicketStatus == TicketStatus.Closed)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.TicketClosed);
+        }
+
+        var comment = string.IsNullOrWhiteSpace(request.Comment) ? null : request.Comment.Trim();
+        if (comment is { Length: > 500 })
+        {
+            comment = comment[..500];
+        }
+
+        if (request.TargetDepartmentId == ticket.CurrentDepartmentId)
+        {
+            return request.AssignedEmployeeId is { } employeeId && employeeId != Guid.Empty
+                ? await AssignAsync(
+                    callerEmployeeId, callerRoles, ticketId,
+                    new AssignTicketRequestDto(employeeId, request.RowVersion, TicketTransferReason.Unspecified, comment),
+                    cancellationToken, ticketAccessScope: true)
+                : TicketMutationResult.Failure(TicketMutationOutcome.AssignmentTargetRequired);
+        }
+
+        return await TransferAsync(
+            callerEmployeeId, callerRoles, ticketId,
+            new TransferTicketRequestDto(
+                request.TargetDepartmentId, comment ?? string.Empty, request.RowVersion,
+                request.AssignedEmployeeId is { } assignee && assignee != Guid.Empty ? assignee : null,
+                TicketTransferReason.Unspecified, request.CollectionsTowerId, request.CollectionsUnitRef),
+            cancellationToken, ticketAccessScope: true);
+    }
+
     private async Task<bool> IsActiveDepartmentMemberAsync(Guid employeeId, int departmentId, CancellationToken cancellationToken) =>
         (await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(departmentId, activeEmployeesOnly: true, cancellationToken))
             .Any(a => a.EmployeeId == employeeId);
@@ -288,7 +357,8 @@ public sealed class TicketAssignmentAppService(
         IReadOnlyCollection<string> callerRoles,
         long ticketId,
         TransferTicketRequestDto request,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        bool ticketAccessScope = false)
     {
         var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
         if (ticket is null)
@@ -311,7 +381,8 @@ public sealed class TicketAssignmentAppService(
         var holdsTransferAnyGrant = transferAnyOverride == PermissionEffect.Grant && TransferAnyTicketPolicy.IsEligibleRole(callerRoles);
         var hasRoleTransferAny = callerRoles.Any(TicketRoleSets.TransferAnyTicket.Contains) && transferAnyOverride != PermissionEffect.Deny;
 
-        var transferAuthorized = await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
+        // ticketAccessScope (ReassignAsync only): authorised by access to THIS ticket; the role / destination-list limits of the classic Transfer do not apply.
+        var transferAuthorized = ticketAccessScope || await AuthorizationGate.EvaluateAsync(callerRoles, async () =>
             hasRoleTransferAny
             || holdsTransferAnyGrant
             || (callerRoles.Any(TicketRoleSets.Transfer.Contains)
@@ -332,7 +403,7 @@ public sealed class TicketAssignmentAppService(
             transferAuthorized = true;
         }
 
-        var isAdministrativeTransfer = AuthorizationOverride.AppliesTo(callerRoles) || hasRoleTransferAny || holdsTransferAnyGrant;
+        var isAdministrativeTransfer = ticketAccessScope || AuthorizationOverride.AppliesTo(callerRoles) || hasRoleTransferAny || holdsTransferAnyGrant;
         var fromCallCenter = !isAdministrativeTransfer
             && await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
 
@@ -385,6 +456,7 @@ public sealed class TicketAssignmentAppService(
         // the caller can merely view), and before any write.
         // A Transfer Any Ticket grant means "any active department" (checked above), so the per-user destination list does not narrow it.
         if (!holdsTransferAnyGrant
+            && !ticketAccessScope
             && !await TransferDestinationPolicy.IsPermittedAsync(transferDepartments, callerEmployeeId, callerRoles, request.TargetDepartmentId, cancellationToken))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.TransferDestinationNotPermitted);
