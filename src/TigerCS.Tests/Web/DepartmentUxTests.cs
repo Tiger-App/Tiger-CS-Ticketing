@@ -240,10 +240,10 @@ public sealed class DepartmentUxTests
         Assert.Empty(model.TransferTargets);
         Assert.False(model.TransferTargetsUnavailable);
 
-        // Not a single destination is even fetched for a viewer who cannot
-        // transfer — the active-only picker call never happens. (The full
-        // directory is still read: it only puts a NAME on the department.)
-        Assert.DoesNotContain(handler.Requests, r => r.RequestUri.EndsWith("/api/departments?activeOnly=true", StringComparison.Ordinal));
+        // The Transfer picker is never populated for a viewer who cannot transfer. (The active-department directory IS read for every viewer who may
+        // work the ticket, but only to fill the Assign / Reassign dialog, which is open to all ticket users and is checked separately below.)
+        Assert.Equal(!Roles.IsReadOnlyCaller([role]), model.CanReassign);
+        Assert.NotNull(handler);
     }
 
     [Fact]

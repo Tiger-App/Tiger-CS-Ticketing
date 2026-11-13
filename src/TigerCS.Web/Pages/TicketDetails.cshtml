@@ -54,7 +54,7 @@ else
 
     // The Actions menu is rendered only when it would hold at least one action — never an empty menu. Each entry inside keeps the
     // exact permission gate its endpoint enforces; this is only "is there anything to list".
-    var showActionsMenu = (!isClosed && (Model.CanAssign || Model.CanClassify || Model.CanTransfer || Model.CanChangeStatus
+    var showActionsMenu = (!isClosed && (Model.CanAssign || Model.CanReassign || Model.CanClassify || Model.CanTransfer || Model.CanChangeStatus
                                           || Model.CanResolve || Model.CanEscalate || Model.CanRequestDowngrade))
         || (isResolved && Model.CanClose)
         || (t.IsReopenEligible && Model.CanReopen);
@@ -132,7 +132,7 @@ else
                 @if (showActionsMenu)
                 {
                 <div class="tw-head__actions">
-                    <details class="disclosure actions-menu" id="actions-menu" open="@(Model.OpenSection is "assign" or "classify" or "transfer" or "status" or "resolve" or "escalate" or "downgrade" or "reopen" ? "open" : null)">
+                    <details class="disclosure actions-menu" id="actions-menu" open="@(Model.OpenSection is "assign" or "reassign" or "classify" or "transfer" or "status" or "resolve" or "escalate" or "downgrade" or "reopen" ? "open" : null)">
                         <summary class="btn btn-sm tw-actions-btn" aria-haspopup="true">Actions @TicketIcons.Svg("chevron-down", "ic ic--btn")</summary>
                         <div class="disclosure__panel actions-menu__panel" role="group" aria-label="Ticket actions">
                     @if (!isClosed)
@@ -142,6 +142,54 @@ else
                            TicketRoleSets/SlaRoleSets plus the ticket's owner and
                            department). !isClosed is lifecycle, not permission, and
                            stays as the outer condition. *@
+                        @if (Model.CanReassign)
+                        {
+                        @* Assign / Reassign: open to every user who works the ticket (not just Admin / Manager / Supervisor). The Api decides by access to THIS ticket,
+                           validates the department and the ACTIVE employee, and writes history + audit. The Assign and Transfer actions below are unchanged. *@
+                        var currentDept = Model.ReassignDepartments.FirstOrDefault(d => d.DepartmentId == t.CurrentDepartmentId);
+                        <details class="disclosure" id="action-reassign" data-action="reassign" open="@(Model.OpenSection == "reassign" ? "open" : null)">
+                            <summary class="btn btn-sm">Assign / Reassign</summary>
+                            <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Assign or reassign ticket">
+                                <div class="action-modal__head"><h2 class="action-modal__title">Assign / Reassign ticket</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <form method="post" asp-page-handler="Reassign" class="action-form" data-reassign data-employees-url="@Url.Page("TicketDetails", "ReassignEmployees", new { id = t.TicketId })" data-current-department="@t.CurrentDepartmentId" data-current-owner="@t.CurrentOwnerEmployeeId" data-me="@Model.Viewer?.EmployeeId">
+                                    <input type="hidden" asp-for="Reassign.RowVersionBase64" />
+                                    <dl class="reassign-current">
+                                        <div><dt>Current department</dt><dd>@(Model.DepartmentName ?? currentDept?.Name ?? "Unknown department")</dd></div>
+                                        <div><dt>Assigned to</dt><dd>@(Model.OwnerName ?? (t.CurrentOwnerEmployeeId is null ? "Not assigned to anyone" : TicketDisplay.UnknownEmployeeLabel))</dd></div>
+                                    </dl>
+                                    <div class="field-group">
+                                        <label class="field-label" for="reassign-dept-search">Department</label>
+                                        <input type="search" class="form-control reassign-search" id="reassign-dept-search" placeholder="Search departments…" autocomplete="off" data-search-list />
+                                        <select class="field-select reassign-list" size="5" asp-for="Reassign.TargetDepartmentId" aria-label="Department" data-reassign-dept>
+                                            @foreach (var d in Model.ReassignDepartments)
+                                            {
+                                                <option value="@d.DepartmentId" selected="@(d.DepartmentId == t.CurrentDepartmentId ? "selected" : null)">@d.Name@(d.DepartmentId == t.CurrentDepartmentId ? " (current)" : "")</option>
+                                            }
+                                        </select>
+                                    </div>
+                                    <partial name="_CollectionsTowerUnit" model="@(new TigerCS.Web.Models.CollectionsTowerUnitFields("reassign", "Reassign", "#Reassign_TargetDepartmentId", Model.CollectionsDepartmentIds, t.TicketId, Optional: true))" />
+                                    <div class="field-group">
+                                        <label class="field-label" for="reassign-emp-search">Employee <span class="field-optional">(optional)</span></label>
+                                        <input type="search" class="form-control reassign-search" id="reassign-emp-search" placeholder="Search employees…" autocomplete="off" data-search-list />
+                                        <select class="field-select reassign-list" size="6" asp-for="Reassign.EmployeeId" aria-label="Employee" data-reassign-emp>
+                                            <option value="">— No specific employee (department only) —</option>
+                                            @foreach (var member in Model.ReassignEmployees)
+                                            {
+                                                <option value="@member.EmployeeId" selected="@(member.EmployeeId == t.CurrentOwnerEmployeeId ? "selected" : null)">@member.DisplayName@(member.EmployeeId == Model.Viewer?.EmployeeId ? " (me)" : "")@(member.EmployeeId == t.CurrentOwnerEmployeeId ? " — current" : "")</option>
+                                            }
+                                        </select>
+                                        <span class="field-hint" data-reassign-emp-hint>Active employees of the selected department. Leave on “No specific employee” to hand the ticket to the department only.</span>
+                                    </div>
+                                    <div class="field-group">
+                                        <label class="field-label" asp-for="Reassign.Comment">Transfer comment <span class="field-optional">(optional)</span></label>
+                                        <textarea class="form-control" asp-for="Reassign.Comment" rows="2" maxlength="500" placeholder="Why the ticket is changing hands"></textarea>
+                                    </div>
+                                    <div class="action-form__footer"><button type="submit" class="btn btn-gold btn-sm">Save</button></div>
+                                </form>
+                            </div>
+                        </details>
+                        }
+
                         @if (Model.CanAssign)
                         {
                         <details class="disclosure" id="action-assign" data-action="assign" open="@(Model.OpenSection == "assign" ? "open" : null)">
@@ -1531,6 +1579,7 @@ else
         </aside>
         </div>
     </div>
+    <script src="~/js/ticket-reassign.js" asp-append-version="true"></script>
     <script src="~/js/ticket-collections-assign.js" asp-append-version="true"></script>
     <script src="~/js/ticket-collections-tower-unit.js" asp-append-version="true"></script>
 }
