@@ -210,7 +210,7 @@ public sealed class ReviewUatReadinessTests(ITestOutputHelper output)
     public void SettledInstalmentsThatLookLikePositiveBalances_AreNotReceivables(string raw)
     {
         var row = ReviewHarness.Row(1) with { Amount = decimal.Parse(raw, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture), AmountIsFloatingPoint = true };
-        var built = ReviewRecordBuilder.Build([row], new ReviewBuildContext(new DateOnly(2026, 10, 14), ReviewHarness.Now, "t", "AED", true, true, false, 0.0001m, new Dictionary<string, string>()));
+        var built = MirrorCrmBuild.Build([row], new ReviewBuildContext(new DateOnly(2026, 10, 14), ReviewHarness.Now, "t", "AED", true, true, false, 0.0001m, new Dictionary<string, string>()));
         Assert.Empty(built.Records);
         Assert.Equal(1, built.SettledRows);
     }
@@ -753,7 +753,7 @@ public sealed class ReviewUatReadinessTests(ITestOutputHelper output)
                 rows.Add(ReviewHarness.Row(n, 100m + k, day: 1 + k * 6) with { UnitId = 100_000 + n, UnitCode = $"TP140-{n}", TenantId = $"T{n:D6}", Mobile = $"97150{n % 10_000_000:D7}" });
         var context = new ReviewBuildContext(new DateOnly(2026, 10, 14), ReviewHarness.Now, "t", "AED", true, true, false, 0.0001m, new Dictionary<string, string>());
         var watch = Stopwatch.StartNew();
-        var built = ReviewRecordBuilder.Build(rows, context);
+        var built = MirrorCrmBuild.Build(rows, context);
         watch.Stop();
         output.WriteLine($"ReviewRecordBuilder: {rows.Count:N0} source rows -> {built.Records.Count:N0} records in {watch.ElapsedMilliseconds:N0} ms");
         Assert.True(built.Records.Count > 0);

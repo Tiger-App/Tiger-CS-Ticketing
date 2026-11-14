@@ -27,7 +27,7 @@ public sealed class CrmContactPriorityTests
     private static List<CollectionsReviewRecord> Records(CrmLinkSet crm, params PactReceivableInstalment[] rows)
     {
         var context = new ReviewBuildContext(Today, ReviewHarness.Now, "PACT test", "AED", true, true, false, MoneyNormalizer.DefaultFloatTolerance, new Dictionary<string, string>(), crm);
-        return ReviewRecordBuilder.Build(rows, context).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
+        return MirrorCrmBuild.Build(rows, context).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
     }
 
     private static string[] Reasons(CollectionsReviewRecord r) => ReviewRecordBuilder.Parse(r.Reasons).ToArray();
@@ -51,11 +51,12 @@ public sealed class CrmContactPriorityTests
     }
 
     [Fact]
-    public void MissingCrmContact_FallsBackToPact_ForAReliablyIdentifiedCustomer()
+    public void AMissingCrmMobile_IsNeverFilledFromPact_TheUnitNeedsReview()
     {
         var record = Assert.Single(Records(Crm(((4, "TP140-1"), Single("", email: ""))), ReviewHarness.Row(1)));
-        Assert.Equal(("+971500000001", "c1@example.test"), (record.Phone, record.Email));
-        Assert.Equal(ReviewValidationStatus.Ready, record.ValidationStatus);
+        Assert.Equal(("", "c1@example.test"), (record.Phone, record.Email));          // the e-mail may still complete from PACT; the MOBILE never does
+        Assert.Contains(ReviewReasons.NoValidContact, Reasons(record));
+        Assert.Equal(ReviewValidationStatus.NeedsReview, record.ValidationStatus);
     }
 
     [Fact]
@@ -95,8 +96,11 @@ public sealed class CrmContactPriorityTests
         var rows = new[] { ReviewHarness.Row(1), other };
         var withCrm = Assert.Single(Records(Crm(((4, "TP140-1"), Single("+966508650505"))), rows));
         Assert.DoesNotContain(ReviewReasons.ConflictingContactDetails, Reasons(withCrm));
-        var withoutCrm = Assert.Single(Records(CrmLinkSet.None, rows));           // without CRM the PACT disagreement is still a genuine conflict
-        Assert.Contains(ReviewReasons.ConflictingContactDetails, Reasons(withoutCrm));
+        // PACT phones are not a campaign contact source, so PACT rows that differ only by phone are no conflict without CRM either; a differing NAME still is.
+        var withoutCrm = Assert.Single(Records(CrmLinkSet.None, rows));
+        Assert.DoesNotContain(ReviewReasons.ConflictingContactDetails, Reasons(withoutCrm));
+        var differentName = Assert.Single(Records(CrmLinkSet.None, new[] { ReviewHarness.Row(1), ReviewHarness.Row(1, 300m, day: 22) with { FullName = "Someone Else", VoucherNumber = "INV-1-c" } }));
+        Assert.Contains(ReviewReasons.ConflictingContactDetails, Reasons(differentName));
     }
 
     // ---- Preview, Export and Send read the one resolved contact ----

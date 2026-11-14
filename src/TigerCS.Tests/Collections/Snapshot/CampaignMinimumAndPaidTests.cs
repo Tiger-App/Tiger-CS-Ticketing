@@ -17,6 +17,7 @@ public sealed class CampaignMinimumAndPaidTests
     /// <summary>Returns every row it holds (including paid ones and sub-minimum ones) so the application-side rules are what is tested.</summary>
     private sealed class RawSource(List<PactReceivableInstalment> rows) : IPactReceivablesSource
     {
+        public List<PactReceivableInstalment> Rows => rows;
         public PactReceivablesRequest? Last { get; private set; }
         public Task<PactReceivablesSnapshot> ReadAsync(DateOnly throughDate, CancellationToken cancellationToken) => throw new NotSupportedException();
         public Task<PactReceivablesSnapshot> ReadAsync(PactReceivablesRequest request, CancellationToken cancellationToken)
@@ -32,7 +33,7 @@ public sealed class CampaignMinimumAndPaidTests
     {
         var options = new CollectionsOptions { Enabled = true };
         return new(options, new CollectionsCampaignOptions { FinancialSourceValidated = true }, new PactReceivablesOptions { Enabled = true, DefaultMinOutstandingAmount = defaultMin },
-            new(options, new FakeDepartmentRepository()), new(options, new FakeTimeProvider(Now)), source, NullLogger<CollectionsCampaignAppService>.Instance);
+            new(options, new FakeDepartmentRepository()), new(options, new FakeTimeProvider(Now)), source, NullLogger<CollectionsCampaignAppService>.Instance, TigerCS.Tests.Collections.Review.MirrorCrmBuild.Links(() => ((RawSource)source).Rows, Now));
     }
 
     private static PactReceivableInstalment Row(string tenant, int unit, DateTime due, decimal amount) =>

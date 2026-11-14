@@ -24,7 +24,7 @@ public sealed class CampaignSnapshotTests
         {
             var options = new CollectionsOptions { Enabled = true };
             Service = new(options, new CollectionsCampaignOptions { FinancialSourceValidated = true }, new PactReceivablesOptions { Enabled = true, DefaultMinOutstandingAmount = 0m },
-                new(options, new FakeDepartmentRepository()), new(options, new FakeTimeProvider(Now)), Source, NullLogger<CollectionsCampaignAppService>.Instance);
+                new(options, new FakeDepartmentRepository()), new(options, new FakeTimeProvider(Now)), Source, NullLogger<CollectionsCampaignAppService>.Instance, TigerCS.Tests.Collections.Review.MirrorCrmBuild.Links(() => Source.Rows, Now));
             Source.Towers.AddRange([new(1, "124", "Tower 124", 4, true), new(3, "127", "Faradis", 32, true)]);
         }
     }

@@ -149,7 +149,7 @@ public sealed class ReviewQueryTests
         var page = await Query(h, new ReviewFilter(Reason: ReviewReasons.NoValidContact, ReminderType: CurrentMonth));
         var row = Assert.Single(page.Items);
         Assert.Equal("Customer 5", row.CustomerName);
-        Assert.Contains("phone number", row.Reasons.Single(r => r.Code == ReviewReasons.NoValidContact).Explanation);
+        Assert.Contains("CRM mobile number", row.Reasons.Single(r => r.Code == ReviewReasons.NoValidContact).Explanation);
         Assert.Equal("PACT receivables (companies 4 and 32)", row.Source);
         Assert.Equal(ReviewHarness.Now, row.SourceReadAtUtc);
         Assert.Equal(CollectionsOutcome.InvalidRequest,

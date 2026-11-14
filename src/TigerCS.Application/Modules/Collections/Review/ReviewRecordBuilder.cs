@@ -65,15 +65,15 @@ public static class ReviewRecordBuilder
         {
             var unitRows = unit.ToList();
             var first = unitRows[0].Row;
-            // The contact to call: CRM first, PACT completing only what CRM lacks (CollectionsContactLinker). The CRM links come from the one bulk read of the local CRM owner data;
+            // The contact to call: the MOBILE comes from CRM only (LinkForCampaign: never the PACT phone, not even as a fallback); name / e-mail CRM first, PACT completing what CRM lacks. The CRM links come from the one bulk read of the local CRM owner data;
             // without CRM (switched off) the contact is PACT's, exactly as before.
             var crm = context.Crm ?? CrmLinkSet.None;
-            var linked = crm.Link(unit.Key.CompanyId, unit.Key.Code,
+            var linked = crm.LinkForCampaign(unit.Key.CompanyId, unit.Key.Code,
                 new SourceContact(first.FullName.Trim(), PhoneNormalizer.Normalize(first.Mobile).E164, NormalizeEmail(first.Email)));
             var email = linked.Email;
             // PACT rows that disagree on name / phone / e-mail only matter when CRM does not supply the contact: for a uniquely identified CRM customer the CRM contact is used.
             var crmSupplies = linked.CrmStatus == CrmLinkStatus.Single;
-            var contactConflict = unitRows.Select(r => crmSupplies ? ("", "", "", r.Row.ProjectCode) : (r.Row.FullName.Trim(), PhoneNormalizer.Normalize(r.Row.Mobile).E164,
+            var contactConflict = unitRows.Select(r => crmSupplies ? ("", "", "", r.Row.ProjectCode) : (r.Row.FullName.Trim(), "",
                 NormalizeEmail(r.Row.Email), r.Row.ProjectCode)).Distinct().Count() > 1;
 
             // The customer's unpaid instalments, ALL of them, stored on every stage record: a Manual send calculates its amount from them and the person's filters, like the preview's

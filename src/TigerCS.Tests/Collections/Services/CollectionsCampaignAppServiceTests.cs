@@ -56,10 +56,13 @@ public sealed class CollectionsCampaignAppServiceTests
         public CollectionsCaller Manager { get; } = new(Guid.NewGuid(), [Roles.CsManager], []);
         public CollectionsCaller Agent { get; } = new(Guid.NewGuid(), [Roles.CsAgent], []);
         public CollectionsCampaignAppService Service { get; }
+        /// <summary>The campaign mobile is CRM only: every seeded PACT unit gets one eligible CRM buyer carrying the seeded phone (see <see cref="TigerCS.Tests.Collections.Crm.PactMirrorCrmOwnerStore"/>).</summary>
+        private CollectionsUnitLinkService MirrorLinks(DateTime now) => new(new TigerCS.Tests.Collections.Crm.PactMirrorCrmOwnerStore(() => Source.Items),
+            new CollectionsCrmOwnersOptions { Enabled = true }, new FakeTimeProvider(now), NullLogger<CollectionsUnitLinkService>.Instance);
         /// <summary>The clock is today (Dubai): nothing due after it is ever listed. <paramref name="now"/> moves it (e.g. to the preview date of a later cycle).</summary>
         public Harness(DateTime? now = null) => Service = new(Options, Campaign, Sql,
             new(Options, new FakeDepartmentRepository()), new(Options, new FakeTimeProvider(now ?? Now)),
-            Source, NullLogger<CollectionsCampaignAppService>.Instance);
+            Source, NullLogger<CollectionsCampaignAppService>.Instance, MirrorLinks(now ?? Now));
     }
 
     internal static PactReceivableInstalment Row(int day = 10, decimal amount = 500m, string tenant = "3001",

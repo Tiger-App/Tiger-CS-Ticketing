@@ -379,7 +379,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "SourceMismatchUnresolved" => "This unit's snapshot differs from PACT even after a refresh (a synchronization or mapping defect). Investigate it on the Financial reconciliation page; other customers are not held back by it.",
         "PaymentStatusUnknown" => "The remaining amount of this balance cannot be determined reliably: it is missing or negative, or the source contradicts it (Status Paid with a remainder owed, or original and paid amounts that do not add up). Confirm the balance in PACT, refresh the approval data and preview again; this is a data rule, not the schedule.",
         "NoValidContact" or "CrmCustomerAmbiguous" or "CrmCompanyAmbiguous" or "ContactSourceConflict" or "CrmUnavailable" or "ConflictingContactDetails" =>
-            "Review: fix the customer's contact in CRM or PACT, refresh the approval data and preview again.",
+            "Review: fix the buyer's mobile number in CRM (the PACT phone is not used), refresh the CRM and approval data and preview again.",
         _ => "Review: resolve the data problem at its source, refresh the approval data and preview again."
     };
 
@@ -454,7 +454,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         "CoverageIncomplete" => "The selected dates are not fully loaded",
         "SourceReconciliationRequired" => "Financial source not reconciled",
         "SourceMismatchUnresolved" => "Snapshot differs from PACT after a refresh (investigate)",
-        "NoValidContact" => "No valid mobile or email in CRM or PACT",
+        "NoValidContact" => "No valid CRM mobile",
         "CrmCustomerAmbiguous" => "Several CRM customers match",
         "CrmCompanyAmbiguous" => "CRM sale cannot be tied to one company",
         "ContactSourceConflict" => "CRM and PACT contacts differ",
@@ -928,10 +928,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>Why a unit cannot be sent: "CRM or PACT" is only claimed when CRM was consulted and linked this unit; a switched-off feed or an unlinked owner is said as such.</summary>
     public static string NoContactNote(CollectionsCampaignContactDto row, string? crmState)
     {
-        if (crmState == "Disabled") return "No mobile or email in PACT; CRM linking is switched off, so CRM was not checked: cannot be sent";
+        if (crmState == "Disabled") return "No CRM mobile: CRM linking is switched off, so CRM was not checked (the PACT phone is not used): cannot be sent";
         var ambiguous = row.Reason.Contains("CrmCustomerAmbiguous", StringComparison.Ordinal) || row.Reason.Contains("CrmCompanyAmbiguous", StringComparison.Ordinal);
-        if (crmState is not null && row.CrmCustomerId is null && !ambiguous) return "No mobile or email in PACT; no CRM owner is linked to this unit: cannot be sent";
-        return "No mobile or email in CRM or PACT: cannot be sent";
+        if (crmState is not null && row.CrmCustomerId is null && !ambiguous) return "No CRM mobile: no CRM owner is linked to this unit (the PACT phone is not used): cannot be sent";
+        return "No valid mobile in CRM (the PACT phone is not used): cannot be sent";
     }
 
     /// <summary>The note under an empty mobile: when CRM could not be used it says so instead of claiming the customer has no mobile.</summary>

@@ -395,10 +395,10 @@ public sealed class CollectionsCampaignAppService(
                 else if (paymentFilter == CampaignPaymentFilter.Overdue) dueAmount = 0m;
                 if (today is not null && dueAmount + overdueAmount <= 0) return null;
                 if (minTotal is { } floor && dueAmount + overdueAmount <= floor) return null;
-                // CRM first, PACT completing; several CRM customers or conflicting people are flagged, never merged (CollectionsContactLinker).
+                // The mobile is CRM only (LinkForCampaign); several CRM customers or conflicting people are flagged, never merged (CollectionsContactLinker).
                 var unitKey = CollectionsUnitKey.Normalize(key.Code);
                 var link = unitKey is not null && crmLinks is not null && crmLinks.TryGetValue((key.CompanyId, unitKey), out var found) ? found : null;
-                var linked = CollectionsContactLinker.Link(
+                var linked = CollectionsContactLinker.LinkForCampaign(
                     new SourceContact(first.FullName.Trim(), CollectionsContactNormalizer.NormalizePhone(first.Mobile), CollectionsContactNormalizer.NormalizeEmail(first.Email)),
                     link?.Contact ?? SourceContact.Empty, link?.Status ?? CrmLinkStatus.None);
                 var phone = linked.Phone;
@@ -410,13 +410,15 @@ public sealed class CollectionsCampaignAppService(
                 if (amount.Amount is { } value && value != decimal.Round(value, 2)) flags |= CollectionsCampaignFlags.AmountPrecisionNeedsReview;
                 if (key.UnitId is not > 0 || string.IsNullOrWhiteSpace(key.Code) || key.Code == "0")
                     flags |= CollectionsCampaignFlags.MissingUnitIdentity;
-                if (basis.Select(r => linked.CrmStatus == CrmLinkStatus.Single ? ("", "", "", r.ProjectCode) : (r.FullName.Trim(), CollectionsContactNormalizer.NormalizePhone(r.Mobile),
+                if (basis.Select(r => linked.CrmStatus == CrmLinkStatus.Single ? ("", "", "", r.ProjectCode) : (r.FullName.Trim(), "",
                         CollectionsContactNormalizer.NormalizeEmail(r.Email), r.ProjectCode)).Distinct().Count() > 1)
                     flags |= CollectionsCampaignFlags.ConflictingContactDetails;
                 if (ambiguousTenants.Contains((key.CompanyId, key.Tenant))) flags |= CollectionsCampaignFlags.UnitAllocationNeedsReview;
                 if (basis.Any(r => string.Equals(r.SourceStatus?.Trim(), "Paid", StringComparison.OrdinalIgnoreCase)))
                     flags |= CollectionsCampaignFlags.ContradictoryPaymentStatus;
                 flags |= CollectionsContactLinker.Flags(linked, selected != CollectionsCampaignStage.LegalReferral);
+                // A campaign is a voice call: the CRM mobile is required (an e-mail alone is not a contact to call), the same rule as the review records behind the export and the send.
+                if (selected != CollectionsCampaignStage.LegalReferral && linked.Phone.Length == 0) flags |= CollectionsCampaignFlags.NoValidContact;
                 if (crmUnavailable) flags |= CollectionsCampaignFlags.CrmUnavailable;
                 return new CampaignUnitFacts(first.CompanyId, key.Tenant, linked.NameSource == "Crm" ? linked.Name : first.FullName, phone, email, first.UnitId, key.Code, first.ProjectCode,
                     amount.Amount, amount.EarliestDueDate, (int)flags, first.TowerNumber, first.TowerName, dueAmount, overdueAmount,
