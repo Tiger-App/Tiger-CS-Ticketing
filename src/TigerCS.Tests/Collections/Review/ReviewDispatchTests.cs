@@ -159,7 +159,7 @@ public sealed class ReviewDispatchTests
     }
 
     [Fact]
-    public async Task DayFourteenOverlap_OfCurrentMonthAndLegalNotice_IsSurfacedAndBlocked()
+    public async Task DayFourteen_CurrentMonthAndLegalNotice_AreBothEligible_AndNothingIsFlaggedAsAnOverlap()
     {
         using var h = new ReviewHarness();
         h.Source.Items.Add(ReviewHarness.Row(1, 1600m) with { DueDate = new DateTime(2026, 9, 10), VoucherNumber = "INV-SEP", PlanAmount = 1600m });
@@ -167,12 +167,8 @@ public sealed class ReviewDispatchTests
         await h.RefreshAsync();
         using var scope = h.NewScope();
         var summary = (await scope.Query.SummarizeAsync(h.Manager, h.All(), CancellationToken.None)).Value!;
-        Assert.Equal(0, summary.Count);
-        var group = Assert.Single((await scope.Query.OverlapsAsync(h.Manager, 1, 25, CancellationToken.None)).Value!.Groups);
-        Assert.True(group.ReminderTypeOverlap);
-        Assert.False(group.SharedAcrossUnits);
-        Assert.Equal(1, group.UnitCount);
-        Assert.Equal(["CurrentMonth", "LegalNotice"], group.ReminderTypes);
+        Assert.True(summary.Count >= 1);
+        Assert.Empty((await scope.Query.OverlapsAsync(h.Manager, 1, 25, CancellationToken.None)).Value!.Groups);
         Assert.Equal(CollectionsOutcome.Forbidden, (await scope.Query.OverlapsAsync(h.Reporting, 1, 25, CancellationToken.None)).Outcome);
     }
 

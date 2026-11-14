@@ -102,7 +102,7 @@ public sealed class ReviewQueryService(
             items.TotalCount, items.Items.Select(v => ToDto(v, stale)).ToList(), applied, towerMissing));
     }
 
-    /// <summary>Phone numbers that would be called repeatedly (several units, or several reminder types for one unit): who, how many units, and why they are held back.</summary>
+    /// <summary>Phone numbers flagged by review data stored before the per-unit calling decision (several units on one number): who, how many units, and why they are held back.</summary>
     public async Task<CollectionsResult<OverlapPageDto>> OverlapsAsync(CollectionsCaller caller, int page, int pageSize, CancellationToken ct)
     {
         if (!(await authorization.ResolveAsync(caller, ct)).CanReadFinancials)
@@ -117,7 +117,6 @@ public sealed class ReviewQueryService(
             g.Rows.Select(r => (r.CompanyId, r.TenantId)).Distinct().Count(),
             g.Rows.Select(r => (r.CompanyId, r.TenantId, r.UnitCode)).Distinct().Count(), g.Rows.Count,
             g.Rows.Any(r => r.Reasons.Contains($";{ReviewReasons.SharedPhoneMultipleUnits};", StringComparison.Ordinal)),
-            g.Rows.Any(r => r.Reasons.Contains($";{ReviewReasons.ReminderTypeOverlap};", StringComparison.Ordinal)),
             g.Rows.Select(r => r.ReminderType).Distinct().Order().ToList(),
             g.Rows.Select(r => new OverlapRowDto(r.CustomerName, r.CompanyId, r.TenantId, r.UnitCode, r.ReminderType, r.RemainingAmount, r.Currency)).ToList())).ToList();
         return CollectionsResult<OverlapPageDto>.Ok(new(result.TotalGroups, page, pageSize, groups));
@@ -547,7 +546,7 @@ public sealed class ReviewQueryService(
         if (manual) reasons.Remove(ReviewReasons.OutsideSchedule);
         if (stale && (r.ValidationStatus == ReviewValidationStatus.Ready || (manual && IsManuallySendable(r))) && !reasons.Contains(ReviewReasons.StaleSource))
             reasons.Add(ReviewReasons.StaleSource);
-        // Held back because the customer was already added to a Genesys list today by ANOTHER record (the contact-frequency limit); say so rather than "already sent".
+        // Held back because the unit was already added to a Genesys list today by ANOTHER record of the SAME campaign type (the contact-frequency limit); say so rather than "already sent".
         if (v.AlreadySent && v.PreviousDispatchStatus is null && !reasons.Contains(ReviewReasons.ContactedToday))
             reasons.Add(ReviewReasons.ContactedToday);
         return reasons;

@@ -72,7 +72,7 @@ Implementation: a sweep (`SuppressionService`, Hangfire recurring `collections-g
 ## 5. Repeated calls: blocked pending your decision
 No acknowledgement releases them. Two kinds of record are held back (status *Excluded*) and cannot be selected, confirmed or uploaded:
 - `SharedPhoneMultipleUnits`: the same phone on several units or customers (same customer with two units, or different customers). Amounts are never merged and no unit is chosen.
-- `ReminderTypeOverlap`: one unit qualifies for several reminder types today, e.g. Current Month and Legal Notice on day 14.
+- `ReminderTypeOverlap`: no longer produced. Campaign types are independent, so a unit that qualifies for several reminder types today (e.g. Current Month and Legal Notice on day 14) is eligible in each; only legacy review data still carries it.
 The review page shows a panel (and `GET /api/collections/review/overlaps`) listing each affected phone with customer count, unit count, records, why, reminder types and amounts. Filter by either reason to see every record.
 **Decisions needed:** (a) one call per unit, one consolidated call per customer, or the first/highest priority; (b) which reminder type wins when two apply on one day; (c) whether people sharing a number are valid contacts.
 In the Overdue export alone, 60 of the 339 phone-bearing records are affected.

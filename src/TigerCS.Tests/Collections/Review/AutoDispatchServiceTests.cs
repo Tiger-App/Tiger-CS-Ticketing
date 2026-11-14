@@ -236,10 +236,10 @@ public sealed class AutoDispatchServiceTests
     }
 
     [Fact]
-    public async Task ACustomerContactedTodayUnderAnotherCampaign_IsHeldBackFromAuto()
+    public async Task ACustomerContactedTodayUnderAnotherCampaign_IsStillSentByAuto()
     {
-        // Customer 1 is in Current Month (scheduled today) AND has an August instalment (the Overdue campaign). A manual Overdue send would call twice on the scheduled day and is blocked, so the
-        // frequency limit is shown through a record of another type being live: seed that dispatch directly, as a previous send of the day.
+        // Customer 1 is in Current Month (scheduled today) AND has an August instalment (the Overdue campaign). Campaign types are independent: an Overdue send earlier today (seeded directly,
+        // as a previous send of the day) must NOT hold customer 1 back from Current Month.
         var rows = new[] { ReviewHarness.Row(1, 500m, day: 20), ReviewHarness.Row(1, 300m, day: 20) with { DueDate = new DateTime(2026, 8, 10), VoucherNumber = "INV-1B" }, ReviewHarness.Row(2) };
         using var h = await SeededAsync(rows: rows);
         using (var context = h.CreateContext())
@@ -255,6 +255,6 @@ public sealed class AutoDispatchServiceTests
             await context.SaveChangesAsync();
         }
         var result = CurrentMonth(await RunAsync(h));
-        Assert.Equal(("Dispatched", 1), (result.Outcome, result.Count));                              // only customer 2: customer 1 was already contacted today
+        Assert.Equal(("Dispatched", 2), (result.Outcome, result.Count));                              // both customers: contact today under Overdue does not block Current Month
     }
 }

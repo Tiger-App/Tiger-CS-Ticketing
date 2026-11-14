@@ -179,60 +179,12 @@ public static class ReviewRecordBuilder
             }
         }
 
-        MarkRepeatedCalls(records);
         return new ReviewBuildResult(records, floatNormalized, settled, cancelled);
     }
 
     /// <summary>
-    /// Repeated calls to ONE UNIT are blocked, not merged and not silently prioritised, until the business decides the policy. Among records that could be sent today (outside-schedule
-    /// records are not candidates, so a unit's Follow Up on day 28 does not collide with its Current Month on day 14) a unit with several reminder types gets <c>ReminderTypeOverlap</c>.
-    /// A phone number is NOT a unit: by the confirmed business decision every property unit is its own contact record and receives its own call, even when several units (of one customer
-    /// or of different customers) share a number. A repeated number alone therefore never holds a record back (<c>SharedPhoneMultipleUnits</c> and <c>ManualSharedPhone</c> are no longer
-    /// produced; they remain defined for review data stored before the decision).
-    /// </summary>
-    private static void MarkRepeatedCalls(List<CollectionsReviewRecord> records)
-    {
-        static (int, string, int?, string) Unit(CollectionsReviewRecord r) => (r.CompanyId, r.TenantId, r.UnitId, r.UnitCode);
-        var candidates = records.Where(r => !Parse(r.Reasons).Contains(ReviewReasons.OutsideSchedule)).ToList();
-        var flagged = new Dictionary<CollectionsReviewRecord, List<string>>();
-        void Flag(CollectionsReviewRecord r, string reason) { if (!flagged.TryGetValue(r, out var l)) flagged[r] = l = []; if (!l.Contains(reason)) l.Add(reason); }
-
-        foreach (var group in candidates.GroupBy(Unit).Where(g => g.Count() > 1))
-            foreach (var record in group) Flag(record, ReviewReasons.ReminderTypeOverlap);
-
-        foreach (var (record, reasons) in flagged)
-        {
-            var all = Parse(record.Reasons).Concat(reasons).Distinct().ToList();
-            record.Reasons = Serialize(all);
-            record.ValidationStatus = ReviewReasons.StatusFor(all, alreadySent: false);
-        }
-        MarkManualRepeatedCalls(records, candidates);
-    }
-
-    /// <summary>
-    /// For a record whose ONLY reason is <c>OutsideSchedule</c>, works out what the repeated-call rule would say if an authorized person sent that reminder type manually today, and
-    /// stores it as a marker (the record's status does not change: in Auto mode it is outside the schedule either way): the unit is already scheduled today under another reminder type
-    /// (<c>ManualReminderTypeOverlap</c>), so manual sending never skips the one-call-per-unit protection that scheduled records get. A shared number is not a marker (see <see cref="MarkRepeatedCalls"/>).
-    /// </summary>
-    private static void MarkManualRepeatedCalls(List<CollectionsReviewRecord> records, List<CollectionsReviewRecord> candidates)
-    {
-        static (int, string, int?, string) Unit(CollectionsReviewRecord r) => (r.CompanyId, r.TenantId, r.UnitId, r.UnitCode);
-        // A GULF_CUSTOMERS unit carries its exclusion beside the schedule; the marker is still worked out so that, once the unit is allowed (day 14 or a manual inclusion), the one-call-per-unit protection holds.
-        static bool OnlyOutsideSchedule(CollectionsReviewRecord r)
-        {
-            var p = Parse(r.Reasons).Where(c => c != ReviewReasons.GulfCustomerExcluded).ToList();
-            return p.Count == 1 && p[0] == ReviewReasons.OutsideSchedule;
-        }
-        var manual = records.Where(OnlyOutsideSchedule).ToList();
-        if (manual.Count == 0) return;
-        var candidateUnits = candidates.Select(Unit).ToHashSet();
-        foreach (var record in manual)
-            if (candidateUnits.Contains(Unit(record))) record.Reasons = Serialize(Parse(record.Reasons).Append(ReviewReasons.ManualReminderTypeOverlap));
-    }
-
-    /// <summary>
     /// Whether a Manual send may send this record now: Ready, or held back by the stage schedule ALONE (<c>OutsideSchedule</c> as its only reason, so no reconciliation, contact, CRM, amount,
-    /// legal-release, repeated-call or Manual marker reason). The schedule is the one rule Manual waives; every other rule keeps the record out. Used by the approval, the list and the
+    /// legal-release or other reason). The schedule is the one rule Manual waives; every other rule keeps the record out. Used by the approval, the list and the
     /// revalidation right before the upload, so they can never disagree.
     /// </summary>
     public static bool IsManuallySendable(CollectionsReviewRecord record)

@@ -226,7 +226,7 @@ public sealed class ReviewValidationTests
     }
 
     [Fact]
-    public void ADayFourteenCurrentMonthAndLegalNoticeOnOneUnitBlockBothAsAnOverlap()
+    public void ADayFourteenCurrentMonthAndLegalNoticeOnOneUnitAreBothEligible_CampaignsAreIndependent()
     {
         // The same unit: a September balance above AED 1,500 (Legal Notice) and an October instalment (Current Month); both are scheduled on day 14.
         var september = ReviewHarness.Row(1, amount: 1600m) with { DueDate = new DateTime(2026, 9, 10), VoucherNumber = "INV-SEP" };
@@ -236,11 +236,12 @@ public sealed class ReviewValidationTests
         Assert.Equal(2, today.Count);
         Assert.All(today, r =>
         {
-            Assert.Contains(ReviewReasons.ReminderTypeOverlap, Reasons(r));
-            Assert.Equal(ReviewValidationStatus.Excluded, r.ValidationStatus);
+            Assert.DoesNotContain(ReviewReasons.ReminderTypeOverlap, Reasons(r));
+            Assert.DoesNotContain(ReviewReasons.ManualReminderTypeOverlap, Reasons(r));
+            Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus);
         });
-        // Records for days that are not today are not part of the overlap.
-        Assert.DoesNotContain(records.Where(r => r.ReminderType is CampaignReminderType.FollowUp or CampaignReminderType.Overdue), r => Reasons(r).Contains(ReviewReasons.ReminderTypeOverlap));
+        // No record carries a cross-campaign marker, whatever its type.
+        Assert.DoesNotContain(records, r => Reasons(r).Contains(ReviewReasons.ReminderTypeOverlap) || Reasons(r).Contains(ReviewReasons.ManualReminderTypeOverlap));
     }
 
     [Fact]
