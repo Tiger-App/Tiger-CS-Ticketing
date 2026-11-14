@@ -50,6 +50,16 @@
 .campaign-card__label { display: block; font-size: var(--text-xs); color: var(--color-text-secondary); }
 .campaign-card__value { margin-top: auto; font-size: 20px; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .campaign-card__sub { display: block; font-size: var(--text-xs); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+/* Clickable filter cards (Manual): the label's link is stretched over the whole card; the Info icon stays its own control above it. Hover / active only set --card-edge, and the card's border-color
+   is declared before the Ready / Held back accents, so those keep their left stripe. The active card is marked by a subtle border colour alone (no layout shift). */
+.campaign-card--filter { --card-edge: var(--color-border); position: relative; cursor: pointer; border-color: var(--card-edge); transition: border-color .12s ease; }
+.campaign-card--filter:hover { --card-edge: var(--color-text-secondary); }
+.campaign-card--active, .campaign-card--active:hover { --card-edge: var(--color-info, #2563eb); }
+.campaign-card__link { color: inherit; text-decoration: none; }
+.campaign-card__link::after { content: ""; position: absolute; inset: 0; border-radius: inherit; }
+.campaign-card__link:focus-visible { outline: none; }
+.campaign-card__link:focus-visible::after { outline: 2px solid var(--color-gold-dark); outline-offset: 1px; }
+.campaign-card--filter .info-tip { position: relative; z-index: 1; }
 .campaign-card--ready { border-left: 3px solid var(--color-success, #15803d); }
 .campaign-card--blocked { border-left: 3px solid var(--color-warning, #b45309); }
 .campaign-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-4); margin: var(--space-2) 0 0; font-size: var(--text-xs); color: var(--color-text-secondary); }

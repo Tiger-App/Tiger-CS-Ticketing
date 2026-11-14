@@ -347,7 +347,7 @@ public sealed class ReviewQueryService(
         var calculated = manual.Views;
         int Count(ReviewValidationStatus s) => calculated.Count(v => ManualStatus(v, stale) == s);
         var counts = new ReviewCountsDto(calculated.Count, Count(ReviewValidationStatus.Ready), Count(ReviewValidationStatus.NeedsReview), Count(ReviewValidationStatus.Excluded), Count(ReviewValidationStatus.AlreadySent));
-        var shown = ManualShown(calculated, spec.ValidationStatus, stale);
+        var shown = ManualShown(calculated, spec.ValidationStatus, stale, spec.HeldBack);
         var readyTotal = calculated.Where(v => ManualStatus(v, stale) == ReviewValidationStatus.Ready).Sum(v => v.Record.RemainingAmount ?? 0m);
         var towerMissing = (spec.TowerId is not null || spec.TowerIds is not null) && shown.Count == 0 && !await store.RunHasTowerDataAsync(run.CollectionsReviewRunId, ct);
         return CollectionsResult<ReviewPageDto>.Ok(new(ToDto(run), counts, page, pageSize, shown.Count,
@@ -355,8 +355,9 @@ public sealed class ReviewQueryService(
     }
 
     /// <summary>The rows of a Manual list in the order the page shows them (company, tenant, unit, record key), optionally only those with one status.</summary>
-    private static List<ReviewRecordView> ManualShown(IEnumerable<ReviewRecordView> calculated, ReviewValidationStatus? wanted, bool stale) =>
-        (wanted is { } status ? calculated.Where(v => ManualStatus(v, stale) == status) : calculated)
+    private static List<ReviewRecordView> ManualShown(IEnumerable<ReviewRecordView> calculated, ReviewValidationStatus? wanted, bool stale, bool heldBack = false) =>
+        (heldBack ? calculated.Where(v => ManualStatus(v, stale) is ReviewValidationStatus.NeedsReview or ReviewValidationStatus.Excluded)
+            : wanted is { } status ? calculated.Where(v => ManualStatus(v, stale) == status) : calculated)
         .OrderBy(v => v.Record.CompanyId).ThenBy(v => v.Record.TenantId, StringComparer.OrdinalIgnoreCase).ThenBy(v => v.Record.UnitCode, StringComparer.OrdinalIgnoreCase)
         .ThenBy(v => v.Record.RecordKey, StringComparer.Ordinal).ToList();
 
@@ -602,11 +603,18 @@ public sealed class ReviewQueryService(
             type = t;
         }
         ReviewValidationStatus? validation = null;
+        var heldBack = false;
         if (!string.IsNullOrWhiteSpace(f.ValidationStatus) && !f.ValidationStatus.Equals("All", StringComparison.OrdinalIgnoreCase))
         {
-            if (!CollectionsEnums.TryParse<ReviewValidationStatus>(f.ValidationStatus.Replace(" ", ""), out var v))
-                return (null, "Validation status must be Ready, NeedsReview, Excluded or AlreadySent.");
-            validation = v;
+            // "HeldBack" = NeedsReview + Excluded: the Manual "Held back" tile. It only narrows what a Manual list shows; the Auto list has no such tile.
+            if (f.ValidationStatus.Replace(" ", "").Equals("HeldBack", StringComparison.OrdinalIgnoreCase))
+            {
+                if (!CollectionsSendingModes.IsManual(f.SendingMode)) return (null, "Held back is only available in Manual.");
+                heldBack = true;
+            }
+            else if (!CollectionsEnums.TryParse<ReviewValidationStatus>(f.ValidationStatus.Replace(" ", ""), out var v))
+                return (null, "Validation status must be Ready, NeedsReview, Excluded, AlreadySent or HeldBack.");
+            else validation = v;
         }
         string? reason = null;
         if (!string.IsNullOrWhiteSpace(f.Reason))
@@ -628,7 +636,7 @@ public sealed class ReviewQueryService(
             f.MinRemaining ?? reviewOptions.DefaultMinimumRemaining, f.MaxRemaining, type, validation, reason, towerSet is { Count: 1 } onlyTower ? onlyTower[0] : null, towerSet is { Count: > 1 } manyTowers ? manyTowers : null,
             // A Manual or Auto dispatch request carries the contact-frequency limit: a customer already added to a Genesys dispatch today is held back.
             string.IsNullOrWhiteSpace(f.SendingMode) ? null : clock.BusinessDayStartUtc,
-            CollectionsUnitFloor.Normalize(f.Floors) is { Count: > 0 } floors ? floors : null), null);
+            CollectionsUnitFloor.Normalize(f.Floors) is { Count: > 0 } floors ? floors : null, HeldBack: heldBack), null);
     }
 
     /// <summary>The distinct tower ids of a filter (the single id and the list together); empty = All projects.</summary>

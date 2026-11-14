@@ -167,14 +167,20 @@
     // View (By unit / By instalment): switching re-runs the search with the same filters.
     form.querySelectorAll('[data-view-radio]').forEach(r => r.addEventListener('change', () => form.requestSubmit()));
     form.addEventListener('submit', event => { event.preventDefault(); autoReloads = 0; load(queryFromForm(), true); });
-    box.addEventListener('click', event => {
+    // A results link (pager, summary card) reloads the list in place with the link's own query.
+    const followResultsLink = event => {
         const link = event.target.closest('a[data-results-link]');
-        if (link) {
-            event.preventDefault(); autoReloads = 0;
-            const q = new URL(link.href, location.origin).searchParams; q.delete('render'); q.delete('handler');
-            load(q, true);
-            return;
-        }
+        if (!link) return false;
+        event.preventDefault(); autoReloads = 0;
+        const q = new URL(link.href, location.origin).searchParams; q.delete('render'); q.delete('handler');
+        load(q, true);
+        return true;
+    };
+    // The Campaigns summary cards are lifted out of the results box into [data-kpi-box] (collections-campaign-filters.js): their links are followed the same way.
+    const kpiBox = document.querySelector('[data-kpi-box]');
+    if (kpiBox) kpiBox.addEventListener('click', followResultsLink);
+    box.addEventListener('click', event => {
+        if (followResultsLink(event)) return;
         const toggle = event.target.closest('[data-unit-toggle]');
         if (toggle) { setUnitOpen(toggle.closest('[data-unit]'), toggle.getAttribute('aria-expanded') !== 'true'); return; }
         if (event.target.closest('[data-results-retry]')) { event.preventDefault(); autoReloads = 0; load(currentQuery(), false); }

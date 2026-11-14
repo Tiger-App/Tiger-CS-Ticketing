@@ -40,6 +40,8 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     public IReadOnlyList<CollectionsTowerDto> Towers { get; private set; } = [];
     public bool TowersFailed { get; private set; }
     public string? Search { get; private set; }
+    /// <summary>The summary card the Manual list is narrowed to (<see cref="CampaignCards"/>); "all" (the Customers card) is the default and means no narrowing. It only decides which rows of the list are shown: never the counts, the approval filter or what can be sent.</summary>
+    public string Card { get; private set; } = CampaignCards.All;
     public int PageNumber { get; private set; } = 1;
     public ApiOutcome Outcome { get; private set; }
     public string? Error { get; private set; }
@@ -71,9 +73,9 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>The page (filters + an empty results area) renders at once and never waits for data; results come from <see cref="OnGetResultsAsync"/>.</summary>
     public async Task OnGetAsync(string stage = "OverdueReminder", DateOnly? businessDate = null,
         string? search = null, [FromQuery(Name = "page")] int pageNumber = 1, DateOnly? dateFrom = null, DateOnly? dateTo = null,
-        int? month = null, int? year = null, string? render = null, string? load = null, string? paymentStatus = null, string? sendingMode = null, CancellationToken cancellationToken = default)
+        int? month = null, int? year = null, string? render = null, string? load = null, string? paymentStatus = null, string? sendingMode = null, string? card = null, CancellationToken cancellationToken = default)
     {
-        SetFilters(stage, businessDate, search, pageNumber, dateFrom, dateTo, month, year, load, paymentStatus, sendingMode);
+        SetFilters(stage, businessDate, search, pageNumber, dateFrom, dateTo, month, year, load, paymentStatus, sendingMode, card);
         RenderFull = render == "full";
         var towers = await api.GetTowersAsync(cancellationToken);
         Towers = towers.IsSuccess && towers.Value is { } list ? list : [];
@@ -93,10 +95,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// <summary>The results area only (HTML fragment): summary, snapshot status, table, pagination and export links.</summary>
     public async Task<IActionResult> OnGetResultsAsync(string stage = "OverdueReminder", DateOnly? businessDate = null,
         string? search = null, [FromQuery(Name = "page")] int pageNumber = 1, DateOnly? dateFrom = null, DateOnly? dateTo = null,
-        int? month = null, int? year = null, string? load = null, string? paymentStatus = null, string? sendingMode = null, CancellationToken cancellationToken = default)
+        int? month = null, int? year = null, string? load = null, string? paymentStatus = null, string? sendingMode = null, string? card = null, CancellationToken cancellationToken = default)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
-        SetFilters(stage, businessDate, search, pageNumber, dateFrom, dateTo, month, year, load, paymentStatus, sendingMode);
+        SetFilters(stage, businessDate, search, pageNumber, dateFrom, dateTo, month, year, load, paymentStatus, sendingMode, card);
         await LoadReportAsync(cancellationToken);
         Response.Headers.CacheControl = "no-store";
         var t = Report?.Timings;
@@ -160,7 +162,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     /// </summary>
     private async Task LoadManualAsync(CancellationToken cancellationToken)
     {
-        var result = await api.GetReviewPageAsync(ApprovalFilter(), PageNumber, cancellationToken);
+        var result = await api.GetReviewPageAsync(ListFilter(), PageNumber, cancellationToken);
         Outcome = result.Outcome;
         ManualPage = result.IsSuccess ? result.Value : null;
         Error = result.Detail;
@@ -193,9 +195,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         return Page();
     }
 
-    private void SetFilters(string stage, DateOnly? date, string? search, int page, DateOnly? from, DateOnly? to, int? month, int? year, string? load, string? paymentStatus, string? sendingMode = null)
+    private void SetFilters(string stage, DateOnly? date, string? search, int page, DateOnly? from, DateOnly? to, int? month, int? year, string? load, string? paymentStatus, string? sendingMode = null, string? card = null)
     {
         SendingMode = CollectionsSendingModes.TryParse(sendingMode, out var parsedMode) ? parsedMode : CollectionsSendingModes.Auto;
+        Card = CampaignCards.Parse(card);
         PaymentStatus = CampaignPaymentFilters.TryParse(paymentStatus, out var payment) ? CampaignPaymentFilters.Name(payment) : paymentStatus!.Trim();
         RequestedBusinessDate = date; RequestedDateTo = to;   // what the person asked for; BusinessDate / DateTo are later filled with the report's own defaults
         Stage = stage; BusinessDate = date; TowerIds = ParseTowerIds(Request.Query["towerId"]); FloorIds = FloorSelection.Parse(Request.Query["floor"]); Search = search?.Trim(); PageNumber = Math.Max(1, page);
@@ -851,7 +854,10 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         return $"/Collections/Campaigns?{query}";
     }
 
-    public string PageUrl(int page = 1, string? export = null)
+    /// <summary>The link of a summary card: the same list with every filter kept, narrowed to that card, back on page 1. A plain GET: nothing is approved or sent by following it.</summary>
+    public string CardUrl(string card) => PageUrl(1, null, CampaignCards.Parse(card));
+
+    public string PageUrl(int page = 1, string? export = null, string? card = null)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         query["stage"] = Stage;
@@ -864,6 +870,7 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
         query["minTotal"] = MinTotalText;
         query["paymentStatus"] = PaymentStatus;
         if (!string.IsNullOrWhiteSpace(Search)) query["search"] = Search;
+        if (IsManual && (card ?? Card) is var chosen && chosen != CampaignCards.All) query["card"] = chosen;   // kept by the pager, dropped by the Customers card
         if (export is null) { query["page"] = page.ToString(CultureInfo.InvariantCulture); query["render"] = "full"; }
         else { query["handler"] = "Export"; query["mode"] = export; }
         return $"/Collections/Campaigns?{query}";
@@ -887,6 +894,12 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
             MinRemaining: MinTotal ?? 0m, ReminderType: reminderType, DueStatus: PaymentStatus is "Both" ? null : PaymentStatus, TowerId: SingleTowerId, TowerIds: ManyTowerIds,
             SendingMode: SendingMode, Floors: FloorFilter);
     }
+
+    /// <summary>
+    /// The filter of the list on screen: <see cref="ApprovalFilter"/> plus the summary card. The card only narrows which rows are shown (the API computes the counts and the eligible amount before it applies it),
+    /// and it is deliberately NOT part of <see cref="ApprovalFilter"/>, so Send to Genesys and the exports resolve the very same customers whichever card is active.
+    /// </summary>
+    public ReviewFilter ListFilter() => ApprovalFilter() with { ValidationStatus = CampaignCards.ValidationStatus(Card) };
 
     /// <summary>The stage's display name = the Genesys campaign name used when this list is sent.</summary>
     public string? CampaignName => CollectionsEnums.TryParse<CollectionsCampaignStage>(Stage, out var stage)
@@ -940,4 +953,29 @@ public sealed class CampaignsModel(CollectionsApiClient api, Microsoft.Extension
     };
 
     public static string MoneyOrDash(decimal amount) => amount > 0 ? amount.ToString("N2", CultureInfo.InvariantCulture) : "—";
+}
+
+/// <summary>The clickable summary cards of the Manual list and the review-record status each one shows. Total amount is not a card filter.</summary>
+public static class CampaignCards
+{
+    /// <summary>Customers: every customer of the list (no narrowing).</summary>
+    public const string All = "all";
+    /// <summary>Eligible: only customers that pass every send check (Ready).</summary>
+    public const string Eligible = "eligible";
+    /// <summary>Held back: the customers that are not sent, each with its reason (Needs review and Excluded: the set the card counts).</summary>
+    public const string HeldBack = "held-back";
+    /// <summary>Already sent: customers that already received the campaign.</summary>
+    public const string AlreadySent = "already-sent";
+
+    /// <summary>An unknown or blank value is the Customers card.</summary>
+    public static string Parse(string? value) => value?.Trim().ToLowerInvariant() switch
+    {
+        Eligible => Eligible, HeldBack => HeldBack, AlreadySent => AlreadySent, _ => All
+    };
+
+    /// <summary>The API's validation-status filter for the card (null = none).</summary>
+    public static string? ValidationStatus(string card) => card switch
+    {
+        Eligible => "Ready", HeldBack => "HeldBack", AlreadySent => "AlreadySent", _ => null
+    };
 }

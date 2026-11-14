@@ -14,6 +14,7 @@ public sealed record ReviewFilter(
 
 /// <summary>
 /// The normalized, validated filter the store understands. <see cref="PaymentStatuses"/> is null for "All".
+/// <see cref="HeldBack"/> (Manual lists only, a display narrowing like <see cref="ValidationStatus"/>) lists every customer that is not sent: NeedsReview and Excluded together, the set the "Held back" tile counts.
 /// </summary>
 public sealed record ReviewQuerySpec(
     int? CompanyId, string? Project, string? Unit, string? CustomerText, string? PhoneDigits,
@@ -21,7 +22,8 @@ public sealed record ReviewQuerySpec(
     decimal? MinRemaining, decimal? MaxRemaining, CampaignReminderType? ReminderType,
     ReviewValidationStatus? ValidationStatus, string? Reason, int? TowerId = null, IReadOnlyList<int>? TowerIds = null,
     DateTime? ContactedSinceUtc = null, IReadOnlyList<int>? Floors = null,
-    IReadOnlyCollection<string>? UnitCodes = null, IReadOnlyCollection<string>? ExcludedUnitCodes = null);
+    IReadOnlyCollection<string>? UnitCodes = null, IReadOnlyCollection<string>? ExcludedUnitCodes = null,
+    bool HeldBack = false);
 
 public sealed record ReviewRunDto(
     long RunId, string Status, string Phase, int ProgressPercent, DateOnly AsOfDate, int? CompanyId,

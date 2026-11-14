@@ -48,3 +48,29 @@
         }
     </div>
 }
+else if (Model.ManualPage?.Run is { } approval)
+{
+    @* Manual reads the stored approval data (the review run), never the live per-company snapshot, so there is no Report here: without this strip the "Snapshot not loaded yet" chip of the idle box
+       would stay on screen next to the loaded customers, because collections-campaign-filters.js removes it only when a [data-snapshot-status] arrives. Same chips, same hooks as Auto. *@
+    var reconciled = approval.SourceReconciled ? "Ready" : "Failed";
+    var approvalState = approval.Status == "Failed" ? "Failed"
+        : approval.Status is "Queued" or "Running" ? "Loading"
+        : approval.IsStale || approval.AsOfDate != CollectionsDisplay.DubaiToday() ? "Warning" : "Ready";
+    var approvalTip = new Microsoft.AspNetCore.Html.HtmlContentBuilder()
+        .Append("The stored approval data this Manual list and its counts are read from, built for ").Append(approval.AsOfDate.ToString("dd MMM yyyy"))
+        .Append(approvalState == "Warning" ? ". It is stale or was built on another day: refresh it before sending." : ".");
+    if (approval.CompletedAtUtc is { } completed) approvalTip.Append(" · ").AppendHtml("<span data-updated>").Append($"Updated {CollectionsDisplay.DubaiTime(completed)}").AppendHtml("</span>");
+    <div class="campaign-snapshot__body campaign-status" data-snapshot-status data-snapshot-manual>
+        <ul class="campaign-status__row" data-status-row>
+            <li class="campaign-status__item"><span class="campaign-status__label">Financial reconciliation<partial name="_InfoTip" model="@(new InfoTipModel("tip-status-reconciliation", "Financial reconciliation", "Whether the financial source has been reconciled against PACT for the configured procedure. Nothing can be approved or sent until it is."))" /></span><span class="campaign-pill campaign-pill--@reconciled.ToLowerInvariant()" data-status-pill="reconciliation" data-state="@reconciled">@reconciled</span></li>
+            <li class="campaign-status__item"><span class="campaign-status__label">Approval data<partial name="_InfoTip" model="@(new InfoTipModel("tip-status-approval", "Approval data", "", null, approvalTip))" /></span><span class="campaign-pill campaign-pill--@approvalState.ToLowerInvariant()" data-status-pill="approval" data-state="@approvalState">@approvalState</span></li>
+        </ul>
+        @if (!approval.SourceReconciled)
+        {
+            <div class="receivables-notice receivables-notice--warning" role="alert" data-source-status="NotReconciled">
+                <span>The financial source has not been reconciled against PACT for the configured procedure, so nothing can be approved or sent.</span>
+                <a class="btn btn-sm" href="/Collections/Reconciliation" data-reconciliation-link>Show the differences</a>
+            </div>
+        }
+    </div>
+}

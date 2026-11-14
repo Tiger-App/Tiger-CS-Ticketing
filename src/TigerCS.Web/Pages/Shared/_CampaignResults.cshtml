@@ -4,6 +4,8 @@
 @if (Model.LoadNotice is { } notice) { <div class="receivables-notice" role="status" data-load-notice>@notice</div> }
 @if (Model.IsManual)
 {
+    @* Like Auto: for the asynchronous reload the snapshot status travels with the fragment and is lifted into the always-visible status box, which replaces the "not loaded yet" chip. *@
+    if (!Model.RenderFull) { <partial name="_CampaignSnapshotStatus" model="Model" /> }
     <partial name="_ManualResults" model="Model" />
 }
 else if (Model.NothingDueYet)
