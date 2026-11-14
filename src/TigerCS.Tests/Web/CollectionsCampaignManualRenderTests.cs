@@ -636,4 +636,90 @@ public sealed class CollectionsCampaignManualRenderTests
         var page = await (await client.GetAsync(response.Headers.Location)).Content.ReadAsStringAsync();
         Assert.Contains("data-approval-notice", page); Assert.Contains("is current. A refresh is not repeated within a minute", Decode(page));
     }
+
+    // ------------------------------------------------------------------ clickable summary cards (view filters)
+
+    private static string CardTag(string html, string card) => Regex.Match(html, $"<li[^>]*data-card=\"{card}\"[^>]*>").Value;
+    private static string CardLink(string html, string card) => Decode(Regex.Match(html, $"<a[^>]*data-card-filter=\"{card}\"[^>]*>").Value);
+
+    [Fact]
+    public async Task SummaryCards_AreLinks_ExceptTotalAmount_AndTheirCountsAreUnchanged()
+    {
+        var (html, _) = await LoadAsync();
+        foreach (var card in new[] { "all", "eligible", "heldback", "sent" }) Assert.Contains("data-results-link", CardLink(html, card));
+        var total = Regex.Match(html, "<li[^>]*>\\s*<span class=\"campaign-card__label\">Total amount.*?</li>", RegexOptions.Singleline).Value;
+        Assert.DoesNotContain("<a ", total); Assert.DoesNotContain("data-card", total); Assert.Contains("data-eligible-total", total);   // not clickable
+        Assert.Matches("data-ready-count>2<", html); Assert.Matches("data-blocked-count>3<", html); Assert.Matches("data-eligible-count>5<", html); Assert.Matches("data-sent-count>0<", html);
+    }
+
+    [Theory]
+    [InlineData("", "all", null)]
+    [InlineData("&card=all", "all", null)]
+    [InlineData("&card=eligible", "eligible", "validationStatus=Ready")]
+    [InlineData("&card=heldback", "heldback", "validationStatus=HeldBack")]
+    [InlineData("&card=sent", "sent", "validationStatus=AlreadySent")]
+    [InlineData("&card=bogus", "all", null)]
+    public async Task EachCard_AsksForItsOwnStatus_HighlightsItself_AndKeepsEveryFilter(string cardParam, string active, string? expectedStatus)
+    {
+        var (html, api) = await LoadAsync(url: Url + "&towerId=7&paymentStatus=Overdue&dateFrom=2026-08-01&dateTo=2026-09-30&minTotal=250&search=Manual" + cardParam);
+        var query = Assert.Single(api.RecordQueries);
+        if (expectedStatus is null) Assert.DoesNotContain("validationStatus", query); else Assert.Contains(expectedStatus, query);
+        // the existing filters, dates, campaign and search are untouched
+        Assert.Contains("reminderType=CurrentMonth", query); Assert.Contains("towerId=7", query); Assert.Contains("dueStatus=Overdue", query);
+        Assert.Contains("dueFrom=2026-08-01", query); Assert.Contains("dueTo=2026-09-30", query); Assert.Contains("minRemaining=250", query); Assert.Contains("customer=Manual", query);
+        // only the active card is highlighted (a subtle border via data-active)
+        foreach (var card in new[] { "all", "eligible", "heldback", "sent" })
+            Assert.Contains($"data-active=\"{(card == active ? "true" : "false")}\"", CardTag(html, card));
+        Assert.Contains("aria-pressed=\"true\"", CardLink(html, active));
+        // every card link keeps the filters and goes to page 1
+        foreach (var card in new[] { "eligible", "heldback", "sent" })
+        {
+            var href = CardLink(html, card);
+            Assert.Contains($"card={card}", href); Assert.Contains("page=1&", href + "&"); Assert.Contains("towerId=7", href); Assert.Contains("dateFrom=2026-08-01", href);
+            Assert.Contains("minTotal=250", href); Assert.Contains("paymentStatus=Overdue", href); Assert.Contains("search=Manual", href); Assert.Contains("sendingMode=Manual", href);
+        }
+        var reset = CardLink(html, "all");
+        Assert.DoesNotContain("card=", reset); Assert.Contains("page=1&", reset + "&"); Assert.Contains("towerId=7", reset);       // Customers resets the card filter
+    }
+
+    [Fact]
+    public async Task SwitchingCard_ResetsPagination_AndPaginationKeepsTheActiveCard()
+    {
+        var (html, _) = await LoadAsync(url: Url + "&card=eligible&page=3");
+        foreach (var card in new[] { "all", "eligible", "heldback", "sent" }) Assert.Contains("page=1", CardLink(html, card));      // never page 3
+        Assert.DoesNotContain("page=3", string.Concat(new[] { "all", "eligible", "heldback", "sent" }.Select(c => CardLink(html, c))));
+    }
+
+    [Fact]
+    public async Task ClickingACard_IsAReadOnlyGet_SendsNothing_AndTheApprovalIsNotNarrowedByIt()
+    {
+        var (html, api) = await LoadAsync(url: Url + "&card=heldback");
+        Assert.All(api.All, call => Assert.StartsWith("GET ", call));                                           // no POST: nothing is approved, exported or dispatched
+        Assert.DoesNotContain(api.All, call => call.Contains("/dispatches") && call.StartsWith("POST"));
+        Assert.Equal(0, api.Exports);
+        var form = Regex.Match(html, "<form[^>]*data-approve-form.*?</form>", RegexOptions.Singleline).Value;
+        Assert.DoesNotContain("name=\"card\"", form); Assert.DoesNotContain("validationStatus", form);          // the send / export always re-resolves the whole filtered population
+        Assert.Contains("name=\"sendingMode\" value=\"Manual\"", form);
+    }
+
+    [Fact]
+    public async Task HeldBackCard_ShowsEveryHeldBackRowWithItsReason_AndItsCountIsExcludedPlusNeedsReview()
+    {
+        var (html, api) = await LoadAsync(a => a.Records = [Row(3, "Excluded", ReviewReasons.ManualSharedPhone), Row(4, "Excluded", ReviewReasons.LegalNoticeReleaseRequired), Row(5, "NeedsReview", ReviewReasons.NoValidContact)],
+            url: Url + "&card=heldback");
+        Assert.Contains("validationStatus=HeldBack", Assert.Single(api.RecordQueries));
+        Assert.Equal(3, Regex.Matches(html, "data-reason-code=\"").Count);                                    // each row states its reason
+        Assert.Matches("data-blocked-count>3<", html);
+        Assert.Equal(3, Regex.Matches(html, "<tr data-campaign-status=").Count);                               // rows shown == the card count
+    }
+
+    [Fact]
+    public async Task TheSnapshotStrip_NoLongerSaysNotLoadedYet_OnceAManualListHasLoaded()
+    {
+        var (html, _) = await LoadAsync(url: Url.Replace("render=full", "handler=Results"));
+        Assert.Contains("data-manual-snapshot-status", html); Assert.Contains("data-status-pill=\"reconciliation\"", html); Assert.Contains("data-status-pill=\"snapshot\"", html);
+        Assert.DoesNotContain("Snapshot not loaded yet", html);
+        var (stale, _) = await LoadAsync(a => a.Run = null, url: Url.Replace("render=full", "handler=Results"));
+        Assert.DoesNotContain("Snapshot not loaded yet", stale);
+    }
 }
