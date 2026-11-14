@@ -138,9 +138,8 @@ public sealed class TeamPerformanceModel(ReportsApiClient reportsApiClient) : Pa
     /// <summary>The roles cell: a comma-joined list (the Api already orders it).</summary>
     public static string RolesText(IReadOnlyList<string> roles) => roles.Count == 0 ? "—" : string.Join(", ", roles);
 
-    /// <summary>The departments cell: a comma-joined list, primary first (the Api already orders it).</summary>
-    public static string DepartmentsText(IReadOnlyList<TeamPerformanceDepartmentDto> departments) =>
-        departments.Count == 0 ? "—" : string.Join(", ", departments.Select(d => d.Name));
+    /// <summary>The Primary Department cell: the primary department's name, or "Not Assigned" when none is configured (never another department).</summary>
+    public static string PrimaryDepartmentText(TeamPerformanceDepartmentDto? primary) => primary?.Name ?? "Not Assigned";
 
     /// <summary>The message for a report that could not be loaded — a 403 is a permission answer, never a technical one.</summary>
     public static string LoadFailureMessage(ApiOutcome outcome) => outcome switch

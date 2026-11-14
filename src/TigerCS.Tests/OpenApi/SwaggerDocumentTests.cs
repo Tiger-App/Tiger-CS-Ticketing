@@ -96,6 +96,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "GET /api/tickets",
         "GET /api/tickets/{ticketId}",
         "POST /api/tickets/{ticketId}/assignment",
+        "POST /api/tickets/{ticketId}/reassign",
         "POST /api/tickets/{ticketId}/assignment/retry",
         "GET /api/admin/cs-agent-backfill/preview",
         "POST /api/admin/cs-agent-backfill/run",

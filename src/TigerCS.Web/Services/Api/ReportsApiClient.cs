@@ -47,6 +47,7 @@ public sealed class ReportsApiClient(HttpClient httpClient, ILogger<ReportsApiCl
         if (!string.IsNullOrWhiteSpace(request.Role)) query["role"] = request.Role;
         if (request.DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
         if (!string.IsNullOrWhiteSpace(request.Status)) query["status"] = request.Status;
+        if (!string.IsNullOrWhiteSpace(request.SlaType)) query["slaType"] = request.SlaType;
         if (!string.IsNullOrWhiteSpace(request.SortBy)) query["sortBy"] = request.SortBy;
         if (!string.IsNullOrWhiteSpace(request.SortDir)) query["sortDir"] = request.SortDir;
         query["page"] = request.Page.ToString(CultureInfo.InvariantCulture);

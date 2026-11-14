@@ -33,12 +33,15 @@ predicate the count used, so a number and its list always agree.
   database. A configured service identity (the Genesys integration account)
   is not a person and is not listed.
 - **One row per employee**, however many roles or departments they hold.
-  Roles are shown comma-joined (alphabetical); departments comma-joined,
-  primary first.
+  Roles are shown comma-joined (alphabetical). The **Primary Department**
+  column shows only the department flagged `UserDepartmentAssignments.IsPrimary`
+  (at most one per employee); an employee with none shows **Not Assigned** —
+  never another department they merely have access to. Secondary departments
+  and department access are unchanged and are not shown here.
 - Employees with **no activity** in the period are included with zeros.
 - Rows are sorted by display name.
 - There is no "agent type" any more: a Call Center agent is simply an
-  employee whose departments include Call Center — filter by Department.
+  employee whose Primary Department is Call Center — filter by Department.
 
 ## Filters
 
@@ -49,10 +52,10 @@ All optional, kept in the page URL (a GET form):
 | `dateFrom`, `dateTo` | UTC calendar days, inclusive. Default: the last 30 days, today included (the Dashboard's `ResolvePeriod`). A reversed range is swapped. |
 | `employeeId` | One active employee. An employee who is not on the report yields no rows. |
 | `role` | An Identity role name (case-insensitive); employees holding it. An unknown value is ignored. |
-| `departmentId` | Employees who are members (primary or not) of that department. |
+| `departmentId` | Employees whose **Primary Department** is that department. Access to a department is not enough; an employee with no primary department matches no department filter. |
 
 The pickers always offer **everyone**, **every configured (active) department**
-— including one with no members yet — and **every role held by an active
+— including one with no members yet, and any department that is an active employee's primary — and **every role held by an active
 employee**, not only what the current filters left. Filters combine (AND).
 
 ## Authorization and visibility

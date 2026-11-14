@@ -274,9 +274,25 @@ public sealed record TransferTicketRequestDto(
     int TargetDepartmentId, string Reason, byte[] RowVersion, Guid? AssignToEmployeeId = null, TicketTransferReason? ReasonCode = null,
     int? CollectionsTowerId = null, string? CollectionsUnitRef = null);
 
+/// <summary>
+/// Assign / Reassign / Transfer in one step (<c>POST /api/tickets/{id}/reassign</c>). Open to every caller who can modify the ticket, whatever their role.
+/// </summary>
+/// <param name="TargetDepartmentId">Required. The department that should hold the ticket. The ticket's current department keeps it where it is; another active department transfers it.</param>
+/// <param name="RowVersion">Required. The <c>rowVersion</c> from the ticket you read. A stale value is answered with 409.</param>
+/// <param name="AssignedEmployeeId">Optional. An ACTIVE member of <paramref name="TargetDepartmentId"/> who becomes the assignee. Omitted: department-only assignment (only valid when the department changes; the transfer keeps its usual owner handling).</param>
+/// <param name="Comment">Optional transfer comment, recorded in the audit log, the assignment history and the ticket timeline (at most 500 characters).</param>
+/// <param name="CollectionsTowerId">Only when the target is the Collections department and the ticket has no verified tower and unit yet.</param>
+/// <param name="CollectionsUnitRef">Required with <paramref name="CollectionsTowerId"/>.</param>
+public sealed record ReassignTicketRequestDto(
+    int TargetDepartmentId, byte[] RowVersion, Guid? AssignedEmployeeId = null, string? Comment = null,
+    int? CollectionsTowerId = null, string? CollectionsUnitRef = null);
+
 public enum TicketMutationOutcome
 {
     Success,
+
+    /// <summary>Reassign was sent with the ticket's own department and no employee: there is nothing to change. Pick an employee, or another department.</summary>
+    AssignmentTargetRequired,
     NotFound,
     Forbidden,
     ConcurrencyConflict,

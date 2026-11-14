@@ -95,6 +95,7 @@ public sealed class TeamPerformanceAppService(
                 e.DisplayName,
                 e.Roles,
                 e.Departments.Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, d.IsPrimary)).ToList(),
+                PrimaryDepartmentOf(e),
                 metrics.CurrentlyAssigned.GetValueOrDefault(e.EmployeeId),
                 metrics.TicketsWorked.GetValueOrDefault(e.EmployeeId),
                 metrics.CompletedFollowUps.GetValueOrDefault(e.EmployeeId),
@@ -192,10 +193,32 @@ public sealed class TeamPerformanceAppService(
             counts.Evaluated, counts.Met, counts.BreachEvents, counts.TicketsWithBreach, counts.FirstResponseBreaches, counts.ResolutionBreaches,
             evaluations.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending), counts.CompliancePercent);
 
+        // Per-clock breakdown: the same SlaCounts aggregation over each clock's finalized cycles, so the rows add up to the summary above.
+        var typeBreakdown = TeamPerformanceSlaTypes.All.Select(type =>
+        {
+            var ofType = evaluations.Where(r => r.SlaType == type).ToList();
+            var typeCounts = SlaCounts.Of(ofType
+                .Where(r => r.Status != TeamPerformanceSlaStatuses.Pending)
+                .Select(r => new SlaOutcomeFact(r.TicketId, type == TeamPerformanceSlaTypes.FirstResponse ? SlaDeadlineType.FirstResponse : SlaDeadlineType.Resolution,
+                    r.Status == TeamPerformanceSlaStatuses.Breached)));
+            return new TeamPerformanceSlaTypeBreakdownDto(
+                type, typeCounts.Evaluated, typeCounts.Met, typeCounts.BreachEvents,
+                ofType.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending), typeCounts.CompliancePercent);
+        }).ToList();
+
+        // The SLA Type filter narrows the list and the status tab counts; the summary and breakdown above stay whole.
+        var typeFilter = TeamPerformanceSlaTypes.Normalize(request.SlaType);
+        var ofTypeFilter = typeFilter is null ? evaluations : evaluations.Where(r => r.SlaType == typeFilter).ToList();
+        var statusCounts = new TeamPerformanceSlaStatusCountsDto(
+            ofTypeFilter.Count,
+            ofTypeFilter.Count(r => r.Status == TeamPerformanceSlaStatuses.Breached),
+            ofTypeFilter.Count(r => r.Status == TeamPerformanceSlaStatuses.Met),
+            ofTypeFilter.Count(r => r.Status == TeamPerformanceSlaStatuses.Pending));
+
         var statusFilter = TeamPerformanceSlaStatuses.Normalize(request.Status);
         var filtered = statusFilter is null
-            ? evaluations
-            : evaluations.Where(r => r.Status == statusFilter).ToList();
+            ? ofTypeFilter
+            : ofTypeFilter.Where(r => r.Status == statusFilter).ToList();
 
         var sortBy = TeamPerformanceSlaSortKeys.Normalize(request.SortBy);
         var descending = !string.Equals(request.SortDir?.Trim(), "asc", StringComparison.OrdinalIgnoreCase);
@@ -225,7 +248,10 @@ public sealed class TeamPerformanceAppService(
                 totalPages,
                 summary,
                 TeamPerformanceSlaPresentation.BuildRules(configuration),
-                sorted.Skip((page - 1) * pageSize).Take(pageSize).ToList()));
+                sorted.Skip((page - 1) * pageSize).Take(pageSize).ToList(),
+                typeFilter,
+                typeBreakdown,
+                statusCounts));
     }
 
     public const int DefaultPageSize = 25;
@@ -250,7 +276,17 @@ public sealed class TeamPerformanceAppService(
         employees
             .Where(e => employeeId is not { } id || e.EmployeeId == id)
             .Where(e => role is null || e.Roles.Contains(role, StringComparer.OrdinalIgnoreCase))
-            .Where(e => departmentId is not { } department || e.Departments.Any(d => d.DepartmentId == department));
+            .Where(e => departmentId is not { } department || PrimaryDepartmentOf(e)?.DepartmentId == department);
+
+    /// <summary>
+    /// The employee's Primary Department: the membership flagged <c>IsPrimary</c> in <c>UserDepartmentAssignments</c> (at most one per employee,
+    /// enforced by a unique filtered index). Null when none is configured — never the first of the other memberships. The row's Department
+    /// column and the Department filter both use this, so an employee with access to several departments is listed once, under their primary.
+    /// </summary>
+    internal static TeamPerformanceDepartmentDto? PrimaryDepartmentOf(TeamPerformanceEmployeeRow employee) =>
+        employee.Departments.Where(d => d.IsPrimary)
+            .Select(d => new TeamPerformanceDepartmentDto(d.DepartmentId, d.Name, true))
+            .FirstOrDefault();
 
     private static List<string> RoleOptions(IEnumerable<TeamPerformanceEmployeeRow> employees) =>
         employees.SelectMany(e => e.Roles).Distinct(StringComparer.OrdinalIgnoreCase)

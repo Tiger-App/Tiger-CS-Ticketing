@@ -405,6 +405,8 @@ public sealed class TicketDetailsModel(
             return;
         }
 
+        CanReassign = false;
+        ReassignDepartments = [];
         CanAssign = CanAssignAcrossDepartments = CanChangeStatus = CanResolve = CanClose = CanEscalate = CanEscalateToLevel4 = false;
         CanRequestDowngrade = CanDecideDowngrade = CanClassify = CanReopen = false;
         StatusTargets = [];
@@ -441,6 +443,16 @@ public sealed class TicketDetailsModel(
 
     [BindProperty] public AssignInput Assign { get; set; } = new();
     [BindProperty] public CollectionsAssignInput CollectionsAssign { get; set; } = new();
+    [BindProperty] public ReassignInput Reassign { get; set; } = new();
+
+    /// <summary>Whether the Actions menu offers "Assign / Reassign" (open to every user who works the ticket, not just managers).</summary>
+    public bool CanReassign { get; private set; }
+
+    /// <summary>Active departments the Assign / Reassign dialog offers (the ticket's own first), searchable.</summary>
+    public IReadOnlyList<DepartmentDto> ReassignDepartments { get; private set; } = [];
+
+    /// <summary>Active members of the ticket's current department - the dialog's initial employee list; other departments are loaded on demand.</summary>
+    public IReadOnlyList<DepartmentUserDto> ReassignEmployees => AssignableEmployees;
 
     /// <summary>Whether the inline Assign / Reassign control beside "Assigned To" is offered: a Collections ticket the viewer may assign (the server's own answer, <c>TicketDetailDto.CanAssignInCollections</c>).</summary>
     /// <summary>The Collections department(s) among the departments the Transfer and Reopen forms offer (matched by the configured code, never by name): moving there needs a Tower and a Unit.</summary>
@@ -658,6 +670,60 @@ public sealed class TicketDetailsModel(
         return result.IsSuccess
             ? new JsonResult(result.Value)
             : new JsonResult(new { status = "Error", message = DescribeError(result.Outcome, result.Detail), towers = Array.Empty<object>() }) { StatusCode = 200 };
+    }
+
+    /// <summary>Assign / Reassign / Transfer dialog: one post. The Api decides who may do it (ticket access, not role) and validates the department and the ACTIVE employee.</summary>
+    public async Task<IActionResult> OnPostReassignAsync(long id, CancellationToken cancellationToken)
+    {
+        TicketId = id;
+        if (!TryDecodeRowVersion(Reassign.RowVersionBase64, out var rowVersion))
+        {
+            return await ReloadWithErrorAsync("reassign", "Could not read the ticket's current version. Reloading.", cancellationToken);
+        }
+
+        if (Reassign.TargetDepartmentId < 1)
+        {
+            return await ReloadWithErrorAsync("reassign", "Choose a department.", cancellationToken);
+        }
+
+        Guid? employeeId = null;
+        if (!string.IsNullOrWhiteSpace(Reassign.EmployeeId))
+        {
+            if (!Guid.TryParse(Reassign.EmployeeId, out var parsed) || parsed == Guid.Empty)
+            {
+                return await ReloadWithErrorAsync("reassign", "Choose an employee from the list, or leave it empty to assign the department only.", cancellationToken);
+            }
+
+            employeeId = parsed;
+        }
+
+        var comment = string.IsNullOrWhiteSpace(Reassign.Comment) ? null : Reassign.Comment.Trim();
+        var result = await ticketsApiClient.ReassignAsync(
+            id, new ReassignTicketRequestDto(Reassign.TargetDepartmentId, rowVersion, employeeId, comment, Reassign.CollectionsTowerId, Reassign.CollectionsUnitRef),
+            cancellationToken);
+        return await HandleMutationAsync(result, "reassign", "Ticket assignment updated.", cancellationToken);
+    }
+
+    /// <summary>The ACTIVE employees of one department, for the dialog's Employee dropdown (JSON; the Api's department roster, active members only).</summary>
+    public async Task<IActionResult> OnGetReassignEmployeesAsync(long id, int departmentId, CancellationToken cancellationToken)
+    {
+        var members = new List<DepartmentUserDto>();
+        for (var page = 1; page <= 20; page++)
+        {
+            var result = await usersApiClient.GetDepartmentUsersAsync(departmentId, page, 100, cancellationToken);
+            if (!result.IsSuccess || result.Value is null)
+            {
+                return new JsonResult(new { ok = false, employees = Array.Empty<object>() });
+            }
+
+            members.AddRange(result.Value.Items);
+            if (result.Value.Items.Count < 100 || members.Count >= result.Value.TotalCount)
+            {
+                break;
+            }
+        }
+
+        return new JsonResult(new { ok = true, employees = members.OrderBy(m => m.DisplayName, StringComparer.OrdinalIgnoreCase).Select(m => new { id = m.EmployeeId, name = m.DisplayName }) });
     }
 
     public async Task<IActionResult> OnPostTransferAsync(long id, CancellationToken cancellationToken)
@@ -1287,6 +1353,7 @@ public sealed class TicketDetailsModel(
         await LoadCategoryNameAsync(Ticket, cancellationToken);
         await LoadTransferTargetsAsync(Ticket, cancellationToken);
         await LoadReopenTargetsAsync(Ticket, cancellationToken);
+        await LoadReassignOptionsAsync(Ticket, cancellationToken);
         ApplyReadOnlyAccess(Ticket);
 
         var lifecycleHistory = historyTask.Result.IsSuccess && historyTask.Result.Value is not null
@@ -1307,6 +1374,7 @@ public sealed class TicketDetailsModel(
             RowVersionBase64 = Ticket.RowVersion,
             Target = Ticket.CurrentOwnerEmployeeId is Guid owner ? $"{owner}|{Ticket.CurrentDepartmentId}" : string.Empty,
         };
+        Reassign = new ReassignInput { RowVersionBase64 = Ticket.RowVersion, TargetDepartmentId = Ticket.CurrentDepartmentId };
         Transfer = new TransferInput { RowVersionBase64 = Ticket.RowVersion, TargetDepartmentId = TransferTargets.FirstOrDefault()?.DepartmentId ?? 0 };
         // Default the picker to a target it actually offers. The ticket's own
         // current status is never one of them (nothing transitions to itself),
@@ -1401,6 +1469,28 @@ public sealed class TicketDetailsModel(
     /// than the one the ticket is already in. The active-only directory call
     /// is skipped entirely for viewers who cannot transfer.
     /// </summary>
+    private async Task LoadReassignOptionsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
+    {
+        CanReassign = TicketActions.CanReassign(ActionContext) && ticket.TicketStatus != nameof(TicketStatus.Closed);
+        ReassignDepartments = [];
+        if (!CanReassign)
+        {
+            return;
+        }
+
+        var active = await nameResolver.GetActiveDepartmentsAsync(cancellationToken);
+        if (active is null)
+        {
+            CanReassign = false;
+            return;
+        }
+
+        ReassignDepartments =
+        [
+            .. active.OrderBy(d => d.DepartmentId == ticket.CurrentDepartmentId ? 0 : 1).ThenBy(d => d.Name, StringComparer.OrdinalIgnoreCase)
+        ];
+    }
+
     private async Task LoadTransferTargetsAsync(TicketDetailDto ticket, CancellationToken cancellationToken)
     {
         // Permission mirrors the API's rule (CS Manager any ticket; CS Agent/Supervisor their own; Supervisor their department),
@@ -1902,6 +1992,23 @@ public sealed class TicketDetailsModel(
         /// <summary>Why the ticket changes hands; optional here. Recorded by the Api only when this reassigns a ticket that already has an owner, or transfers it to another department.</summary>
         public TicketTransferReason? ReasonCode { get; set; }
         public string? RowVersionBase64 { get; set; }
+    }
+
+    public sealed class ReassignInput
+    {
+        /// <summary>The department that holds the ticket afterwards (the current one = assign / reassign only; another = transfer).</summary>
+        public int TargetDepartmentId { get; set; }
+
+        /// <summary>Optional: an active member of that department. Empty = department-only assignment.</summary>
+        public string? EmployeeId { get; set; }
+
+        /// <summary>Optional transfer comment (recorded in history and audit).</summary>
+        [StringLength(500)]
+        public string? Comment { get; set; }
+
+        public string? RowVersionBase64 { get; set; }
+        public int? CollectionsTowerId { get; set; }
+        public string? CollectionsUnitRef { get; set; }
     }
 
     public sealed class CollectionsAssignInput

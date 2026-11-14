@@ -298,6 +298,17 @@ public static class TicketActions
     public static bool CanAddNote(IReadOnlyCollection<string>? viewerRoles) =>
         viewerRoles is not null && !Roles.IsReadOnlyCaller(viewerRoles);
 
+    /// <summary>
+    /// Whether the "Assign / Reassign" action is offered: <b>every</b> viewer who can work on the ticket, whatever their role (the page is only reachable
+    /// for a ticket the viewer may open, and read-only access hides all actions separately). Mirrors <c>TicketAssignmentAppService.ReassignAsync</c>:
+    /// read-only roles never; an explicit denial of both Tickets.Assign and Tickets.Transfer removes it. Whether THIS ticket can be modified (ownership,
+    /// department scope) is decided by the Api; a control shown here can still come back 403.
+    /// </summary>
+    public static bool CanReassign(TicketActionContext? context) =>
+        context is { } c
+        && !c.IsReadOnlyViewer
+        && !(c.IsDenied(Permissions.TicketsAssign) && c.IsDenied(Permissions.TicketsTransfer));
+
     public static bool CanAssign(TicketActionContext? context) =>
         context is { } c
         && !c.IsDenied(Permissions.TicketsAssign)

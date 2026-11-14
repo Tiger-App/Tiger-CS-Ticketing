@@ -466,6 +466,42 @@ public class TicketsController(
         return ToActionResult(result);
     }
 
+    /// <summary>Assign, reassign or transfer a ticket — open to every user who can modify the ticket.</summary>
+    /// <remarks>
+    /// One operation for the Ticket Details "Assign / Reassign" dialog. Authority is ticket access, not role: any signed-in employee who can open and modify
+    /// the ticket under the normal visibility rules (own assigned ticket for a CS Agent / Department Employee, department scope for the rest) may assign it to
+    /// themselves or a colleague, hand it to another employee, or move it to another department. Read-only roles and service identities are refused. The
+    /// target department must be active and the employee an ACTIVE member of it. The same department with an employee = assign / reassign; another department =
+    /// transfer, with or without an employee. Status and SLA are never reset; assignment history, workflow events and audit entries are written in one transaction.
+    /// Genesys AI-to-human assignment is a separate path and is not affected.
+    /// </remarks>
+    /// <param name="ticketId">The ticket to assign.</param>
+    /// <param name="request">The target department, optional employee, optional comment and the ticket's current rowVersion.</param>
+    /// <response code="200">The updated ticket.</response>
+    /// <response code="403">The caller cannot modify this ticket (or holds a read-only role).</response>
+    /// <response code="404">No such ticket.</response>
+    /// <response code="409">rowVersion did not match — reload and retry.</response>
+    /// <response code="422">The change is not valid for this ticket's current state (closed, inactive department or employee, nothing to change…).</response>
+    [ProducesResponseType<TicketDetailDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ValidationProblemDetails>(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status409Conflict)]
+    [ProducesResponseType<ProblemDetails>(StatusCodes.Status422UnprocessableEntity)]
+    [HttpPost("{ticketId:long}/reassign")]
+    [NoPermissionRequired("Authority is access to the ticket itself, decided server-side in TicketAssignmentAppService.ReassignAsync - not a role or a permission.")]
+    [Tags(OpenApiTags.Assignment)]
+    public async Task<IActionResult> Reassign(long ticketId, [FromBody] ReassignTicketRequestDto request, CancellationToken cancellationToken)
+    {
+        var employeeId = GetEmployeeId();
+        if (employeeId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await ticketAssignmentAppService.ReassignAsync(employeeId.Value, GetRoles(), ticketId, request, cancellationToken);
+        return ToActionResult(result);
+    }
+
     /// <summary>Retry the automatic CS Agent assignment of an active ticket that has none (CS Manager / administrator).</summary>
     /// <remarks>
     /// Safe to repeat: a ticket that already has a CS Agent is returned unchanged with no new assignment row or audit entry. Uses the same
@@ -1200,6 +1236,12 @@ public class TicketsController(
             type: "https://tigercs.internal/problems/employee-not-in-department",
             title: "Employee not in department",
             detail: "The assignee is not an active member of the ticket's resulting department (its current department for Assign; the target department for a transfer with assignToEmployeeId).",
+            statusCode: StatusCodes.Status422UnprocessableEntity),
+
+        TicketMutationOutcome.AssignmentTargetRequired => Problem(
+            type: "https://tigercs.internal/problems/assignment-target-required",
+            title: "Choose an employee or another department",
+            detail: "The ticket is already in that department. Select an employee to assign it to, or a different department to transfer it.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
 
         TicketMutationOutcome.AlreadyAssignedToEmployee => Problem(

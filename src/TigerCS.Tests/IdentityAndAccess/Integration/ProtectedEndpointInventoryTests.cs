@@ -58,6 +58,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["POST /api/admin/cs-agent-backfill/run"] = nameof(SystemAdministratorEndpointAuthorizationTests.CsAgentBackfill_PreviewAndDryRun_Return200_AndWriteNothing),
         ["GET /api/admin/default-classification-backfill/preview"] = nameof(SystemAdministratorEndpointAuthorizationTests.DefaultClassificationBackfill_PreviewAndDryRun_Return200_AndALiveRunIsRefusedUnlessEnabled),
         ["POST /api/admin/default-classification-backfill/run"] = nameof(SystemAdministratorEndpointAuthorizationTests.DefaultClassificationBackfill_PreviewAndDryRun_Return200_AndALiveRunIsRefusedUnlessEnabled),
+        ["POST /api/tickets/{ticketId:long}/reassign"] = nameof(SystemAdministratorEndpointAuthorizationTests.ReassignTicket_Returns200),
         ["POST /api/tickets/{ticketId:long}/assignment/retry"] = nameof(SystemAdministratorEndpointAuthorizationTests.RetryCsAgentAssignment_Returns200_AndIsIdempotentForAnAlreadyAssignedTicket),
         ["POST /api/tickets/{ticketId:long}/ownership"] = nameof(SystemAdministratorEndpointAuthorizationTests.TakeOwnership_IsRefused_BecauseTheCallerMustThemselvesBeACallCenterAgent_AndTheTicketIsUntouched),
         ["POST /api/tickets/{ticketId:long}/transfer"] = nameof(SystemAdministratorEndpointAuthorizationTests.TransferTicket_Returns200),

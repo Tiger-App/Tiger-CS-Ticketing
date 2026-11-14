@@ -53,7 +53,8 @@ public sealed record TeamPerformanceAppliedFiltersDto(
 /// <param name="EmployeeId">The employee (AspNetUsers.Id / Employees.EmployeeId).</param>
 /// <param name="DisplayName">The employee's display name.</param>
 /// <param name="Roles">The Identity roles the employee holds, alphabetical (empty when none).</param>
-/// <param name="Departments">The employee's department memberships, primary first.</param>
+/// <param name="Departments">The employee's department memberships (access), primary first. Unchanged; the report's Department column and filter use <paramref name="PrimaryDepartment"/>.</param>
+/// <param name="PrimaryDepartment">The department flagged <c>UserDepartmentAssignments.IsPrimary</c> for this employee; null when none is configured. Never inferred from the other memberships.</param>
 /// <param name="CurrentlyAssigned">Current state, not period-bound: tickets whose <c>CurrentOwnerEmployeeId</c> is this employee and whose status is not Closed.</param>
 /// <param name="TicketsWorked">Distinct tickets on which the employee performed at least one recorded action within the period (assignment to them, a status change, a note, a resolution, a workflow event, or a customer follow-up assigned to or completed by them). Measured from history, not from current ownership.</param>
 /// <param name="CompletedFollowUps">Customer follow-ups (<c>TicketAgentHandoffs</c>) assigned to the employee and completed within the period. Counts work items, not tickets.</param>
@@ -67,6 +68,7 @@ public sealed record TeamPerformanceRowDto(
     string DisplayName,
     IReadOnlyList<string> Roles,
     IReadOnlyList<TeamPerformanceDepartmentDto> Departments,
+    TeamPerformanceDepartmentDto? PrimaryDepartment,
     int CurrentlyAssigned,
     int TicketsWorked,
     int CompletedFollowUps,
@@ -194,6 +196,22 @@ public static class TeamPerformanceSlaStatuses
         All.FirstOrDefault(s => string.Equals(s, value?.Trim(), StringComparison.OrdinalIgnoreCase));
 }
 
+/// <summary>The SLA clock an evaluation belongs to, as shown in the SLA Type column and accepted by the <c>slaType</c> filter.</summary>
+public static class TeamPerformanceSlaTypes
+{
+    public const string FirstResponse = "First Response";
+    public const string Resolution = "Resolution";
+
+    public static readonly IReadOnlyList<string> All = [FirstResponse, Resolution];
+
+    /// <summary>Case-insensitive match to one type ("First Response", "FirstResponse", "first-response", "Resolution"), or null when the value is not one (meaning "all types").</summary>
+    public static string? Normalize(string? value)
+    {
+        var key = new string((value ?? string.Empty).Where(char.IsLetter).ToArray());
+        return All.FirstOrDefault(t => string.Equals(new string(t.Where(char.IsLetter).ToArray()), key, StringComparison.OrdinalIgnoreCase));
+    }
+}
+
 /// <summary>The columns the SLA details list can be sorted by (the <c>sortBy</c> values).</summary>
 public static class TeamPerformanceSlaSortKeys
 {
@@ -229,6 +247,7 @@ public static class TeamPerformanceSlaSortKeys
 /// <param name="Role">The report's Role filter, if applied — the employee must satisfy it.</param>
 /// <param name="DepartmentId">The report's Department filter, if applied — the employee must satisfy it.</param>
 /// <param name="Status">Narrow the list to <c>Met</c>, <c>Breached</c> or <c>Pending</c>; omitted = all. The summary always covers every status.</param>
+/// <param name="SlaType">Narrow the list to <c>First Response</c> or <c>Resolution</c>; omitted = both. The summary and the type breakdown always cover both; the status counts follow this filter.</param>
 /// <param name="SortBy">One of <see cref="TeamPerformanceSlaSortKeys.All"/>; default <c>event</c> (breach / achievement time).</param>
 /// <param name="SortDir"><c>asc</c> or <c>desc</c> (default <c>desc</c>).</param>
 /// <param name="Page">1-based page number.</param>
@@ -243,9 +262,10 @@ public sealed record TeamPerformanceSlaDetailsRequestDto(
     string? SortBy = null,
     string? SortDir = null,
     int Page = 1,
-    int PageSize = 25);
+    int PageSize = 25,
+    string? SlaType = null);
 
-/// <summary>The SLA details page: summary, rules, and one page of evaluations.</summary>
+/// <summary>The SLA details page: summary, type breakdown, rules, and one page of evaluations.</summary>
 public sealed record TeamPerformanceSlaDetailsDto(
     Guid EmployeeId,
     string DisplayName,
@@ -262,7 +282,28 @@ public sealed record TeamPerformanceSlaDetailsDto(
     int TotalPages,
     TeamPerformanceSlaSummaryDto Summary,
     TeamPerformanceSlaRulesDto Rules,
-    IReadOnlyList<TeamPerformanceSlaRecordDto> Records);
+    IReadOnlyList<TeamPerformanceSlaRecordDto> Records,
+    string? SlaTypeFilter,
+    IReadOnlyList<TeamPerformanceSlaTypeBreakdownDto> TypeBreakdown,
+    TeamPerformanceSlaStatusCountsDto StatusCounts);
+
+/// <summary>
+/// One row of the SLA type breakdown: the finalized cycles of one clock for the employee and period, counted by the same aggregation as the
+/// summary, so the rows add up to the summary (Evaluated, Met, Late, and Pending).
+/// </summary>
+/// <param name="SlaType"><c>First Response</c> or <c>Resolution</c>.</param>
+/// <param name="Evaluated">Met + Late.</param>
+/// <param name="Met">Cycles achieved on time.</param>
+/// <param name="Late">Breach events on this clock.</param>
+/// <param name="Pending">Open clocks of this type (not evaluated).</param>
+/// <param name="CompliancePercent">Met / Evaluated × 100, one decimal; null when nothing was evaluated.</param>
+public sealed record TeamPerformanceSlaTypeBreakdownDto(string SlaType, int Evaluated, int Met, int Late, int Pending, decimal? CompliancePercent);
+
+/// <summary>
+/// How many evaluations each status filter tab would list under the current <c>slaType</c> filter, so a tab's number always equals the
+/// records it opens. <see cref="All"/> = <see cref="Late"/> + <see cref="OnTime"/> + <see cref="Pending"/>.
+/// </summary>
+public sealed record TeamPerformanceSlaStatusCountsDto(int All, int Late, int OnTime, int Pending);
 
 /// <summary>
 /// The SLA counts for the employee and period, derived by the same aggregation as the main table's row. Evaluated = Met + BreachEvents

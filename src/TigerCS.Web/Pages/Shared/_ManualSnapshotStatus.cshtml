@@ -1,0 +1,18 @@
+@using TigerCS.Web.Pages.Collections
+@model CampaignsModel
+@* The data status of a Manual list. Manual reads the stored approval data (not the live financial snapshot Auto previews), so its chips describe that data: whether the financial source was reconciled
+   and how fresh the approval data is. Without this, the strip kept saying "Snapshot not loaded yet" next to customer counts and amounts that had already loaded. collections-campaign-filters.js lifts it
+   into the always-visible status box, replacing the idle pill. *@
+@if (Model.ManualPage is { } list)
+{
+    var run = list.Run;
+    var reconciled = run is { SourceReconciled: true };
+    var dataState = run is null ? "Failed" : run.IsStale || run.Status != "Completed" ? "Warning" : "Ready";
+    var dataText = run is null ? "No approval data" : dataState == "Ready" ? "Ready" : "Stale";
+    <div class="campaign-snapshot__body campaign-status" data-snapshot-status data-manual-snapshot-status>
+        <ul class="campaign-status__row" data-status-row>
+            <li class="campaign-status__item"><span class="campaign-status__label">Financial reconciliation<partial name="_InfoTip" model="@(new InfoTipModel("tip-status-reconciliation", "Financial reconciliation", "Whether the financial source behind the approval data was reconciled. Nothing can be sent until it is."))" /></span><span class="campaign-pill campaign-pill--@(reconciled ? "ready" : "failed")" data-status-pill="reconciliation" data-state="@(reconciled ? "Ready" : "Failed")">@(reconciled ? "Ready" : "Failed")</span></li>
+            <li class="campaign-status__item"><span class="campaign-status__label">Approval data<partial name="_InfoTip" model="@(new InfoTipModel("tip-status-snapshot", "Approval data", run?.CompletedAtUtc is { } done ? $"The stored data this Manual list is read from. Updated {CollectionsDisplay.DubaiTime(done)}." : "The stored data this Manual list is read from. Refresh it to build it."))" /></span><span class="campaign-pill campaign-pill--@dataState.ToLowerInvariant()" data-status-pill="snapshot" data-state="@dataState">@dataText</span></li>
+        </ul>
+    </div>
+}

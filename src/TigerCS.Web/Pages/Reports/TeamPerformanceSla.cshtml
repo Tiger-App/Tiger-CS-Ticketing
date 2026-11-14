@@ -43,35 +43,172 @@
     }
     else
     {
-        @* ---- Summary: the evaluation counts and the compliance formula. ---- *@
-        <div class="kpi-grid kpi-grid--six sla-summary" aria-label="SLA summary">
-            <div class="kpi-card"><strong>@d.Summary.Evaluated</strong><span>SLA evaluated</span></div>
-            <div class="kpi-card kpi-card--attention tone-success"><strong>@d.Summary.Met</strong><span>SLA met</span></div>
-            <div class="kpi-card kpi-card--attention tone-critical"><strong>@d.Summary.BreachEvents</strong><span>Breach events</span></div>
-            <div class="kpi-card kpi-card--attention tone-critical"><strong>@d.Summary.TicketsWithBreach</strong><span>Tickets with SLA breach</span></div>
-            <div class="kpi-card kpi-card--attention tone-info"><strong>@TeamPerformanceSlaModel.ComplianceText(d.Summary)</strong><span>SLA compliance</span></div>
-            <div class="kpi-card kpi-card--attention tone-warning"><strong>@d.Summary.Pending</strong><span>Pending (not evaluated)</span></div>
+        @* ---- Summary: four KPIs, the compliance bar, and the secondary metrics. ---- *@
+        var s = d.Summary;
+        <div class="kpi-grid kpi-grid--four sla-summary" aria-label="SLA summary">
+            <div class="kpi-card"><strong>@s.Evaluated</strong><span>SLA Evaluated</span></div>
+            <div class="kpi-card kpi-card--attention tone-success"><strong>@s.Met</strong><span>On Time (SLA Met)</span></div>
+            <div class="kpi-card kpi-card--attention tone-critical"><strong>@s.BreachEvents</strong><span>Late (SLA Breached)</span></div>
+            <div class="kpi-card kpi-card--attention tone-info"><strong>@TeamPerformanceSlaModel.ComplianceText(s)</strong><span>SLA Compliance %</span></div>
         </div>
-        <p class="sla-formula"><strong>Breach events by clock.</strong> First Response: @d.Summary.FirstResponseBreaches · Resolution: @d.Summary.ResolutionBreaches
-            (a ticket that breached both clocks is two events but one ticket).</p>
-        <p class="sla-formula"><strong>Formula.</strong> @TeamPerformanceSlaSummaryDto.Formula
-            @if (d.Summary.CompliancePercent is decimal)
+
+        <div class="panel sla-compliance">
+            @if (s.Evaluated > 0)
             {
-                <text> Here: @d.Summary.Met / (@d.Summary.Met + @d.Summary.BreachEvents) × 100 = @TeamPerformanceSlaModel.ComplianceText(d.Summary).</text>
+                <progress class="sla-bar" max="@s.Evaluated" value="@s.Met" aria-label="On Time @s.Met of @s.Evaluated evaluated SLAs">@TeamPerformanceSlaModel.ComplianceText(s)</progress>
+                <div class="sla-bar__legend">
+                    <span class="sla-bar__key sla-bar__key--met">On Time · @s.Met</span>
+                    <span class="sla-bar__key sla-bar__key--late">Late · @s.BreachEvents</span>
+                </div>
             }
             else
             {
-                <text> Nothing has been evaluated yet in this period (Met + Breach Events = 0), so there is no percentage.</text>
+                <p class="sla-bar__empty">No SLA has been evaluated in this period, so there is no compliance percentage.</p>
             }
-        </p>
+            <p class="sla-secondary">Tickets with SLA Breach: <strong>@s.TicketsWithBreach</strong>
+                · Pending (running, not evaluated): <strong>@s.Pending</strong></p>
+        </div>
+
+        @* ---- SLA type breakdown: the same counts split by clock; the rows add up to the summary. ---- *@
+        <div class="panel sla-breakdown">
+            <div class="table-scroll">
+                <table class="data-table">
+                    <caption class="sla-caption">SLA type breakdown</caption>
+                    <thead>
+                        <tr>
+                            <th scope="col">SLA Type</th>
+                            <th scope="col" class="cell-num">Evaluated</th>
+                            <th scope="col" class="cell-num">On Time</th>
+                            <th scope="col" class="cell-num">Late</th>
+                            <th scope="col" class="cell-num">Compliance %</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var t in d.TypeBreakdown)
+                        {
+                            <tr>
+                                <td class="cell-primary">@t.SlaType</td>
+                                <td class="cell-num">@t.Evaluated</td>
+                                <td class="cell-num">@t.Met</td>
+                                <td class="cell-num">@t.Late</td>
+                                <td class="cell-num">@TeamPerformanceSlaModel.PercentText(t.CompliancePercent)</td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        @* ---- Records ---- *@
+        var counts = d.StatusCounts;
+        <div class="panel sla-panel">
+            <div class="panel__header">
+                <div>
+                    <span class="panel__title">SLA evaluations</span>
+                    <div class="dash-card__subtitle">@d.TotalRecords @(d.TotalRecords == 1 ? "record" : "records")@(d.StatusFilter is null ? "" : $" · {TeamPerformanceSlaModel.StatusLabel(d.StatusFilter)} only")@(d.SlaTypeFilter is null ? "" : $" · {d.SlaTypeFilter} only")</div>
+                </div>
+                <div class="sla-filters">
+                    <nav class="sla-tabs" aria-label="Filter by SLA status">
+                        <a class="sla-tab @(d.StatusFilter is null ? "is-active" : "")" href="@Model.Href(1, status: "")">All (@counts.All)</a>
+                        <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Breached ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Breached)">Late (@counts.Late)</a>
+                        <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Met ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Met)">On Time (@counts.OnTime)</a>
+                        <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Pending ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Pending)">Pending (@counts.Pending)</a>
+                    </nav>
+                    <nav class="sla-tabs" aria-label="Filter by SLA type">
+                        <a class="sla-tab @(d.SlaTypeFilter is null ? "is-active" : "")" href="@Model.Href(1, slaType: "")">All Types</a>
+                        @foreach (var type in TeamPerformanceSlaTypes.All)
+                        {
+                            <a class="sla-tab @(d.SlaTypeFilter == type ? "is-active" : "")" href="@Model.Href(1, slaType: type)">@type</a>
+                        }
+                    </nav>
+                </div>
+            </div>
+            @if (d.Records.Count == 0)
+            {
+                <div class="empty-state">
+                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                    <p class="empty-state__title">Nothing to show.</p>
+                    <p>No SLA evaluations match this employee, period, status and SLA type.</p>
+                </div>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="data-table report-table sla-table sla-table--compact">
+                        <thead>
+                            <tr>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Ticket)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Ticket)">Ticket</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Department)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Department)">Department</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.SlaType)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.SlaType)">SLA type</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Created)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Created)">Ticket created (UTC)</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Started)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Started)">SLA started (UTC)</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Target)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Target)">SLA target</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Due)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Due)">SLA due (UTC)</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Actual)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Actual)">Actual response / resolution (UTC)</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Status)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Status)">SLA status</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Breach)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Breach)">Breach duration</a></th>
+                                <th scope="col">Assigned employee (at SLA deadline)</th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Policy)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Policy)">SLA policy</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Event)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Event)">Why it is counted</a></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var r in d.Records)
+                            {
+                                <tr class="sla-row sla-row--@TeamPerformanceSlaModel.StatusCss(r.Status)">
+                                    <td><a class="ticket-id-link" href="/Tickets/@r.TicketId">@r.TicketNumber</a></td>
+                                    <td>@(string.IsNullOrWhiteSpace(r.DepartmentName) ? "—" : r.DepartmentName)</td>
+                                    <td>@r.SlaType</td>
+                                    <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.TicketCreatedAtUtc)</td>
+                                    <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.SlaStartedAtUtc)</td>
+                                    <td>@r.TargetText</td>
+                                    <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.DueAtUtc)</td>
+                                    <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.ActualAtUtc)</td>
+                                    <td><span class="badge badge-sla-@TeamPerformanceSlaModel.StatusCss(r.Status)">@TeamPerformanceSlaModel.StatusLabel(r.Status)</span></td>
+                                    <td class="@(r.BreachText is null ? "" : "sla-breach-duration")">@(r.BreachText ?? "—")</td>
+                                    <td>@r.AssignedEmployeeName</td>
+                                    <td class="sla-policy">@r.Policy</td>
+                                    <td class="sla-why">
+                                        @r.Explanation
+                                    </td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+
+                var firstShown = (d.Page - 1) * d.PageSize + 1;
+                var lastShown = firstShown + d.Records.Count - 1;
+                <div class="panel__footer">
+                    <span class="pager-page">Showing @firstShown–@lastShown of @d.TotalRecords · page @d.Page of @d.TotalPages</span>
+                    <nav class="pagination" aria-label="SLA evaluations pages">
+                        <a class="@(d.Page <= 1 ? "is-disabled" : "")" href="@Model.Href(d.Page - 1)" rel="prev" aria-label="Previous page">Previous</a>
+                        <span class="is-active" aria-current="page">@d.Page</span>
+                        <a class="@(d.Page >= d.TotalPages ? "is-disabled" : "")" href="@Model.Href(d.Page + 1)" rel="next" aria-label="Next page">Next</a>
+                    </nav>
+                </div>
+            }
+        </div>
 
         @* ---- How SLA is calculated: the rules in force, read from the system. ---- *@
-        <details class="filter-disclosure report-help sla-rules" open>
+        <details class="filter-disclosure report-help sla-rules" id="sla-how">
             <summary>
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8" /><path d="M12 11v6M12 7h.01" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" /></svg>
-                How SLA is calculated
+                How is SLA calculated?
             </summary>
             <div class="panel report-help__body">
+                <p class="sla-formula"><strong>Formula.</strong> @TeamPerformanceSlaSummaryDto.Formula
+                    @if (d.Summary.CompliancePercent is decimal)
+                    {
+                        <text> Here: @d.Summary.Met / (@d.Summary.Met + @d.Summary.BreachEvents) × 100 = @TeamPerformanceSlaModel.ComplianceText(d.Summary).</text>
+                    }
+                    else
+                    {
+                        <text> Nothing has been evaluated yet in this period (Met + Breach Events = 0), so there is no percentage.</text>
+                    }
+                </p>
+                <p class="sla-formula"><strong>Terms on this page.</strong> “On Time” is a Met SLA and “Late” is a Breached SLA (a breach event). A ticket that breached both clocks is two Late evaluations but one ticket in “Tickets with SLA breach”.</p>
+                <p class="sla-formula"><strong>Accountability.</strong> Each evaluation belongs to the employee who held the ticket at the SLA deadline, not to the current ticket owner. A breach whose ticket was held by nobody at its deadline (released to a queue or closed before it) is attributed to no employee, so it is not counted on any employee's page.</p>
                 <dl class="report-help__list">
                     @foreach (var rule in d.Rules.Rules)
                     {
@@ -113,86 +250,5 @@
             </div>
         </details>
 
-        @* ---- Records ---- *@
-        <div class="panel">
-            <div class="panel__header">
-                <div>
-                    <span class="panel__title">SLA evaluations</span>
-                    <div class="dash-card__subtitle">@d.TotalRecords @(d.TotalRecords == 1 ? "record" : "records")@(d.StatusFilter is null ? "" : $" · {d.StatusFilter} only") · red = breached, green = met</div>
-                </div>
-                <nav class="sla-tabs" aria-label="Filter by SLA status">
-                    <a class="sla-tab @(d.StatusFilter is null ? "is-active" : "")" href="@Model.Href(1, status: "")">All (@(d.Summary.Evaluated + d.Summary.Pending))</a>
-                    <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Breached ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Breached)">Breach events (@d.Summary.BreachEvents)</a>
-                    <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Met ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Met)">Met (@d.Summary.Met)</a>
-                    <a class="sla-tab @(d.StatusFilter == TeamPerformanceSlaStatuses.Pending ? "is-active" : "")" href="@Model.Href(1, status: TeamPerformanceSlaStatuses.Pending)">Pending (@d.Summary.Pending)</a>
-                </nav>
-            </div>
-
-            @if (d.Records.Count == 0)
-            {
-                <div class="empty-state">
-                    <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 13l4 4L19 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" /></svg>
-                    <p class="empty-state__title">Nothing to show.</p>
-                    <p>No SLA evaluations match this employee, period and status.</p>
-                </div>
-            }
-            else
-            {
-                <div class="table-scroll">
-                    <table class="data-table report-table sla-table">
-                        <thead>
-                            <tr>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Ticket)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Ticket)">Ticket</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Department)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Department)">Department</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.SlaType)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.SlaType)">SLA type</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Created)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Created)">Ticket created (UTC)</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Started)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Started)">SLA started (UTC)</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Target)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Target)">SLA target</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Due)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Due)">SLA due (UTC)</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Actual)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Actual)">Actual response / resolution (UTC)</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Status)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Status)">SLA status</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Breach)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Breach)">Breach duration</a></th>
-                                <th scope="col">Assigned employee</th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Policy)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Policy)">SLA policy</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Event)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Event)">Why it is counted</a></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            @foreach (var r in d.Records)
-                            {
-                                <tr class="sla-row sla-row--@TeamPerformanceSlaModel.StatusCss(r.Status)">
-                                    <td><a class="ticket-id-link" href="/Tickets/@r.TicketId">@r.TicketNumber</a></td>
-                                    <td>@(string.IsNullOrWhiteSpace(r.DepartmentName) ? "—" : r.DepartmentName)</td>
-                                    <td>@r.SlaType</td>
-                                    <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.TicketCreatedAtUtc)</td>
-                                    <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.SlaStartedAtUtc)</td>
-                                    <td>@r.TargetText</td>
-                                    <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.DueAtUtc)</td>
-                                    <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.ActualAtUtc)</td>
-                                    <td><span class="badge badge-sla-@TeamPerformanceSlaModel.StatusCss(r.Status)">@r.Status</span></td>
-                                    <td class="@(r.BreachText is null ? "" : "sla-breach-duration")">@(r.BreachText ?? "—")</td>
-                                    <td>@r.AssignedEmployeeName</td>
-                                    <td class="sla-policy">@r.Policy</td>
-                                    <td class="sla-why">
-                                        @r.Explanation
-                                    </td>
-                                </tr>
-                            }
-                        </tbody>
-                    </table>
-                </div>
-
-                var firstShown = (d.Page - 1) * d.PageSize + 1;
-                var lastShown = firstShown + d.Records.Count - 1;
-                <div class="panel__footer">
-                    <span class="pager-page">Showing @firstShown–@lastShown of @d.TotalRecords · page @d.Page of @d.TotalPages</span>
-                    <nav class="pagination" aria-label="SLA evaluations pages">
-                        <a class="@(d.Page <= 1 ? "is-disabled" : "")" href="@Model.Href(d.Page - 1)" rel="prev" aria-label="Previous page">Previous</a>
-                        <span class="is-active" aria-current="page">@d.Page</span>
-                        <a class="@(d.Page >= d.TotalPages ? "is-disabled" : "")" href="@Model.Href(d.Page + 1)" rel="next" aria-label="Next page">Next</a>
-                    </nav>
-                </div>
-            }
-        </div>
     }
 </div>

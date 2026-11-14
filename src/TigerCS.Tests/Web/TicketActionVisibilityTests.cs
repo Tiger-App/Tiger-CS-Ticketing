@@ -231,6 +231,35 @@ public sealed class TicketActionVisibilityTests
     // Assign / Change Status / Escalate — the same class of gap
     // ===============================================================
 
+    [Theory]
+    [InlineData(Roles.CsAgent)]
+    [InlineData(Roles.DepartmentEmployee)]
+    [InlineData(Roles.DepartmentHead)]
+    [InlineData(Roles.CsSupervisor)]
+    [InlineData(Roles.CsManager)]
+    [InlineData(Roles.GeneralManager)]
+    [InlineData(Roles.SystemAdministrator)]
+    public void Reassign_IsOfferedToEveryRoleThatWorksTheTicket_NotJustManagers(string role) =>
+        Assert.True(TicketActions.CanReassign(Context(Stranger, [role], viewerDepartmentIds: [])));
+
+    [Theory]
+    [InlineData(Roles.ChairmanCeo)]
+    [InlineData(Roles.ReportingUser)]
+    public void Reassign_IsNeverOfferedToAReadOnlyViewer(string role) =>
+        Assert.False(TicketActions.CanReassign(Context(Stranger, [role], viewerDepartmentIds: [])));
+
+    [Fact]
+    public void Reassign_IsHiddenOnlyWhenBothAssignAndTransferAreExplicitlyDenied()
+    {
+        var onlyAssignDenied = new TicketActionContext(
+            [Roles.DepartmentEmployee], Stranger, null, TicketDepartmentId, [], ViewerDeniedPermissions: new HashSet<string> { TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsAssign });
+        var bothDenied = onlyAssignDenied with { ViewerDeniedPermissions = new HashSet<string> { TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsAssign, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransfer } };
+
+        Assert.True(TicketActions.CanReassign(onlyAssignDenied));
+        Assert.False(TicketActions.CanReassign(bothDenied));
+        Assert.False(TicketActions.CanReassign(null));
+    }
+
     [Fact]
     public void Assign_MirrorsTheApisCrossDepartmentAndWithinDepartmentSplit()
     {

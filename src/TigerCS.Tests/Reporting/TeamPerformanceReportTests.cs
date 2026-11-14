@@ -199,6 +199,8 @@ public sealed class TeamPerformanceReportTests : IDisposable
         var bilal = Row(report, _bilalId);
         Assert.Equal(["Call Center", "Customer Service"], bilal.Departments.Select(d => d.Name).ToArray());
         Assert.True(bilal.Departments[0].IsPrimary);
+        Assert.Equal(("Call Center", true), (bilal.PrimaryDepartment!.Name, bilal.PrimaryDepartment.IsPrimary));
+        Assert.Equal("Customer Service", amina.PrimaryDepartment!.Name);
         Assert.Single(report.Rows, r => r.EmployeeId == _bilalId);
 
         // A Collections employee with two roles shows both, alphabetically, and their department.
@@ -213,6 +215,83 @@ public sealed class TeamPerformanceReportTests : IDisposable
 
         var dana = Row(report, _danaId);
         Assert.Equal((0, 0, 0, 0), (dana.CurrentlyAssigned, dana.TicketsWorked, dana.CompletedFollowUps, dana.TicketsWithSlaBreach));
+    }
+
+    private Guid AddExtraEmployee(string name, params (int DepartmentId, bool IsPrimary)[] departments)
+    {
+        var id = Guid.NewGuid();
+        using var context = _db.CreateContext();
+        AddEmployee(context, id, name, [], departments);
+        return id;
+    }
+
+    [Fact]
+    public async Task PrimaryDepartment_EmployeeWithSeveralDepartmentPermissions_ShowsOnlyThePrimary_AndIsListedOnceUnderIt()
+    {
+        // Access to three departments; the primary is Legal, deliberately not the alphabetically/first-listed one.
+        var multi = AddExtraEmployee("Zed Multi", (_db.CustomerServiceId, false), (_db.CollectionsId, false), (_legalId, true));
+
+        var all = await ReportAsync();
+        Assert.Single(all.Rows, r => r.EmployeeId == multi);
+        var row = Row(all, multi);
+        Assert.Equal(_legalId, row.PrimaryDepartment!.DepartmentId);
+        Assert.Equal("Legal", row.PrimaryDepartment.Name);
+        Assert.Equal(3, row.Departments.Count); // access/secondary departments are unchanged
+
+        // Only the primary department's filter finds them.
+        Assert.Contains(multi, (await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _legalId))).Rows.Select(r => r.EmployeeId));
+        Assert.DoesNotContain(multi, (await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _db.CustomerServiceId))).Rows.Select(r => r.EmployeeId));
+        Assert.DoesNotContain(multi, (await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _db.CollectionsId))).Rows.Select(r => r.EmployeeId));
+
+        // Every employee is in exactly one department filter (or none, when they have no primary).
+        var departmentIds = all.FilterOptions.Departments.Select(d => int.Parse(d.Id)).ToList();
+        var seen = new List<Guid>();
+        foreach (var id in departmentIds)
+        {
+            seen.AddRange((await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: id))).Rows.Select(r => r.EmployeeId));
+        }
+
+        Assert.Equal(seen.Count, seen.Distinct().Count());
+        Assert.Equal(all.Rows.Count(r => r.PrimaryDepartment is not null), seen.Count);
+    }
+
+    [Fact]
+    public async Task PrimaryDepartment_EmployeeWithoutOne_HasNullPrimary_NoFallbackToAnAccessDepartment_AndMatchesNoDepartmentFilter()
+    {
+        var none = AddExtraEmployee("Nora NoPrimary", (_db.CustomerServiceId, false), (_legalId, false));
+        var noMembership = AddExtraEmployee("Omar Orphan");
+
+        var all = await ReportAsync();
+        foreach (var id in new[] { none, noMembership })
+        {
+            Assert.Single(all.Rows, r => r.EmployeeId == id);
+            Assert.Null(Row(all, id).PrimaryDepartment);
+        }
+
+        Assert.Equal(2, Row(all, none).Departments.Count); // access kept, but none of it is "primary"
+
+        foreach (var option in all.FilterOptions.Departments)
+        {
+            var rows = (await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: int.Parse(option.Id)))).Rows.Select(r => r.EmployeeId).ToList();
+            Assert.DoesNotContain(none, rows);
+            Assert.DoesNotContain(noMembership, rows);
+        }
+
+        // The employee's own drill-down still resolves with no department filter.
+        using var context = _db.CreateContext();
+        var records = await CreateService(context).GetRecordsAsync(new TeamPerformanceRecordsRequestDto(none, TeamPerformanceMetric.CurrentlyAssigned.ToString()));
+        Assert.Equal(TeamPerformanceRecordsOutcome.Success, records.Outcome);
+    }
+
+    [Fact]
+    public async Task FilterOptions_IncludeADepartmentThatIsAnActiveEmployeesPrimary_EvenWhenTheDepartmentIsInactive()
+    {
+        AddExtraEmployee("Ida Inactive", (_archivedId, true));
+
+        var report = await ReportAsync();
+        Assert.Contains(report.FilterOptions.Departments, d => d.Id == _archivedId.ToString());
+        var byArchived = await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _archivedId));
+        Assert.Equal(["Ida Inactive"], byArchived.Rows.Select(r => r.DisplayName).ToArray());
     }
 
     [Fact]
@@ -388,9 +467,10 @@ public sealed class TeamPerformanceReportTests : IDisposable
         Assert.Equal([_coraId], (await ReportAsync(new TeamPerformanceRequestDto(Role: "Collections Officer"))).Rows.Select(r => r.EmployeeId).ToArray());
         Assert.Contains(_coraId, (await ReportAsync(new TeamPerformanceRequestDto(Role: Roles.CsSupervisor))).Rows.Select(r => r.EmployeeId));
 
-        // Membership of the department, primary or not: Bilal is in Customer Service too.
+        // The Department filter uses the PRIMARY department only: Bilal has access to Customer Service but his primary is Call Center.
         var byDepartment = await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _db.CustomerServiceId));
-        Assert.Contains(_bilalId, byDepartment.Rows.Select(r => r.EmployeeId));
+        Assert.DoesNotContain(_bilalId, byDepartment.Rows.Select(r => r.EmployeeId));
+        Assert.Contains(_aminaId, byDepartment.Rows.Select(r => r.EmployeeId));
         Assert.DoesNotContain(_coraId, byDepartment.Rows.Select(r => r.EmployeeId));
         var byCallCenter = await ReportAsync(new TeamPerformanceRequestDto(DepartmentId: _callCenterId));
         Assert.Equal([_bilalId], byCallCenter.Rows.Select(r => r.EmployeeId).ToArray());

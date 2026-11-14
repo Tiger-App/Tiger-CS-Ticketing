@@ -22,8 +22,8 @@ namespace TigerCS.Application.Modules.Reporting.Services;
 /// </summary>
 internal static class TeamPerformanceSlaPresentation
 {
-    private const string FirstResponseLabel = "First Response";
-    private const string ResolutionLabel = "Resolution";
+    private const string FirstResponseLabel = TeamPerformanceSlaTypes.FirstResponse;
+    private const string ResolutionLabel = TeamPerformanceSlaTypes.Resolution;
 
     public static TeamPerformanceSlaRecordDto ToRecord(
         TeamPerformanceSlaEvaluationRow row, TeamPerformanceEmployeeRow employee, DateTime nowUtc)
