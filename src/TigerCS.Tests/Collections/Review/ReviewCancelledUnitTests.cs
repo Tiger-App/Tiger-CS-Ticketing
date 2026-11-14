@@ -30,7 +30,7 @@ public sealed class ReviewCancelledUnitTests
         var active = ReviewHarness.Row(2);
         var context = new ReviewBuildContext(Today, ReviewHarness.Now, "PACT test", "AED", true, true, false, MoneyNormalizer.DefaultFloatTolerance, new Dictionary<string, string>(), null);
 
-        var result = ReviewRecordBuilder.Build([cancelled, active], context);
+        var result = MirrorCrmBuild.Build([cancelled, active], context);
 
         Assert.All(result.Records, r => Assert.Equal("TP140-2", r.UnitCode));
         Assert.NotEmpty(result.Records);

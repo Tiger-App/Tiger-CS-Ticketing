@@ -29,7 +29,7 @@ public sealed class CampaignReviewEligibilityParityTests
     }
 
     private static CollectionsCampaignAppService Campaigns(ReviewHarness h) => new(h.Options, h.Campaign, h.Sql, new(h.Options, new FakeDepartmentRepository()),
-        new(h.Options, h.Time), h.Source, NullLogger<CollectionsCampaignAppService>.Instance);
+        new(h.Options, h.Time), h.Source, NullLogger<CollectionsCampaignAppService>.Instance, h.Links);
 
     [Theory]
     [InlineData("OverdueReminder", "Overdue")]

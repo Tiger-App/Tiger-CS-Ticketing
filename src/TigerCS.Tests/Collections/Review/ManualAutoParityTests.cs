@@ -38,7 +38,7 @@ public sealed class ManualAutoParityTests
 
     private static CollectionsCampaignAppService Preview(ReviewHarness h) =>
         new(h.Options, h.Campaign, h.Sql, new(h.Options, new TigerCS.Tests.IdentityAndAccess.Fakes.FakeDepartmentRepository()),
-            new(h.Options, h.Time), h.Source, Microsoft.Extensions.Logging.Abstractions.NullLogger<CollectionsCampaignAppService>.Instance);
+            new(h.Options, h.Time), h.Source, Microsoft.Extensions.Logging.Abstractions.NullLogger<CollectionsCampaignAppService>.Instance, h.Links);
 
     private static ReviewFilter Manual(decimal minTotal = 100m) => new(ReminderType: "CurrentMonth", SendingMode: "Manual", MinRemaining: minTotal);
 

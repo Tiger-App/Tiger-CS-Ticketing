@@ -81,24 +81,38 @@ public sealed partial class CollectionsCrmLinkingTests
     }
 
     [Fact]
-    public async Task PactCompletesOnlyTheFieldCrmLacks_AndNeverOverridesCrm()
+    public async Task WhenCrmLacksTheMobile_ThePactPhoneIsNeverUsed_AndTheUnitNeedsReview()
     {
         var r = new Rig(); r.Store.CompanyOfTower["115"] = 4;
         r.Source.Items.Add(Tp115Row(mobile: "971500003001", email: "mohammad.m.abdulhamid@gmail.com"));
         r.Owners(Tp115(mobile: null));    // CRM has a name and an e-mail (equal to PACT's), no mobile
         var unit = Assert.Single((await Preview(r)).Items);
-        Assert.Equal(("Mohammad Mousa Abdul Hamid", "+971500003001", "mohammad.m.abdulhamid@gmail.com"), (unit.CustomerName, unit.Phone, unit.Email));   // the mobile alone comes from PACT
+        Assert.Equal(("Mohammad Mousa Abdul Hamid", "", "mohammad.m.abdulhamid@gmail.com"), (unit.CustomerName, unit.Phone, unit.Email));   // the mobile is CRM only: PACT's valid phone is NOT a fallback
+        Assert.Contains("NoValidContact", unit.Reason); Assert.Equal("NeedsReview", unit.Status);
         Assert.DoesNotContain("ContactSourceConflict", unit.Reason);
 
-        // CRM lacks the mobile and PACT's e-mail is a DIFFERENT one: CRM's e-mail wins, PACT's mobile fills the gap, and nothing is held for review.
+        // CRM lacks the mobile and PACT's e-mail is a DIFFERENT one: CRM's e-mail wins, PACT's mobile is still not used, so the unit needs review (no mobile), not a conflict.
         var r2 = new Rig(); r2.Store.CompanyOfTower["115"] = 4;
         r2.Source.Items.Add(Tp115Row(mobile: "971500003001", email: "someone.else@example.test"));
         r2.Owners(Tp115(mobile: null));
         var conflict = Assert.Single((await Preview(r2)).Items);
         Assert.DoesNotContain("ContactSourceConflict", conflict.Reason);
-        Assert.Equal("+971500003001", conflict.Phone);
+        Assert.Equal("", conflict.Phone);
         Assert.Equal("mohammad.m.abdulhamid@gmail.com", conflict.Email);
-        Assert.DoesNotContain("NeedsReview", conflict.Status);
+        Assert.Equal("NeedsReview", conflict.Status); Assert.Contains("NoValidContact", conflict.Reason);
+    }
+
+    [Fact]
+    public async Task WhenPactHasNoValidPhone_AValidCrmMobileKeepsTheUnitEligible_InThePreview()
+    {
+        var r = new Rig(); r.Store.CompanyOfTower["115"] = 4;
+        r.Source.Items.Add(Tp115Row(mobile: "12345", email: ""));      // PACT's phone is invalid
+        r.Owners(Tp115(mobile: "0501234567"));                         // CRM holds a valid mobile for the buyer of this unit
+        var report = await Preview(r);
+        var unit = Assert.Single(report.Items);
+        Assert.Equal("+971501234567", unit.Phone);
+        Assert.DoesNotContain("NoValidContact", unit.Reason);
+        Assert.Equal(1, report.ReadyCount);
     }
 
     [Fact]
@@ -112,14 +126,15 @@ public sealed partial class CollectionsCrmLinkingTests
     }
 
     [Fact]
-    public async Task WithoutAnyCrmOwner_TheContactIsPacts_AndNothingIsFlagged()
+    public async Task WithoutAnyCrmOwner_ThereIsNoMobile_ThePactPhoneIsNotUsed_AndTheUnitNeedsReview()
     {
         var r = new Rig(); r.Store.CompanyOfTower["115"] = 4;
         r.Source.Items.Add(Tp115Row(mobile: "971500003001", email: "pact@example.test", name: "Pact Name"));
         r.Owners(FakeCrmUnitOwnersGateway.Owner(5, "TP140", "999"));   // CRM is loaded and healthy; it just has no sale for this unit
         var report = await Preview(r);
         var unit = Assert.Single(report.Items);
-        Assert.Equal(("Pact Name", "+971500003001"), (unit.CustomerName, unit.Phone));
+        Assert.Equal(("Pact Name", ""), (unit.CustomerName, unit.Phone));                   // CRM is the only mobile source; no eligible CRM buyer = no mobile
+        Assert.Contains("NoValidContact", unit.Reason); Assert.Equal("NeedsReview", unit.Status);
         Assert.DoesNotContain("CrmUnavailable", unit.Reason);
         Assert.Equal(("Ready", false), (report.Crm!.State, report.Crm.Blocks));
         Assert.Null(report.Crm.Message);
@@ -138,7 +153,7 @@ public sealed partial class CollectionsCrmLinkingTests
         var unit = Assert.Single(report.Items);
         Assert.Contains("CrmUnavailable", unit.Reason);
         Assert.Equal("NeedsReview", unit.Status);
-        Assert.Equal("+971500003001", unit.Phone);                       // PACT's own value is still shown, but as unconfirmed
+        Assert.Equal("", unit.Phone);                                    // the PACT phone is never shown as a fallback either
         Assert.Equal(("ReadFailed", true), (report.Crm!.State, report.Crm.Blocks));
         Assert.Contains("could not be read", report.Crm.Message);
         Assert.Equal(0, report.ReadyCount); Assert.Equal(1, report.ReviewCount);
@@ -226,7 +241,7 @@ public sealed partial class CollectionsCrmLinkingTests
         r.Owners(Tp115(), new CrmUnitOwnerDto(256147, 8, "Sold", 1, 778, "Second Buyer", null, "+966555555555", "second@example.test", 1921, "1921", 115, "TP115", "Blue Wave"));
         var unit = Assert.Single((await Preview(r)).Items);
         Assert.Contains("CrmCustomerAmbiguous", unit.Reason);
-        Assert.Equal("+971500003001", unit.Phone);      // PACT's own contact stays; no CRM buyer was chosen
+        Assert.Equal("", unit.Phone);      // no CRM buyer was chosen, and the PACT phone is not used instead
         Assert.Null(unit.CrmCustomerId);
     }
 
@@ -240,7 +255,7 @@ public sealed partial class CollectionsCrmLinkingTests
         var unit = Assert.Single((await Preview(r)).Items);
         Assert.Contains("CrmCompanyAmbiguous", unit.Reason);
         Assert.Equal("NeedsReview", unit.Status);
-        Assert.Equal("+971500003001", unit.Phone);
+        Assert.Equal("", unit.Phone);
         Assert.Null(unit.CrmCustomerId);
     }
 
@@ -252,7 +267,7 @@ public sealed partial class CollectionsCrmLinkingTests
         r.Owners(Tp115());
         var units = (await Preview(r)).Items.ToDictionary(u => u.CompanyId);
         Assert.Equal(("Mohammad Mousa Abdul Hamid", "+966508650505"), (units[32].CustomerName, units[32].Phone));
-        Assert.Equal(("Dubai Tenant", "+971500003001"), (units[4].CustomerName, units[4].Phone));     // the other company's unit is untouched
+        Assert.Equal(("Dubai Tenant", ""), (units[4].CustomerName, units[4].Phone));     // the other company's unit has no CRM buyer: no mobile, and PACT's is not used
         Assert.Null(units[4].CrmCustomerId);
     }
 
@@ -393,7 +408,7 @@ public sealed partial class CollectionsCrmLinkingTests
             var a = (await off.Service.PreviewAsync(off.Manager, stage, dateFrom: new DateOnly(2000, 1, 1), minTotal: null)).Value!;
             var b = (await on.Service.PreviewAsync(on.Manager, stage, dateFrom: new DateOnly(2000, 1, 1), minTotal: null)).Value!;
             Assert.Equal(a.Items.Select(i => (i.UnitCode, i.Amount, i.DueAmount, i.OverdueAmount, i.TotalAmount, i.DueDate)), b.Items.Select(i => (i.UnitCode, i.Amount, i.DueAmount, i.OverdueAmount, i.TotalAmount, i.DueDate)));
-            Assert.Equal((a.TotalCount, a.ReadyCount, a.ReviewCount), (b.TotalCount, b.ReadyCount, b.ReviewCount));          // CRM does not change who qualifies or what is Ready
+            Assert.Equal(a.TotalCount, b.TotalCount);          // CRM does not change who qualifies (it only supplies the mobile, so Ready / Needs review legitimately differ)
             Assert.All(a.Items.Concat(b.Items), i => Assert.NotEqual("TP127-3", i.UnitCode));                                  // next month: never listed
             Assert.DoesNotContain(b.Items, i => i.UnitCode.Contains('*') || i.UnitCode == "TP132-0");
         }

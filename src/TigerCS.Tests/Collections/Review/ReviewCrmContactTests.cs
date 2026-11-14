@@ -27,7 +27,7 @@ public sealed class ReviewCrmContactTests
     private static CollectionsReviewRecord Record(PactReceivableInstalment row, CrmLinkSet? crm)
     {
         var context = new ReviewBuildContext(Today, ReviewHarness.Now, "PACT test", "AED", true, true, false, MoneyNormalizer.DefaultFloatTolerance, new Dictionary<string, string>(), crm);
-        return Assert.Single(ReviewRecordBuilder.Build([row], context).Records, r => r.ReminderType == CampaignReminderType.CurrentMonth);
+        return Assert.Single(MirrorCrmBuild.Build([row], context).Records, r => r.ReminderType == CampaignReminderType.CurrentMonth);
     }
 
     private static string[] Reasons(CollectionsReviewRecord r) => ReviewRecordBuilder.Parse(r.Reasons).ToArray();
@@ -44,13 +44,16 @@ public sealed class ReviewCrmContactTests
     }
 
     [Fact]
-    public void WithoutCrm_TheContactIsPacts_ExactlyAsBefore()
+    public void WithoutACrmBuyer_ThereIsNoMobile_ThePactPhoneIsNeverACampaignContact()
     {
-        var plain = Record(ReviewHarness.Row(1), null);
-        var off = Record(ReviewHarness.Row(1), CrmLinkSet.None);
-        Assert.Equal(("+971500000001", "Customer 1", ReviewValidationStatus.Ready), (plain.Phone, plain.CustomerName, plain.ValidationStatus));
-        Assert.Equal((plain.Phone, plain.CustomerName, plain.Reasons), (off.Phone, off.CustomerName, off.Reasons));
-        Assert.Equal("+971500000001", Record(ReviewHarness.Row(1), Crm(Ready)).Phone);      // CRM healthy, no sale for this unit: PACT's contact, no flag
+        // CRM switched off, or healthy but holding no eligible sale of the unit: the PACT phone is NOT a fallback, so the unit has no mobile and needs review.
+        foreach (var record in new[] { Record(ReviewHarness.Row(1), CrmLinkSet.None), Record(ReviewHarness.Row(1), Crm(Ready)) })
+        {
+            Assert.Equal("", record.Phone);
+            Assert.Contains(ReviewReasons.NoValidContact, Reasons(record));
+            Assert.Equal(ReviewValidationStatus.NeedsReview, record.ValidationStatus);
+            Assert.Equal("Customer 1", record.CustomerName);
+        }
     }
 
     [Fact]
@@ -77,7 +80,7 @@ public sealed class ReviewCrmContactTests
     {
         var several = Record(ReviewHarness.Row(1), Crm(Ready, ((4, "TP140-1"), new CrmUnitLink(CrmLinkStatus.Ambiguous, 2, 0, 0, 0, SourceContact.Empty))));
         Assert.Contains(ReviewReasons.CrmCustomerAmbiguous, Reasons(several));
-        Assert.Equal("+971500000001", several.Phone);               // PACT's own contact; no CRM buyer was picked
+        Assert.Equal("", several.Phone);               // no CRM buyer was picked, and the PACT phone is not used instead
         var company = Record(ReviewHarness.Row(1), Crm(Ready, ((4, "TP140-1"), new CrmUnitLink(CrmLinkStatus.CompanyAmbiguous, 1, 0, 0, 0, SourceContact.Empty))));
         Assert.Contains(ReviewReasons.CrmCompanyAmbiguous, Reasons(company));
         Assert.Equal(ReviewValidationStatus.NeedsReview, company.ValidationStatus);
@@ -92,7 +95,7 @@ public sealed class ReviewCrmContactTests
         var record = Record(ReviewHarness.Row(1), Crm(new CrmAvailability(state)));
         Assert.Contains(ReviewReasons.CrmUnavailable, Reasons(record));
         Assert.Equal(ReviewValidationStatus.NeedsReview, record.ValidationStatus);
-        Assert.Equal("+971500000001", record.Phone);                // the PACT number is shown, but never as a confirmed contact
+        Assert.Equal("", record.Phone);                // the PACT number is never a campaign contact, confirmed or not
     }
 
     // ---- re-verified from the CURRENT CRM data before anything is sent ----

@@ -182,8 +182,8 @@ public sealed class ExceptionPoliciesTests
     {
         var context = new ReviewBuildContext(new DateOnly(2026, 10, 14), ReviewHarness.Now, "PACT test", "AED", true, true, false, MoneyNormalizer.DefaultFloatTolerance,
             new Dictionary<string, string>(), Exceptions: new CollectionsExceptionPolicy(Configured()));
-        var plain = ReviewRecordBuilder.Build(Rows(), context with { Exceptions = null }).Records;
-        var records = ReviewRecordBuilder.Build(Rows(), context).Records;
+        var plain = MirrorCrmBuild.Build(Rows(), context with { Exceptions = null }).Records;
+        var records = MirrorCrmBuild.Build(Rows(), context).Records;
 
         Assert.Equal(plain.Count, records.Count);                                              // nothing is dropped: the units stay in the stored data
         Assert.Equal(plain.Select(r => (r.UnitCode, r.RemainingAmount, r.RawRemainingAmount, r.InstalmentsJson)), records.Select(r => (r.UnitCode, r.RemainingAmount, r.RawRemainingAmount, r.InstalmentsJson)));
@@ -203,7 +203,7 @@ public sealed class ExceptionPoliciesTests
         var options = Configured(); options.GulfCustomerUnitCodes = [Special];
         var context = new ReviewBuildContext(new DateOnly(2026, 10, 14), ReviewHarness.Now, "PACT test", "AED", true, true, false, MoneyNormalizer.DefaultFloatTolerance,
             new Dictionary<string, string>(), Exceptions: new CollectionsExceptionPolicy(options));
-        var record = ReviewRecordBuilder.Build(Rows(), context).Records.First(r => r.UnitCode == Special && r.ReminderType == CampaignReminderType.CurrentMonth);
+        var record = MirrorCrmBuild.Build(Rows(), context).Records.First(r => r.UnitCode == Special && r.ReminderType == CampaignReminderType.CurrentMonth);
         Assert.Equal([ReviewReasons.SpecialCaseExcluded, ReviewReasons.GulfCustomerExcluded], ReviewRecordBuilder.Parse(record.Reasons).Where(c => c is ReviewReasons.SpecialCaseExcluded or ReviewReasons.GulfCustomerExcluded));
     }
 

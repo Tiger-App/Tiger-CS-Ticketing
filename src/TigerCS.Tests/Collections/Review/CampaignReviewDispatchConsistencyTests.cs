@@ -33,7 +33,7 @@ public sealed class CampaignReviewDispatchConsistencyTests
 
     private static CollectionsCampaignAppService Preview(ReviewHarness h) =>
         new(h.Options, h.Campaign, h.Sql, new(h.Options, new TigerCS.Tests.IdentityAndAccess.Fakes.FakeDepartmentRepository()),
-            new(h.Options, h.Time), h.Source, Microsoft.Extensions.Logging.Abstractions.NullLogger<CollectionsCampaignAppService>.Instance);
+            new(h.Options, h.Time), h.Source, Microsoft.Extensions.Logging.Abstractions.NullLogger<CollectionsCampaignAppService>.Instance, h.Links);
 
     [Fact]
     public async Task PreviewReviewExportAndDispatch_UseTheSameMinimumStartAndAmounts()

@@ -73,3 +73,28 @@ public sealed class FakeCrmUnitOwnersGateway : ICrmUnitOwnersGateway
         int leadStatus = 8, string? statusName = "Sold", int customerType = 1, int leadId = 0) =>
         new(leadId == 0 ? customerId * 10 : leadId, leadStatus, statusName, customerType, customerId, name, null, mobile, email, 5000 + customerId, unit, 7, project, "Project");
 }
+
+/// <summary>
+/// Test default for suites that seed customers on the PACT side only: every PACT unit gets ONE eligible CRM buyer whose mobile is the seeded phone, so campaign tests keep exercising the
+/// other rules now that the campaign mobile comes from CRM alone. A unit seeded with an empty / invalid phone therefore has an empty / invalid CRM mobile (NoValidContact), exactly as before.
+/// </summary>
+public sealed class PactMirrorCrmOwnerStore(Func<IEnumerable<PactReceivableInstalment>> items) : ICollectionsCrmOwnerStore
+{
+    public Task<int> ReplaceAsync(IReadOnlyList<CrmOwnerRow> rows, CancellationToken cancellationToken, string? note = null) => Task.FromResult(0);
+    public Task RecordFailureAsync(string message, CancellationToken cancellationToken) => Task.CompletedTask;
+    public Task<CrmOwnerState> GetStateAsync(CancellationToken cancellationToken) =>
+        Task.FromResult(new CrmOwnerState(true, TigerCS.Tests.Collections.Review.ReviewHarness.Now.AddMinutes(-20), null, "Succeeded", null, 1, 0, 0, null));
+
+    public Task<IReadOnlyDictionary<(int CompanyId, string UnitKey), CrmUnitLink>> GetLinksAsync(IReadOnlyList<(int CompanyId, string UnitKey)> units, CancellationToken cancellationToken)
+    {
+        var wanted = units.ToHashSet();
+        var result = new Dictionary<(int, string), CrmUnitLink>();
+        foreach (var r in items())
+        {
+            if (CollectionsUnitKey.Normalize(r.UnitCode) is not { } key || !wanted.Contains((r.CompanyId, key)) || result.ContainsKey((r.CompanyId, key))) continue;
+            result[(r.CompanyId, key)] = new CrmUnitLink(CrmLinkStatus.Single, 1, 9000 + (r.UnitId ?? 0), r.UnitId ?? 0, r.UnitId ?? 0,
+                new SourceContact(r.FullName, CollectionsContactNormalizer.NormalizePhone(r.Mobile), CollectionsContactNormalizer.NormalizeEmail(r.Email)));
+        }
+        return Task.FromResult<IReadOnlyDictionary<(int, string), CrmUnitLink>>(result);
+    }
+}

@@ -138,7 +138,7 @@ public sealed class PaymentClassificationTests
         // A settled instalment never enters the stored instalments (the record builder drops it), and the calculation ignores a zero if one ever did.
         var withPaid = FilteredAmounts.Calculate([.. instalments, new(new DateOnly(2026, 9, 1), 0m)], new AmountCriteria(CampaignPaymentFilter.Overdue, null, null, null), today);
         Assert.Equal((300m, 0m, 300m), (withPaid.Amount, withPaid.DueAmount, withPaid.OverdueAmount));
-        var built = ReviewRecordBuilder.Build(Rows(), new ReviewBuildContext(today, DateTime.UtcNow, "test", "AED", true, true, false, 0.0001m, NoMap));
+        var built = MirrorCrmBuild.Build(Rows(), new ReviewBuildContext(today, DateTime.UtcNow, "test", "AED", true, true, false, 0.0001m, NoMap));
         Assert.DoesNotContain(built.Records, r => r.TenantId == "T0004");
         Assert.Equal(1, built.SettledRows);
     }

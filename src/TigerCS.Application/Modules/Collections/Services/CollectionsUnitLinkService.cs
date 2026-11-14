@@ -47,6 +47,13 @@ public sealed record CrmLinkSet(CrmAvailability Availability, IReadOnlyDictionar
         return CollectionsContactLinker.Link(pact, link?.Contact ?? SourceContact.Empty, link?.Status ?? CrmLinkStatus.None);
     }
 
+    /// <summary>The contact of a campaign unit: the mobile comes from CRM only (never PACT, not even as a fallback); name and e-mail as <see cref="Link"/>.</summary>
+    public LinkedContact LinkForCampaign(int companyId, string? unitCode, SourceContact pact)
+    {
+        var link = Find(companyId, unitCode);
+        return CollectionsContactLinker.LinkForCampaign(pact, link?.Contact ?? SourceContact.Empty, link?.Status ?? CrmLinkStatus.None);
+    }
+
     /// <summary>The review flags of a linked unit, including <c>CrmUnavailable</c> when CRM could not be used at all.</summary>
     public CollectionsCampaignFlags Flags(LinkedContact linked, bool contactRequired)
     {

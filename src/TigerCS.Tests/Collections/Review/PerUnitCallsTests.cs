@@ -160,14 +160,17 @@ public sealed class PerUnitCallsTests
     public async Task ADifferentCrmContact_DoesNotHoldTheUnit_AndEveryUnitIsStillItsOwnCall()
     {
         var store = new FakeCrmOwnerStore { LastSuccessUtc = ReviewHarness.Now.AddMinutes(-20) };
-        await store.ReplaceAsync([new CrmOwnerRow("TP140-2001", "TP140", "1", 10, 8, 1, 5001, 7, "Crm Customer 1", "+966508650505", "c1@example.test", "+966508650505", "c1@example.test", "Blue Wave")], default, null);
+        // Unit 2001's CRM buyer has a different mobile than PACT; the other two units' CRM buyers carry the shared number. Every unit is its own call.
+        await store.ReplaceAsync([new CrmOwnerRow("TP140-2001", "TP140", "1", 10, 8, 1, 5001, 7, "Crm Customer 1", "+966508650505", "c1@example.test", "+966508650505", "c1@example.test", "Blue Wave"),
+            new CrmOwnerRow("TP140-1", "TP140", "1", 11, 8, 2, 5002, 7, "Crm Customer 2", "+971500007777", "c2@example.test", "+971500007777", "c2@example.test", "Blue Wave"),
+            new CrmOwnerRow("TP140-2002", "TP140", "2002", 12, 8, 3, 5003, 7, "Crm Customer 3", "+971500007777", "c3@example.test", "+971500007777", "c3@example.test", "Blue Wave")], default, null);
         var links = new CollectionsUnitLinkService(store, new CollectionsCrmOwnersOptions { Enabled = true }, new FakeTimeProvider(ReviewHarness.Now), NullLogger<CollectionsUnitLinkService>.Instance);
         using var h = await SeededAsync(x => x.Links = links);
         using var scope = h.NewScope();
         var page = (await scope.Query.QueryAsync(h.Manager, Manual(), 1, 50, CancellationToken.None)).Value!;
         var crmUnit = page.Items.Single(i => i.UnitCode == "TP140-2001");
         Assert.Equal("Ready", crmUnit.ValidationStatus); Assert.DoesNotContain(crmUnit.Reasons, r => r.Code == ReviewReasons.ContactSourceConflict);
-        Assert.Equal("+966508650505", crmUnit.Phone);          // CRM's number, not PACT's
+        Assert.Equal("+966508650505", crmUnit.Phone);          // CRM's number, not PACT's (971500007777)
         Assert.Equal(3, page.Counts.Ready);
         var (summary, confirm) = await h.PrepareAsync(h.All(Manual()), "conflict");
         Assert.Equal(3, summary.Count);
@@ -221,13 +224,13 @@ public sealed class PerUnitCallsTests
     public void ARepeatedNumberAlone_NeverProducesAHold_InTheBuilder()
     {
         var context = new ReviewBuildContext(new DateOnly(2026, 10, 14), ReviewHarness.Now, "t", "AED", true, true, false, 0.0001m, new Dictionary<string, string>());
-        var records = ReviewRecordBuilder.Build(ThreeUnitsOneCustomer().Concat([ReviewHarness.Row(9, 100m, mobile: Phone)]).ToList(), context).Records
+        var records = MirrorCrmBuild.Build(ThreeUnitsOneCustomer().Concat([ReviewHarness.Row(9, 100m, mobile: Phone)]).ToList(), context).Records
             .Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(4, records.Count);
         Assert.All(records, r => { Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus); Assert.Equal("", r.Reasons); });
         // Campaign types are independent: a unit scheduled for two reminder types today (day 14: Current Month and Legal Notice) is eligible in both.
         var september = ReviewHarness.Row(5, 1600m) with { DueDate = new DateTime(2026, 9, 10), VoucherNumber = "INV-SEP" };
-        var overlap = ReviewRecordBuilder.Build([september, ReviewHarness.Row(5, 400m, day: 20)], context).Records.Where(r => r.ReminderType is CampaignReminderType.CurrentMonth or CampaignReminderType.LegalNotice).ToList();
+        var overlap = MirrorCrmBuild.Build([september, ReviewHarness.Row(5, 400m, day: 20)], context).Records.Where(r => r.ReminderType is CampaignReminderType.CurrentMonth or CampaignReminderType.LegalNotice).ToList();
         Assert.Equal(2, overlap.Count);
         Assert.All(overlap, r => { Assert.DoesNotContain(ReviewReasons.ReminderTypeOverlap, ReviewRecordBuilder.Parse(r.Reasons)); Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus); });
     }

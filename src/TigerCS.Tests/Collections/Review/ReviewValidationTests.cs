@@ -14,7 +14,7 @@ public sealed class ReviewValidationTests
 
     private static CollectionsReviewRecord Single(IEnumerable<PactReceivableInstalment> rows, CampaignReminderType type = CampaignReminderType.CurrentMonth,
         ReviewBuildContext? context = null) =>
-        Assert.Single(ReviewRecordBuilder.Build(rows, context ?? Context()).Records, r => r.ReminderType == type);
+        Assert.Single(MirrorCrmBuild.Build(rows, context ?? Context()).Records, r => r.ReminderType == type);
 
     private static string[] Reasons(CollectionsReviewRecord r) => ReviewRecordBuilder.Parse(r.Reasons).ToArray();
 
@@ -76,7 +76,7 @@ public sealed class ReviewValidationTests
     [Fact]
     public void AmountPrecision_ASettledZeroBalanceIsStillSettled()
     {
-        Assert.Empty(ReviewRecordBuilder.Build([ReviewHarness.Row(1, amount: 0m, plan: 500m)], Context()).Records);
+        Assert.Empty(MirrorCrmBuild.Build([ReviewHarness.Row(1, amount: 0m, plan: 500m)], Context()).Records);
     }
 
     [Fact]
@@ -93,7 +93,7 @@ public sealed class ReviewValidationTests
     public void AmountPrecision_AFloatRemainderOfZeroIsASettledInstalment_NotAReceivable()
     {
         var settled = ReviewHarness.Row(1) with { Amount = 0.000000000001m, AmountIsFloatingPoint = true };
-        var result = ReviewRecordBuilder.Build([settled], Context());
+        var result = MirrorCrmBuild.Build([settled], Context());
         Assert.Empty(result.Records);
         Assert.Equal(1, result.SettledRows);
     }
@@ -203,7 +203,7 @@ public sealed class ReviewValidationTests
     {
         var first = ReviewHarness.Row(1, amount: 300m, day: 16);
         var second = ReviewHarness.Row(1, amount: 450m, day: 18) with { UnitId = 2001, UnitCode = "TP140-2001" };
-        var records = ReviewRecordBuilder.Build([first, second], Context()).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
+        var records = MirrorCrmBuild.Build([first, second], Context()).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(2, records.Count);
         Assert.Equal(new decimal?[] { 300m, 450m }, records.OrderBy(r => r.DueDate).Select(r => r.RemainingAmount));
         // One customer, two units, one phone: two Ready records, each its own call (the confirmed per-unit decision); not merged and not resolved by choosing a unit.
@@ -215,7 +215,7 @@ public sealed class ReviewValidationTests
     {
         var a = ReviewHarness.Row(1, mobile: "0500003001", amount: 300m);
         var b = ReviewHarness.Row(2, mobile: "0500003001", amount: 450m);
-        var records = ReviewRecordBuilder.Build([a, b], Context()).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
+        var records = MirrorCrmBuild.Build([a, b], Context()).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(2, records.Count);                                         // one record per unit; no merged 750
         Assert.Equal(new decimal?[] { 300m, 450m }, records.OrderBy(r => r.RemainingAmount).Select(r => r.RemainingAmount));
         Assert.All(records, r =>
@@ -231,7 +231,7 @@ public sealed class ReviewValidationTests
         // The same unit: a September balance above AED 1,500 (Legal Notice) and an October instalment (Current Month); both are scheduled on day 14.
         var september = ReviewHarness.Row(1, amount: 1600m) with { DueDate = new DateTime(2026, 9, 10), VoucherNumber = "INV-SEP" };
         var october = ReviewHarness.Row(1, amount: 400m, day: 20);
-        var records = ReviewRecordBuilder.Build([september, october], Context()).Records;
+        var records = MirrorCrmBuild.Build([september, october], Context()).Records;
         var today = records.Where(r => r.ReminderType is CampaignReminderType.CurrentMonth or CampaignReminderType.LegalNotice).ToList();
         Assert.Equal(2, today.Count);
         Assert.All(today, r =>
@@ -279,7 +279,7 @@ public sealed class ReviewValidationTests
     {
         var a = ReviewHarness.Row(1);
         var b = a with { UnitId = 2001, UnitCode = "TP140-2001" };
-        Assert.All(ReviewRecordBuilder.Build([a, b], Context()).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth),
+        Assert.All(MirrorCrmBuild.Build([a, b], Context()).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth),
             r => Assert.Contains(ReviewReasons.UnitAllocationNeedsReview, Reasons(r)));
     }
 
@@ -303,8 +303,8 @@ public sealed class ReviewValidationTests
     public void ConflictingContactDetailsOnOneUnitNeedReview()
     {
         var a = ReviewHarness.Row(1, day: 16);
-        var b = ReviewHarness.Row(1, day: 18, mobile: "0559999999");
-        Assert.Contains(ReviewReasons.ConflictingContactDetails, Reasons(Single([a, b])));
+        var b = ReviewHarness.Row(1, day: 18, name: "Someone Else");   // a different NAME; PACT phones are not compared (the campaign mobile is CRM only)
+        Assert.Contains(ReviewReasons.ConflictingContactDetails, Reasons(Single([a, b], context: Context() with { Crm = TigerCS.Application.Modules.Collections.Services.CrmLinkSet.None })));   // no CRM buyer supplies the contact, so PACT's own disagreement counts
     }
 
     [Fact]
@@ -319,13 +319,13 @@ public sealed class ReviewValidationTests
     {
         // A balance 4 months overdue and above AED 20,000 is a Legal Case candidate by the approved policy...
         var old = ReviewHarness.Row(1, amount: 25000m, day: 1) with { DueDate = new DateTime(2026, 6, 1) };
-        var types = ReviewRecordBuilder.Build([old], Context()).Records.Select(r => r.ReminderType).ToHashSet();
+        var types = MirrorCrmBuild.Build([old], Context()).Records.Select(r => r.ReminderType).ToHashSet();
         Assert.Contains(CampaignReminderType.LegalCase, types);
         Assert.Contains(CampaignReminderType.Overdue, types);
 
         // ...but the same age with AED 5,000 is not: age alone never creates a Legal Case.
         var smaller = old with { Amount = 5000m, PlanAmount = 5000m };
-        types = ReviewRecordBuilder.Build([smaller], Context()).Records.Select(r => r.ReminderType).ToHashSet();
+        types = MirrorCrmBuild.Build([smaller], Context()).Records.Select(r => r.ReminderType).ToHashSet();
         Assert.DoesNotContain(CampaignReminderType.LegalCase, types);
         Assert.DoesNotContain(CampaignReminderType.LegalNotice, types);
         Assert.Contains(CampaignReminderType.Overdue, types);
@@ -335,7 +335,7 @@ public sealed class ReviewValidationTests
     public void LegalNoticeNeedsPreviousMonthBalanceAboveThresholdAndRelease()
     {
         var september = ReviewHarness.Row(1, amount: 1500m, day: 10) with { DueDate = new DateTime(2026, 9, 10) };
-        Assert.DoesNotContain(ReviewRecordBuilder.Build([september], Context()).Records, r => r.ReminderType == CampaignReminderType.LegalNotice); // strictly more than 1,500
+        Assert.DoesNotContain(MirrorCrmBuild.Build([september], Context()).Records, r => r.ReminderType == CampaignReminderType.LegalNotice); // strictly more than 1,500
         var above = september with { Amount = 1500.01m, PlanAmount = 1500.01m };
         var notice = Single([above], CampaignReminderType.LegalNotice);
         Assert.Equal(ReviewValidationStatus.Ready, notice.ValidationStatus);
@@ -367,8 +367,8 @@ public sealed class ReviewValidationTests
     [Fact]
     public void RecordKeyIsStableForTheSameUnitAndCycleAndDiffersByStage()
     {
-        var first = ReviewRecordBuilder.Build([ReviewHarness.Row(1)], Context()).Records.ToList();
-        var again = ReviewRecordBuilder.Build([ReviewHarness.Row(1, amount: 900m)], Context()).Records.ToList();
+        var first = MirrorCrmBuild.Build([ReviewHarness.Row(1)], Context()).Records.ToList();
+        var again = MirrorCrmBuild.Build([ReviewHarness.Row(1, amount: 900m)], Context()).Records.ToList();
         Assert.Equal(first.Select(r => r.RecordKey).Order(), again.Select(r => r.RecordKey).Order());
         Assert.Equal(first.Count, first.Select(r => r.RecordKey).Distinct().Count());
     }
