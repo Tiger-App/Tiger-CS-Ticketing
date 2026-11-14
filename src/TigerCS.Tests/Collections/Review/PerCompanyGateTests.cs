@@ -159,7 +159,7 @@ public sealed class PerCompanyGateTests
         var rows = new[] { ReviewHarness.Row(1, 500m), ReviewHarness.Row(2, 700m) };
         var context = new ReviewBuildContext(new DateOnly(2026, 10, 14), ReviewHarness.Now, "t", "AED", true, true, false, MoneyNormalizer.DefaultFloatTolerance,
             new Dictionary<string, string>(), null, null, new HashSet<(int, string, long)> { (4, "T0002", 1002L) });
-        var built = ReviewRecordBuilder.Build(rows, context).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
+        var built = MirrorCrmBuild.Build(rows, context).Records.Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(ReviewValidationStatus.Ready, built.Single(r => r.TenantId == "T0001").ValidationStatus);
         var held = built.Single(r => r.TenantId == "T0002");
         Assert.Equal(ReviewValidationStatus.NeedsReview, held.ValidationStatus);

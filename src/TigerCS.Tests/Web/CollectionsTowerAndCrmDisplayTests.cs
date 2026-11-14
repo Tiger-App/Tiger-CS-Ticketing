@@ -93,9 +93,9 @@ public sealed class CollectionsTowerAndCrmDisplayTests
         var row = new CollectionsCampaignContactDto("r", "k", 4, "T1", "N", "", "", 1, "TP115-1921", "TP115", 1m, "AED", null, "S", "C", "NeedsReview", "CrmUnavailable;NoValidContact");
         var notes = CampaignsModel.ReviewNotes(row).ToList();
         Assert.Contains(notes, n => n.StartsWith("CRM unavailable"));
-        Assert.DoesNotContain(notes, n => n.Contains("in CRM or PACT"));
+        Assert.DoesNotContain(notes, n => n.Contains("No valid mobile in CRM"));
         var plain = row with { Reason = "NoValidContact" };
-        Assert.Contains(CampaignsModel.ReviewNotes(plain), n => n.Contains("No mobile or email in CRM or PACT"));
+        Assert.Contains(CampaignsModel.ReviewNotes(plain), n => n.Contains("No valid mobile in CRM"));
     }
 
     // ---- the four different reasons nobody can be reached (switched off / owner not linked / CRM linked but empty / CRM service down) ----
@@ -146,8 +146,8 @@ public sealed class CollectionsTowerAndCrmDisplayTests
         var row = new CollectionsCampaignContactDto("r", "k", 4, "T1", "N", "", "", 1, "TP140-407", "TP140", 1m, "AED", null, "S", "C", "NeedsReview", "NoValidContact");
         Assert.Contains("switched off", CampaignsModel.ReviewNotes(row, "Disabled").Single());
         Assert.Contains("no CRM owner is linked", CampaignsModel.ReviewNotes(row, "Ready").Single());
-        Assert.Contains("CRM or PACT", CampaignsModel.ReviewNotes(row with { CrmCustomerId = 9 }, "Ready").Single());
+        Assert.Contains("No valid mobile in CRM", CampaignsModel.ReviewNotes(row with { CrmCustomerId = 9 }, "Ready").Single());
         Assert.Contains("CRM unavailable", CampaignsModel.ReviewNotes(row with { Reason = "CrmUnavailable;NoValidContact" }, "ReadFailed").Single());
-        Assert.Contains("CRM or PACT", CampaignsModel.ReviewNotes(row).Single());            // state unknown: the old wording, no new claim
+        Assert.Contains("No valid mobile in CRM", CampaignsModel.ReviewNotes(row).Single());   // state unknown: no claim about a missing CRM owner
     }
 }

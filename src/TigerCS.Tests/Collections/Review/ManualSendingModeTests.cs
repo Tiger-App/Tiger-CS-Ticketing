@@ -83,7 +83,7 @@ public sealed class ManualSendingModeTests
     public void EveryStageRecord_CarriesTheCustomersInstalments_AndNoExtraRecordExists()
     {
         var rows = new[] { ReviewHarness.Row(1, 500m, day: 20), ReviewHarness.Row(1, 300m, day: 20) with { DueDate = new DateTime(2026, 8, 10), VoucherNumber = "INV-1B" } };
-        var records = ReviewRecordBuilder.Build(rows, Context(Today)).Records;
+        var records = MirrorCrmBuild.Build(rows, Context(Today)).Records;
         Assert.Equal([CampaignReminderType.CurrentMonth, CampaignReminderType.FollowUp, CampaignReminderType.Overdue], records.Select(r => r.ReminderType).Order());   // one per stage that qualifies
         Assert.All(records, r => Assert.Equal("20260810=300;20261020=500", r.InstalmentsJson));
         // Auto still sees the stage amounts: Current Month = this month's instalment only, Overdue = the August one.
@@ -94,12 +94,12 @@ public sealed class ManualSendingModeTests
     [Fact]
     public void AnOutsideScheduleRecord_IsExcludedForOneReasonOnly_ButManuallySendable()
     {
-        var records = ReviewRecordBuilder.Build([ReviewHarness.Row(1)], Context(Today)).Records;
+        var records = MirrorCrmBuild.Build([ReviewHarness.Row(1)], Context(Today)).Records;
         var current = Assert.Single(records, r => r.ReminderType == CampaignReminderType.CurrentMonth);
         Assert.Equal(ReviewValidationStatus.Excluded, current.ValidationStatus);                          // Auto: not sent outside the schedule
         Assert.Equal([ReviewReasons.OutsideSchedule], ReviewRecordBuilder.Parse(current.Reasons));
         Assert.True(ReviewRecordBuilder.IsManuallySendable(current));                                     // Manual: the schedule is waived
-        var scheduled = ReviewRecordBuilder.Build([ReviewHarness.Row(1)], Context(new DateOnly(2026, 10, 14))).Records.Single(r => r.ReminderType == CampaignReminderType.CurrentMonth);
+        var scheduled = MirrorCrmBuild.Build([ReviewHarness.Row(1)], Context(new DateOnly(2026, 10, 14))).Records.Single(r => r.ReminderType == CampaignReminderType.CurrentMonth);
         Assert.Equal(ReviewValidationStatus.Ready, scheduled.ValidationStatus); Assert.True(ReviewRecordBuilder.IsManuallySendable(scheduled));
     }
 
@@ -107,16 +107,16 @@ public sealed class ManualSendingModeTests
     public void ManualWaivesOnlyTheSchedule_EveryOtherReasonKeepsTheRecordOut()
     {
         // Two customers on one number are each their own call (the confirmed per-unit decision): both sendable, nothing merged. A bad contact, an unreconciled source and an internal legal referral stay out.
-        var shared = ReviewRecordBuilder.Build([ReviewHarness.Row(3, mobile: "971500000001"), ReviewHarness.Row(4, mobile: "971500000001")], Context(Today)).Records
+        var shared = MirrorCrmBuild.Build([ReviewHarness.Row(3, mobile: "971500000001"), ReviewHarness.Row(4, mobile: "971500000001")], Context(Today)).Records
             .Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(2, shared.Count);
         Assert.All(shared, r => { Assert.DoesNotContain(ReviewReasons.ManualSharedPhone, ReviewRecordBuilder.Parse(r.Reasons)); Assert.True(ReviewRecordBuilder.IsManuallySendable(r)); });
-        var noPhone = ReviewRecordBuilder.Build([ReviewHarness.Row(5, mobile: "123")], Context(Today)).Records.First(r => r.ReminderType == CampaignReminderType.CurrentMonth);
+        var noPhone = MirrorCrmBuild.Build([ReviewHarness.Row(5, mobile: "123")], Context(Today)).Records.First(r => r.ReminderType == CampaignReminderType.CurrentMonth);
         Assert.False(ReviewRecordBuilder.IsManuallySendable(noPhone)); Assert.Contains(ReviewReasons.NoValidContact, ReviewRecordBuilder.Parse(noPhone.Reasons));
-        var unreconciled = ReviewRecordBuilder.Build([ReviewHarness.Row(6)], Context(Today) with { SourceReconciled = false }).Records.First();
+        var unreconciled = MirrorCrmBuild.Build([ReviewHarness.Row(6)], Context(Today) with { SourceReconciled = false }).Records.First();
         Assert.True(ReviewRecordBuilder.IsManuallySendable(unreconciled));                                 // the source gate is the send's, not the record's (ReconciliationGateTests)
         // 28 Oct: Follow Up is scheduled, yet a manual Current Month for the same customer is not blocked: campaign types are independent.
-        var overlap = ReviewRecordBuilder.Build([ReviewHarness.Row(7)], Context(new DateOnly(2026, 10, 28))).Records.Single(r => r.ReminderType == CampaignReminderType.CurrentMonth);
+        var overlap = MirrorCrmBuild.Build([ReviewHarness.Row(7)], Context(new DateOnly(2026, 10, 28))).Records.Single(r => r.ReminderType == CampaignReminderType.CurrentMonth);
         Assert.DoesNotContain(ReviewReasons.ManualReminderTypeOverlap, ReviewRecordBuilder.Parse(overlap.Reasons)); Assert.True(ReviewRecordBuilder.IsManuallySendable(overlap));
     }
 

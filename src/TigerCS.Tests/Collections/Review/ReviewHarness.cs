@@ -286,7 +286,14 @@ internal sealed class ReviewHarness : IDisposable
         return options;
     }
     /// <summary>The shared CRM link service (null = CRM linking off: contacts are PACT's, as before).</summary>
-    public TigerCS.Application.Modules.Collections.Services.CollectionsUnitLinkService? Links { get; set; }
+    public TigerCS.Application.Modules.Collections.Services.CollectionsUnitLinkService? Links
+    {
+        // Default: every seeded PACT unit has one eligible CRM buyer whose mobile is the seeded phone (the campaign mobile is CRM only). Tests of CRM behaviour set their own.
+        get => _links ??= new(new TigerCS.Tests.Collections.Crm.PactMirrorCrmOwnerStore(() => Source.Items), new TigerCS.Application.Modules.Collections.CollectionsCrmOwnersOptions { Enabled = true },
+            new FakeTimeProvider(Now), NullLogger<TigerCS.Application.Modules.Collections.Services.CollectionsUnitLinkService>.Instance);
+        set => _links = value;
+    }
+    private TigerCS.Application.Modules.Collections.Services.CollectionsUnitLinkService? _links;
     public FakeGenesysClient Client { get; } = new();
     public FakeJobScheduler Scheduler { get; } = new();
     public FakeAdminEmailSender Email { get; } = new();

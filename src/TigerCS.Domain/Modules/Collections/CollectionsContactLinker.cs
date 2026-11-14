@@ -56,6 +56,19 @@ public static class CollectionsContactLinker
         return new(name, phone, email, Source(name, crm.Name), Source(phone, crm.Phone), Source(email, crm.Email), status);
     }
 
+    /// <summary>
+    /// The contact for a CAMPAIGN call (preview, review records, exports, Genesys send). CRM is the only source of the MOBILE NUMBER: the phone is the CRM customer's own mobile when exactly one
+    /// eligible CRM buyer holds the unit, and is otherwise empty (no CRM buyer, several buyers, ambiguous company, CRM unavailable). The PACT phone is never used, not even as a fallback, so a
+    /// missing or invalid PACT phone cannot hold a customer back and a PACT phone can never be called. Name and e-mail keep the <see cref="Link"/> rules. An empty phone becomes NoValidContact
+    /// (Needs review) in the caller; CRM's value is validated here, so an invalid CRM mobile is empty too.
+    /// </summary>
+    public static LinkedContact LinkForCampaign(SourceContact pact, SourceContact crm, CrmLinkStatus status)
+    {
+        var linked = Link(pact, crm, status);
+        var crmPhone = status == CrmLinkStatus.Single ? Review.PhoneNormalizer.Normalize(crm.Phone).E164 : "";
+        return linked with { Phone = crmPhone, PhoneSource = crmPhone.Length > 0 ? "Crm" : "" };
+    }
+
     /// <summary>The review flags a linking raises (CrmCustomerAmbiguous, CrmCompanyAmbiguous) and NoValidContact when the linked contact has neither phone nor e-mail.</summary>
     public static CollectionsCampaignFlags Flags(LinkedContact linked, bool contactRequired)
     {
