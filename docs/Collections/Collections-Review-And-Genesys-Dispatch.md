@@ -119,9 +119,10 @@ merged. **Confirmed business decision: every property unit is its own Genesys co
 phone number** (one customer with three units on one number = three records and three calls; two customers on one number = both records kept). A phone
 number is never an identifier: records are never merged, consolidated, prioritised or held back because numbers match. The unit-level protections are what
 prevent genuine duplicates: the record key (company, tenant, unit id, unit code, campaign cycle), the filtered unique index over live dispatch items, the
-contact-frequency limit per unit and business day, and the idempotency key of a dispatch. The only repeated-call hold left is per **unit**: a unit that
-qualifies for two reminder types scheduled on the same day (`ReminderTypeOverlap`, e.g. Legal Notice and Current Month on day 14) stays held until the
-business decides the priority. `SharedPhoneMultipleUnits` / `ManualSharedPhone` are no longer produced; review data stored before the decision still shows
+contact-frequency limit per unit, **campaign type** and business day, and the idempotency key of a dispatch. **Campaign types are fully independent:** each evaluates
+eligibility with its own rules, so a unit that qualifies for several types on one day (e.g. Current Month and Legal Notice on day 14) is eligible in each, and sending one
+type never blocks another; *Already Sent* and duplicate protection apply only within the same campaign type and its occurrence. `ReminderTypeOverlap` /
+`ManualReminderTypeOverlap` / `SharedPhoneMultipleUnits` / `ManualSharedPhone` are no longer produced; review data stored before the decision still shows
 them until it is refreshed.
 
 **Genesys side (UAT):** the upload sends one contact per unit with the same `Phone` value; the six-column list template has no unit column, so the rows
