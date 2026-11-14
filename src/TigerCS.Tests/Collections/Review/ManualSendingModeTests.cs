@@ -115,9 +115,9 @@ public sealed class ManualSendingModeTests
         Assert.False(ReviewRecordBuilder.IsManuallySendable(noPhone)); Assert.Contains(ReviewReasons.NoValidContact, ReviewRecordBuilder.Parse(noPhone.Reasons));
         var unreconciled = ReviewRecordBuilder.Build([ReviewHarness.Row(6)], Context(Today) with { SourceReconciled = false }).Records.First();
         Assert.True(ReviewRecordBuilder.IsManuallySendable(unreconciled));                                 // the source gate is the send's, not the record's (ReconciliationGateTests)
-        // 28 Oct: Follow Up is scheduled, so a manual Current Month for the same customer would call twice.
+        // 28 Oct: Follow Up is scheduled, yet a manual Current Month for the same customer is not blocked: campaign types are independent.
         var overlap = ReviewRecordBuilder.Build([ReviewHarness.Row(7)], Context(new DateOnly(2026, 10, 28))).Records.Single(r => r.ReminderType == CampaignReminderType.CurrentMonth);
-        Assert.Contains(ReviewReasons.ManualReminderTypeOverlap, ReviewRecordBuilder.Parse(overlap.Reasons)); Assert.False(ReviewRecordBuilder.IsManuallySendable(overlap));
+        Assert.DoesNotContain(ReviewReasons.ManualReminderTypeOverlap, ReviewRecordBuilder.Parse(overlap.Reasons)); Assert.True(ReviewRecordBuilder.IsManuallySendable(overlap));
     }
 
     // ------------------------------------------------------------ any campaign type, any time, no send date
@@ -452,19 +452,18 @@ public sealed class ManualSendingModeTests
     }
 
     [Fact]
-    public async Task ContactFrequency_OneContactPerCustomerPerDay_AcrossCampaignTypes_WithItsReason()
+    public async Task ContactFrequency_IsScopedToTheCampaignType_AnotherTypeIsNeverBlocked()
     {
         using var h = await SeededAsync();
         var (_, confirm) = await h.PrepareAsync(All(Manual("CurrentMonth")), "freq");
         using (var scope = h.NewScope()) Assert.Equal(CollectionsOutcome.Accepted, (await scope.Dispatch.ConfirmAsync(h.Manager, confirm, CancellationToken.None)).Outcome);
-        // The same customers were just added to a Genesys list: another campaign type holds them back for the rest of the day, and says why.
-        Assert.Equal(0, (await SummaryAsync(h, All(Manual("FollowUp")))).Value!.Count);
+        // The same customers were just added to the Current Month list: that is protected (same campaign type, same period) ...
+        Assert.Equal(0, (await SummaryAsync(h, All(Manual("CurrentMonth")))).Value!.Count);
+        Assert.All((await ListAsync(h, Manual("CurrentMonth"))).Items, i => Assert.Equal("AlreadySent", i.ValidationStatus));
+        // ... but another campaign type is independent: it is neither blocked nor given a contact-frequency reason.
+        Assert.Equal(2, (await SummaryAsync(h, All(Manual("FollowUp")))).Value!.Count);
         var page = await ListAsync(h, Manual("FollowUp"));
-        Assert.All(page.Items, i => { Assert.Equal("AlreadySent", i.ValidationStatus); Assert.Contains(i.Reasons, r => r.Code == ReviewReasons.ContactedToday); });
-        // Tomorrow the limit no longer applies (fresh review data is needed first).
-        h.Time.Advance(TimeSpan.FromDays(1)); h.Source.ReadAt = ReviewHarness.Now.AddDays(2);
-        await h.RefreshAsync();
-        Assert.Equal(2, (await ListAsync(h, Manual("FollowUp"))).Counts.Ready);
+        Assert.All(page.Items, i => { Assert.NotEqual("AlreadySent", i.ValidationStatus); Assert.DoesNotContain(i.Reasons, r => r.Code == ReviewReasons.ContactedToday); });
     }
 
     [Fact]

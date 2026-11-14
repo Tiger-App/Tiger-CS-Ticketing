@@ -88,7 +88,7 @@ public sealed record OverlapRowDto(string CustomerName, int CompanyId, string Te
 
 /// <summary>One phone number that would receive several calls: the customers and units behind it, and why it is held back.</summary>
 public sealed record OverlapGroupDto(
-    string Phone, int CustomerCount, int UnitCount, int RecordCount, bool SharedAcrossUnits, bool ReminderTypeOverlap,
+    string Phone, int CustomerCount, int UnitCount, int RecordCount, bool SharedAcrossUnits,
     IReadOnlyList<string> ReminderTypes, IReadOnlyList<OverlapRowDto> Rows);
 
 public sealed record OverlapPageDto(int TotalPhones, int Page, int PageSize, IReadOnlyList<OverlapGroupDto> Groups);

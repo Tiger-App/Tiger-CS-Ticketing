@@ -39,8 +39,8 @@ public static class ReviewReasons
     public const string CurrencyNeedsReview = "CurrencyNeedsReview";
     public const string OutsideSchedule = "OutsideSchedule";
     /// <summary>
-    /// Markers stored on an outside-schedule record. They change nothing in Auto mode (the record is outside the schedule either way); in Manual mode they hold the record back
-    /// because sending it on the manual date would call the same unit twice, or the same number for two units, on that day.
+    /// No longer produced: campaign types are independent, so a unit that qualifies for several reminder types on one day is eligible in each of them. Kept only so review data stored
+    /// before that decision still reads; a refresh clears it.
     /// </summary>
     public const string ManualReminderTypeOverlap = "ManualReminderTypeOverlap";
     /// <summary>No longer produced (each unit is its own call, whatever its number); kept so review data stored before that decision still reads. A refresh clears it.</summary>
@@ -49,6 +49,7 @@ public static class ReviewReasons
     public const string LegalCaseNotApproved = "LegalCaseNotApproved";
     /// <summary>No longer produced (each unit is its own call, whatever its number); kept so review data stored before that decision still reads. A refresh clears it.</summary>
     public const string SharedPhoneMultipleUnits = "SharedPhoneMultipleUnits";
+    /// <summary>No longer produced (campaign types are independent); kept so review data stored before that decision still reads. A refresh clears it.</summary>
     public const string ReminderTypeOverlap = "ReminderTypeOverlap";
     public const string SourceAmountsInconsistent = "SourceAmountsInconsistent";
     public const string CrmCustomerAmbiguous = "CrmCustomerAmbiguous";
@@ -83,7 +84,7 @@ public static class ReviewReasons
         new(ContradictoryPaymentStatus, ReasonKind.NeedsReview, "The source says Paid but still shows an amount remaining."),
         new(CurrencyNeedsReview, ReasonKind.NeedsReview, "The currency is not AED; amounts cannot be added or sent until reviewed."),
         new(OutsideSchedule, ReasonKind.Exclusion, "Today is not a scheduled send day for this reminder type. In Manual mode an authorized person can still send it today."),
-        new(ManualReminderTypeOverlap, ReasonKind.ManualOnly, "Manual sending is held back: this unit already qualifies for another reminder type that is scheduled today, so it would be called twice."),
+        new(ManualReminderTypeOverlap, ReasonKind.ManualOnly, "Stored before campaigns became independent: qualifying for another reminder type on the same day no longer holds a record back. Refresh the approval data."),
         new(ManualSharedPhone, ReasonKind.ManualOnly, "Stored before the per-unit calling decision: a phone number shared by several units no longer holds a record back (each unit is its own call). Refresh the approval data."),
         new(LegalNoticeReleaseRequired, ReasonKind.Exclusion, "Sending legal notices to customers has not been released (needs an approved legal workflow)."),
         new(LegalCaseNotApproved, ReasonKind.Exclusion, "Legal Case records are internal Legal referrals; calling customers for them needs an explicit business decision."),
@@ -92,13 +93,13 @@ public static class ReviewReasons
         new(CrmCompanyAmbiguous, ReasonKind.NeedsReview, "The CRM sale of this unit cannot be tied to one company: the same unit code exists in both companies' PACT data. No company was guessed."),
         new(ContactSourceConflict, ReasonKind.NeedsReview, "CRM and PACT give different phone numbers (or e-mails) for this unit. Two different people are never merged; CRM alone is shown and a person must confirm."),
         new(CrmUnavailable, ReasonKind.NeedsReview, "CRM contact data is switched on but could not be used (never loaded, too old, or unreadable), so the contact may be incomplete. This is a service problem, not a missing value in CRM; nothing is sent until it is back."),
-        new(ContactedToday, ReasonKind.Exclusion, "This customer was already added to a Genesys contact list today. The contact-frequency limit is one contact per customer per day; try again tomorrow."),
+        new(ContactedToday, ReasonKind.Exclusion, "This unit was already added to a Genesys contact list today for THIS campaign type (Already Sent is scoped to one campaign type). Other campaign types are not affected."),
         new(SharedPhoneMultipleUnits, ReasonKind.Exclusion, "Stored before the per-unit calling decision: a phone number shared by several units no longer holds a record back (each unit is its own call). Refresh the approval data."),
         new(SpecialCaseExcluded, ReasonKind.Exclusion, "This unit is a permanent special case: it is never part of a normal Collections campaign, on any date and whatever is selected."),
         new(GulfCustomerExcluded, ReasonKind.Exclusion, "This unit belongs to GULF_CUSTOMERS (cheques). It is excluded from campaigns except in a Manual campaign on the 14th of the month, or when an authorized person includes it manually for that campaign."),
         new(ManuallyIncluded, ReasonKind.Warning, "Manually included: an authorized person added this GULF_CUSTOMERS unit to this Manual campaign. Every other safety check still applies."),
         new(GulfInclusionDay, ReasonKind.Warning, "GULF_CUSTOMERS unit eligible today: the 14th of the month is its Manual campaign day. Every other safety check still applies."),
-        new(ReminderTypeOverlap, ReasonKind.Exclusion, "This unit qualifies for more than one reminder type today (for example Current Month and Legal Notice on day 14). Sending both would call twice on the same day, and the business has not yet decided which takes priority, so these records are held back.")
+        new(ReminderTypeOverlap, ReasonKind.Exclusion, "Stored before campaigns became independent: qualifying for more than one reminder type on the same day no longer holds a record back. Refresh the approval data.")
     ];
 
     private static readonly Dictionary<string, ReviewReasonInfo> ByCode = All.ToDictionary(r => r.Code, StringComparer.Ordinal);

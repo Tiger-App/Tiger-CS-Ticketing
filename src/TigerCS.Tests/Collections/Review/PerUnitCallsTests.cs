@@ -225,9 +225,10 @@ public sealed class PerUnitCallsTests
             .Where(r => r.ReminderType == CampaignReminderType.CurrentMonth).ToList();
         Assert.Equal(4, records.Count);
         Assert.All(records, r => { Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus); Assert.Equal("", r.Reasons); });
-        // The per-unit hold is untouched: a unit scheduled for two reminder types today is still held (day 14: Current Month and Legal Notice).
+        // Campaign types are independent: a unit scheduled for two reminder types today (day 14: Current Month and Legal Notice) is eligible in both.
         var september = ReviewHarness.Row(5, 1600m) with { DueDate = new DateTime(2026, 9, 10), VoucherNumber = "INV-SEP" };
         var overlap = ReviewRecordBuilder.Build([september, ReviewHarness.Row(5, 400m, day: 20)], context).Records.Where(r => r.ReminderType is CampaignReminderType.CurrentMonth or CampaignReminderType.LegalNotice).ToList();
-        Assert.All(overlap, r => Assert.Contains(ReviewReasons.ReminderTypeOverlap, ReviewRecordBuilder.Parse(r.Reasons)));
+        Assert.Equal(2, overlap.Count);
+        Assert.All(overlap, r => { Assert.DoesNotContain(ReviewReasons.ReminderTypeOverlap, ReviewRecordBuilder.Parse(r.Reasons)); Assert.Equal(ReviewValidationStatus.Ready, r.ValidationStatus); });
     }
 }

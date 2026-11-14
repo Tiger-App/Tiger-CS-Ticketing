@@ -476,8 +476,9 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
     }
 
     /// <summary>
-    /// "Sent" = the record is in a live or uploaded dispatch. When <paramref name="contactedSinceUtc"/> is given (Manual and Auto dispatch) the contact-frequency limit adds: the same customer is in a
-    /// live or uploaded dispatch of ANY record that was approved since then (the start of today), so a customer is never added to a Genesys list twice in a day.
+    /// "Sent" = the record is in a live or uploaded dispatch. When <paramref name="contactedSinceUtc"/> is given (Manual and Auto dispatch) the contact-frequency limit adds: the same unit is in a
+    /// live or uploaded dispatch of a record OF THE SAME CAMPAIGN TYPE that was approved since then (the start of today), so a unit is never added twice to one campaign's list in a day. Campaign
+    /// types are independent: a send of one type never marks the unit Already Sent for another.
     /// </summary>
     private IQueryable<Row> WithSent(IQueryable<CollectionsReviewRecord> q, DateTime? contactedSinceUtc = null)
     {
@@ -488,7 +489,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
             Record = r,
             Sent = db.CollectionsDispatchItems.Any(i => i.RecordKey == r.RecordKey && LiveStatuses.Contains(i.Status))
                 || (limit
-                    && db.CollectionsDispatchItems.Any(i => i.CompanyId == r.CompanyId && i.TenantId == r.TenantId && i.UnitCode == r.UnitCode && LiveStatuses.Contains(i.Status)
+                    && db.CollectionsDispatchItems.Any(i => i.CompanyId == r.CompanyId && i.TenantId == r.TenantId && i.UnitCode == r.UnitCode && i.ReminderType == r.ReminderType && LiveStatuses.Contains(i.Status)
                         && db.CollectionsDispatches.Any(d => d.CollectionsDispatchId == i.CollectionsDispatchId && d.InitiatedAtUtc >= since)))
         });
     }
@@ -708,7 +709,7 @@ public sealed class ReviewStore(TigerCsDbContext db, ReviewWriteRetryPolicy? ret
     public async Task<OverlapPage> GetOverlapsAsync(long runId, int skip, int take, CancellationToken ct)
     {
         var flagged = db.CollectionsReviewRecords.AsNoTracking().Where(r => r.CollectionsReviewRunId == runId && r.Phone != ""
-            && (EF.Functions.Like(r.Reasons, "%;SharedPhoneMultipleUnits;%") || EF.Functions.Like(r.Reasons, "%;ReminderTypeOverlap;%")));
+            && EF.Functions.Like(r.Reasons, "%;SharedPhoneMultipleUnits;%"));
         var phones = flagged.GroupBy(r => r.Phone);
         var total = await phones.CountAsync(ct);
         var page = await phones.OrderByDescending(g => g.Count()).ThenBy(g => g.Key).Skip(skip).Take(take).Select(g => g.Key).ToListAsync(ct);

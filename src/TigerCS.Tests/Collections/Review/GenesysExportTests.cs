@@ -186,7 +186,7 @@ public sealed class GenesysExportTests
     // ------------------------------------------------------------ a file is not a send: held-back customers are in it, and said to be
 
     [Fact]
-    public async Task AlreadySentAndContactedTodayCustomers_AreInTheFile_AndTheFileSaysSo()
+    public async Task AlreadySentCustomers_AreInTheFile_AndTheFileSaysSo_ButAnotherCampaignsSendIsNotCountedAgainstThem()
     {
         using var h = await SeededAsync();
         var (_, confirm) = await h.PrepareAsync(All(Manual("CurrentMonth")), "first");
@@ -194,8 +194,8 @@ public sealed class GenesysExportTests
         var sent = (await ExportAsync(h, All(Manual("CurrentMonth")))).Value!;                          // already in a live dispatch: still in the file, counted as such
         Assert.Equal(2, sent.RowCount); Assert.Equal(2, sent.IncludedByStatus!["AlreadySent"]);
         Assert.Contains(sent.Notices, n => n.Contains("2 of the 2 customer unit(s) in this file are held back from sending (Already sent 2)"));
-        var today = (await ExportAsync(h, All(Manual("FollowUp")))).Value!;                             // the contact-frequency hold of a send does not empty a file
-        Assert.True(today.IncludedByStatus!.ContainsKey("AlreadySent"));
+        var other = (await ExportAsync(h, All(Manual("FollowUp")))).Value!;                             // Already Sent is scoped to the campaign type: a Current Month send never marks Follow Up
+        Assert.False(other.IncludedByStatus!.ContainsKey("AlreadySent"));
     }
 
     [Fact]
