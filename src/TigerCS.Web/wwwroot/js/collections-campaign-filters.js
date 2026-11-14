@@ -101,6 +101,15 @@
     let submitted = applied;       // what the request in flight was started with
     form.addEventListener('submit', () => { stale = false; clearSelection(); submitted = serialize(); });
 
+    // ---- Summary cards (Manual): the cards are lifted out of the results box, so the results box's own link handler never sees them. A card click asks receivables.js to load its URL
+    // (the same filters, page 1, the card chosen) as a normal results request: a view filter only, it never submits the approval form and sends nothing.
+    if (kpiBox) kpiBox.addEventListener('click', event => {
+        const link = event.target instanceof Element ? event.target.closest('a[data-card-filter]') : null;
+        if (!link) return;
+        event.preventDefault();
+        window.dispatchEvent(new CustomEvent('campaign-results-navigate', { detail: { href: link.href } }));
+    });
+
     // ---- Lift the snapshot status out of each fragment so it survives clearing the customers
     const lift = () => {
         const status = box.querySelector('[data-snapshot-status]');

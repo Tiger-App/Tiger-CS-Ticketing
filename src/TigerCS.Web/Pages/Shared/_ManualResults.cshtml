@@ -16,29 +16,30 @@
     var today = CollectionsDisplay.DubaiToday();
     var blockedRows = list.Items.Where(i => i.ValidationStatus != "Ready").ToList();
     var reasonGroups = blockedRows.SelectMany(i => i.Reasons.Select(r => r.Code)).GroupBy(c => c).OrderByDescending(g => g.Count()).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
+    <partial name="_ManualSnapshotStatus" model="Model" />
     <div hidden data-effective-filters data-from="@Model.DateFrom?.ToString("yyyy-MM-dd")" data-to="@Model.DateTo?.ToString("yyyy-MM-dd")"></div>
     <div class="campaign-fragment" data-customer-results data-preview-current data-manual-send>
         <div class="campaign-kpis" data-campaign-kpis>
             <ul class="campaign-totals" data-campaign-totals>
-                <li class="campaign-card">
+                <li class="campaign-card campaign-card--filter" data-card="all" data-active="@(Model.IsCard("all") ? "true" : "false")">
                     <span class="campaign-card__label">Customers<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-customers", "Customers", "Customers of this campaign type with a Due or Overdue balance that match the filters. The stage schedule is not applied."))" /></span>
-                    <strong class="campaign-card__value" data-eligible-count>@counts.Total.ToString("N0")</strong>
+                    <a class="campaign-card__value campaign-card__link" href="@Model.CardUrl("all")" data-results-link data-card-filter="all" aria-pressed="@(Model.IsCard("all") ? "true" : "false")" data-eligible-count>@counts.Total.ToString("N0")</a>
                 </li>
-                <li class="campaign-card campaign-card--ready">
+                <li class="campaign-card campaign-card--filter campaign-card--ready" data-card="eligible" data-active="@(Model.IsCard("eligible") ? "true" : "false")">
                     <span class="campaign-card__label">Eligible<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-ready", "Eligible to send", "Passing every mandatory check: reconciliation, contact and identity, shared phone, legal stage, duplicate-send and contact-frequency limits."))" /></span>
-                    <strong class="campaign-card__value" data-ready-count>@counts.Ready.ToString("N0")</strong>
+                    <a class="campaign-card__value campaign-card__link" href="@Model.CardUrl("eligible")" data-results-link data-card-filter="eligible" aria-pressed="@(Model.IsCard("eligible") ? "true" : "false")" data-ready-count>@counts.Ready.ToString("N0")</a>
                 </li>
-                <li class="campaign-card @(blocked > 0 ? "campaign-card--blocked" : "")">
+                <li class="campaign-card campaign-card--filter @(blocked > 0 ? "campaign-card--blocked" : "")" data-card="heldback" data-active="@(Model.IsCard("heldback") ? "true" : "false")">
                     <span class="campaign-card__label">Held back<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-blocked", "Held back", "Never sent. Each row states the exact reason and the review step."))" /></span>
-                    <strong class="campaign-card__value" data-blocked-count>@blocked.ToString("N0")</strong>
+                    <a class="campaign-card__value campaign-card__link" href="@Model.CardUrl("heldback")" data-results-link data-card-filter="heldback" aria-pressed="@(Model.IsCard("heldback") ? "true" : "false")" data-blocked-count>@blocked.ToString("N0")</a>
                 </li>
                 <li class="campaign-card">
                     <span class="campaign-card__label">Total amount<partial name="_InfoTip" model="@(new InfoTipModel("tip-direct-total", "Total amount", "The exact amount that will be sent to Genesys for the eligible customers: only the unpaid instalments matching the Payment status and the From / To dates, for customers above the Minimum Total."))" /></span>
                     <strong class="campaign-card__value" data-eligible-total>AED @((list.ReadyTotalAmount ?? 0m).ToString("N2", System.Globalization.CultureInfo.InvariantCulture))</strong>
                 </li>
-                <li class="campaign-card">
+                <li class="campaign-card campaign-card--filter" data-card="sent" data-active="@(Model.IsCard("sent") ? "true" : "false")">
                     <span class="campaign-card__label">Already sent</span>
-                    <strong class="campaign-card__value" data-sent-count>@counts.AlreadySent.ToString("N0")</strong>
+                    <a class="campaign-card__value campaign-card__link" href="@Model.CardUrl("sent")" data-results-link data-card-filter="sent" aria-pressed="@(Model.IsCard("sent") ? "true" : "false")" data-sent-count>@counts.AlreadySent.ToString("N0")</a>
                 </li>
             </ul>
             <p class="campaign-meta">
