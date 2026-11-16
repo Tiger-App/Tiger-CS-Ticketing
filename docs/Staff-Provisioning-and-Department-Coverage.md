@@ -111,3 +111,20 @@ dotnet run --project src/TigerCS.ProductionSeeder -- provision-staff --target pr
 **Preferred alternative (not built; needs approval):** a department queue with individual access. Tickets stay unassigned in the department queue (already visible to Supervisors/Managers/Admin) and named employees of that department claim them (a department-scoped copy of the Call Center "Take Ownership": active member, one transaction, audited), or are assigned by a Department Head. This keeps individual accountability and needs no shared password, but it is a new mechanism and changes the employee visibility rule for the unassigned department pool.
 
 Deactivate a department account in User Management (never deleted) once individuals are in place.
+
+## 8. Handover staff (2 users)
+
+`provision-staff --roster handover` (same safety rules; dry run by default; same `AdminUserAppService.CreateAsync` path, so the Identity account, Employee profile, role, primary department and audit entry are created together and the account is active).
+
+| Full name | Email / user name | Department | Role |
+|---|---|---|---|
+| Shahd Al-Khaldi | C.Alkhalidi@tigergroup.ae | Handover (HO), primary | Department Employee |
+| Susi Awad | s.aouad@tigergroup.ae | Handover (HO), primary | Department Employee |
+
+Role: **Department Employee**, the existing non-administrative role used for Registration (works and resolves tickets assigned to their department; no assign/close/transfer/admin authority; assignment-only ticket visibility). No other role or department is given. Duplicates are checked by email/user name (case-insensitive) before creation; an existing account is never modified, only reported. The password is generated at run time into an owner-only file and never logged; users are reset through the normal User Management reset.
+
+```bash
+dotnet run --project src/TigerCS.ProductionSeeder -- provision-staff --target production --roster handover   # dry run, read-only
+```
+
+No SQL script is provided on purpose: Identity password hashes (and the security stamp) cannot be reproduced safely in T-SQL, and a hand-written insert would bypass the audited creation path. Not executed in this session (no database access).
