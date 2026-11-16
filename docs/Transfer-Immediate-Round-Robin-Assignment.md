@@ -22,6 +22,9 @@ A named employee (`AssignToEmployeeId`) is a manual assignment: unchanged, never
 Unchanged: transfer permissions and destination lists, department access, closed-ticket refusal, status/priority/SLA (not touched), `Transfer` audit entry, transfer workflow event (now records the employee who actually received it). A Resolved ticket keeps its owner (automatic assignment never applies to resolved work).
 Not changed: request-type / category **classification** routing still keeps the agent (`TicketRequestTypeRoutingService`).
 
+## Tickets left Unassigned are picked up later
+A transfer that found nobody eligible leaves a marker (the `AutoAssign ... DepartmentQueue ... Trigger=DepartmentTransfer` audit entry shares the transfer event's correlation id). The unassigned-work reconciler (`CallCenterReconciliation`, still OFF / dry-run by default) classifies such a ticket as `TransferredAwaitingDepartmentAssignment` and deals it by the **destination** department's Round Robin as soon as one of its employees is eligible. Its eligibility pre-check is read-only (no audit rows while the department is still empty), and the ticket is never routed to the Call Center. Only a transfer that actually tried and failed qualifies: pre-existing tickets waiting in a department queue are not auto-assigned. `POST api/tickets/{id}/assignment/retry` uses the same department Round Robin for such a ticket (not the shared Call Center pool).
+
 ## Concurrency
 Ticket `RowVersion`, the unique current-assignment index, and the cursor row lock (held until commit; rolled back with the transaction) are all reused: concurrent transfers into one department queue on the cursor and are dealt consecutive slots; the loser of a RowVersion race rolls back without consuming a slot.
 
