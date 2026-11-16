@@ -585,6 +585,157 @@ public class TransferRoundRobinAssignmentTests
         Assert.Equal(staff[0], next.CurrentOwnerEmployeeId);
     }
 
+    // ---- 5b. same-department operations do not rotate ---------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task SameDepartmentTransfer_IsRefused_WithoutRotatingOrReassigning()
+    {
+        var env = new Env();
+        env.AddStaff(env.Destination, 3);
+        var (ticket, _) = await env.OwnedTicketAsync(env.Source, 1);
+        await env.TransferAsync(ticket, env.Destination);
+        var owner = ticket.CurrentOwnerEmployeeId;
+        var cursor = env.Rotation.Rows[env.Destination.DepartmentId].LastAssignedEmployeeId;
+        var rows = env.Assignments.Added.Count;
+        var audits = env.Audit.Entries.Count;
+
+        var again = await env.TransferAsync(ticket, env.Destination);
+
+        Assert.Equal(TicketMutationOutcome.AlreadyInTargetDepartment, again.Outcome);
+        Assert.Equal(owner, ticket.CurrentOwnerEmployeeId);                                                // still the same employee
+        Assert.Equal(cursor, env.Rotation.Rows[env.Destination.DepartmentId].LastAssignedEmployeeId);      // the cursor did not move
+        Assert.Equal(rows, env.Assignments.Added.Count);
+        Assert.Equal(audits, env.Audit.Entries.Count);
+        Assert.Single(env.Events.All, e => e.EventType == WorkflowEventType.TicketTransferred);            // no second transfer event
+    }
+
+    [Fact]
+    public async Task ReassigningInsideTheSameDepartment_IsAManualChoice_AndNeverRotatesTheCursor()
+    {
+        var env = new Env();
+        var staff = env.AddStaff(env.Destination, 3);
+        var (ticket, _) = await env.OwnedTicketAsync(env.Source, 1);
+        await env.TransferAsync(ticket, env.Destination);                                                  // dealt staff[0]; cursor = staff[0]
+        var cursor = env.Rotation.Rows[env.Destination.DepartmentId].LastAssignedEmployeeId;
+
+        var result = await env.Assignment.AssignAsync(
+            Guid.NewGuid(), Manager, ticket.TicketId, new AssignTicketRequestDto(staff[2], [], TicketTransferReason.Other));
+
+        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
+        Assert.Equal(staff[2], ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(cursor, env.Rotation.Rows[env.Destination.DepartmentId].LastAssignedEmployeeId);      // a manual reassignment never advances the rotation
+        Assert.Single(env.CurrentRows(ticket));
+    }
+
+    // ---- 5c. SLA, assignment history and transfer history are preserved --------------------------------------------------------------
+
+    [Fact]
+    public async Task Transfer_ChangesOnlyTheDepartmentAndTheOwner_SoSlaStateAndTimersAreUntouched()
+    {
+        var env = new Env();
+        env.AddStaff(env.Destination, 2);
+        var (running, _) = await env.OwnedTicketAsync(env.Source, 1);
+        var (paused, _) = await env.OwnedTicketAsync(env.Source, 2);
+        paused.PauseSla();
+        var slaStates = new[] { running.SlaState, paused.SlaState };
+
+        var allowedToChange = new HashSet<string> { nameof(Ticket.CurrentDepartmentId), nameof(Ticket.CurrentOwnerEmployeeId), nameof(Ticket.RowVersion) };
+        foreach (var ticket in new[] { running, paused })
+        {
+            var before = Snapshot(ticket);
+            Assert.Equal(TicketMutationOutcome.Success, (await env.TransferAsync(ticket, env.Destination)).Outcome);
+            var after = Snapshot(ticket);
+
+            var changed = before.Keys.Where(k => !Equals(before[k], after[k])).ToList();
+            Assert.DoesNotContain(changed, k => !allowedToChange.Contains(k));                             // SlaState, escalation, priority, first response, timestamps, status...
+        }
+
+        Assert.Equal(slaStates, new[] { running.SlaState, paused.SlaState });                              // a paused SLA stays paused, a running one running
+
+        static Dictionary<string, object?> Snapshot(Ticket t) =>
+            typeof(Ticket).GetProperties().Where(p => p.GetIndexParameters().Length == 0 && p.CanRead && IsValueLike(p.PropertyType))
+                .ToDictionary(p => p.Name, p => p.GetValue(t) is byte[] bytes ? Convert.ToBase64String(bytes) : p.GetValue(t));
+
+        static bool IsValueLike(Type type) =>
+            (Nullable.GetUnderlyingType(type) ?? type) is { } t && (t.IsPrimitive || t.IsEnum || t == typeof(string) || t == typeof(Guid) || t == typeof(DateTime) || t == typeof(byte[]) || t == typeof(decimal));
+    }
+
+    [Fact]
+    public async Task Transfers_KeepTheWholeAssignmentAndTransferHistory_NothingIsDeletedOrRewritten()
+    {
+        var env = new Env();
+        var facilities = env.AddStaff(env.Destination, 2);
+        var maintenance = env.AddStaff(env.Other, 2);
+        var (ticket, original) = await env.OwnedTicketAsync(env.Source, 1);
+
+        await env.TransferAsync(ticket, env.Destination);                    // original -> facilities[0]
+        await env.TransferAsync(ticket, env.Other);                          // facilities[0] -> maintenance[0]
+
+        var history = env.Assignments.Added.Where(a => a.TicketId == ticket.TicketId).OrderBy(a => a.AssignedAtUtc).ToList();
+        Assert.Equal([original, facilities[0], maintenance[0]], history.Select(a => a.AssignedEmployeeId));   // every owner, in order, none removed
+        Assert.Equal([env.Source.DepartmentId, env.Destination.DepartmentId, env.Other.DepartmentId], history.Select(a => a.AssignedDepartmentId));
+        Assert.Equal([false, false, true], history.Select(a => a.IsCurrent));                                // only the last is current
+
+        var transfers = env.Events.All.Where(e => e.EventType == WorkflowEventType.TicketTransferred).ToList();
+        Assert.Equal(2, transfers.Count);
+        Assert.Equal([env.Source.DepartmentId, env.Destination.DepartmentId], transfers.Select(e => e.FromDepartmentId));
+        Assert.Equal([env.Destination.DepartmentId, env.Other.DepartmentId], transfers.Select(e => e.ToDepartmentId));
+        Assert.Equal([facilities[0], maintenance[0]], transfers.Select(e => e.ToEmployeeId));
+        Assert.Equal(2, env.Audit.Entries.Count(e => e.Action == "Transfer"));
+    }
+
+    // ---- 5d. notifications are not duplicated ----------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AnAutomaticTransferAssignment_NotifiesTheNewAssigneeExactlyOnce()
+    {
+        var env = new Env();
+        var staff = env.AddStaff(env.Destination, 2);
+        var (owned, _) = await env.OwnedTicketAsync(env.Source, 1);
+
+        await env.TransferAsync(owned, env.Destination);
+
+        var committed = env.Outbox.Committed;
+        Assert.Single(committed, m => m.EventType == OutboxEventTypes.TicketAssignedToAgent && m.Payload.Contains(staff[0].ToString()));
+        Assert.Single(committed);                                                                        // nothing else, nothing twice
+        Assert.Equal(committed.Count, committed.Select(m => m.Payload).Distinct().Count());              // no two identical messages
+    }
+
+    [Fact]
+    public async Task ATransferThatGivesAnUnownedTicketItsFirstOwner_SendsEachNotificationKindOnce()
+    {
+        var env = new Env();
+        var staff = env.AddStaff(env.Destination, 2);
+        var ticket = Ticket.CreateUnverified("TG-CS-20261103-0042", env.Source.DepartmentId, 5, (byte)PriorityLevel.High, "x", Now.AddHours(-3));
+        await env.Tickets.AddAsync(ticket);
+
+        await env.TransferAsync(ticket, env.Destination);
+
+        var counts = env.Outbox.Committed.GroupBy(m => m.EventType).ToDictionary(g => g.Key, g => g.Count());
+        Assert.All(counts.Values, c => Assert.Equal(1, c));                                              // customer "assigned" and colleague "assigned to you": one each
+        Assert.Equal(1, counts[OutboxEventTypes.TicketAssignedToAgent]);
+        Assert.Equal(staff[0], ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task AManualTransferAssignment_NotifiesOnce_AndAFailedOrNoEligibleTransferNotifiesNobody()
+    {
+        var env = new Env();
+        var staff = env.AddStaff(env.Destination, 2);
+        var (manual, _) = await env.OwnedTicketAsync(env.Source, 1);
+        var (nobody, _) = await env.OwnedTicketAsync(env.Source, 2);
+
+        await env.TransferAsync(manual, env.Destination, assignTo: staff[1]);
+        var afterManual = env.Outbox.Committed.Count;
+        Assert.Equal(1, afterManual);
+        Assert.Single(env.Outbox.Committed, m => m.EventType == OutboxEventTypes.TicketAssignedToAgent && m.Payload.Contains(staff[1].ToString()));
+
+        env.Accounts.LockOut(staff[0]);
+        env.Accounts.LockOut(staff[1]);
+        await env.TransferAsync(nobody, env.Other);                                                      // Other has no staff at all
+        Assert.Equal(afterManual, env.Outbox.Committed.Count);
+    }
+
     // ---- 6. permissions, department access and validation are unchanged ------------------------------------------------------------
 
     [Fact]

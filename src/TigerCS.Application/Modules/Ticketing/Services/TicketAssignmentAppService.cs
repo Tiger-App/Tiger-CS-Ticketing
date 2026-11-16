@@ -40,7 +40,8 @@ public sealed class TicketAssignmentAppService(
     ITicketAssignmentHistoryRepository? assignmentHistory = null,
     CollectionsTransferGuard? collectionsGuard = null,
     IOutboxWriter? outboxWriter = null,
-    IUserTransferDepartmentRepository? transferDepartments = null)
+    IUserTransferDepartmentRepository? transferDepartments = null,
+    ITicketUnassignedWorkRepository? unassignedWork = null)
 {
     /// <summary>Customer "assigned" and colleague "assigned to you" notification events, written in the operation's own transaction.</summary>
     private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
@@ -83,8 +84,16 @@ public sealed class TicketAssignmentAppService(
         var correlationId = Guid.NewGuid();
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
-        var result = await autoAssignmentService.EnsureCsAgentAsync(
-            ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.ManualRetry, now, correlationId, cancellationToken);
+        // A transferred ticket still waiting Unassigned in its department is retried against THAT department's Round Robin (never the shared
+        // Call Center pool); every other ticket keeps the shared CS Agent rotation.
+        var awaitingDepartment = unassignedWork is not null
+            && !await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
+            && await unassignedWork.GetEvidenceAsync(ticketId, cancellationToken) is { AwaitingDepartmentAssignment: true };
+        var result = awaitingDepartment
+            ? await autoAssignmentService.AssignDepartmentRoundRobinAsync(
+                ticket, AutoAssignmentTrigger.ManualRetry, now, correlationId, carriedOverOwnerEmployeeId: null, cancellationToken)
+            : await autoAssignmentService.EnsureCsAgentAsync(
+                ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.ManualRetry, now, correlationId, cancellationToken);
 
         await auditWriter.WriteAsync(
             callerEmployeeId, "RetryCsAgentAssignment", "Ticket", ticketId.ToString(),

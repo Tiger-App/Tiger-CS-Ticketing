@@ -120,8 +120,23 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
 
         var events = (await db.TicketWorkflowEvents.AsNoTracking()
             .Where(e => ids.Contains(e.TicketId))
-            .Select(e => new { e.TicketId, e.EventType, e.OccurredAtUtc, e.FromDepartmentId })
+            .Select(e => new { e.TicketId, e.EventType, e.OccurredAtUtc, e.FromDepartmentId, e.ToDepartmentId, e.CorrelationId })
             .ToListAsync(ct)).ToLookup(e => e.TicketId);
+
+        // Transfers whose automation ran and found nobody: the "AutoAssign ... DepartmentQueue ... Trigger=DepartmentTransfer" audit entry shares the
+        // transfer event's correlation id. A ticket merely sitting in a department queue (every legacy / pre-existing one) has no such entry, so it is
+        // never picked up by the department rule - only a transfer that actually tried and failed is.
+        var failedTransferAutomation = (await db.AuditEntries.AsNoTracking()
+            .Where(a => a.Action == "AutoAssign" && a.EntityType == "Ticket" && idText.Contains(a.EntityId!)
+                && a.AfterValue != null && a.AfterValue.StartsWith("DepartmentQueue") && a.AfterValue.Contains("Trigger=DepartmentTransfer"))
+            .Select(a => a.CorrelationId).Distinct().ToListAsync(ct)).ToHashSet();
+
+        // Latest assignment row per ticket (any, current or superseded): "nobody has been assigned since the transfer" is judged against it.
+        var lastAssignedAt = (await db.TicketAssignments.AsNoTracking()
+            .Where(a => ids.Contains(a.TicketId))
+            .GroupBy(a => a.TicketId)
+            .Select(g => new { TicketId = g.Key, At = g.Max(a => a.AssignedAtUtc) })
+            .ToListAsync(ct)).ToDictionary(x => x.TicketId, x => x.At);
 
         var released = (await db.AuditEntries.AsNoTracking()
             .Where(a => a.Action == "Unassign" && a.EntityType == "Ticket" && a.ActorEmployeeId != null && idText.Contains(a.EntityId!))
@@ -173,6 +188,14 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
                 && (te.Any(e => e.EventType == WorkflowEventType.TicketTransferred && e.FromDepartmentId == cc)
                     || (t.OriginatingDepartmentId == cc && t.CurrentDepartmentId != cc));
 
+            // A transfer INTO the current department, with no assignment made at or after it: the owner was released (or never existed) and nobody
+            // eligible took it. A person's later release, a manual assignment or a reconciled assignment all create a row at/after the transfer.
+            var lastTransferIn = te.Where(e => e.EventType == WorkflowEventType.TicketTransferred && e.ToDepartmentId == t.CurrentDepartmentId)
+                .OrderByDescending(e => e.OccurredAtUtc).FirstOrDefault();
+            var awaitingDepartmentAssignment = lastTransferIn is not null
+                && failedTransferAutomation.Contains(lastTransferIn.CorrelationId)
+                && (!lastAssignedAt.TryGetValue(t.TicketId, out var assignedAt) || assignedAt < lastTransferIn.OccurredAtUtc);
+
             result.Add(new UnassignedTicketEvidence(
                 t.TicketId, t.TicketNumber, t.Status, t.Owner, t.CurrentDepartmentId, t.OriginatingDepartmentId, t.CreatedAtUtc,
                 PendingApproval: pendingApproval.Contains(t.TicketId),
@@ -190,7 +213,8 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
                 LastActivityUtc: lastActivity,
                 LeftCallCenter: left,
                 ReleasedByPerson: released.Contains(t.TicketId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
-                LiveGenesysIsPhoneOnly: live.Count > 0 && live.All(i => i.ChannelId == WellKnownChannels.Phone)));
+                LiveGenesysIsPhoneOnly: live.Count > 0 && live.All(i => i.ChannelId == WellKnownChannels.Phone),
+                AwaitingDepartmentAssignment: awaitingDepartmentAssignment));
         }
 
         return result;

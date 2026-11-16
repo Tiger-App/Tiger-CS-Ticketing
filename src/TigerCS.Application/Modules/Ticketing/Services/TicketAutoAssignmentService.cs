@@ -79,7 +79,10 @@ public enum AutoAssignmentTrigger
     ManualRetry,
 
     /// <summary>The one-time batch backfill gave an existing active ticket its CS Agent.</summary>
-    Backfill
+    Backfill,
+
+    /// <summary>The unassigned-work reconciler found a transferred ticket waiting in a department that now has an eligible employee.</summary>
+    Reconciler
 }
 
 /// <summary>The outcome plus what was assigned, for the caller's response/logging. <paramref name="TeamMemberEmployeeIds"/> carries the configured team members (excluding the primary) for a team rule.</summary>
@@ -349,6 +352,31 @@ public sealed class TicketAutoAssignmentService(
         && departmentRepository is not null
         && await departmentRepository.GetByIdAsync(departmentId, cancellationToken) is { } department
         && string.Equals(department.Code, collectionsOptions.CollectionsDepartmentCode, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Read-only: true when <see cref="AssignDepartmentRoundRobinAsync"/> could deal a ticket of <paramref name="departmentId"/> right now (the
+    /// department is active, assignment is enabled, it is not Collections, and at least one member is eligible). Writes nothing and locks nothing,
+    /// so a recurring job can poll it without leaving audit rows behind.
+    /// </summary>
+    public async Task<bool> HasEligibleDepartmentEmployeeAsync(int departmentId, CancellationToken cancellationToken = default)
+    {
+        if (rotationRepository is null
+            || await IsCollectionsDepartmentAsync(departmentId, cancellationToken)
+            || await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(departmentId, cancellationToken) is { AllowAssignment: false })
+        {
+            return false;
+        }
+
+        if (departmentRepository is not null
+            && await departmentRepository.GetByIdAsync(departmentId, cancellationToken) is not { IsActive: true })
+        {
+            return false;
+        }
+
+        var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(departmentId, activeEmployeesOnly: true, cancellationToken);
+        var callCenterOnly = await IsCallCenterDepartmentAsync(departmentId, cancellationToken);
+        return (await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), callCenterOnly, cancellationToken)).Count > 0;
+    }
 
     /// <summary>
     /// Department transfer: deals the ticket to the next eligible active employee of the ticket's CURRENT (destination) department, using the
