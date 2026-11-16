@@ -1012,9 +1012,9 @@ public class CollectionsTowerAssignmentTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(f.Maintenance.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(f.CsAgent, ticket.CurrentOwnerEmployeeId);        // the existing rule: the CS agent is kept
-        Assert.Empty(f.History.Entries);
-        Assert.DoesNotContain(f.Audit.Entries, a => a.Action is "AutoAssign" or "CollectionsAutoAssignSkipped");
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                    // the destination's own Round Robin applies (nobody eligible here): unassigned, not tower routing
+        Assert.Empty(f.History.Entries);                               // no Collections assignment history
+        Assert.DoesNotContain(f.Audit.Entries, a => a.Action is "CollectionsAutoAssignSkipped");
     }
 
     [Fact]

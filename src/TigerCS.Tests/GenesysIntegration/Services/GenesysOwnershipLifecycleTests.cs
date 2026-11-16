@@ -397,7 +397,7 @@ public class GenesysOwnershipLifecycleTests
     // ---- department classification never costs the ticket its agent --------------------------------------------------------------------
 
     [Fact]
-    public async Task RequestTypeClassificationAndDepartmentTransfer_KeepTheConfirmedCsAgent()
+    public async Task DepartmentTransfer_ReleasesTheConfirmedCsAgent_WhenNobodyIsEligible_AndALateGenesysEventDoesNotPullItBack()
     {
         var w = NewWorld();
         var facilities = w.F.Departments.AddDepartment("Facilities Management", "FM");
@@ -405,20 +405,22 @@ public class GenesysOwnershipLifecycleTests
         await ConnectAsync(w, chat, w.Agents[2].GenesysId);
         var owner = w.Agents[2].Id;
 
-        // A CS Manager classifies / moves the ticket to Facilities: the department changes, the CS Agent does not.
+        // A CS Manager moves the ticket to Facilities, which nobody staffs: the department changes and the ticket waits there unassigned.
         var ticket = w.Ticket(chat.TicketId);
         var moved = await AssignmentService(w).TransferAsync(
             Guid.NewGuid(), [Roles.CsManager], chat.TicketId, new TransferTicketRequestDto(facilities.DepartmentId, "Facilities issue", ticket.RowVersion));
 
         Assert.Equal(TicketMutationOutcome.Success, moved.Outcome);
         Assert.Equal(facilities.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
-        AssertOwner(w, chat.TicketId, owner);
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == chat.TicketId.ToString() && e.AfterValue!.Contains("Trigger=DepartmentTransfer"));
+        AssertOwner(w, chat.TicketId, null);
+        Assert.NotEqual(owner, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "Unassign" && e.EntityId == chat.TicketId.ToString() && e.BeforeValue == owner.ToString());
 
-        // A later Genesys event does not pull it back to the Call Center nor take the agent away.
+        // A later Genesys event does not pull it back to the Call Center; the agent who actually answers it (existing rule: the answering agent
+        // owns an unassigned ticket) becomes its single owner.
         await ConnectAsync(w, chat, w.Agents[0].GenesysId);
         Assert.Equal(facilities.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
-        AssertOwner(w, chat.TicketId, owner);
+        AssertOwner(w, chat.TicketId, w.Agents[0].Id);
     }
 
     // ---- 9. Concurrency ----------------------------------------------------------------------------------------------------------------

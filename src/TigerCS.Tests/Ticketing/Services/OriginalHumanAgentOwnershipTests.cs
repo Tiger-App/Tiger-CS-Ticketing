@@ -293,12 +293,12 @@ public class OriginalHumanAgentOwnershipTests
         var kawthar = agents[1];
         var ticket = await env.CreateAsync(kawthar, roles: [Roles.CsAgent]);
 
-        await env.TransferAsync(ticket, env.Collections, kawthar);   // the agent is preserved through the transfer
-        var rowsBefore = env.Assignments.Added.Count;
+        await env.TransferAsync(ticket, env.Collections, kawthar);   // nobody staffs Collections here: the ticket waits unassigned there
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
         await env.TransferAsync(ticket, env.CallCenter, kawthar);
 
-        Assert.Equal(kawthar, ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(rowsBefore, env.Assignments.Added.Count);
+        Assert.Equal(kawthar, ticket.CurrentOwnerEmployeeId);        // back to the Original Human Agent (not dealt to anyone else)
+        Assert.Single(env.Assignments.Added, a => a.IsCurrent && a.AssignedEmployeeId == kawthar);
         Assert.Equal(kawthar, ticket.OriginalHumanAgentId);
     }
 
@@ -372,7 +372,7 @@ public class OriginalHumanAgentOwnershipTests
 
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Equal(rows, env.Assignments.Added.Count);                      // nothing written
-        Assert.Empty(env.Rotation.Rows);                                      // the cursor was never touched
+        Assert.DoesNotContain(env.CallCenter.DepartmentId, env.Rotation.Rows.Keys);   // the Call Center cursor was never touched (Collections' own cursor was, by the earlier transfer)
 
         // A person (authorized) assigns it explicitly: that works, and the hold is then moot.
         await Task.Delay(20);
@@ -557,11 +557,10 @@ public class OriginalHumanAgentOwnershipTests
         await env.TakenByAsync(ticket, collector);
         await env.TransferAsync(ticket, env.CallCenter, collector);
 
-        // Exactly the pre-feature behaviour: the department moves, the carried-over owner stays (a department transfer never reassigns on its own).
+        // A legacy ticket has no Original Human Agent to return to, so the Call Center's Round Robin deals it like any transfer (the collector does not stay).
         Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(collector, ticket.CurrentOwnerEmployeeId);
-        Assert.NotEqual(kawthar, ticket.CurrentOwnerEmployeeId);
-        Assert.NotEqual(bader, ticket.CurrentOwnerEmployeeId);
+        Assert.NotEqual(collector, ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(ticket.CurrentOwnerEmployeeId!.Value, new[] { bader, kawthar });
         Assert.Null(ticket.OriginalHumanAgentId);
         Assert.DoesNotContain(env.Audit.Entries, e => e.Action is "ReturnToCallCenterQueue" || (e.AfterValue ?? "").Contains("ReturnToOriginalHumanAgent"));
         Assert.DoesNotContain(env.Events.All, e => e.Note is not null && e.Note.Contains(TicketAutoAssignmentService.OriginalAgentHoldMarker));
@@ -582,7 +581,7 @@ public class OriginalHumanAgentOwnershipTests
         await env.TakenByAsync(ticket, collector);
         await env.TransferAsync(ticket, env.CallCenter, collector);
 
-        Assert.Equal(collector, ticket.CurrentOwnerEmployeeId);     // not sent to the stray "original" Kawthar
+        Assert.Equal(bader, ticket.CurrentOwnerEmployeeId);         // dealt by the Call Center's Round Robin, not sent to the stray "original" Kawthar
 
         // Unowned in the Call Center: the ordinary rotation applies, never the stray value and never a hold.
         (await env.Assignments.GetCurrentAsync(ticket.TicketId))!.MarkSuperseded();

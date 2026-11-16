@@ -705,48 +705,39 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
-    public async Task ADepartmentTransfer_KeepsTheResponsibleCsAgentAsOwner_UnassignedDepartmentStaffCannotSeeIt_AndTheAgentNeverTakesOwnershipAgain()
+    public async Task ADepartmentTransfer_AssignsTheDestinationsRoundRobinEmployeeImmediately_AndOnlyThatEmployeeSeesIt()
     {
         var own = await DepartmentAsync();
         var (agent, agentId) = await ClientAsync(departmentId: own);
         var (otherAgent, _) = await ClientAsync(departmentId: own);
         var (manager, _) = await ClientAsync(Roles.CsManager);
         var receiving = await NewDepartmentAsync();
-        var (worker, _) = await ClientAsync(Roles.DepartmentEmployee, departmentId: receiving);
+        var (worker, workerId) = await ClientAsync(Roles.DepartmentEmployee, departmentId: receiving);
         var ticket = await CreateManualTicketAsync(agent, own);
         var current = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal(agentId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
 
-        // The department changes; no assignee is named, so the CS Agent stays on the ticket.
+        // The department changes; no assignee is named, so the receiving department's Round Robin deals it - within the same request - to its
+        // only eligible employee. The previous department's agent is no longer the owner.
         var transfer = await manager.PostAsJsonAsync(
             $"/api/tickets/{ticket.TicketId}/transfer",
             new TransferTicketRequestDto(receiving, "Belongs to the receiving team.", Convert.FromBase64String(current!.RowVersion), null));
         Assert.Equal(HttpStatusCode.OK, transfer.StatusCode);
 
-        Assert.Equal(agentId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));            // still the responsible agent's ticket
-        var afterTransfer = await (await agent.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.False(afterTransfer!.IsReadOnlyAccess);                                                 // full access, no Take Ownership step
-        Assert.False(afterTransfer.CanTakeOwnership);
-        Assert.Equal(receiving, afterTransfer.CurrentDepartmentId);
-        Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
+        Assert.Equal(workerId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
+        var workerView = await (await worker.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.False(workerView!.IsReadOnlyAccess);
+        Assert.Equal(receiving, workerView.CurrentDepartmentId);
+        Assert.Contains(ticket.TicketId, await ListedIdsAsync(worker));
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));   // assignment-only visibility is unchanged
 
-        // A receiving-department employee the ticket is NOT assigned to has no access at all (assignment-only visibility): not the detail,
-        // not the notes, not a note of their own, not the list. Transferring without naming an assignee does not hand the ticket to the
-        // department's staff; the responsible CS Agent stays the owner.
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(worker, ticket.TicketId));
-        Assert.Equal(HttpStatusCode.Forbidden, (await worker.GetAsync($"/api/tickets/{ticket.TicketId}/notes")).StatusCode);
-        var note = await worker.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/notes", new CreateNoteRequestDto("Looking into it."));
-        Assert.Equal(HttpStatusCode.Forbidden, note.StatusCode);
-        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(worker));
-        Assert.Equal(agentId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
-
-        // An explicit manager reassignment is still the only way the agent changes (and it still needs a reason).
-        var (_, otherAgentId) = await ClientAsync(departmentId: receiving);
+        // A manual reassignment still needs a reason, and a refused one changes nothing.
+        var (_, otherEmployeeId) = await ClientAsync(departmentId: receiving);
         var again = await (await manager.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
         var withoutReason = await manager.PostAsJsonAsync(
-            $"/api/tickets/{ticket.TicketId}/assignment", new AssignTicketRequestDto(otherAgentId, Convert.FromBase64String(again!.RowVersion), null));
+            $"/api/tickets/{ticket.TicketId}/assignment", new AssignTicketRequestDto(otherEmployeeId, Convert.FromBase64String(again!.RowVersion), null));
         Assert.NotEqual(HttpStatusCode.OK, withoutReason.StatusCode);
-        Assert.Equal(agentId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
+        Assert.Equal(workerId, await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
     }
 
     [Fact]

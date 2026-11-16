@@ -43,7 +43,7 @@ public class SingleOwnerTransferAndConcurrencyTests
     }
 
     [Fact]
-    public async Task Transfer_KeepsTheCsAgentAsTheSingleCurrentOwner_NoUnassignedQueue()
+    public async Task Transfer_IntoADepartmentWithNobodyEligible_ReleasesThePreviousOwner_NoStaleCurrentAssignment()
     {
         var s = await NewAsync();
         var previous = await OwnAsync(s);
@@ -54,9 +54,9 @@ public class SingleOwnerTransferAndConcurrencyTests
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         var ticket = (await s.F.Tickets.GetByIdAsync(s.TicketId))!;
         Assert.Equal(s.ToDepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(previous, ticket.CurrentOwnerEmployeeId);                                 // the CS Agent is independent of the department
-        Assert.Single(s.F.TicketAssignments.Added, a => a.IsCurrent);                          // exactly one current owner, no duplicate row
-        Assert.Contains(s.F.TicketAssignments.Added, a => a.AssignedEmployeeId == previous);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                            // the previous department's agent no longer owns it
+        Assert.DoesNotContain(s.F.TicketAssignments.Added, a => a.IsCurrent);                  // ...and no stale current assignment row survives
+        Assert.Contains(s.F.TicketAssignments.Added, a => a.AssignedEmployeeId == previous && !a.IsCurrent);
         Assert.Contains(s.F.Audit.Entries, e => e.Action == "Transfer");
     }
 
