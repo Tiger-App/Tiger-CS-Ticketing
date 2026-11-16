@@ -41,6 +41,19 @@ public static class StaffRoster
     public static readonly IReadOnlyCollection<string> DepartmentAccountUserNames =
         DepartmentAccounts.Select(a => a.Identifier).ToList();
 
+    public const string HandoverDepartmentCode = "HO";
+
+    /// <summary>
+    /// Handover staff: individual people (email = user name, as for every other roster), primary membership of Handover only, and the same
+    /// existing non-administrative <see cref="Roles.DepartmentEmployee"/> role used for Registration. No admin role, no other department.
+    /// Created active through the existing create-user path; the initial password is generated at run time like every other roster.
+    /// </summary>
+    public static readonly IReadOnlyList<StaffRosterEntry> HandoverStaff =
+    [
+        new("Shahd Al-Khaldi", "C.Alkhalidi@tigergroup.ae", HandoverDepartmentCode, Roles.DepartmentEmployee),
+        new("Susi Awad", "s.aouad@tigergroup.ae", HandoverDepartmentCode, Roles.DepartmentEmployee)
+    ];
+
     public static readonly IReadOnlyList<StaffRosterEntry> RequestedStaff =
     [
         new("Zakarya Azzouz", "customerservice1@tigergroup.ae", CustomerServiceDepartmentCode, Roles.CsAgent),

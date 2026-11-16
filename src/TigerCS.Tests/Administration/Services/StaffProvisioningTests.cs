@@ -329,8 +329,43 @@ public class StaffProvisioningTests
     }
 
     [Fact]
+    public void Handover_roster_is_two_non_admin_department_employees_with_email_usernames()
+    {
+        Assert.Equal(["C.Alkhalidi@tigergroup.ae", "s.aouad@tigergroup.ae"], StaffRoster.HandoverStaff.Select(e => e.Identifier));
+        Assert.All(StaffRoster.HandoverStaff, e =>
+        {
+            Assert.Equal("HO", e.DepartmentCode);
+            Assert.Equal(Roles.DepartmentEmployee, e.Role);
+            Assert.Equal(e.Email, e.AccountEmail);
+        });
+    }
+
+    [Fact]
+    public async Task Handover_staff_are_created_once_active_with_primary_handover_and_only_the_employee_role()
+    {
+        var f = Create();
+        var handover = f.Departments.AddDepartment("Handover", "HO");
+
+        var first = await f.Provisioning.ApplyAsync(StaffRoster.HandoverStaff, Admin, Password);
+
+        Assert.All(first, l => Assert.Equal(StaffProvisioningStatus.Created, l.Status));
+        foreach (var line in first)
+        {
+            var id = line.EmployeeId!.Value;
+            Assert.Equal([Roles.DepartmentEmployee], (await f.Accounts.GetRolesAsync(id)).ToList());
+            Assert.Equal(handover.DepartmentId, (await f.Assignments.GetPrimaryAsync(id))!.DepartmentId);
+            Assert.True((await f.Employees.GetByIdAsync(id))!.IsActive);
+        }
+
+        var second = await f.Provisioning.ApplyAsync(StaffRoster.HandoverStaff, Admin, _ => throw new InvalidOperationException("no password for existing"));
+        Assert.All(second, l => Assert.Equal(StaffProvisioningStatus.AlreadyExists, l.Status));
+        Assert.Equal(2, (await f.Employees.ListAsync(true, null)).Count);
+    }
+
+    [Fact]
     public void Command_line_accepts_only_known_rosters()
     {
+        Assert.Equal("handover", StaffProvisioningCommand.Parse(["provision-staff", "--target", "production", "--roster", "handover"]).Roster);
         Assert.Null(StaffProvisioningCommand.Parse(["provision-staff", "--target", "production", "--roster", "department-accounts"]).Error);
         Assert.Equal("department-accounts", StaffProvisioningCommand.Parse(["provision-staff", "--target", "production", "--roster", "department-accounts"]).Roster);
         Assert.Equal("staff", StaffProvisioningCommand.Parse(["provision-staff", "--target", "production"]).Roster);
