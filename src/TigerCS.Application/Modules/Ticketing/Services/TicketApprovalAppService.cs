@@ -174,6 +174,15 @@ public sealed class TicketApprovalAppService(
             return ApprovalMutationResult.Failure(ApprovalMutationOutcome.ApprovalNotConfigured);
         }
 
+        // A requirement aimed at a DEACTIVATED department can no longer be decided by anyone (its members are retired), so no new cycle
+        // may open against it. Existing cycles and history are untouched; an operator re-points the requirement to revive the approval.
+        if (requirement.TargetKind == ApprovalTargetKind.Department
+            && requirement.TargetDepartmentId is { } targetDepartmentId
+            && await departmentRepository.GetByIdAsync(targetDepartmentId, cancellationToken) is { IsActive: false })
+        {
+            return ApprovalMutationResult.Failure(ApprovalMutationOutcome.ApprovalNotConfigured);
+        }
+
         if (isReopenApproval)
         {
             // The carve-out is not a hole: a Reopen Approval may only be

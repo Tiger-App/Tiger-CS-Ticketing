@@ -84,3 +84,33 @@ WHERE u.DepartmentId = @Acc;
 -- 7 ---------------------------------------------------------------------------
 SELECT 'ClosedInAcc_NeverModified' AS ResultSet, COUNT(*) AS ClosedTickets
 FROM dbo.Tickets WHERE CurrentDepartmentId = @Acc AND TicketStatus = 6;
+
+-- ============================ Retirement pre-checks (see docs/Accounting-Department-Retirement-Plan.md) ===============
+-- C: the approval requirements targeting ACC, with request type name and its SLA triggers (Send Receipts = ApprovalReceived = 3)
+SELECT 'C_Requirements' AS ResultSet, r.RequestTypeApprovalRequirementId, r.RequestTypeId, rt.Name AS RequestType, rt.DepartmentId AS OwnerDepartmentId,
+       r.ApprovalType, r.TargetKind, r.BlocksWorkUntilApproved, r.IsActive,
+       (SELECT STRING_AGG(CONCAT('P', s.PriorityId, ':trigger', s.Trigger), ', ') FROM dbo.RequestTypeSlaPolicies s WHERE s.RequestTypeId = rt.RequestTypeId) AS SlaTriggers
+FROM dbo.RequestTypeApprovalRequirements r JOIN dbo.RequestTypes rt ON rt.RequestTypeId = r.RequestTypeId
+WHERE r.TargetDepartmentId = @Acc;
+
+-- D: non-Closed tickets on request types that carry an ACC approval requirement (must be 0 or handled before changing the approval step)
+SELECT 'D_OpenTicketsOnAffectedRequestTypes' AS ResultSet, t.RequestTypeId, COUNT(*) AS NonClosedTickets
+FROM dbo.Tickets t
+WHERE t.TicketStatus <> 6 AND t.RequestTypeId IN (SELECT RequestTypeId FROM dbo.RequestTypeApprovalRequirements WHERE TargetDepartmentId = @Acc)
+GROUP BY t.RequestTypeId;
+
+-- E: every membership and role of ACC members (this is also the ROLLBACK MANIFEST - save the output)
+SELECT 'E_MemberMemberships' AS ResultSet, u.EmployeeId, e.DisplayName, e.DeactivatedAtUtc, d.Code AS Department, u.IsPrimary,
+       (SELECT STRING_AGG(r.Name, ', ') FROM dbo.AspNetUserRoles ur JOIN dbo.AspNetRoles r ON r.Id = ur.RoleId WHERE ur.UserId = u.EmployeeId) AS Roles
+FROM dbo.UserDepartmentAssignments u
+JOIN dbo.Employees e ON e.EmployeeId = u.EmployeeId
+JOIN dbo.Departments d ON d.DepartmentId = u.DepartmentId
+WHERE u.EmployeeId IN (SELECT EmployeeId FROM dbo.UserDepartmentAssignments WHERE DepartmentId = @Acc)
+ORDER BY e.DisplayName, d.Code;
+
+-- F: other live dependencies the deactivation guard checks
+SELECT 'F_Dependencies' AS ResultSet,
+       (SELECT COUNT(*) FROM dbo.RequestTypes WHERE DepartmentId = @Acc AND IsActive = 1)                                   AS ActiveRequestTypes,
+       (SELECT COUNT(*) FROM dbo.GenesysQueueMappings WHERE DepartmentId = @Acc AND IsActive = 1)                           AS ActiveQueueMappings,
+       (SELECT COUNT(*) FROM dbo.UserTransferDepartments WHERE DepartmentId = @Acc)                                         AS TransferGrants,
+       (SELECT COUNT(*) FROM dbo.TicketApprovals WHERE TargetDepartmentId = @Acc AND Status = 1)                            AS PendingApprovals;
