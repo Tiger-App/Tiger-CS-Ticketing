@@ -20,7 +20,7 @@ public sealed record StaffProvisioningRequest(
 public static class StaffProvisioningCommand
 {
     public const string Usage =
-        "  provision-staff --target seedtest|production [--roster staff|department-accounts]   (DRY RUN: read-only plan + department coverage report)\n" +
+        "  provision-staff --target seedtest|production [--roster staff|department-accounts|handover]   (DRY RUN: read-only plan + department coverage report)\n" +
         "  provision-staff --target seedtest --apply --confirm-seed-test --actor-email <active System Administrator> --credentials-out <new file>\n" +
         "  provision-staff --target production --apply --confirm-production " + SeedSafety.Server + "/" + SeedSafety.ProductionDatabase +
         " --backup-confirmed --actor-email <active System Administrator> --credentials-out <new file>\n" +
@@ -50,7 +50,7 @@ public static class StaffProvisioningCommand
             }
         }
 
-        if (rosterName is not ("staff" or "department-accounts")) return Fail("--roster must be staff or department-accounts.");
+        if (rosterName is not ("staff" or "department-accounts" or "handover")) return Fail("--roster must be staff, department-accounts or handover.");
 
         SeedTarget resolved;
         if (string.Equals(target, "seedtest", StringComparison.OrdinalIgnoreCase)) resolved = SeedTarget.SeedTest;
@@ -104,7 +104,12 @@ public static class StaffProvisioningCommand
             return 1;
         }
 
-        var roster = request.Roster == "department-accounts" ? StaffRoster.DepartmentAccounts : StaffRoster.RequestedStaff;
+        var roster = request.Roster switch
+        {
+            "department-accounts" => StaffRoster.DepartmentAccounts,
+            "handover" => StaffRoster.HandoverStaff,
+            _ => StaffRoster.RequestedStaff
+        };
         var expectedDatabase = SeedSafety.DatabaseFor(request.Target);
         var configuration = new ConfigurationBuilder().AddEnvironmentVariables().Build();
         var connectionString = configuration.GetConnectionString("TigerCsDatabase");
