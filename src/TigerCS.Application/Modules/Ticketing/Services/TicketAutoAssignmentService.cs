@@ -41,7 +41,7 @@ public enum AutoAssignmentOutcome
     /// <summary>The ticket already had a CS Agent / owner; nothing was written.</summary>
     AlreadyAssigned,
 
-    /// <summary>The ticket's previous CS Agent was kept (department transfer / reopen): the agent and the department are independent fields.</summary>
+    /// <summary>The ticket's previous CS Agent was kept (reopen / classification routing). A department transfer no longer keeps it: the destination department's Round Robin deals the ticket (see AssignDepartmentRoundRobinAsync).</summary>
     PreservedCsAgent,
 
     /// <summary>The ticket is closed or resolved, so no assignment applies.</summary>
@@ -79,7 +79,10 @@ public enum AutoAssignmentTrigger
     ManualRetry,
 
     /// <summary>The one-time batch backfill gave an existing active ticket its CS Agent.</summary>
-    Backfill
+    Backfill,
+
+    /// <summary>The unassigned-work reconciler found a transferred ticket waiting in a department that now has an eligible employee.</summary>
+    Reconciler
 }
 
 /// <summary>The outcome plus what was assigned, for the caller's response/logging. <paramref name="TeamMemberEmployeeIds"/> carries the configured team members (excluding the primary) for a team rule.</summary>
@@ -343,6 +346,79 @@ public sealed class TicketAutoAssignmentService(
         return true;
     }
 
+    /// <summary>True when <paramref name="departmentId"/> is the configured Collections department (tower routing owns its assignments).</summary>
+    private async Task<bool> IsCollectionsDepartmentAsync(int departmentId, CancellationToken cancellationToken) =>
+        collectionsOptions is not null
+        && departmentRepository is not null
+        && await departmentRepository.GetByIdAsync(departmentId, cancellationToken) is { } department
+        && string.Equals(department.Code, collectionsOptions.CollectionsDepartmentCode, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Read-only: true when <see cref="AssignDepartmentRoundRobinAsync"/> could deal a ticket of <paramref name="departmentId"/> right now (the
+    /// department is active, assignment is enabled, it is not Collections, and at least one member is eligible). Writes nothing and locks nothing,
+    /// so a recurring job can poll it without leaving audit rows behind.
+    /// </summary>
+    public async Task<bool> HasEligibleDepartmentEmployeeAsync(int departmentId, CancellationToken cancellationToken = default)
+    {
+        if (rotationRepository is null
+            || await IsCollectionsDepartmentAsync(departmentId, cancellationToken)
+            || await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(departmentId, cancellationToken) is { AllowAssignment: false })
+        {
+            return false;
+        }
+
+        if (departmentRepository is not null
+            && await departmentRepository.GetByIdAsync(departmentId, cancellationToken) is not { IsActive: true })
+        {
+            return false;
+        }
+
+        var members = await userDepartmentAssignmentRepository.GetByDepartmentIdAsync(departmentId, activeEmployeesOnly: true, cancellationToken);
+        var callCenterOnly = await IsCallCenterDepartmentAsync(departmentId, cancellationToken);
+        return (await FilterEligibleAsync(members.Select(m => m.EmployeeId).Distinct(), callCenterOnly, cancellationToken)).Count > 0;
+    }
+
+    /// <summary>
+    /// Department transfer: deals the ticket to the next eligible active employee of the ticket's CURRENT (destination) department, using the
+    /// SAME Round Robin as a configured Round Robin rule (<c>AssignRoundRobinAsync</c>: the department's persisted, row-locked cursor, the same
+    /// eligibility filter, the same assignment row / audit / notification). It is the answer to "no rule decided" for a transfer, instead of the
+    /// shared Call Center pool. It never overrides a person: a ticket owned by anyone other than <paramref name="carriedOverOwnerEmployeeId"/>
+    /// (the previous department's owner the transfer carried over, which this assignment deliberately replaces) is returned untouched, and a department whose workflow
+    /// settings disable assignment, a Collections department (tower routing owns it) or a department with nobody eligible leaves the ticket
+    /// unassigned with the reason audited and flagged (<see cref="WorkflowEventType.ManualAssignmentRequired"/>). Runs inside the caller's transaction.
+    /// </summary>
+    public async Task<AutoAssignmentResult> AssignDepartmentRoundRobinAsync(
+        Ticket ticket, AutoAssignmentTrigger trigger, DateTime nowUtc, Guid correlationId, Guid? carriedOverOwnerEmployeeId = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        if (ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed)
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.NotApplicable);
+        }
+
+        if (ticket.CurrentOwnerEmployeeId is { } existing && existing != carriedOverOwnerEmployeeId)
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.AlreadyAssigned, existing);
+        }
+
+        if (await IsCollectionsDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken))
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.NotApplicable);
+        }
+
+        var settings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(ticket.CurrentDepartmentId, cancellationToken);
+        if (settings is { AllowAssignment: false })
+        {
+            return await QueueAsync(ticket, AutoAssignmentOutcome.AssignmentDisabledForDepartment,
+                $"Department {ticket.CurrentDepartmentId} workflow settings disable assignment; Status=Unassigned",
+                trigger, correlationId, cancellationToken, recordFailure: true, nowUtc);
+        }
+
+        return await AssignRoundRobinAsync(ticket, nowUtc, correlationId, trigger, ruleId: null, cancellationToken);
+    }
+
     /// <summary>
     /// Business rule: every active ticket has a CS Agent, whatever its department. After the department-specific rule (if any) has had
     /// its say, a ticket that still has no owner is given the next CS Agent of the ONE shared rotation — see
@@ -434,10 +510,7 @@ public sealed class TicketAutoAssignmentService(
 
         // A Collections ticket is owned by its tower's collector or waits in the Collections queue for a person to assign it; the shared CS Agent rotation
         // (new tickets, the backfill, the retry) never gives it to a Call Center agent.
-        if (collectionsOptions is not null
-            && departmentRepository is not null
-            && await departmentRepository.GetByIdAsync(ticket.CurrentDepartmentId, cancellationToken) is { } currentDepartment
-            && string.Equals(currentDepartment.Code, collectionsOptions.CollectionsDepartmentCode, StringComparison.OrdinalIgnoreCase))
+        if (await IsCollectionsDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken))
         {
             return new AutoAssignmentResult(AutoAssignmentOutcome.NotApplicable);
         }

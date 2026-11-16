@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -311,35 +311,41 @@ public sealed class AssignmentBasedVisibilityEndpointsTests(TigerCsApiFactory fa
     }
 
     [Fact]
-    public async Task Transfer_ToAnotherDepartmentWithAnAssignee_MovesAccessToTheAssignee_AndWithoutOneTheOwnerKeepsIt()
+    public async Task Transfer_ToAnotherDepartment_MovesAccessToTheEmployeeTheDestinationsRoundRobinPicks_AndAManualReassignmentMovesItAgain()
     {
         var d = await DepartmentsAsync();
         var manager = await ManagerClientAsync();
         var (owner, ownerId) = await ClientAsync(Roles.DepartmentEmployee, d.Facilities);
         var (receiver, receiverId) = await ClientAsync(Roles.DepartmentEmployee, d.Finance);
-        var (financeColleague, _) = await ClientAsync(Roles.DepartmentEmployee, d.Finance);
+        var (financeColleague, colleagueId) = await ClientAsync(Roles.DepartmentEmployee, d.Finance);
         var ticket = await TicketAsync(d.Facilities, ownerId);
 
-        // Transfer without naming an assignee: the department changes, the owner does not - and still sees it (My Tickets after a transfer);
-        // the receiving department's staff do not gain access merely because the ticket now sits in their department.
+        // Transfer without naming an assignee: the department changes and the destination's Round Robin assigns exactly ONE of its employees
+        // immediately. Access follows the assignment: the previous owner loses it, the other Finance employee never had it.
         var current = await DetailAsync(manager, ticket);
         Assert.Equal(HttpStatusCode.OK, (await manager.PostAsJsonAsync(
             $"/api/tickets/{ticket}/transfer", new TransferTicketRequestDto(d.Finance, "Belongs to Finance.", Convert.FromBase64String(current.RowVersion)))).StatusCode);
-        Assert.Equal(d.Finance, (await DetailAsync(owner, ticket)).CurrentDepartmentId);
-        Assert.Contains(ticket, await IdsAsync(owner));
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(financeColleague, ticket));
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(receiver, ticket));
+        Assert.Equal(d.Finance, (await DetailAsync(manager, ticket)).CurrentDepartmentId);
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(owner, ticket));
+        Assert.DoesNotContain(ticket, await IdsAsync(owner));
 
-        // Transfer back to Facilities naming the Finance receiver is not possible (not a member); transfer onward with the receiver assigned.
+        var statuses = new[] { await DetailStatusAsync(receiver, ticket), await DetailStatusAsync(financeColleague, ticket) };
+        Assert.Single(statuses, s => s == HttpStatusCode.OK);
+        Assert.Single(statuses, s => s == HttpStatusCode.Forbidden);
+        var (winner, other) = statuses[0] == HttpStatusCode.OK ? (receiver, financeColleague) : (financeColleague, receiver);
+        Assert.Contains(ticket, await IdsAsync(winner));
+        Assert.DoesNotContain(ticket, await IdsAsync(other));
+
+        // A manual reassignment to the other Finance employee moves the access again.
+        var otherId = ReferenceEquals(other, receiver) ? receiverId : colleagueId;
         var next = await DetailAsync(manager, ticket);
         Assert.Equal(HttpStatusCode.OK, (await manager.PostAsJsonAsync(
             $"/api/tickets/{ticket}/assignment",
-            new AssignTicketRequestDto(receiverId, Convert.FromBase64String(next.RowVersion), TicketTransferReason.Other))).StatusCode);
+            new AssignTicketRequestDto(otherId, Convert.FromBase64String(next.RowVersion), TicketTransferReason.Other))).StatusCode);
 
-        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(receiver, ticket));
+        Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(other, ticket));
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(winner, ticket));
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(owner, ticket));
-        Assert.DoesNotContain(ticket, await IdsAsync(owner));
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(financeColleague, ticket));
     }
 
     // =====================================================================

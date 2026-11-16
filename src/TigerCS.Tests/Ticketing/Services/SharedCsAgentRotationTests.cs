@@ -248,38 +248,42 @@ public class SharedCsAgentRotationTests
     // ---- transfer: preserve unless explicitly reassigned --------------------------------------------------------------------------
 
     [Fact]
-    public async Task Transfer_OfATicketWithoutAnAgent_GetsOneFromTheSharedRotation_EvenWhenTheDestinationHasNoStaffAndAQueueRule()
+    public async Task Transfer_IntoADepartmentWithNobodyEligible_LeavesTheTicketUnassigned_RecordsTheReason_AndNeverUsesTheCallCenterPool()
     {
         var env = new Env();
-        var agents = env.AddAgents(2);
+        env.AddAgents(2);
         var ticket = await env.NewTicketAsync(env.Leasing, 1);       // legacy / failed ticket: no agent
         ticket.ClassifyRequestType(10);
-        env.Rules.Add(RequestTypeAssignmentRule.ForDepartmentQueue(10));   // "Facilities Management Queue (Unassigned)" before this fix
+        env.Rules.Add(RequestTypeAssignmentRule.ForDepartmentQueue(10));
 
         var result = await env.Assignment.TransferAsync(
             Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new TransferTicketRequestDto(env.Facilities.DepartmentId, "Wrong team", []));
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(env.Facilities.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
-        Assert.Single(env.Assignments.Added, a => a.IsCurrent && a.AssignedEmployeeId == agents[0]);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                  // Facilities has nobody eligible: it waits in ITS queue, unassigned
+        Assert.Empty(env.Assignments.Added);
+        Assert.DoesNotContain(env.CallCenter.DepartmentId, env.Rotation.Rows.Keys);   // the Call Center pool is not a fallback for a transfer
+        Assert.Contains(env.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Status=Unassigned") && e.AfterValue.Contains("Trigger=DepartmentTransfer"));
+        Assert.Contains(env.Events.All, e => e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note!.Contains(TicketAutoAssignmentService.AssignmentFailureMarker));
     }
 
     [Fact]
-    public async Task Transfer_PreservesTheCsAgent_AndAnExplicitReassignmentReplacesIt()
+    public async Task Transfer_DealsTheDestinationsNextEmployee_AndAnExplicitChoiceIsPreserved()
     {
         var env = new Env();
         var agents = env.AddAgents(2);
         var ticket = await env.NewTicketAsync(env.Leasing, 1);
         await env.EnsureAsync(ticket);
         Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
-        var assignmentsBefore = env.Assignments.Added.Count;
+        var fmStaff = new[] { env.AddAgent(env.Facilities, Roles.DepartmentEmployee), env.AddAgent(env.Facilities, Roles.DepartmentEmployee) }.Order().ToArray();
 
-        var kept = await env.Assignment.TransferAsync(
+        var dealt = await env.Assignment.TransferAsync(
             Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, new TransferTicketRequestDto(env.Facilities.DepartmentId, "FM issue", []));
-        Assert.Equal(TicketMutationOutcome.Success, kept.Outcome);
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(assignmentsBefore, env.Assignments.Added.Count);       // no duplicate assignment row
+        Assert.Equal(TicketMutationOutcome.Success, dealt.Outcome);
+        Assert.Equal(fmStaff[0], ticket.CurrentOwnerEmployeeId);            // Facilities' own rotation, immediately
+        Assert.Single(env.Assignments.Added, a => a.IsCurrent && a.AssignedEmployeeId == fmStaff[0]);
+        Assert.Equal(fmStaff[0], env.Rotation.Rows[env.Facilities.DepartmentId].LastAssignedEmployeeId);
 
         var facilitiesStaff = env.AddAgent(env.Leasing, Roles.DepartmentEmployee);
         var reassigned = await env.Assignment.TransferAsync(
@@ -288,6 +292,7 @@ public class SharedCsAgentRotationTests
         Assert.Equal(TicketMutationOutcome.Success, reassigned.Outcome);
         Assert.Equal(facilitiesStaff, ticket.CurrentOwnerEmployeeId);
         Assert.Single(env.Assignments.Added, a => a.IsCurrent);              // still exactly one current owner
+        Assert.DoesNotContain(env.Leasing.DepartmentId, env.Rotation.Rows.Keys);   // a manual choice neither consults nor advances the rotation
     }
 
     // ---- reopen support -----------------------------------------------------------------------------------------------------------

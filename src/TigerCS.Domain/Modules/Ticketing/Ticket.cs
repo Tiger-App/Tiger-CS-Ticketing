@@ -867,8 +867,9 @@ public class Ticket
 
         CurrentDepartmentId = targetDepartmentId;
 
-        // The department and the CS Agent are independent fields: a business transfer keeps the agent unless the caller reassigns explicitly.
-        // Only system routing that deliberately releases an automatic pre-assignment (Call Center first) clears it.
+        // preserveOwner keeps the carried-over owner on the row until the caller has run the destination's assignment (a department transfer
+        // then supersedes / replaces it - see TicketAssignmentAppService.TransferAsync; classification routing still keeps the agent).
+        // Only system routing that deliberately releases an automatic pre-assignment (Call Center first) clears it outright.
         if (!preserveOwner)
         {
             CurrentOwnerEmployeeId = null;

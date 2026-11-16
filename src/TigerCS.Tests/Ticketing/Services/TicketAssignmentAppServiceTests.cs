@@ -340,7 +340,7 @@ public class TicketAssignmentAppServiceTests
         if (expectSuccess)
         {
             Assert.Equal(targetDepartment.DepartmentId, ticket.CurrentDepartmentId);
-            Assert.Equal(csAgent, ticket.CurrentOwnerEmployeeId);   // department and CS Agent are independent
+            Assert.Null(ticket.CurrentOwnerEmployeeId);   // the previous department's agent does not stay accountable; nobody eligible in the target => Unassigned
         }
         else
         {
@@ -373,7 +373,7 @@ public class TicketAssignmentAppServiceTests
     }
 
     [Fact]
-    public async Task TransferAsync_ByCsAgent_KeepsTheAgent_AndDoesNotRotateInTheTargetDepartment()
+    public async Task TransferAsync_ByCsAgent_AssignsTheNextEligibleEmployeeOfTheTargetDepartment_NotTheAgent()
     {
         var f = CreateService();
         var agent = Guid.NewGuid();
@@ -396,9 +396,9 @@ public class TicketAssignmentAppServiceTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(target.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
-        Assert.Empty(rotation);   // the destination department's own rotation is not consulted
-        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign");
+        Assert.Equal(eligible, ticket.CurrentOwnerEmployeeId);          // the destination department's own Round Robin dealt it immediately
+        Assert.Equal(eligible, rotation[target.DepartmentId].LastAssignedEmployeeId);
+        Assert.Contains(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Trigger=DepartmentTransfer"));
     }
 
     [Fact]
@@ -481,7 +481,7 @@ public class TicketAssignmentAppServiceTests
     }
 
     [Fact]
-    public async Task TransferAsync_ByCsManager_MovesDepartmentAndKeepsTheCsAgent()
+    public async Task TransferAsync_ByCsManager_MovesDepartment_AndLeavesItUnassigned_WhenTheTargetHasNobodyEligible()
     {
         var f = CreateService();
         var ticket = await SeedTicketAsync(f.Tickets, departmentId: 2);
@@ -495,9 +495,11 @@ public class TicketAssignmentAppServiceTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(targetDepartment.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(csAgent, ticket.CurrentOwnerEmployeeId);
-        Assert.Contains(f.Audit.Entries, w => w.Action == "Transfer" && w.AfterValue!.Contains("CsAgentPreserved=true"));
-        Assert.DoesNotContain(f.Audit.Entries, w => w.Action == "AutoAssign");   // no duplicate assignment event
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(f.Audit.Entries, w => w.Action == "Transfer");
+        // The release and the reason are on record (and the automation audited why nobody could be assigned).
+        Assert.Contains(f.Audit.Entries, w => w.Action == "Unassign" && w.BeforeValue == csAgent.ToString() && w.AfterValue!.Contains("Status=Unassigned"));
+        Assert.Contains(f.Audit.Entries, w => w.Action == "AutoAssign" && w.AfterValue!.Contains("Trigger=DepartmentTransfer"));
         Assert.Empty(f.Assignments.Added);
     }
 

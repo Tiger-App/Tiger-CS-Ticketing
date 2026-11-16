@@ -270,11 +270,11 @@ public class CallCenterFirstRoutingTests
     }
 
     [Fact]
-    public async Task CallCenterOwner_CanTransfer_AndTheCsAgentIsPreserved_NoDestinationRotation_NoDuplicateAssignment()
+    public async Task CallCenterOwner_CanTransfer_AndTheDestinationsRoundRobinAssignsImmediately_ExactlyOneCurrentAssignment()
     {
         var env = new Env();
         var agent = env.AddMember(env.CallCenter!);
-        env.AddMembers(env.Cs, 2);
+        var csStaff = env.AddMembers(env.Cs, 2);
         var ticket = await OwnedByCallCenterAgentAsync(env, agent);
         var previousAssignment = Assert.Single(env.Assignments.Added);
 
@@ -283,18 +283,18 @@ public class CallCenterFirstRoutingTests
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
         Assert.Equal(env.Cs.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);          // department and CS Agent are independent
-        Assert.True(previousAssignment.IsCurrent);                   // the assignment is untouched...
-        Assert.Single(env.Assignments.Added);                        // ...and no duplicate row was written
-        Assert.DoesNotContain(env.Audit.Entries, e => e.Action == "AutoAssign");
+        Assert.Contains(ticket.CurrentOwnerEmployeeId!.Value, csStaff);   // the next eligible employee of the destination, not the Call Center agent
+        Assert.False(previousAssignment.IsCurrent);                       // the previous assignment is superseded...
+        Assert.Single(env.Assignments.Added, a => a.IsCurrent && a.AssignedEmployeeId == ticket.CurrentOwnerEmployeeId);   // ...by exactly one current row
+        Assert.Contains(env.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Trigger=DepartmentTransfer"));
     }
 
     [Fact]
-    public async Task TransfersToTheSameDepartment_KeepEachTicketsOwnCsAgent()
+    public async Task TransfersToTheSameDepartment_DealConsecutiveTicketsToConsecutiveEmployees()
     {
         var env = new Env();
         var agent = env.AddMember(env.CallCenter!);
-        env.AddMembers(env.Cs, 2);
+        var csStaff = env.AddMembers(env.Cs, 2).Order().ToArray();
         var t1 = await OwnedByCallCenterAgentAsync(env, agent);
         await env.Assignment.TransferAsync(agent, [Roles.CsAgent], t1.TicketId, new TransferTicketRequestDto(env.Cs.DepartmentId, "x", []));
 
@@ -305,16 +305,16 @@ public class CallCenterFirstRoutingTests
         await env.Assignments.AddAsync(new TicketAssignment(t2.TicketId, agent, env.CallCenter.DepartmentId, Now, null));
         await env.Assignment.TransferAsync(agent, [Roles.CsAgent], t2.TicketId, new TransferTicketRequestDto(env.Cs.DepartmentId, "x", []));
 
-        Assert.Equal(agent, t1.CurrentOwnerEmployeeId);
-        Assert.Equal(agent, t2.CurrentOwnerEmployeeId);
+        Assert.Equal(csStaff[0], t1.CurrentOwnerEmployeeId);
+        Assert.Equal(csStaff[1], t2.CurrentOwnerEmployeeId);
     }
 
     [Fact]
-    public async Task ADepartmentQueueRule_CannotStripTheCsAgentOnTransfer()
+    public async Task ADepartmentQueueRule_StillGetsTheDestinationsRoundRobinOnTransfer()
     {
         var env = new Env();
         var agent = env.AddMember(env.CallCenter!);
-        env.AddMember(env.Cs);
+        var csEmployee = env.AddMember(env.Cs);
         var ticket = await OwnedByCallCenterAgentAsync(env, agent);
         ticket.ClassifyRequestType(10);
         env.Rules.Add(RequestTypeAssignmentRule.ForDepartmentQueue(10));
@@ -323,7 +323,7 @@ public class CallCenterFirstRoutingTests
             agent, [Roles.CsAgent], ticket.TicketId, new TransferTicketRequestDto(env.Cs.DepartmentId, "x", []));
 
         Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(csEmployee, ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
