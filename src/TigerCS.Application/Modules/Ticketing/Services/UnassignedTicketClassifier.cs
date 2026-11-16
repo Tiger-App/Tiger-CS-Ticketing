@@ -21,6 +21,12 @@ public enum UnassignedTicketClass
     /// <summary>The Call Center transferred it onward (or it originated there and left): the destination's department queue is where it belongs.</summary>
     TransferredOutOfCallCenter,
 
+    /// <summary>
+    /// A department transfer found nobody eligible in the destination, so the ticket waits Unassigned there (and nobody has been assigned since).
+    /// It is dealt by the DESTINATION department's Round Robin as soon as one of its employees is eligible - and is never pulled back to the Call Center.
+    /// </summary>
+    TransferredAwaitingDepartmentAssignment,
+
     /// <summary>In the Call Center and a person deliberately released it to the queue (an audited Unassign by a person): left for them.</summary>
     ReleasedByPerson,
 
@@ -60,6 +66,9 @@ public enum UnassignedTicketAction
 
     /// <summary>Move to the Call Center if needed and deal to the next eligible agent by Round Robin.</summary>
     RoundRobinCallCenter,
+
+    /// <summary>Deal to the next eligible employee of the ticket's CURRENT department by that department's Round Robin (a transfer that found nobody).</summary>
+    RoundRobinDepartment,
 }
 
 /// <summary>Everything the classification looks at, gathered per ticket by the repository (set-based) — no customer data.</summary>
@@ -94,7 +103,9 @@ public sealed record UnassignedTicketEvidence(
     bool ReleasedByPerson,
     // At least one Genesys interaction is live AND every live one is a Phone call. Only such a ticket can be released by the Phone stale rule;
     // a live chat / messaging / any other-channel conversation keeps the ticket protected. Default false = protected (safe for older callers).
-    bool LiveGenesysIsPhoneOnly = false);
+    bool LiveGenesysIsPhoneOnly = false,
+    // A department transfer into the CURRENT department left the ticket unassigned and no assignment has been made since (safe default false).
+    bool AwaitingDepartmentAssignment = false);
 
 public sealed record UnassignedTicketClassification(UnassignedTicketClass Class, UnassignedTicketAction Action);
 
@@ -117,6 +128,11 @@ public static class UnassignedTicketClassifier
         if (evidence.PendingApproval) return Of(UnassignedTicketClass.PendingApproval);
 
         var inCallCenter = callCenterDepartmentId is { } cc && evidence.CurrentDepartmentId == cc;
+        if (!inCallCenter && evidence.AwaitingDepartmentAssignment)
+        {
+            return Of(UnassignedTicketClass.TransferredAwaitingDepartmentAssignment, UnassignedTicketAction.RoundRobinDepartment);
+        }
+
         if (!inCallCenter && evidence.LeftCallCenter) return Of(UnassignedTicketClass.TransferredOutOfCallCenter);
         if (inCallCenter && evidence.ReleasedByPerson) return Of(UnassignedTicketClass.ReleasedByPerson);
 

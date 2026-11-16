@@ -102,6 +102,47 @@ public sealed class CallCenterUnassignedWorkReconciler(
     }
 
     /// <summary>
+    /// Deals a transferred, still-unassigned ticket by its CURRENT department's Round Robin. The eligibility check is read-only, so a department that
+    /// still has nobody leaves no rows behind however often the job runs; the ticket is never routed to the Call Center.
+    /// </summary>
+    private async Task<ReconcileResult> ReconcileDepartmentAsync(
+        long ticketId, int departmentId, UnassignedTicketClass ticketClass, bool dryRun, DateTime now, CancellationToken cancellationToken)
+    {
+        if (!await autoAssignment.HasEligibleDepartmentEmployeeAsync(departmentId, cancellationToken))
+        {
+            return new ReconcileResult(ticketId, ticketClass, ReconcileOutcome.NoEligibleAgent);
+        }
+
+        if (dryRun)
+        {
+            return new ReconcileResult(ticketId, ticketClass, ReconcileOutcome.WouldAct);
+        }
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
+            if (ticket is null || ticket.TicketStatus != TicketStatus.Open || ticket.CurrentOwnerEmployeeId is not null || ticket.CurrentDepartmentId != departmentId)
+            {
+                return new ReconcileResult(ticketId, ticketClass, ReconcileOutcome.NoLongerApplicable);
+            }
+
+            var result = await autoAssignment.AssignDepartmentRoundRobinAsync(
+                ticket, AutoAssignmentTrigger.Reconciler, now, Guid.NewGuid(), carriedOverOwnerEmployeeId: null, cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+            await transaction.CommitAsync(cancellationToken);
+
+            return result.Outcome == AutoAssignmentOutcome.AssignedRoundRobin
+                ? new ReconcileResult(ticketId, ticketClass, ReconcileOutcome.AssignedRoundRobin, result.AssignedEmployeeId)
+                : new ReconcileResult(ticketId, ticketClass, ReconcileOutcome.NoEligibleAgent);
+        }
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
+        {
+            return new ReconcileResult(ticketId, ticketClass, ReconcileOutcome.LostRace);
+        }
+    }
+
+    /// <summary>
     /// Re-checks one ticket under a transaction and, unless <paramref name="dryRun"/>, gives it an owner. Call with a fresh scope per ticket
     /// (a lost race leaves tracked entities dirty).
     /// </summary>
@@ -125,6 +166,12 @@ public sealed class CallCenterUnassignedWorkReconciler(
         if (classification.Action == UnassignedTicketAction.None)
         {
             return new ReconcileResult(ticketId, classification.Class, ReconcileOutcome.Skipped);
+        }
+
+        if (classification.Action == UnassignedTicketAction.RoundRobinDepartment)
+        {
+            // A transfer left it unassigned in a department: that department's own Round Robin deals it once somebody there is eligible.
+            return await ReconcileDepartmentAsync(ticketId, evidence.CurrentDepartmentId, classification.Class, dryRun, now, cancellationToken);
         }
 
         if (callCenter is null)

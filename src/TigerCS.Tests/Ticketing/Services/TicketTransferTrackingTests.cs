@@ -71,8 +71,8 @@ public class TicketTransferTrackingTests
         Assert.Null(e.ToEmployeeId);
         Assert.Equal("Customer needs a technician", e.Note);
         Assert.True(e.IsEscalation);
-        // The department and the CS Agent are independent: the transfer keeps the agent.
-        Assert.Equal(firstAgent, ticket.CurrentOwnerEmployeeId);
+        // Nobody is eligible in the destination, so the previous department's agent is released (no one took it: ToEmployeeId stays null).
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]

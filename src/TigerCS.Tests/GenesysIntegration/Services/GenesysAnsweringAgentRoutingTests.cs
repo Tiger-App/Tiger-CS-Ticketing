@@ -640,7 +640,7 @@ public class GenesysAnsweringAgentRoutingTests
     }
 
     [Fact]
-    public async Task TransferredIntoAnUnstaffedDepartment_KeepsItsCsAgent_AndIsNotPulledBackToTheCallCenterByALateGenesysUpdate()
+    public async Task TransferredIntoAnUnstaffedDepartment_WaitsUnassignedWithTheReasonFlagged_AndIsNotPulledBackToTheCallCenterByALateGenesysUpdate()
     {
         var w = NewWorld();
         var legal = w.F.Departments.AddDepartment("Legal", "LEG");     // nobody staffs Legal: the CS Agent stays on the ticket regardless
@@ -650,14 +650,14 @@ public class GenesysAnsweringAgentRoutingTests
             w.Answering.Id, [Roles.CsAgent], call.TicketId,
             new TransferTicketRequestDto(legal.DepartmentId, "Legal matter", [], ReasonCode: TicketTransferReason.WrongDepartment));
         Assert.Equal(TicketMutationOutcome.Success, transfer.Outcome);
-        AssertSingleOwner(w, call.TicketId, w.Answering.Id);                                 // the CS Agent is preserved, never "Legal Queue (Unassigned)"
+        AssertSingleOwner(w, call.TicketId, null);                                           // nobody eligible in Legal: unassigned in Legal's queue...
+        Assert.Equal(1, FlagCount(w, call.TicketId));                                        // ...with the reason recorded for staff
 
         await ConnectAsync(w, call, w.Answering.GenesysId);
         await ConnectAsync(w, call, w.Agents[0].GenesysId);
 
         Assert.Equal(legal.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);       // not routed back to CC
-        AssertSingleOwner(w, call.TicketId, w.Answering.Id);                                 // not re-assigned to anyone
-        Assert.Equal(0, FlagCount(w, call.TicketId));
+        AssertSingleOwner(w, call.TicketId, w.Agents[0].Id);                                 // existing Genesys rule: each agent who actually answers a still-unassigned / Genesys-owned ticket takes it; always a single owner
     }
 
     [Fact]
