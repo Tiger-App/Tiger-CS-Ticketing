@@ -1,6 +1,8 @@
 @page "/Dashboard"
 @using System.Globalization
 @model TigerCS.Web.Pages.DashboardModel
+@using TigerCS.Domain.Modules.IdentityAndAccess.Permissions
+@inject ViewerAccessService ViewerAccess
 @{
     ViewData["Title"] = "Dashboard";
     ViewData["ActiveNav"] = "dashboard";
@@ -327,6 +329,11 @@
                 @foreach (var card in sideCards)
                 {
                     @await Html.PartialAsync("_DashboardSummaryCard", card)
+                }
+                @* Customers by Location: its two counts open the Customers directory, so they are links only for a viewer who can reach it. *@
+                @if (DashboardModel.BuildCustomerLocationCard(Model.Overview, (await ViewerAccess.GetAsync()).CanReach(Permissions.CustomersView, true)) is { } locationCard)
+                {
+                    @await Html.PartialAsync("_DashboardCustomerLocationCard", locationCard)
                 }
             </div>
         </section>

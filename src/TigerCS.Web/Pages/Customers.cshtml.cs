@@ -1,6 +1,7 @@
 using TigerCS.Application.Modules.Ticketing.CustomerNames;
 using Microsoft.AspNetCore.Mvc.RazorPages;
 using TigerCS.Application.Modules.Ticketing.Dto;
+using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Web.Models;
 using TigerCS.Web.Services;
 using TigerCS.Web.Services.Api;
@@ -37,7 +38,18 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
     public int PageNumber { get; private set; } = 1;
     public int PageSize { get; private set; } = DefaultPageSize;
 
-    public bool HasFilters => !string.IsNullOrWhiteSpace(Search) || VerificationSource is not null || DepartmentId is not null || OpenOnly;
+    /// <summary>The Dashboard's Customers by Location filter ("within-uae", "outside-uae", "unknown"), when the list was opened from that card.</summary>
+    public CustomerLocation? Location { get; private set; }
+
+    /// <summary>The Dashboard's own filters, carried from the card so the list shows exactly the customers the card counted. Null when the list was not opened from the Dashboard.</summary>
+    public CustomerDirectoryListRequestDto? DashboardScope { get; private set; }
+
+    public string? LocationLabel => Location is { } location ? CustomerLocationKeys.Label(location) : null;
+
+    /// <summary>The dashboard period the list is limited to, as the card showed it ("Aug 12 – Sep 10, 2026"), or null.</summary>
+    public string? DashboardPeriodLabel => DashboardScope is { DateFrom: { } from, DateTo: { } to } ? $"{from:MMM d} – {to:MMM d, yyyy}" : null;
+
+    public bool HasFilters => !string.IsNullOrWhiteSpace(Search) || VerificationSource is not null || DepartmentId is not null || OpenOnly || Location is not null || DashboardScope is not null;
 
     public ApiOutcome Outcome { get; private set; } = ApiOutcome.Success;
     public IReadOnlyList<CustomerDirectoryRowDto> Rows { get; private set; } = [];
@@ -56,7 +68,8 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
 
     public async Task OnGetAsync(
         string? search, string? phoneNumber, string? verificationSource, int? departmentId, bool openOnly, int page, int pageSize,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, string? location = null, DateOnly? dateFrom = null, DateOnly? dateTo = null,
+        Guid? ownerEmployeeId = null, byte? channelId = null, int? requestTypeId = null, string? ticketStatus = null, byte? priorityId = null)
     {
         Viewer = CurrentUser.FromPrincipal(User);
         CanCreateTicket = TicketCreationPolicy.AppliesTo(Viewer);
@@ -69,6 +82,14 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
             : null;
         DepartmentId = departmentId;
         OpenOnly = openOnly;
+        Location = CustomerLocationKeys.Parse(location);
+        var openedFromDashboard = dateFrom is not null || dateTo is not null || ownerEmployeeId is not null || channelId is not null
+            || requestTypeId is not null || !string.IsNullOrWhiteSpace(ticketStatus) || priorityId is not null;
+        DashboardScope = openedFromDashboard
+            ? new CustomerDirectoryListRequestDto(
+                DepartmentId: departmentId, DateFrom: dateFrom, DateTo: dateTo, OwnerEmployeeId: ownerEmployeeId, ChannelId: channelId,
+                RequestTypeId: requestTypeId, TicketStatus: string.IsNullOrWhiteSpace(ticketStatus) ? null : ticketStatus, PriorityId: priorityId)
+            : null;
         PageNumber = page < 1 ? 1 : page;
         PageSize = pageSize is < 1 or > 100 ? DefaultPageSize : pageSize;
 
@@ -77,7 +98,10 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
         await nameResolver.PrimeDepartmentsAsync(cancellationToken);
 
         var result = await customersApiClient.ListAsync(
-            new CustomerDirectoryListRequestDto(Search, VerificationSource, DepartmentId, OpenOnly, PageNumber, PageSize),
+            new CustomerDirectoryListRequestDto(
+                Search, VerificationSource, DepartmentId, OpenOnly, PageNumber, PageSize, CustomerLocationKeys.ToKey(Location),
+                DashboardScope?.DateFrom, DashboardScope?.DateTo, DashboardScope?.OwnerEmployeeId, DashboardScope?.ChannelId,
+                DashboardScope?.RequestTypeId, DashboardScope?.TicketStatus, DashboardScope?.PriorityId),
             cancellationToken);
         Outcome = result.Outcome;
         if (result.IsSuccess && result.Value is not null)
@@ -109,9 +133,24 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
         if (VerificationSource is not null) query["verificationSource"] = VerificationSource;
         if (DepartmentId is { } departmentId) query["departmentId"] = departmentId.ToString();
         if (OpenOnly) query["openOnly"] = "true";
+        foreach (var (name, value) in DashboardQuery()) query[name] = value;
         query["page"] = page.ToString();
         if (PageSize != DefaultPageSize) query["pageSize"] = PageSize.ToString();
         return $"/Customers?{query}";
+    }
+
+    /// <summary>The location and Dashboard-filter query values this list was opened with — re-emitted by the paging links and the filter form so neither silently drops them.</summary>
+    public IEnumerable<(string Name, string Value)> DashboardQuery()
+    {
+        if (CustomerLocationKeys.ToKey(Location) is { } locationKey) yield return ("location", locationKey);
+        if (DashboardScope is not { } scope) yield break;
+        if (scope.DateFrom is { } from) yield return ("dateFrom", from.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+        if (scope.DateTo is { } to) yield return ("dateTo", to.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture));
+        if (scope.OwnerEmployeeId is { } owner) yield return ("ownerEmployeeId", owner.ToString());
+        if (scope.ChannelId is { } channel) yield return ("channelId", channel.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (scope.RequestTypeId is { } requestType) yield return ("requestTypeId", requestType.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        if (!string.IsNullOrWhiteSpace(scope.TicketStatus)) yield return ("ticketStatus", scope.TicketStatus!);
+        if (scope.PriorityId is { } priority) yield return ("priorityId", priority.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     public static string ProfileHref(string customerKey) => $"/Customers/{Uri.EscapeDataString(customerKey)}";

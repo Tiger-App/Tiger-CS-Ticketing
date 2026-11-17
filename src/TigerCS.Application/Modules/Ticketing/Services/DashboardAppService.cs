@@ -30,7 +30,8 @@ public sealed class DashboardAppService(
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     ITicketAgentHandoffRepository? agentHandoffRepository = null,
     DashboardOptions? dashboardOptions = null,
-    CustomerNotificationModePolicy? notificationMode = null)
+    CustomerNotificationModePolicy? notificationMode = null,
+    CustomerDirectoryAppService? customerDirectoryAppService = null)
 {
     /// <summary>The default volume period when no date range is requested: the last 30 UTC calendar days, today included.</summary>
     public const int DefaultPeriodDays = 30;
@@ -178,6 +179,9 @@ public sealed class DashboardAppService(
             requestTypeDepartmentIds: agentScope is null ? scope : null,
             cancellationToken);
 
+        var customerLocation = await GetCustomerLocationAsync(
+            callerEmployeeId, callerRoles, dateFrom, dateTo, request, ticketStatus, cancellationToken);
+
         return new DashboardOverviewDto(
             new DashboardAppliedFiltersDto(
                 dateFrom, dateTo, request.DepartmentId, request.OwnerEmployeeId, request.ChannelId,
@@ -218,7 +222,36 @@ public sealed class DashboardAppService(
                 // its real status in the breakdowns and in its own row; it is
                 // only the filter that stops offering it.
                 TicketStatusTransitions.ActiveStatuses.Select(s => new DashboardFilterOptionDto(s.ToString(), s.ToString())).ToList(),
-                options.Priorities.Select(o => new DashboardFilterOptionDto(o.Id.ToString(), o.Label, o.GroupId, o.IsActive)).ToList()));
+                options.Priorities.Select(o => new DashboardFilterOptionDto(o.Id.ToString(), o.Label, o.GroupId, o.IsActive)).ToList()),
+            customerLocation);
+    }
+
+    /// <summary>
+    /// Customers by Location, computed by the Customers directory's own query (<see cref="CustomerDirectoryAppService.CountByLocationAsync"/>)
+    /// with the dashboard's range and filters, so the card and the Customers list its counts open are one query over one visibility
+    /// scope. Reads only TigerCS's persisted tickets/intakes — no CRM call — and a failure here never takes the rest of the dashboard down.
+    /// </summary>
+    private async Task<DashboardCustomerLocationDto?> GetCustomerLocationAsync(
+        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, DateOnly dateFrom, DateOnly dateTo,
+        DashboardOverviewRequestDto request, TicketStatus? ticketStatus, CancellationToken cancellationToken)
+    {
+        if (customerDirectoryAppService is null)
+        {
+            return null;
+        }
+
+        var counts = await customerDirectoryAppService.CountByLocationAsync(
+            callerEmployeeId, callerRoles,
+            new CustomerDirectoryListRequestDto(
+                DepartmentId: request.DepartmentId, DateFrom: dateFrom, DateTo: dateTo, OwnerEmployeeId: request.OwnerEmployeeId,
+                ChannelId: request.ChannelId, RequestTypeId: request.RequestTypeId, TicketStatus: ticketStatus?.ToString(), PriorityId: request.PriorityId),
+            cancellationToken);
+
+        return new DashboardCustomerLocationDto(
+            counts.WithinUae, Percentage(counts.WithinUae, counts.Total),
+            counts.OutsideUae, Percentage(counts.OutsideUae, counts.Total),
+            counts.Unknown, Percentage(counts.Unknown, counts.Total),
+            counts.Total);
     }
 
     /// <summary>Null visible scope (cross-department) narrows to the requested department alone; a restricted scope narrows to the requested department only if it is already visible, otherwise to nothing.</summary>

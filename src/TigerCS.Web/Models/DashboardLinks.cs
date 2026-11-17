@@ -79,6 +79,27 @@ public static class DashboardLinks
     /// <summary>Every ticket created in the range, in the filter context — the volume breakdowns' own total.</summary>
     public static string VolumeTotal(DashboardAppliedFiltersDto f) => Build(f, includeDates: true);
 
+    public const string CustomersPath = "/Customers";
+
+    /// <summary>
+    /// A Customers by Location count: the Customers directory filtered to that location, carrying the dashboard's date range and every filter
+    /// it applied. The directory evaluates it with the very query the card was counted with, so the list's total is the number on the card.
+    /// </summary>
+    public static string CustomersByLocation(DashboardAppliedFiltersDto f, CustomerLocation location)
+    {
+        var query = HttpUtility.ParseQueryString(string.Empty);
+        query["location"] = CustomerLocationKeys.ToKey(location)!;
+        query["dateFrom"] = f.DateFrom.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        query["dateTo"] = f.DateTo.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (f.DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
+        if (f.OwnerEmployeeId is Guid ownerId) query["ownerEmployeeId"] = ownerId.ToString();
+        if (f.ChannelId is byte channelId) query["channelId"] = channelId.ToString(CultureInfo.InvariantCulture);
+        if (f.RequestTypeId is int requestTypeId) query["requestTypeId"] = requestTypeId.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(f.TicketStatus)) query["ticketStatus"] = f.TicketStatus;
+        if (f.PriorityId is byte priorityId) query["priorityId"] = priorityId.ToString(CultureInfo.InvariantCulture);
+        return $"{CustomersPath}?{query}";
+    }
+
     private static string Build(DashboardAppliedFiltersDto f, bool includeDates, params (string Name, string Value)[] extra)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);

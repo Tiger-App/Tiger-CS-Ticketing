@@ -49,9 +49,12 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         public string? ExternalId { get; init; }
         public string? Phone { get; init; }
         public DateTime? LastInteractionAtUtc { get; init; }
+
+        /// <summary>The ticket's own phone placed by <see cref="CustomerPhoneLocation"/> (0 Unknown, 1 Within UAE, 2 Outside UAE). Only computed when the caller asks for it (<c>withLocation</c>); 0 otherwise.</summary>
+        public int LocationCode { get; init; }
     }
 
-    private IQueryable<IdentifiedTicket> Identified(IReadOnlyCollection<int>? visibleDepartmentIds, Guid? agentScopeEmployeeId = null, Guid? ownerEmployeeId = null)
+    private IQueryable<IdentifiedTicket> Identified(IReadOnlyCollection<int>? visibleDepartmentIds, Guid? agentScopeEmployeeId = null, Guid? ownerEmployeeId = null, bool withLocation = false)
     {
         var tickets = dbContext.Tickets.AsNoTracking().VisibleTo(
             dbContext, visibleDepartmentIds, agentScopeEmployeeId, ownerEmployeeId: ownerEmployeeId, inactivityReopenCutoffUtc: TicketQueryFilters.InactivityReopenCutoff(reopenPolicy, clock));
@@ -78,18 +81,43 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             join intake in dbContext.IntakeRecords on first.IntakeRecordId equals intake.IntakeRecordId
             select new { first.TicketId, intake.PhoneNumber };
 
-        var withPhone =
-            from t in tickets
-            join p in firstIntakePhones on t.TicketId equals p.TicketId into phones
-            from p in phones.DefaultIfEmpty()
-            select new
-            {
-                Ticket = t,
-                IntakePhone = p.PhoneNumber,
-                LastInteractionAtUtc = dbContext.TicketInteractions
-                    .Where(i => i.TicketId == t.TicketId)
-                    .Max(i => (DateTime?)i.CreatedAtUtc),
-            };
+        // Customers by Location only: the ticket's first interaction phone, resolved like the intake phone — one derived table, one join —
+        // for the tickets that have no intake (a call promoted straight from Genesys). Never joined for the list or a profile.
+        var firstInteractionPhones =
+            from first in dbContext.TicketInteractions
+                .Where(i => i.CustomerPhone != "")
+                .GroupBy(i => i.TicketId)
+                .Select(g => new { TicketId = g.Key, TicketInteractionId = g.Min(i => i.TicketInteractionId) })
+            join interaction in dbContext.TicketInteractions on first.TicketInteractionId equals interaction.TicketInteractionId
+            select new { first.TicketId, interaction.CustomerPhone };
+
+        var withPhone = withLocation
+            ? from t in tickets
+              join p in firstIntakePhones on t.TicketId equals p.TicketId into phones
+              from p in phones.DefaultIfEmpty()
+              join ip in firstInteractionPhones on t.TicketId equals ip.TicketId into interactionPhones
+              from ip in interactionPhones.DefaultIfEmpty()
+              select new
+              {
+                  Ticket = t,
+                  IntakePhone = p.PhoneNumber,
+                  InteractionPhone = ip.CustomerPhone,
+                  LastInteractionAtUtc = dbContext.TicketInteractions
+                      .Where(i => i.TicketId == t.TicketId)
+                      .Max(i => (DateTime?)i.CreatedAtUtc),
+              }
+            : from t in tickets
+              join p in firstIntakePhones on t.TicketId equals p.TicketId into phones
+              from p in phones.DefaultIfEmpty()
+              select new
+              {
+                  Ticket = t,
+                  IntakePhone = p.PhoneNumber,
+                  InteractionPhone = (string?)null,
+                  LastInteractionAtUtc = dbContext.TicketInteractions
+                      .Where(i => i.TicketId == t.TicketId)
+                      .Max(i => (DateTime?)i.CreatedAtUtc),
+              };
 
         // The captured number, canonicalized in SQL. This is what the phone
         // fallback groups, filters and searches on — never the raw column,
@@ -102,18 +130,43 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         {
             x.Ticket,
             x.IntakePhone,
+            x.InteractionPhone,
             x.LastInteractionAtUtc,
             CanonicalIntakePhone = x.IntakePhone == null
                 ? null
                 : x.IntakePhone.Trim().Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "").Replace("/", ""),
         });
 
-        return canonicalized.Select(x => new IdentifiedTicket
+        // Customers by Location: the ticket's phone as captured (intake first, else its first interaction's), reduced to its digits in SQL and
+        // placed by the SQL twin of CustomerPhoneLocation.Classify. Skipped entirely — constant 0 — for the list and the profile.
+        var located = withLocation
+            ? canonicalized.Select(x => new { Row = x, Raw = (x.IntakePhone != null && x.IntakePhone != "" ? x.IntakePhone : x.InteractionPhone) })
+                .Select(x => new { x.Row, Stripped = x.Raw == null ? null : x.Raw.Trim().Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "").Replace("/", ""), Plus = x.Raw != null && x.Raw.Trim().StartsWith("+") })
+                .Select(x => new { x.Row, x.Stripped, x.Plus, Intl = x.Plus || (x.Stripped != null && x.Stripped.StartsWith("00")) })
+                .Select(x => new { x.Row, x.Stripped, x.Intl, Core = x.Stripped == null ? "" : (x.Intl && !x.Plus ? x.Stripped.Substring(2) : x.Stripped) })
+                .Select(x => new
+                {
+                    x.Row,
+                    Code = x.Stripped == null || x.Stripped == ""
+                           // a letter or any other non-separator character makes the number invalid: nothing but digits may remain
+                           || x.Stripped.Replace("0", "").Replace("1", "").Replace("2", "").Replace("3", "").Replace("4", "").Replace("5", "").Replace("6", "").Replace("7", "").Replace("8", "").Replace("9", "") != ""
+                        ? 0
+                        : x.Intl
+                            ? (x.Core.Length >= CustomerPhoneLocation.MinInternationalDigits && x.Core.Length <= CustomerPhoneLocation.MaxInternationalDigits && !x.Core.StartsWith("0")
+                                ? (x.Core.StartsWith("971") ? (x.Core.Length == 12 ? 1 : 0) : 2)
+                                : 0)
+                            : (x.Core.StartsWith("971") && x.Core.Length == 12 ? 1 : 0),
+                })
+                .Select(x => new { x.Row.Ticket, x.Row.IntakePhone, x.Row.InteractionPhone, x.Row.LastInteractionAtUtc, x.Row.CanonicalIntakePhone, x.Code })
+            : canonicalized.Select(x => new { x.Ticket, x.IntakePhone, x.InteractionPhone, x.LastInteractionAtUtc, x.CanonicalIntakePhone, Code = 0 });
+
+        return located.Select(x => new IdentifiedTicket
         {
             Ticket = x.Ticket,
             IntakePhone = x.IntakePhone,
             CanonicalIntakePhone = x.CanonicalIntakePhone,
             LastInteractionAtUtc = x.LastInteractionAtUtc,
+            LocationCode = x.Code,
             Kind = x.Ticket.CrmBuyerCustomerId != null ? CrmKind
                 : x.Ticket.CustomerVerificationSource != null && x.Ticket.ExternalCustomerId != null ? ExternalKind
                 // A number that is nothing but separators ("+") canonicalizes
@@ -127,9 +180,14 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         }).Where(x => x.Kind != 0);
     }
 
-    public async Task<CustomerDirectoryPage> ListAsync(CustomerDirectoryQuery query, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// The identified tickets of the customers this query selects — search, department, dashboard ticket filters and verification source.
+    /// ONE method for the list and the by-location counts, so a count on the Dashboard and the list its link opens can only differ if
+    /// the query itself does.
+    /// </summary>
+    private IQueryable<IdentifiedTicket> FilteredCandidates(CustomerDirectoryQuery query, bool withLocation)
     {
-        var identified = Identified(query.VisibleDepartmentIds, query.AgentScopeEmployeeId, query.OwnerVisibilityEmployeeId);
+        var identified = Identified(query.VisibleDepartmentIds, query.AgentScopeEmployeeId, query.OwnerVisibilityEmployeeId, withLocation);
         var candidates = identified;
 
         // Search and the department filter select CUSTOMERS (any of whose
@@ -183,11 +241,85 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                     || (x.Kind == PhoneKind && m.Phone == x.Phone))));
         }
 
+        // The Dashboard's own filters (date range, department, agent, channel, request type, status, priority) select customers exactly as
+        // the Dashboard's Customers by Location card counts them: customers with at least one visible ticket matching ALL of them at once.
+        if (query.TicketFilter is { } ticketFilter)
+        {
+            var qualifying = identified.Where(m => true);
+            if (ticketFilter.CreatedFromUtc is { } createdFrom) qualifying = qualifying.Where(m => m.Ticket.CreatedAtUtc >= createdFrom);
+            if (ticketFilter.CreatedToUtc is { } createdTo) qualifying = qualifying.Where(m => m.Ticket.CreatedAtUtc < createdTo);
+            if (ticketFilter.DepartmentId is { } filterDepartment) qualifying = qualifying.Where(m => m.Ticket.CurrentDepartmentId == filterDepartment);
+            if (ticketFilter.OwnerEmployeeId is { } owner) qualifying = qualifying.Where(m => m.Ticket.CurrentOwnerEmployeeId == owner);
+            if (ticketFilter.RequestTypeId is { } requestType) qualifying = qualifying.Where(m => m.Ticket.RequestTypeId == requestType);
+            if (ticketFilter.PriorityId is { } priority) qualifying = qualifying.Where(m => m.Ticket.PriorityId == priority);
+            if (ticketFilter.TicketStatus is { } status) qualifying = qualifying.Where(m => m.Ticket.TicketStatus == status);
+            if (ticketFilter.ChannelId is { } channel)
+            {
+                qualifying = qualifying.Where(m => dbContext.TicketInteractions.Any(i => i.TicketId == m.Ticket.TicketId && i.IsOriginatingInteraction && i.ChannelId == channel));
+            }
+
+            candidates = candidates.Where(x => qualifying.Any(m =>
+                m.Kind == x.Kind
+                && ((x.Kind == CrmKind && m.CrmId == x.CrmId)
+                    || (x.Kind == ExternalKind && m.Source == x.Source && m.ExternalId == x.ExternalId)
+                    || (x.Kind == PhoneKind && m.Phone == x.Phone))));
+        }
+
         if (query.VerificationSource is { } source)
         {
             candidates = source.Equals("Crm", StringComparison.OrdinalIgnoreCase) ? candidates.Where(x => x.Kind == CrmKind)
                 : source.Equals("Unverified", StringComparison.OrdinalIgnoreCase) ? candidates.Where(x => x.Kind == PhoneKind)
                 : candidates.Where(x => x.Kind == ExternalKind && x.Source == source);
+        }
+
+
+        return candidates;
+    }
+
+    public async Task<CustomerLocationCounts> CountByLocationAsync(CustomerDirectoryQuery query, CancellationToken cancellationToken = default)
+    {
+        // One row per customer, placed once: every located ticket must agree (CustomerPhoneLocation.Resolve), so a customer is in exactly
+        // one of the three buckets however many tickets or numbers they have. The whole thing is one grouped COUNT in the database.
+        var perCustomer = FilteredCandidates(query with { Location = null }, withLocation: true)
+            .GroupBy(x => new { x.Kind, x.CrmId, x.Source, x.ExternalId, x.Phone })
+            .Select(g => new
+            {
+                Within = g.Count(x => x.LocationCode == 1),
+                Outside = g.Count(x => x.LocationCode == 2),
+            })
+            .Select(c => c.Within > 0 && c.Outside == 0 ? 1 : c.Outside > 0 && c.Within == 0 ? 2 : 0);
+
+        var rows = await perCustomer
+            .GroupBy(location => location)
+            .Select(g => new { Location = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        int Of(int location) => rows.Where(r => r.Location == location).Sum(r => r.Count);
+        return new CustomerLocationCounts(Of(1), Of(2), Of(0));
+    }
+
+    public async Task<CustomerDirectoryPage> ListAsync(CustomerDirectoryQuery query, CancellationToken cancellationToken = default)
+    {
+        var candidates = FilteredCandidates(query, withLocation: query.Location is not null);
+
+        if (query.Location is { } wanted)
+        {
+            var wantedCode = (int)wanted;
+            candidates = candidates.Where(x => x.Kind != 0);
+            var located = candidates
+                .GroupBy(x => new { x.Kind, x.CrmId, x.Source, x.ExternalId, x.Phone })
+                .Select(g => new
+                {
+                    g.Key.Kind, g.Key.CrmId, g.Key.Source, g.Key.ExternalId, g.Key.Phone,
+                    Location = g.Count(x => x.LocationCode == 1) > 0 && g.Count(x => x.LocationCode == 2) == 0 ? 1
+                        : g.Count(x => x.LocationCode == 2) > 0 && g.Count(x => x.LocationCode == 1) == 0 ? 2 : 0,
+                })
+                .Where(c => c.Location == wantedCode);
+            candidates = candidates.Where(x => located.Any(c =>
+                c.Kind == x.Kind
+                && ((x.Kind == CrmKind && c.CrmId == x.CrmId)
+                    || (x.Kind == ExternalKind && c.Source == x.Source && c.ExternalId == x.ExternalId)
+                    || (x.Kind == PhoneKind && c.Phone == x.Phone))));
         }
 
         var grouped = candidates

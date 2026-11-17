@@ -20,6 +20,15 @@ public sealed class CustomersApiClient(HttpClient httpClient, ILogger<CustomersA
         if (!string.IsNullOrWhiteSpace(request.VerificationSource)) query["verificationSource"] = request.VerificationSource;
         if (request.DepartmentId is int departmentId) query["departmentId"] = departmentId.ToString(CultureInfo.InvariantCulture);
         if (request.OpenOnly) query["openOnly"] = "true";
+        if (!string.IsNullOrWhiteSpace(request.Location)) query["location"] = request.Location;
+        // The Dashboard's own filters, when the list was opened from one of its cards.
+        if (request.DateFrom is { } dateFrom) query["dateFrom"] = dateFrom.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (request.DateTo is { } dateTo) query["dateTo"] = dateTo.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+        if (request.OwnerEmployeeId is { } ownerEmployeeId) query["ownerEmployeeId"] = ownerEmployeeId.ToString();
+        if (request.ChannelId is { } channelId) query["channelId"] = channelId.ToString(CultureInfo.InvariantCulture);
+        if (request.RequestTypeId is { } requestTypeId) query["requestTypeId"] = requestTypeId.ToString(CultureInfo.InvariantCulture);
+        if (!string.IsNullOrWhiteSpace(request.TicketStatus)) query["ticketStatus"] = request.TicketStatus;
+        if (request.PriorityId is { } priorityId) query["priorityId"] = priorityId.ToString(CultureInfo.InvariantCulture);
         query["page"] = request.Page.ToString(CultureInfo.InvariantCulture);
         query["pageSize"] = request.PageSize.ToString(CultureInfo.InvariantCulture);
 
