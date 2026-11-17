@@ -335,6 +335,19 @@
                 {
                     @await Html.PartialAsync("_DashboardCustomerLocationCard", locationCard)
                 }
+                else if (Model.CustomerLocationFailed)
+                {
+                    @* The card's read failed: say so. Zeros here would claim there are no customers. *@
+                    <div class="panel dash-card dash-card--summary dash-card--location" data-dash-card="customers-by-location" data-state="unavailable">
+                        <div class="panel__header">
+                            <div class="panel__lead">
+                                <span class="panel__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 21s7-6.2 7-11.5a7 7 0 1 0-14 0C5 14.8 12 21 12 21Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" /><circle cx="12" cy="9.5" r="2.4" stroke="currentColor" stroke-width="1.8" /></svg></span>
+                                <span class="panel__title">Customers by Location</span>
+                            </div>
+                        </div>
+                        <div class="empty-state empty-state--compact"><p>Customers by Location could not be loaded right now. The rest of the dashboard is unaffected — try again in a moment.</p></div>
+                    </div>
+                }
             </div>
         </section>
 
