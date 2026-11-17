@@ -51,7 +51,21 @@ public interface ITeamPerformanceQueryRepository
 
     /// <summary>The SLA configuration read from the database, for the details view's rules explanation.</summary>
     Task<TeamPerformanceSlaConfiguration> GetSlaConfigurationAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Phone interactions the employee is recorded as having <b>connected to</b> (an inquiry / routing event naming them as the answering
+    /// agent) with a Genesys connect time in the window. This is the only call-answer evidence TigerCS stores: it holds no offer event.
+    /// </summary>
+    Task<IReadOnlyList<TeamPerformanceConnectedCallRow>> GetConnectedCallsAsync(
+        Guid employeeId, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>Ticket numbers by ticket id, for the ids that exist.</summary>
+    Task<IReadOnlyDictionary<long, string>> GetTicketNumbersAsync(
+        IReadOnlyCollection<long> ticketIds, CancellationToken cancellationToken = default);
 }
+
+/// <summary>One phone interaction the employee connected to, and when Genesys says they connected.</summary>
+public sealed record TeamPerformanceConnectedCallRow(long TicketId, DateTime ConnectedAtUtc);
 
 /// <summary>One active employee with their roles (alphabetical) and department memberships (primary first).</summary>
 public sealed record TeamPerformanceEmployeeRow(

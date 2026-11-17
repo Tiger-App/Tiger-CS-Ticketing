@@ -642,6 +642,41 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
         return rows;
     }
 
+    public async Task<IReadOnlyList<TeamPerformanceConnectedCallRow>> GetConnectedCallsAsync(
+        Guid employeeId, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken = default)
+    {
+        // Only a handler row that carries Genesys' own connect time on a Phone interaction, written by an inquiry / routing event
+        // (the "agent connected" events). Transcript / update / legacy rows are not an answer event, and RecordedAtUtc is TigerCS' own
+        // clock, so a row without a connect time is not an answer time and is not listed.
+        var rows = await (
+            from h in dbContext.TicketInteractionHandlers.AsNoTracking()
+            join i in dbContext.TicketInteractions.AsNoTracking() on h.TicketInteractionId equals i.TicketInteractionId
+            where h.HandledByUserId == employeeId
+                && (h.Source == InteractionHandlerSource.Inquiry || h.Source == InteractionHandlerSource.Routing)
+                && i.ChannelId == WellKnownChannels.Phone
+                && h.ConnectedAtUtc != null
+                && h.ConnectedAtUtc >= rangeStartUtc && h.ConnectedAtUtc < rangeEndUtc
+            select new { h.TicketId, ConnectedAtUtc = h.ConnectedAtUtc!.Value })
+            .ToListAsync(cancellationToken);
+
+        return rows.Select(r => new TeamPerformanceConnectedCallRow(r.TicketId, r.ConnectedAtUtc))
+            .OrderBy(r => r.ConnectedAtUtc).ThenBy(r => r.TicketId).ToList();
+    }
+
+    public async Task<IReadOnlyDictionary<long, string>> GetTicketNumbersAsync(
+        IReadOnlyCollection<long> ticketIds, CancellationToken cancellationToken = default)
+    {
+        if (ticketIds.Count == 0)
+        {
+            return new Dictionary<long, string>();
+        }
+
+        return await dbContext.Tickets.AsNoTracking()
+            .Where(t => ticketIds.Contains(t.TicketId))
+            .Select(t => new { t.TicketId, t.TicketNumber })
+            .ToDictionaryAsync(t => t.TicketId, t => t.TicketNumber, cancellationToken);
+    }
+
     public async Task<TeamPerformanceSlaConfiguration> GetSlaConfigurationAsync(CancellationToken cancellationToken = default)
     {
         var policies = await dbContext.SlaPolicies.AsNoTracking()

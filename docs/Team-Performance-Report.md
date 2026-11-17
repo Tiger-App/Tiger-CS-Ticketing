@@ -302,3 +302,10 @@ One schema change: `TicketAssignments.SupersededAtUtc datetime2 NULL` (no data c
   the old build keeps working against the migrated database (roll back by redeploying the old build; leave the column).
 - CI: `validate-migration` applies the migrations and the EF-generated idempotent script to a real SQL Server and pins the
   exact column list of `TicketAssignments` (the new nullable column is part of that list).
+
+### Employee response to call offers (separate from the ticket SLA)
+
+The SLA details page also lists the Genesys call offers the employee received, with offer time, answer time, response duration and outcome
+(Answered / Not Responding / Outside Shift / Availability Unknown). It never changes a ticket SLA result or any SLA count. See
+[Employee-Response-Time-Reporting.md](Employee-Response-Time-Reporting.md) — including which data TigerCS does not yet receive (offer events,
+shift and leave history), so that today offers are reported as Availability Unknown.

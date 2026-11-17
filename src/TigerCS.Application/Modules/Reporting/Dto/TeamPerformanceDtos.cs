@@ -285,7 +285,9 @@ public sealed record TeamPerformanceSlaDetailsDto(
     IReadOnlyList<TeamPerformanceSlaRecordDto> Records,
     string? SlaTypeFilter,
     IReadOnlyList<TeamPerformanceSlaTypeBreakdownDto> TypeBreakdown,
-    TeamPerformanceSlaStatusCountsDto StatusCounts);
+    TeamPerformanceSlaStatusCountsDto StatusCounts,
+    EmployeeResponseSummaryDto? EmployeeResponseSummary = null,
+    IReadOnlyList<EmployeeOfferResponseDto>? EmployeeResponses = null);
 
 /// <summary>
 /// One row of the SLA type breakdown: the finalized cycles of one clock for the employee and period, counted by the same aggregation as the
@@ -402,6 +404,58 @@ public sealed record TeamPerformanceSlaCalendarDto(
     string BusinessDayEndLocal,
     IReadOnlyList<string> WorkingDays,
     int HolidayCount);
+
+/// <summary>The four outcomes of a Genesys call offer to an employee. Exact strings: the page and the API show them as written.</summary>
+public static class EmployeeOfferOutcomes
+{
+    public const string Answered = "Answered";
+    public const string NotResponding = "Not Responding";
+    public const string OutsideShift = "Outside Shift";
+    public const string Declined = "Declined";
+    public const string Redirected = "Redirected";
+    public const string CallerAbandoned = "Caller Abandoned";
+    public const string AvailabilityUnknown = "Availability Unknown";
+}
+
+/// <summary>
+/// One Genesys call offer to THIS employee (never to someone else on the same ticket), with the outcome of that offer. Independent of the
+/// ticket's SLA, which is shown separately and is never changed by anything here.
+/// </summary>
+/// <param name="TicketId">Links to Ticket Details.</param>
+/// <param name="TicketNumber">The human-facing ticket number.</param>
+/// <param name="OfferedAtUtc">When Genesys offered the call to this employee; null when no offer event was received.</param>
+/// <param name="AnsweredAtUtc">When this employee answered; null when they did not, or it is not known.</param>
+/// <param name="ResponseSeconds">Offer → this employee's answer, in seconds. Only for <c>Answered</c>; there is no threshold and no pass/fail.</param>
+/// <param name="ResponseText">The same, readable ("12 s", "1 m 5 s"), or "—".</param>
+/// <param name="Outcome">One of <see cref="EmployeeOfferOutcomes"/>.</param>
+/// <param name="Explanation">Why the offer has this outcome, and whether it counts toward employee performance.</param>
+/// <param name="CountsTowardPerformance">True only for Answered and Not Responding (in-shift, Genesys-confirmed).</param>
+public sealed record EmployeeOfferResponseDto(
+    long TicketId,
+    string TicketNumber,
+    DateTime? OfferedAtUtc,
+    DateTime? AnsweredAtUtc,
+    double? ResponseSeconds,
+    string ResponseText,
+    string Outcome,
+    string Explanation,
+    bool CountsTowardPerformance);
+
+/// <summary>
+/// Counts of the employee's offers by outcome, plus the average measured response. <c>Measured</c> = Answered + Not Responding. Outside Shift and
+/// Availability Unknown are listed but excluded. No breach count or compliance percentage exists for offers on purpose.
+/// </summary>
+public sealed record EmployeeResponseSummaryDto(
+    int Offers,
+    int Answered,
+    int NotResponding,
+    int OutsideShift,
+    int AvailabilityUnknown,
+    double? AverageResponseSeconds,
+    string AverageResponseText,
+    int Declined = 0,
+    int Redirected = 0,
+    int CallerAbandoned = 0);
 
 /// <summary>How an SLA details request landed.</summary>
 public enum TeamPerformanceSlaDetailsOutcome
