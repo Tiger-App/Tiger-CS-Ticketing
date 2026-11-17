@@ -145,13 +145,60 @@ public sealed record CustomerIdentity(
 /// <param name="OpenOnly">Keep customers with at least one active ticket.</param>
 /// <param name="Page">1-based page number.</param>
 /// <param name="PageSize">Rows per page (1–100; defaults to 25 otherwise).</param>
+/// <param name="Location">"within-uae", "outside-uae" or "unknown" (<see cref="CustomerLocationKeys"/>) — how the Dashboard's Customers by Location counts open their list.</param>
+/// <param name="DateFrom">Dashboard filter: first UTC day of the ticket creation range (inclusive). With the filters below, selects customers with at least one visible ticket matching all of them; <paramref name="DepartmentId"/> doubles as the department filter.</param>
+/// <param name="DateTo">Dashboard filter: last UTC day of the ticket creation range (inclusive).</param>
+/// <param name="OwnerEmployeeId">Dashboard filter: ticket's current owner.</param>
+/// <param name="ChannelId">Dashboard filter: ticket's originating channel.</param>
+/// <param name="RequestTypeId">Dashboard filter: ticket's request type.</param>
+/// <param name="TicketStatus">Dashboard filter: ticket's status.</param>
+/// <param name="PriorityId">Dashboard filter: ticket's priority.</param>
 public sealed record CustomerDirectoryListRequestDto(
     string? Search = null,
     string? VerificationSource = null,
     int? DepartmentId = null,
     bool OpenOnly = false,
     int Page = 1,
-    int PageSize = 25);
+    int PageSize = 25,
+    string? Location = null,
+    DateOnly? DateFrom = null,
+    DateOnly? DateTo = null,
+    Guid? OwnerEmployeeId = null,
+    byte? ChannelId = null,
+    int? RequestTypeId = null,
+    string? TicketStatus = null,
+    byte? PriorityId = null);
+
+/// <summary>The URL spelling of <see cref="CustomerLocation"/>, shared by the API, the Dashboard link and the Customers page.</summary>
+public static class CustomerLocationKeys
+{
+    public const string WithinUae = "within-uae";
+    public const string OutsideUae = "outside-uae";
+    public const string Unknown = "unknown";
+
+    public static string? ToKey(CustomerLocation? location) => location switch
+    {
+        CustomerLocation.WithinUae => WithinUae,
+        CustomerLocation.OutsideUae => OutsideUae,
+        CustomerLocation.Unknown => Unknown,
+        _ => null,
+    };
+
+    public static CustomerLocation? Parse(string? key) => key?.Trim().ToLowerInvariant() switch
+    {
+        WithinUae => CustomerLocation.WithinUae,
+        OutsideUae => CustomerLocation.OutsideUae,
+        Unknown => CustomerLocation.Unknown,
+        _ => null,
+    };
+
+    public static string Label(CustomerLocation location) => location switch
+    {
+        CustomerLocation.WithinUae => "Within UAE",
+        CustomerLocation.OutsideUae => "Outside UAE",
+        _ => "Unknown location",
+    };
+}
 
 /// <summary>One customer row of the directory: the identity, what the latest ticket says about them, and their ticket footprint.</summary>
 public sealed record CustomerDirectoryRowDto(

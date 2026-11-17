@@ -68,6 +68,26 @@ public class DashboardController(DashboardAppService dashboardAppService) : Cont
         return Ok(result);
     }
 
+    /// <summary>Customers by Location: distinct customers within the UAE / outside the UAE / unknown, by phone country code, for the dashboard's range and filters.</summary>
+    /// <remarks>
+    /// Counted by the Customers directory's own query over the caller's own customer visibility, so the figures equal the list each count opens
+    /// (<c>/Customers?location=…</c>). Same optional filters as the overview; they only narrow. Never a CRM call.
+    /// </remarks>
+    /// <response code="200">The three mutually exclusive counts, their shares and the total of unique customers.</response>
+    [HttpGet("customers-by-location")]
+    [ProducesResponseType<DashboardCustomerLocationDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> GetCustomersByLocation([FromQuery] DashboardOverviewRequestDto request, CancellationToken cancellationToken)
+    {
+        var employeeId = GetEmployeeId();
+        if (employeeId is null)
+        {
+            return Unauthorized();
+        }
+
+        var result = await dashboardAppService.GetCustomerLocationAsync(employeeId.Value, GetRoles(), request, cancellationToken);
+        return result is null ? NotFound() : Ok(result);
+    }
+
     private Guid? GetEmployeeId()
     {
         var idValue = User.FindFirstValue(ClaimTypes.NameIdentifier);

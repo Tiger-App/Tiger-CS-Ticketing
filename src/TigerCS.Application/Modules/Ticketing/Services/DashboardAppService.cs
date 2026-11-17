@@ -30,7 +30,8 @@ public sealed class DashboardAppService(
     IUserDepartmentAssignmentRepository userDepartmentAssignmentRepository,
     ITicketAgentHandoffRepository? agentHandoffRepository = null,
     DashboardOptions? dashboardOptions = null,
-    CustomerNotificationModePolicy? notificationMode = null)
+    CustomerNotificationModePolicy? notificationMode = null,
+    CustomerDirectoryAppService? customerDirectoryAppService = null)
 {
     /// <summary>The default volume period when no date range is requested: the last 30 UTC calendar days, today included.</summary>
     public const int DefaultPeriodDays = 30;
@@ -219,6 +220,38 @@ public sealed class DashboardAppService(
                 // only the filter that stops offering it.
                 TicketStatusTransitions.ActiveStatuses.Select(s => new DashboardFilterOptionDto(s.ToString(), s.ToString())).ToList(),
                 options.Priorities.Select(o => new DashboardFilterOptionDto(o.Id.ToString(), o.Label, o.GroupId, o.IsActive)).ToList()));
+    }
+
+    /// <summary>
+    /// Customers by Location (<c>GET /api/dashboard/customers-by-location</c>), computed by the Customers directory's own query
+    /// (<see cref="CustomerDirectoryAppService.CountByLocationAsync"/>) with the dashboard's range and filters, so the card and the Customers list its
+    /// counts open are one query over one visibility scope. Reads only TigerCS's persisted tickets/intakes — no CRM call. A read of its own, not part of
+    /// the overview: the customer aggregate is the heaviest number on the page, so it neither slows nor can fail the rest of the dashboard.
+    /// Returns null when the Customers directory is not wired.
+    /// </summary>
+    public async Task<DashboardCustomerLocationDto?> GetCustomerLocationAsync(
+        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, DashboardOverviewRequestDto request, CancellationToken cancellationToken = default)
+    {
+        if (customerDirectoryAppService is null)
+        {
+            return null;
+        }
+
+        var (dateFrom, dateTo) = ResolvePeriod(request.DateFrom, request.DateTo, DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime));
+        var ticketStatus = ParseStatus(request.TicketStatus);
+
+        var counts = await customerDirectoryAppService.CountByLocationAsync(
+            callerEmployeeId, callerRoles,
+            new CustomerDirectoryListRequestDto(
+                DepartmentId: request.DepartmentId, DateFrom: dateFrom, DateTo: dateTo, OwnerEmployeeId: request.OwnerEmployeeId,
+                ChannelId: request.ChannelId, RequestTypeId: request.RequestTypeId, TicketStatus: ticketStatus?.ToString(), PriorityId: request.PriorityId),
+            cancellationToken);
+
+        return new DashboardCustomerLocationDto(
+            counts.WithinUae, Percentage(counts.WithinUae, counts.Total),
+            counts.OutsideUae, Percentage(counts.OutsideUae, counts.Total),
+            counts.Unknown, Percentage(counts.Unknown, counts.Total),
+            counts.Total);
     }
 
     /// <summary>Null visible scope (cross-department) narrows to the requested department alone; a restricted scope narrows to the requested department only if it is already visible, otherwise to nothing.</summary>

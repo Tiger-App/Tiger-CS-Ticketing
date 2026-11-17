@@ -109,7 +109,8 @@ public sealed class DashboardSqliteFixture : IDisposable
         var queries = new TicketQueryAppService(
             tickets, assignments, new FakeTicketResolutionRepository(), new FakeTicketStatusHistoryRepository(), ReopenPolicy.Default, time,
             handlerRepository: new TicketInteractionHandlerRepository(context));
-        return new DashboardAppService(tickets, queries, time, new DashboardQueryRepository(context, ReopenPolicy.Default, time), assignments, notificationMode: mode);
+        return new DashboardAppService(tickets, queries, time, new DashboardQueryRepository(context, ReopenPolicy.Default, time), assignments, notificationMode: mode,
+            customerDirectoryAppService: new CustomerDirectoryAppService(new CustomerDirectoryRepository(context, ReopenPolicy.Default, time), queries));
     }
 
     public TicketQueryAppService CreateQueryService(

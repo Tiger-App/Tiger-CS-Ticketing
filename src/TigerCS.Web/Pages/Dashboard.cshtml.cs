@@ -88,6 +88,24 @@ public sealed record DashboardBarRow(string Label, int Count, double Percentage,
     public string BarWidthClass => "bar-fill--w" + BarWidthPercent.ToString(CultureInfo.InvariantCulture);
 }
 
+/// <summary>One side of the Customers by Location card: a count, its share of all unique customers and the Customers list it opens (null when the viewer may not open that list).</summary>
+public sealed record CustomerLocationSegment(string Key, string Label, int Count, double Percentage, string? Href)
+{
+    /// <summary>The class that draws the segment's share of the bar — one per whole percent, in the stylesheet (the CSP allows no inline style).</summary>
+    public string WidthClass => "bar-fill--w" + Math.Clamp((int)Math.Round(Percentage, MidpointRounding.AwayFromZero), 0, 100).ToString(CultureInfo.InvariantCulture);
+}
+
+/// <summary>The Customers by Location card. <see cref="Unknown"/> is null unless there is at least one unknown customer: it is shown only when greater than zero.</summary>
+public sealed record CustomerLocationCard(CustomerLocationSegment Within, CustomerLocationSegment Outside, CustomerLocationSegment? Unknown, int Total, string Period)
+{
+    public const string Title = "Customers by Location";
+
+    /// <summary>Spoken form of the distribution bar, for assistive technology.</summary>
+    public string BarLabel =>
+        $"{Within.Count} within UAE ({Within.Percentage.ToString("0.#", CultureInfo.InvariantCulture)}%), {Outside.Count} outside UAE ({Outside.Percentage.ToString("0.#", CultureInfo.InvariantCulture)}%)"
+        + (Unknown is { } unknown ? $", {unknown.Count} unknown ({unknown.Percentage.ToString("0.#", CultureInfo.InvariantCulture)}%)" : "");
+}
+
 /// <summary>One breakdown card. <see cref="TotalHref"/> links to the queue view of everything the card counted; <see cref="TopRows"/>/<see cref="MoreRows"/> keep long lists compact behind a "View all".</summary>
 public sealed record DashboardBarCard(string Title, string Subtitle, IReadOnlyList<DashboardBarRow> Rows, int Total, string TotalHref, string EmptyText)
 {
@@ -129,6 +147,9 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
     /// <summary>The Closed in Selected Period section (total, Ticket Reviews, Closed By), shown beneath <see cref="Cards"/>.</summary>
     public ClosureSummary? Closure { get; private set; }
     public IReadOnlyList<DashboardBarCard> BreakdownCards { get; private set; } = [];
+
+    /// <summary>The Customers by Location figures from their own Api read; null when that read failed or returned nothing — the card is then simply absent and the rest of the dashboard is unaffected.</summary>
+    public DashboardCustomerLocationDto? CustomerLocationData { get; private set; }
 
     /// <summary>True when the user narrowed anything beyond the defaults — the filter bar then offers "Clear".</summary>
     public bool HasFilters =>
@@ -174,6 +195,33 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
         Cards = BuildCards(Overview, Viewer);
         Closure = BuildClosureSummary(Overview);
         BreakdownCards = BuildBreakdownCards(Overview);
+
+        // The card has a read of its own: a failure there costs only the card, never the dashboard.
+        var location = await dashboardApiClient.GetCustomersByLocationAsync(
+            new DashboardOverviewRequestDto(DateFrom, DateTo, DepartmentId, OwnerEmployeeId, ChannelId, RequestTypeId, TicketStatus, PriorityId), cancellationToken);
+        CustomerLocationData = location.IsSuccess ? location.Value : null;
+    }
+
+    /// <summary>
+    /// The Customers by Location card from the Api's numbers — nothing is recomputed here. Both counts link to the Customers directory
+    /// (<see cref="DashboardLinks.CustomersByLocation"/>) unless the viewer cannot open it (<paramref name="canOpenCustomers"/> false), in
+    /// which case they are plain figures rather than links that would only lead to a refusal.
+    /// </summary>
+    public static CustomerLocationCard? BuildCustomerLocationCard(DashboardAppliedFiltersDto f, DashboardCustomerLocationDto? c, bool canOpenCustomers)
+    {
+        if (c is null)
+        {
+            return null;
+        }
+
+        string? Href(TigerCS.Domain.Modules.Ticketing.CustomerLocation location) => canOpenCustomers ? DashboardLinks.CustomersByLocation(f, location) : null;
+        return new CustomerLocationCard(
+            new CustomerLocationSegment("within", "Within UAE", c.WithinUae, c.WithinUaePercentage, Href(TigerCS.Domain.Modules.Ticketing.CustomerLocation.WithinUae)),
+            new CustomerLocationSegment("outside", "Outside UAE", c.OutsideUae, c.OutsideUaePercentage, Href(TigerCS.Domain.Modules.Ticketing.CustomerLocation.OutsideUae)),
+            // Unknown is data quality, not a headline: only present when there is something to say, and never a drill-down card of its own.
+            c.Unknown > 0 ? new CustomerLocationSegment("unknown", "Unknown", c.Unknown, c.UnknownPercentage, Href(TigerCS.Domain.Modules.Ticketing.CustomerLocation.Unknown)) : null,
+            c.Total,
+            $"{f.DateFrom:MMM d} – {f.DateTo:MMM d, yyyy}");
     }
 
     /// <summary>The six KPI cards, each a drill-down into the queue. The numbers are already scoped by the Api; card visibility is not an authorization boundary.</summary>

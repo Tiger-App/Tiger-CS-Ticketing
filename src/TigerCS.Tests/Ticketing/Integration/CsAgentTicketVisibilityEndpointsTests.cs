@@ -432,6 +432,29 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         Assert.True(supervisorOverview!.Kpis.OpenTickets >= 3);
     }
 
+    [Fact]
+    public async Task TheCustomersByLocationCard_IsScopedLikeTheDashboard_AnAgentCountsOnlyTheCustomersOfTheirOwnTickets()
+    {
+        var (genesys, _) = await ClientAsync();
+        var (manager, _) = await ClientAsync(Roles.CsManager);
+        var gA = NewGenesysId();
+        var (agent, agentId) = await ClientAsync(genesysUserId: gA);
+        var (supervisor, _) = await ClientAsync(Roles.CsSupervisor);
+        await GenesysTicketAsync(genesys, answeredBy: gA);   // answered, not assigned: not the agent's
+        var (assigned, _) = await GenesysTicketAsync(genesys);
+        await AssignAsync(manager, assigned, agentId);
+        await GenesysTicketAsync(genesys);   // unrelated, same department
+
+        var agentCard = await (await agent.GetAsync("/api/dashboard/customers-by-location")).Content.ReadFromJsonAsync<DashboardCustomerLocationDto>();
+        var supervisorCard = await (await supervisor.GetAsync("/api/dashboard/customers-by-location")).Content.ReadFromJsonAsync<DashboardCustomerLocationDto>();
+
+        // Same visibility as the dashboard beside it: the agent's customers are a subset of the supervisor's, and never someone else's.
+        Assert.True(agentCard!.Total <= supervisorCard!.Total);
+        Assert.True(agentCard.Total <= 1);
+        Assert.Equal(agentCard.Total, agentCard.WithinUae + agentCard.OutsideUae + agentCard.Unknown);
+        Assert.Equal(supervisorCard.Total, supervisorCard.WithinUae + supervisorCard.OutsideUae + supervisorCard.Unknown);
+    }
+
     // =====================================================================
     // Access that must not change
     // =====================================================================

@@ -1,0 +1,73 @@
+@model TigerCS.Web.Pages.CustomerLocationCard
+@using System.Globalization
+@{
+    // Customers by Location: a compact card in the dashboard's own panel/summary-card language. Two counts (each a link into the Customers
+    // list it counted), the total, one horizontal distribution bar and — only when greater than zero — the Unknown count. Green is Within UAE,
+    // blue is Outside UAE; Unknown stays neutral grey. Bar segment widths are stylesheet classes, never inline styles (the CSP forbids them).
+    string Pct(double value) => value.ToString("0.#", CultureInfo.InvariantCulture) + "%";
+    var segments = new[] { (Model.Within, "uae"), (Model.Outside, "intl") };
+}
+<div class="panel dash-card dash-card--summary dash-card--location" data-dash-card="customers-by-location">
+    <div class="panel__header">
+        <div class="panel__lead">
+            <span class="panel__icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none"><path d="M12 21s7-6.2 7-11.5a7 7 0 1 0-14 0C5 14.8 12 21 12 21Z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="9.5" r="2.4" stroke="currentColor" stroke-width="1.8"/></svg></span>
+            <span class="panel__title">@CustomerLocationCard.Title</span>
+        </div>
+        <span class="loc-total" data-loc="total" title="Distinct customers with tickets in the selected period">@Model.Total.ToString("N0", CultureInfo.InvariantCulture) <span class="loc-total__label">unique customers</span></span>
+    </div>
+
+    @if (Model.Total == 0)
+    {
+        <div class="empty-state empty-state--compact">
+            <p>No customers with tickets in this period.</p>
+        </div>
+    }
+    else
+    {
+        <div class="loc-stats">
+            @foreach (var (segment, tone) in segments)
+            {
+                if (segment.Href is not null)
+                {
+                    <a class="loc-stat loc-stat--@tone" href="@segment.Href" data-loc="@segment.Key" title="Open these customers">
+                        <span class="loc-stat__dot" aria-hidden="true"></span>
+                        <span class="loc-stat__label">@segment.Label</span>
+                        <span class="loc-stat__figures"><strong class="loc-stat__count">@segment.Count.ToString("N0", CultureInfo.InvariantCulture)</strong> <span class="loc-stat__pct">@Pct(segment.Percentage)</span></span>
+                    </a>
+                }
+                else
+                {
+                    <div class="loc-stat loc-stat--@tone loc-stat--static" data-loc="@segment.Key">
+                        <span class="loc-stat__dot" aria-hidden="true"></span>
+                        <span class="loc-stat__label">@segment.Label</span>
+                        <span class="loc-stat__figures"><strong class="loc-stat__count">@segment.Count.ToString("N0", CultureInfo.InvariantCulture)</strong> <span class="loc-stat__pct">@Pct(segment.Percentage)</span></span>
+                    </div>
+                }
+            }
+        </div>
+
+        <div class="loc-bar" role="img" aria-label="@Model.BarLabel">
+            <span class="loc-seg loc-seg--uae @Model.Within.WidthClass"></span>
+            <span class="loc-seg loc-seg--intl @Model.Outside.WidthClass"></span>
+            @if (Model.Unknown is { } unknownBar)
+            {
+                <span class="loc-seg loc-seg--unknown @unknownBar.WidthClass"></span>
+            }
+        </div>
+
+        @if (Model.Unknown is { } unknown)
+        {
+            <p class="loc-unknown" data-loc="unknown">
+                @if (unknown.Href is not null)
+                {
+                    <a href="@unknown.Href" title="Customers whose phone number is missing, invalid or ambiguous"><strong>@unknown.Count.ToString("N0", CultureInfo.InvariantCulture)</strong> unknown (@Pct(unknown.Percentage))</a>
+                }
+                else
+                {
+                    <span><strong>@unknown.Count.ToString("N0", CultureInfo.InvariantCulture)</strong> unknown (@Pct(unknown.Percentage))</span>
+                }
+                <span class="loc-unknown__hint">no valid phone country code</span>
+            </p>
+        }
+    }
+</div>

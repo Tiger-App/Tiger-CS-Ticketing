@@ -122,6 +122,27 @@ public sealed record DashboardOverviewDto(
     IReadOnlyList<DashboardRecentTicketDto> RecentTickets,
     DashboardFilterOptionsDto FilterOptions);
 
+/// <summary>
+/// The Customers by Location card (<c>GET /api/dashboard/customers-by-location</c>, a read of its own so the heavier customer aggregate never slows or fails the overview): DISTINCT customers (the existing customer identity — CRM Buyer id, else external id, else canonical
+/// phone — never tickets) in the dashboard's date range, filters and visibility, placed by their phone number's country code alone.
+/// The three buckets are mutually exclusive, so <see cref="Total"/> = Within + Outside + Unknown and every percentage is of <see cref="Total"/>.
+/// </summary>
+/// <param name="WithinUae">Customers whose phone is a valid UAE number (+971).</param>
+/// <param name="OutsideUae">Customers whose phone is a valid international number with another country code.</param>
+/// <param name="Unknown">Customers with a missing, invalid, ambiguous or conflicting phone — shown only when greater than zero.</param>
+/// <param name="WithinUaePercentage">Within UAE as a percentage of the total, one decimal.</param>
+/// <param name="OutsideUaePercentage">Outside UAE as a percentage of the total, one decimal.</param>
+/// <param name="UnknownPercentage">Unknown as a percentage of the total, one decimal.</param>
+/// <param name="Total">Total unique customers.</param>
+public sealed record DashboardCustomerLocationDto(
+    int WithinUae,
+    double WithinUaePercentage,
+    int OutsideUae,
+    double OutsideUaePercentage,
+    int Unknown,
+    double UnknownPercentage,
+    int Total);
+
 /// <summary>The filters as applied, echoed back so the page can render the effective state (e.g. the defaulted date range).</summary>
 public sealed record DashboardAppliedFiltersDto(
     DateOnly DateFrom,
