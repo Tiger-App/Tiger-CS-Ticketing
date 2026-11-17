@@ -190,6 +190,61 @@
             }
         </div>
 
+        @* ---- Employee response to Genesys call offers: separate from, and never changing, the ticket SLA above. ---- *@
+        @if (d.EmployeeResponseSummary is { } rs && d.EmployeeResponses is { } responses)
+        {
+            <div class="panel sla-responses" id="employee-responses">
+                <div class="panel__header">
+                    <h2 class="panel__title">Employee response to call offers</h2>
+                    <p class="page-subtitle">Measured from the offer to this employee to this employee's answer. The ticket SLA above is a separate result and is not affected by anything in this table.
+                        There is no response-time threshold: the measured time and the confirmed outcome are shown as they are.</p>
+                </div>
+                <p class="sla-secondary">Offers: <strong>@rs.Offers</strong>
+                    · Answered: <strong>@rs.Answered</strong>@(rs.Answered > 0 ? $" (average {rs.AverageResponseText})" : "")
+                    · Not Responding: <strong>@rs.NotResponding</strong>
+                    · Declined / Redirected / Caller Abandoned (shown separately, not scored): <strong>@rs.Declined</strong> / <strong>@rs.Redirected</strong> / <strong>@rs.CallerAbandoned</strong>
+                    · Outside Shift (excluded): <strong>@rs.OutsideShift</strong>
+                    · Availability Unknown (excluded): <strong>@rs.AvailabilityUnknown</strong></p>
+                @if (responses.Count == 0)
+                {
+                    <div class="empty-state">
+                        <p class="empty-state__title">No call offers recorded.</p>
+                        <p>No Genesys offer to this employee, and no answered call, is on record for this period.</p>
+                    </div>
+                }
+                else
+                {
+                    <div class="table-scroll">
+                        <table class="data-table report-table sla-table sla-table--compact">
+                            <thead>
+                                <tr>
+                                    <th scope="col">Ticket</th>
+                                    <th scope="col">Offered (UTC)</th>
+                                    <th scope="col">Answered (UTC)</th>
+                                    <th scope="col">Response time</th>
+                                    <th scope="col">Outcome</th>
+                                    <th scope="col">Why</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var r in responses)
+                                {
+                                    <tr class="sla-row">
+                                        <td><a class="ticket-id-link" href="/Tickets/@r.TicketId">@r.TicketNumber</a></td>
+                                        <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.OfferedAtUtc)</td>
+                                        <td class="text-mono">@TeamPerformanceSlaModel.Stamp(r.AnsweredAtUtc)</td>
+                                        <td>@r.ResponseText</td>
+                                        <td><span class="badge">@r.Outcome</span></td>
+                                        <td class="sla-why">@r.Explanation</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        }
+
         @* ---- How SLA is calculated: the rules in force, read from the system. ---- *@
         <details class="filter-disclosure report-help sla-rules" id="sla-how">
             <summary>
