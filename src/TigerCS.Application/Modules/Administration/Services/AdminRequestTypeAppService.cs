@@ -342,9 +342,13 @@ public sealed class AdminRequestTypeAppService(
                 {
                     errors.Add("A deciding department is required.");
                 }
-                else if (await departmentRepository.GetByIdAsync(targetDepartmentId, cancellationToken) is null)
+                else if (await departmentRepository.GetByIdAsync(targetDepartmentId, cancellationToken) is not { } decidingDepartment)
                 {
                     errors.Add("The deciding department does not exist.");
+                }
+                else if (!decidingDepartment.IsActive && request.IsActive)
+                {
+                    errors.Add($"Department '{decidingDepartment.Name}' is inactive and cannot be asked to decide approvals.");
                 }
 
                 if (request.TargetRoleName is not null && !Roles.All.Contains(request.TargetRoleName))

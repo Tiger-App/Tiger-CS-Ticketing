@@ -1,3 +1,4 @@
+using TigerCS.Application.Modules.Administration.Abstractions;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.Administration.Services;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
@@ -17,7 +18,8 @@ public class AdminDepartmentAppServiceTests
         FakeDepartmentRepository Departments,
         FakeEmployeeRepository Employees,
         FakeUserAccountManager Accounts,
-        DepartmentDirectoryAppService Directory);
+        DepartmentDirectoryAppService Directory,
+        FakeDeactivationDependencyReader Dependencies);
 
     private static Fixture Create()
     {
@@ -27,9 +29,10 @@ public class AdminDepartmentAppServiceTests
         var assignments = new FakeUserDepartmentAssignmentRepository();
         var unitOfWork = new FakeIdentityUnitOfWork();
         var assignmentService = new DepartmentAssignmentService(employees, departments, assignments, unitOfWork, TimeProvider.System);
+        var dependencies = new FakeDeactivationDependencyReader();
         var service = new AdminDepartmentAppService(
-            departments, assignments, employees, accounts, new FakeRequestTypeRepository(), assignmentService, unitOfWork, new FakeAuditEntryWriter());
-        return new Fixture(service, departments, employees, accounts, new DepartmentDirectoryAppService(departments));
+            departments, assignments, employees, accounts, new FakeRequestTypeRepository(), assignmentService, unitOfWork, new FakeAuditEntryWriter(), dependencies);
+        return new Fixture(service, departments, employees, accounts, new DepartmentDirectoryAppService(departments), dependencies);
     }
 
     [Fact]
@@ -100,5 +103,60 @@ public class AdminDepartmentAppServiceTests
         var result = await f.Service.AddMemberAsync(Admin, department.DepartmentId, new AddDepartmentMemberRequestDto(employeeId, false));
 
         Assert.Equal(AdminOutcome.Conflict, result.Outcome);
+    }
+
+    [Fact]
+    public async Task Deactivation_is_refused_while_live_routing_or_approval_dependencies_remain_and_nothing_changes()
+    {
+        var f = Create();
+        var department = (await f.Service.CreateAsync(Admin, new SaveDepartmentRequestDto("Accounting", "ACC"))).Value!;
+        f.Dependencies.Blockers[department.DepartmentId] = ["5 active approval requirement(s) target this department."];
+
+        var refused = await f.Service.SetActivationAsync(Admin, department.DepartmentId, new SetActiveRequestDto(false, "retire"));
+
+        Assert.Equal(AdminOutcome.Conflict, refused.Outcome);
+        Assert.Contains(refused.Errors!, e => e.Contains("approval requirement", StringComparison.Ordinal));
+        Assert.True((await f.Departments.GetByIdAsync(department.DepartmentId))!.IsActive);
+
+        f.Dependencies.Blockers.Clear();
+        var allowed = await f.Service.SetActivationAsync(Admin, department.DepartmentId, new SetActiveRequestDto(false, "retire"));
+        Assert.Equal(AdminOutcome.Success, allowed.Outcome);
+        Assert.False(allowed.Value!.IsActive);
+    }
+
+    [Fact]
+    public async Task Reactivation_is_never_blocked_by_the_deactivation_guard()
+    {
+        var f = Create();
+        var department = (await f.Service.CreateAsync(Admin, new SaveDepartmentRequestDto("Accounting", "ACC"))).Value!;
+        await f.Service.SetActivationAsync(Admin, department.DepartmentId, new SetActiveRequestDto(false, "retire"));
+        f.Dependencies.Blockers[department.DepartmentId] = ["anything"];
+
+        var result = await f.Service.SetActivationAsync(Admin, department.DepartmentId, new SetActiveRequestDto(true, "restore"));
+
+        Assert.Equal(AdminOutcome.Success, result.Outcome);
+    }
+
+    [Fact]
+    public async Task An_inactive_department_cannot_receive_new_members()
+    {
+        var f = Create();
+        var department = (await f.Service.CreateAsync(Admin, new SaveDepartmentRequestDto("Accounting", "ACC"))).Value!;
+        var employeeId = Guid.NewGuid();
+        f.Employees.Add(new Employee(employeeId, "Reem T", false, DateTime.UtcNow), Roles.DepartmentEmployee);
+        f.Accounts.Add(employeeId, "reem.t", Roles.DepartmentEmployee);
+        await f.Service.SetActivationAsync(Admin, department.DepartmentId, new SetActiveRequestDto(false, "retire"));
+
+        var result = await f.Service.AddMemberAsync(Admin, department.DepartmentId, new AddDepartmentMemberRequestDto(employeeId, false));
+
+        Assert.Equal(AdminOutcome.Conflict, result.Outcome);
+    }
+
+    public sealed class FakeDeactivationDependencyReader : IDepartmentDeactivationDependencyReader
+    {
+        public Dictionary<int, IReadOnlyList<string>> Blockers { get; } = [];
+
+        public Task<IReadOnlyList<string>> GetBlockersAsync(int departmentId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Blockers.TryGetValue(departmentId, out var list) ? list : (IReadOnlyList<string>)[]);
     }
 }
