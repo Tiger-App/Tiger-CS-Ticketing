@@ -73,7 +73,7 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
     // ------------------------------------------------------------------ validation, per event type
 
     [Theory]
-    [InlineData("TicketCreated", "QueueNumber,CompanyId,TicketTypeId")]
+    [InlineData("TicketCreated", "QueueNumber,CompanyId,TicketTypeId,CustomerPhone")]
     [InlineData("TicketAssigned", "AssignedUserId")]
     [InlineData("TicketReassigned", "AssignedUserId")]
     [InlineData("TicketCommentAdded", "Comment")]
@@ -143,6 +143,7 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         Assert.Equal(at, ticket.CreatedAtUtc, TimeSpan.FromMilliseconds(5));
         var sla = await f.Factory.GetCurrentSlaInstanceAsync(ticket.TicketId);
         Assert.NotNull(sla);
+        Assert.Equal(at, sla!.PeriodStartAtUtc, TimeSpan.FromMilliseconds(5));      // the SLA clock starts at the ORIGINAL OccurredAtUtc, not at delivery
         Assert.Null(ticket.FirstHumanResponseAtUtc);
 
         // Recorded on the existing Walk in channel, as the originating interaction.
@@ -334,18 +335,26 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         var ticket = (await f.FindTicketAsync(id))!;
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Equal(f.DepartmentId, ticket.CurrentDepartmentId);                 // still in the department's queue
-        Assert.Equal(TicketStatus.InProgress, ticket.TicketStatus);               // no new status: InProgress -> Open is not a TigerCS transition
+        Assert.Equal(TicketStatus.Open, ticket.TicketStatus);                     // back to Open - for a queue-managed ticket only
         Assert.Equal(QueueingTicketState.Waiting, (await f.FindLinkAsync(ticket.TicketId))!.State);
+        var returnedHistory = await f.ReadAsync(db => db.TicketStatusHistoryEntries.AsNoTracking()
+            .Where(h => h.TicketId == ticket.TicketId && h.Dimension == TicketStatusDimension.TicketStatus && h.NewValue == (byte)TicketStatus.Open && h.OldValue == (byte)TicketStatus.InProgress)
+            .ToListAsync());
+        var back = Assert.Single(returnedHistory);
+        Assert.True(back.ActorIsSystem);
+        Assert.Contains("Customer stepped away", back.Note);
         var assignment = Assert.Single(await f.ReadAsync(db => db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticket.TicketId).ToListAsync()));
         Assert.False(assignment.IsCurrent);
         var audit = await f.Factory.GetAuditEntriesAsync(ticket.TicketId.ToString());
         Assert.Contains(audit, a => a.Action == "ReturnToQueue");
         Assert.Contains(audit, a => a.Action == "QueueingTicketReturned" && a.AfterValue!.Contains("PerformedByUserId=queue-user-a"));
 
-        // And it can be called again.
+        // And it can be called again: the existing Open -> InProgress transition applies exactly as for a first assignment.
         var (_, again) = await f.PostAsync(f.Assigned(id, 4, f.QueueUserB));
         Assert.Equal(QueueingResultStatus.Processed, again!.Status);
-        Assert.Equal(f.EmployeeB, (await f.FindTicketAsync(id))!.CurrentOwnerEmployeeId);
+        var reassigned = (await f.FindTicketAsync(id))!;
+        Assert.Equal(f.EmployeeB, reassigned.CurrentOwnerEmployeeId);
+        Assert.Equal(TicketStatus.InProgress, reassigned.TicketStatus);
     }
 
     [Fact]
@@ -818,5 +827,173 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         var (_, again) = await f.PostAsync(assign);            // the same event, redelivered
         Assert.Equal(QueueingResultStatus.Pending, again!.Status);
         Assert.Equal(1, (await f.FindEventAsync(assign.EventId!))!.AttemptCount);
+    }
+
+    [Fact]
+    public async Task CustomerPhone_IsMandatoryOnCreation_AndMustLookLikeANumber()
+    {
+        var (http, body) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null });
+        Assert.Equal(HttpStatusCode.BadRequest, http.StatusCode);
+        Assert.Contains("CustomerPhone", body!.Errors!.Keys);
+
+        var (http2, body2) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = "not a number" });
+        Assert.Equal(HttpStatusCode.BadRequest, http2.StatusCode);
+        Assert.Contains("CustomerPhone", body2!.Errors!.Keys);
+    }
+
+    [Fact]
+    public async Task AnAssignedEvent_DoesNotNeedAPhone()
+    {
+        var id = NewTicketId();
+        await f.PostAsync(Created(id));
+        var (http, _) = await f.PostAsync(f.Assigned(id, 2));
+        Assert.Equal(HttpStatusCode.OK, http.StatusCode);
+    }
+
+    // ------------------------------------------------------------------ payload retention
+
+    [Fact]
+    public async Task Retention_ErasesOnlyOldSuccessfullyProcessedPayloads_AndKeepsEveryIdentifierAndTheTicketHistory()
+    {
+        var id = NewTicketId();
+        var old = Created(id);
+        var recent = f.Assigned(id, 2);
+        await f.PostAsync(old);
+        await f.PostAsync(recent);
+        var unresolved = f.Assigned(NewTicketId(), 2, "queue-user-never-mapped-retention");        // stays Unresolved (no ticket yet)
+        await f.PostAsync(unresolved);
+        var ticket = (await f.FindTicketAsync(id))!;
+
+        // Age the first event past the retention period, as the clock passing 91 days would (also age the unresolved one: it must STILL survive).
+        await f.ReadAsync(async db =>
+        {
+            foreach (var row in await db.QueueingEvents.Where(e => e.EventId == old.EventId || e.EventId == unresolved.EventId).ToListAsync())
+            {
+                db.Entry(row).Property(nameof(QueueingEvent.ProcessedAtUtc)).CurrentValue = row.Status == QueueingEventStatus.Processed ? DateTime.UtcNow.AddDays(-91) : row.ProcessedAtUtc;
+                db.Entry(row).Property(nameof(QueueingEvent.ReceivedAtUtc)).CurrentValue = DateTime.UtcNow.AddDays(-91);
+            }
+
+            await db.SaveChangesAsync();
+            return 0;
+        });
+
+        using (var scope = f.Factory.Services.CreateScope())
+        {
+            var purged = await scope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.QueueingIntegration.Services.QueueingEventProcessor>().PurgeExpiredPayloadsAsync(100);
+            Assert.Equal(1, purged);
+        }
+
+        var erased = (await f.FindEventAsync(old.EventId!))!;
+        Assert.Null(erased.Payload);                                  // customer name / phone / email are gone
+        Assert.NotNull(erased.PayloadPurgedAtUtc);
+        Assert.Equal(QueueingEventStatus.Processed, erased.Status);   // the row, its identifiers and its outcome stay
+        Assert.Equal(old.ExternalTicketId, erased.ExternalTicketId);
+        Assert.Equal(1, erased.EventSequence);
+        Assert.Equal(ticket.TicketId, erased.TicketId);
+        Assert.NotEmpty(erased.PayloadHash);
+
+        Assert.NotNull((await f.FindEventAsync(recent.EventId!))!.Payload);        // too recent
+        var waiting = (await f.FindEventAsync(unresolved.EventId!))!;
+        Assert.Equal(QueueingEventStatus.Unresolved, waiting.Status);
+        Assert.NotNull(waiting.Payload);                                           // an unresolved event is never purged, however old
+
+        // The ticket history is untouched.
+        Assert.Equal(f.EmployeeA, (await f.FindTicketAsync(id))!.CurrentOwnerEmployeeId);
+        Assert.NotEmpty(await f.ReadAsync(db => db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticket.TicketId).ToListAsync()));
+        Assert.NotNull(await f.FindLinkAsync(ticket.TicketId));
+    }
+
+    [Fact]
+    public async Task AfterAPayloadIsErased_IdempotencyStillHolds_ByHash()
+    {
+        var id = NewTicketId();
+        var request = Created(id);
+        await f.PostAsync(request);
+        await f.ReadAsync(async db =>
+        {
+            var row = await db.QueueingEvents.FirstAsync(e => e.EventId == request.EventId);
+            db.Entry(row).Property(nameof(QueueingEvent.ProcessedAtUtc)).CurrentValue = DateTime.UtcNow.AddDays(-120);
+            await db.SaveChangesAsync();
+            return 0;
+        });
+        using (var scope = f.Factory.Services.CreateScope())
+        {
+            await scope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.QueueingIntegration.Services.QueueingEventProcessor>().PurgeExpiredPayloadsAsync(100);
+        }
+
+        Assert.Null((await f.FindEventAsync(request.EventId!))!.Payload);
+
+        var (same, sameBody) = await f.PostAsync(request);                                     // a redelivery after the purge
+        Assert.Equal(HttpStatusCode.OK, same.StatusCode);
+        Assert.Equal(QueueingResultStatus.Duplicate, sameBody!.Status);
+
+        var (other, otherBody) = await f.PostAsync(request with { QueueNumber = "A-999" });    // the same EventId, different content
+        Assert.Equal(HttpStatusCode.Conflict, other.StatusCode);
+        Assert.Equal("EVENT_ID_REUSED", otherBody!.Outcome);
+        Assert.Equal(1, await f.CountTicketsAsync(id));
+    }
+
+    [Fact]
+    public async Task Retention_CanBeSwitchedOff()
+    {
+        var previous = f.Options.PayloadRetentionDays;
+        f.Options.PayloadRetentionDays = 0;
+        try
+        {
+            using var scope = f.Factory.Services.CreateScope();
+            Assert.Equal(0, await scope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.QueueingIntegration.Services.QueueingEventProcessor>().PurgeExpiredPayloadsAsync(100));
+        }
+        finally
+        {
+            f.Options.PayloadRetentionDays = previous;
+        }
+    }
+
+    [Fact]
+    public void TheDomain_AllowsInProgressToOpen_OnlyForAQueueManagedTicket()
+    {
+        var ordinary = Ticket.CreateUnverified("TG-X-1", 1, 1, 3, "x", DateTime.UtcNow);
+        Assert.Throws<InvalidOperationException>(() => ordinary.ReturnToQueue());
+        Assert.False(TicketStatusTransitions.IsChangeStatusAllowed(TicketStatus.InProgress, TicketStatus.Open));   // the generic table is untouched
+
+        var queued = Ticket.CreateUnverified("TG-X-2", 1, 1, 3, "x", DateTime.UtcNow);
+        queued.RecordExternalOrigin(TicketIntegrationSources.QueueingSystem, "qt-1", "A-1");
+        queued.AssignTo(Guid.NewGuid());
+        queued.ChangeStatus(TicketStatus.InProgress);
+        Assert.Equal(TicketStatus.InProgress, queued.ReturnToQueue());
+        Assert.Equal(TicketStatus.Open, queued.TicketStatus);
+        Assert.Null(queued.CurrentOwnerEmployeeId);
+        Assert.Equal(TicketStatus.Open, queued.ReturnToQueue());                                                    // already waiting: nothing changes
+    }
+
+    [Fact]
+    public async Task TheRetrySweep_SettlesLaterEvents_EvenWhenAnEarlierEventInTheSameBatchFailsAgain()
+    {
+        // Ordered by ExternalTicketId: "qt-aaa..." is processed first and fails again (its employee is still unmapped); "qt-zzz..." must still be applied AND marked
+        // processed - a failure of an earlier event must never detach the rest of the batch from the unit of work.
+        var first = "qt-aaa-" + Guid.NewGuid().ToString("N");
+        var second = "qt-zzz-" + Guid.NewGuid().ToString("N");
+        await f.PostAsync(Created(first));
+        var stuck = f.Assigned(first, 2, "queue-user-still-unmapped");
+        await f.PostAsync(stuck);
+        var later = Created(second, companyId: "company-mapped-later");
+        var (_, pending) = await f.PostAsync(later);
+        Assert.Equal(QueueingOutcomeCodes.CompanyNotMapped, pending!.Outcome);
+
+        await f.ReadAsync(async db =>
+        {
+            db.QueueingCompanyMappings.Add(new QueueingCompanyMapping("company-mapped-later", f.DepartmentId, DateTime.UtcNow));
+            db.QueueingTicketTypeMappings.Add(new QueueingTicketTypeMapping("company-mapped-later", TicketTypeId, f.RequestTypeId, DateTime.UtcNow));
+            await db.SaveChangesAsync();
+            return 0;
+        });
+        await f.MakeRetriesDueAsync();
+        await f.RetryAsync();
+
+        Assert.Equal(QueueingEventStatus.Unresolved, (await f.FindEventAsync(stuck.EventId!))!.Status);       // still waiting for its employee
+        Assert.Equal(1, await f.CountTicketsAsync(second));
+        var settled = (await f.FindEventAsync(later.EventId!))!;
+        Assert.Equal(QueueingEventStatus.Processed, settled.Status);                                           // the ticket committed AND the event says so
+        Assert.NotNull(await f.FindLinkAsync((await f.FindTicketAsync(second))!.TicketId));
     }
 }

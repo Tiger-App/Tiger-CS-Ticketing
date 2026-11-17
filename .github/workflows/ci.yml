@@ -72,3 +72,21 @@ jobs:
         run: npm install --no-audit --no-fund
       - name: Collections Campaigns browser-script tests
         run: npm test
+
+  queueing-sender:
+    # The Queueing System's sending side: a separate solution that references nothing from TigerCS. Its tests also check the sample JSON in
+    # docs/QueueingIntegration/samples, which the TigerCS suite posts to the real API - so the two sides cannot drift apart.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: queueing-system
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - name: Build
+        run: dotnet build QueueingSystem.Sender.slnx --configuration Release
+      - name: Test
+        run: dotnet test QueueingSystem.Sender.slnx --no-build --configuration Release

@@ -33,6 +33,13 @@ public sealed class QueueingStore(TigerCsDbContext dbContext) : IQueueingStore
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<QueueingEvent>> ListPurgeablePayloadsAsync(DateTime processedBeforeUtc, int take, CancellationToken cancellationToken = default) =>
+        await dbContext.QueueingEvents
+            .Where(e => e.Status == QueueingEventStatus.Processed && e.Payload != null && e.ProcessedAtUtc != null && e.ProcessedAtUtc < processedBeforeUtc)
+            .OrderBy(e => e.ProcessedAtUtc)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
     public async Task<IReadOnlyList<QueueingEvent>> ListWaitingForTicketAsync(string externalTicketId, CancellationToken cancellationToken = default)
     {
         var id = externalTicketId.Trim();

@@ -612,7 +612,7 @@ public static class TicketActivityTimelineBuilder
                 case "QueueingTicketReturned":
                     entries.Add(Make(
                         audit.OccurredAtUtc, "QueueTicketReturned", "Returned to the waiting queue", "Queueing", TimelineActorTypes.System, "Queueing System",
-                        "The Queueing System returned the ticket to the waiting queue; it has no owner until the queue calls it again.",
+                        "The Queueing System returned the ticket to the waiting queue: the owner was released and the ticket is Open again until the queue calls it.",
                         SourceAudit, rank: 3, reason: Pick(after, "Reason", string.Empty) is { Length: > 0 } returnReason ? returnReason : null,
                         previous: $"Counter: {Pick(after, "CounterId")}"));
                     break;

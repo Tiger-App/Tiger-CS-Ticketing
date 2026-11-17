@@ -68,6 +68,7 @@ public static class BackgroundJobServiceCollectionExtensions
         // Holds only the scope factory; it opens one scope per candidate itself.
         services.AddScoped<ChatbotInactivityCloseJob>();
         services.AddScoped<QueueingEventRetryJob>();
+        services.AddScoped<QueueingPayloadRetentionJob>();
         services.AddScoped<AiOnlyAutoCloseJob>();
 
         if (!options.Enabled)
@@ -190,10 +191,13 @@ public static class BackgroundJobServiceCollectionExtensions
         if (!queueingEnabled)
         {
             manager.RemoveIfExists(QueueingEventRetryJob.RecurringJobId);
+            manager.RemoveIfExists(QueueingPayloadRetentionJob.RecurringJobId);
             return;
         }
 
         manager.AddOrUpdate<QueueingEventRetryJob>(QueueingEventRetryJob.RecurringJobId, job => job.RunAsync(CancellationToken.None), "* * * * *");
+        // Daily, in the quiet hours (UTC): erases the payload of successfully processed events past QueueingIntegration:PayloadRetentionDays.
+        manager.AddOrUpdate<QueueingPayloadRetentionJob>(QueueingPayloadRetentionJob.RecurringJobId, job => job.RunAsync(CancellationToken.None), "17 2 * * *");
     }
 
     /// <summary>

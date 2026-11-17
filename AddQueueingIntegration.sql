@@ -1,7 +1,7 @@
 ﻿BEGIN TRANSACTION;
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     ALTER TABLE [Tickets] ADD [ExternalReference] nvarchar(100) NULL;
@@ -9,7 +9,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     ALTER TABLE [Tickets] ADD [ExternalTicketId] nvarchar(100) NULL;
@@ -17,7 +17,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     ALTER TABLE [Tickets] ADD [IntegrationSource] nvarchar(50) NULL;
@@ -25,7 +25,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE TABLE [QueueingCompanyMappings] (
@@ -41,7 +41,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE TABLE [QueueingEvents] (
@@ -52,7 +52,9 @@ BEGIN
         [ExternalTicketId] nvarchar(100) NOT NULL,
         [EventSequence] bigint NOT NULL,
         [OccurredAtUtc] datetime2 NOT NULL,
-        [Payload] nvarchar(max) NOT NULL,
+        [Payload] nvarchar(max) NULL,
+        [PayloadHash] char(64) NOT NULL,
+        [PayloadPurgedAtUtc] datetime2 NULL,
         [Status] tinyint NOT NULL,
         [OutcomeCode] nvarchar(64) NULL,
         [OutcomeDetail] nvarchar(1000) NULL,
@@ -67,7 +69,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE TABLE [QueueingTicketLinks] (
@@ -91,7 +93,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE TABLE [QueueingTicketTypeMappings] (
@@ -107,7 +109,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE TABLE [QueueingUserMappings] (
@@ -122,7 +124,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     EXEC(N'CREATE UNIQUE INDEX [UX_Tickets_IntegrationSource_ExternalTicketId] ON [Tickets] ([IntegrationSource], [ExternalTicketId]) WHERE [IntegrationSource] IS NOT NULL AND [ExternalTicketId] IS NOT NULL');
@@ -130,7 +132,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE INDEX [IX_QueueingCompanyMappings_DepartmentId] ON [QueueingCompanyMappings] ([DepartmentId]);
@@ -138,7 +140,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE UNIQUE INDEX [UX_QueueingCompanyMappings_CompanyId] ON [QueueingCompanyMappings] ([CompanyId]);
@@ -146,7 +148,15 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
+)
+BEGIN
+    EXEC(N'CREATE INDEX [IX_QueueingEvents_PurgeablePayloads] ON [QueueingEvents] ([ProcessedAtUtc]) WHERE [Payload] IS NOT NULL AND [Status] = 2');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE INDEX [IX_QueueingEvents_Status_NextRetry] ON [QueueingEvents] ([Status], [NextRetryAtUtc]);
@@ -154,7 +164,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE INDEX [IX_QueueingEvents_Ticket_Sequence] ON [QueueingEvents] ([Source], [ExternalTicketId], [EventSequence]);
@@ -162,7 +172,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE UNIQUE INDEX [UX_QueueingEvents_Source_EventId] ON [QueueingEvents] ([Source], [EventId]);
@@ -170,7 +180,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE UNIQUE INDEX [UX_QueueingTicketLinks_ExternalTicketId] ON [QueueingTicketLinks] ([ExternalTicketId]);
@@ -178,7 +188,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE UNIQUE INDEX [UX_QueueingTicketLinks_TicketId] ON [QueueingTicketLinks] ([TicketId]);
@@ -186,7 +196,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE UNIQUE INDEX [UX_QueueingTicketTypeMappings_Company_Type] ON [QueueingTicketTypeMappings] ([CompanyId], [TicketTypeId]);
@@ -194,7 +204,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE UNIQUE INDEX [UX_QueueingUserMappings_EmployeeId] ON [QueueingUserMappings] ([EmployeeId]);
@@ -202,7 +212,7 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     CREATE UNIQUE INDEX [UX_QueueingUserMappings_ExternalUserId] ON [QueueingUserMappings] ([ExternalUserId]);
@@ -210,11 +220,11 @@ END;
 
 IF NOT EXISTS (
     SELECT * FROM [__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20261117082231_AddQueueingIntegration'
+    WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
     INSERT INTO [__EFMigrationsHistory] ([MigrationId], [ProductVersion])
-    VALUES (N'20261117082231_AddQueueingIntegration', N'10.0.11');
+    VALUES (N'20261117101035_AddQueueingIntegration', N'10.0.11');
 END;
 
 COMMIT;

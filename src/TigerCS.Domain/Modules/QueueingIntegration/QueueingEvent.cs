@@ -42,7 +42,19 @@ public class QueueingEvent
     public string ExternalTicketId { get; private set; } = string.Empty;
     public long EventSequence { get; private set; }
     public DateTime OccurredAtUtc { get; private set; }
-    public string Payload { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// The event as received (canonical JSON), kept so an unresolved event can be retried exactly as sent. Null once it has been purged: a successfully
+    /// processed event's payload is erased after the retention period (<see cref="PayloadPurgedAtUtc"/>); the row, its identifiers and
+    /// <see cref="PayloadHash"/> stay, so idempotency and the audit trail never depend on the payload.
+    /// </summary>
+    public string? Payload { get; private set; }
+
+    /// <summary>SHA-256 (lower-case hex) of the canonical payload. Written once at receipt and never erased: a redelivery of the same EventId is compared by hash, so a purged payload still detects an EventId reused with different content.</summary>
+    public string PayloadHash { get; private set; } = string.Empty;
+
+    public DateTime? PayloadPurgedAtUtc { get; private set; }
+
     public QueueingEventStatus Status { get; private set; }
 
     /// <summary>A stable machine-readable code for why the event is not <see cref="QueueingEventStatus.Processed"/> (see <c>QueueingOutcomeCodes</c>), or the success outcome.</summary>
@@ -68,8 +80,37 @@ public class QueueingEvent
         EventSequence = eventSequence;
         OccurredAtUtc = occurredAtUtc;
         Payload = payload;
+        PayloadHash = HashOf(payload);
         ReceivedAtUtc = receivedAtUtc;
         Status = QueueingEventStatus.Received;
+    }
+
+    public static string HashOf(string payload) =>
+        Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
+
+    /// <summary>True when <paramref name="canonicalPayload"/> is the content this EventId was first received with (compared by hash, so it works after a purge).</summary>
+    public bool HasSamePayloadAs(string canonicalPayload) => string.Equals(PayloadHash, HashOf(canonicalPayload), StringComparison.Ordinal);
+
+    /// <summary>
+    /// Erases the payload of a <b>successfully processed</b> event (the retention rule). Everything that gives the event its identity - the ids, sequence, type,
+    /// timestamps, outcome, ticket link and <see cref="PayloadHash"/> - is kept. Refused for every other status: an unresolved event is still waiting to be retried
+    /// from its payload and must never be purged. Returns false when there was nothing to purge.
+    /// </summary>
+    public bool PurgePayload(DateTime nowUtc)
+    {
+        if (Status != QueueingEventStatus.Processed)
+        {
+            throw new InvalidOperationException("Only the payload of a successfully processed event can be purged.");
+        }
+
+        if (Payload is null)
+        {
+            return false;
+        }
+
+        Payload = null;
+        PayloadPurgedAtUtc = nowUtc;
+        return true;
     }
 
     public void MarkProcessed(string outcomeCode, string? detail, long? ticketId, DateTime nowUtc)

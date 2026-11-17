@@ -100,7 +100,7 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         // AddGenesysAssignmentHistorySource (three nullable columns on TicketAssignmentHistory: source, Genesys event time and conversation id for Genesys-driven assignments) was added after that and is deployed by its own script.
         // AddTicketAssignmentSupersededAt (one nullable datetime2 column on TicketAssignments: when an assignment ended, so SLA reporting can tell who held a ticket at a past moment) is the newest and is deployed by its own script.
         // AddQueueingIntegration (the Queueing System receiving API: origin columns on Tickets plus the event inbox, per-ticket state and mapping tables) is the newest and is deployed by its own script.
-        Assert.Equal("20261117082231_AddQueueingIntegration", migrations[^1]);
+        Assert.Equal("20261117101035_AddQueueingIntegration", migrations[^1]);
         Assert.Equal("20261112071745_AddTicketAssignmentSupersededAt", migrations[^2]);
         Assert.Equal("20261112065853_AddGenesysAssignmentHistorySource", migrations[^3]);
         Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^4]);

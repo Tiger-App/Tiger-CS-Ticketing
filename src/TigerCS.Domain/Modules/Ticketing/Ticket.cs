@@ -1030,6 +1030,32 @@ public class Ticket
     }
 
     /// <summary>
+    /// The external system that owns the ticket (the Queueing System) returned it to the waiting queue: the owner is released and the ticket goes back to
+    /// <see cref="TicketStatus.Open"/>. <b>Only for a queue-managed ticket</b> - a generic InProgress -&gt; Open transition does not exist in
+    /// <see cref="TicketStatusTransitions"/> and none is added there, so no other workflow can reach it. Allowed from Open (no status change) and InProgress;
+    /// a Resolved / Closed ticket is refused. Returns the status held before, so the caller writes the history row.
+    /// </summary>
+    public TicketStatus ReturnToQueue()
+    {
+        EnsureNotClosed();
+
+        if (!IsQueueManaged)
+        {
+            throw new InvalidOperationException("Only a queue-managed ticket can be returned to the waiting queue.");
+        }
+
+        if (TicketStatus is not (TicketStatus.Open or TicketStatus.InProgress))
+        {
+            throw new InvalidTicketStatusTransitionException(TicketId, TicketStatus, TicketStatus.Open);
+        }
+
+        var previous = TicketStatus;
+        CurrentOwnerEmployeeId = null;
+        TicketStatus = TicketStatus.Open;
+        return previous;
+    }
+
+    /// <summary>
     /// Call Center tickets are worked from the moment they exist: a ticket that originates in the Call Center department starts
     /// <see cref="TicketStatus.InProgress"/> instead of <see cref="TicketStatus.Open"/>. Creation-time only — a persisted
     /// ticket moves through <see cref="ChangeStatus"/>, which still demands an owner for Open→InProgress. Leaves

@@ -14,7 +14,7 @@ public static class QueueingEventValidator
     /// <summary>The fields each event type requires beyond the envelope (EventId, EventType, ExternalTicketId, EventSequence, OccurredAtUtc).</summary>
     public static readonly IReadOnlyDictionary<QueueingEventType, string[]> RequiredFields = new Dictionary<QueueingEventType, string[]>
     {
-        [QueueingEventType.TicketCreated] = ["QueueNumber", "CompanyId", "TicketTypeId"],
+        [QueueingEventType.TicketCreated] = ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone"],
         [QueueingEventType.TicketAssigned] = ["AssignedUserId"],
         [QueueingEventType.TicketReassigned] = ["AssignedUserId"],
         [QueueingEventType.TicketReturned] = [],
@@ -115,7 +115,12 @@ public static class QueueingEventValidator
         var comment = Text("Comment", request.Comment, options.MaxCommentLength, required: type == QueueingEventType.TicketCommentAdded);
         var reason = Text("Reason", request.Reason, QueueingEvent.DetailMaxLength, required: false);
         var customerName = Text("CustomerName", request.CustomerName, 200, required: false);
-        var customerPhone = Text("CustomerPhone", request.CustomerPhone, 32, required: false);
+        var customerPhone = Text("CustomerPhone", request.CustomerPhone, 32, required: type == QueueingEventType.TicketCreated);
+        if (customerPhone is not null && !TigerCS.Domain.Modules.Ticketing.CustomerPhoneNumber.LooksLikeNumber(customerPhone))
+        {
+            Add("CustomerPhone", "CustomerPhone must be a phone number.");
+        }
+
         var customerEmail = Text("CustomerEmail", request.CustomerEmail, 256, required: false);
 
         if (problems.Count > 0 || type is null)

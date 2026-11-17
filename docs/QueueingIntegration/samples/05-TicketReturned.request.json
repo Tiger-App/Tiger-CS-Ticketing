@@ -1,0 +1,10 @@
+{
+  "EventId": "0f6c1d52-3b7a-4a55-9c53-0d6a1f1b0005",
+  "EventType": "TicketReturned",
+  "ExternalTicketId": "QT-20261110-0001",
+  "EventSequence": 5,
+  "PerformedByUserId": "queue-user-a",
+  "CounterId": "counter-3",
+  "Reason": "Customer stepped away",
+  "OccurredAtUtc": "2026-11-10T08:40:00Z"
+}

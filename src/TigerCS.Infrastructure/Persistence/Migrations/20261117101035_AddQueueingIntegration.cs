@@ -66,7 +66,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     ExternalTicketId = table.Column<string>(type: "nvarchar(100)", maxLength: 100, nullable: false),
                     EventSequence = table.Column<long>(type: "bigint", nullable: false),
                     OccurredAtUtc = table.Column<DateTime>(type: "datetime2", nullable: false),
-                    Payload = table.Column<string>(type: "nvarchar(max)", nullable: false),
+                    Payload = table.Column<string>(type: "nvarchar(max)", nullable: true),
+                    PayloadHash = table.Column<string>(type: "char(64)", unicode: false, fixedLength: true, maxLength: 64, nullable: false),
+                    PayloadPurgedAtUtc = table.Column<DateTime>(type: "datetime2", nullable: true),
                     Status = table.Column<byte>(type: "tinyint", nullable: false),
                     OutcomeCode = table.Column<string>(type: "nvarchar(64)", maxLength: 64, nullable: true),
                     OutcomeDetail = table.Column<string>(type: "nvarchar(1000)", maxLength: 1000, nullable: true),
@@ -161,6 +163,12 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                 table: "QueueingCompanyMappings",
                 column: "CompanyId",
                 unique: true);
+
+            migrationBuilder.CreateIndex(
+                name: "IX_QueueingEvents_PurgeablePayloads",
+                table: "QueueingEvents",
+                column: "ProcessedAtUtc",
+                filter: "[Payload] IS NOT NULL AND [Status] = 2");
 
             migrationBuilder.CreateIndex(
                 name: "IX_QueueingEvents_Status_NextRetry",

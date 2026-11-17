@@ -624,7 +624,8 @@
                   "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
                   "const b = pm.response.json();",
                   "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
-                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));"
+                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));",
+                  "pm.test('back to Open', () => pm.expect(b.ticketStatus).to.eql('Open'));"
                 ]
               }
             }
@@ -1285,7 +1286,7 @@
           }
         },
         {
-          "name": "4.4 Unmapped company -> 202 COMPANY_NOT_MAPPED, no ticket",
+          "name": "4.4 Unmapped company -> 202 COMPANY_NOT_MAPPED, no ticket (a department is never guessed)",
           "event": [
             {
               "listen": "prerequest",
@@ -1342,7 +1343,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-020\",\n  \"CompanyId\": \"company-not-mapped\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-020\",\n  \"CompanyId\": \"company-not-mapped\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1408,7 +1409,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-DIFFERENT\",\n  \"CompanyId\": \"company-not-mapped\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-DIFFERENT\",\n  \"CompanyId\": \"company-not-mapped\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"
@@ -1419,7 +1420,72 @@
           }
         },
         {
-          "name": "4.6 Missing required field -> 400, per event type",
+          "name": "4.6 TicketCreated without CustomerPhone -> 400 (mandatory)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('names CustomerPhone', () => pm.expect(Object.keys(pm.response.json().errors)).to.include('CustomerPhone'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"QT-no-phone\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-021\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "4.7 Missing required field -> 400, per event type",
           "event": [
             {
               "listen": "prerequest",

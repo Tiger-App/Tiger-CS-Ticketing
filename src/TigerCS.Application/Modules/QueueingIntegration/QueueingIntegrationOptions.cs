@@ -1,15 +1,5 @@
 namespace TigerCS.Application.Modules.QueueingIntegration;
 
-/// <summary>What happens when a queue ticket type has no usable request-type mapping.</summary>
-public enum QueueingMissingRequestTypePolicy
-{
-    /// <summary>The event is kept unresolved and retried; no ticket is created until the mapping exists. Nothing is guessed. (Default.)</summary>
-    Hold = 0,
-
-    /// <summary>The ticket is created in the company's department with the department's existing default General classification, and the gap is audited.</summary>
-    DefaultClassification = 1
-}
-
 /// <summary>What happens when a person changes a queue-managed ticket's assignment, status or closure in TigerCS.</summary>
 public enum QueueingManualChangePolicy
 {
@@ -55,8 +45,6 @@ public sealed class QueueingIntegrationOptions
 
     public QueueingUserLookupMode UserLookupMode { get; set; } = QueueingUserLookupMode.Mapping;
 
-    public QueueingMissingRequestTypePolicy MissingRequestTypePolicy { get; set; } = QueueingMissingRequestTypePolicy.Hold;
-
     public QueueingManualChangePolicy ManualChangePolicy { get; set; } = QueueingManualChangePolicy.Block;
 
     /// <summary>How many times an unresolved event is retried before it is marked Failed (needs a person; a redelivery restarts it).</summary>
@@ -69,6 +57,13 @@ public sealed class QueueingIntegrationOptions
 
     /// <summary>An event stamped further in the future than this (clock skew allowance) is refused as invalid.</summary>
     public int MaxClockSkewSeconds { get; set; } = 300;
+
+    /// <summary>
+    /// How many days the payload of a <b>successfully processed</b> event is kept before it is erased (default 90). Only the payload (customer name, phone, email and
+    /// the rest of the body) goes: the row with its EventId, ExternalTicketId, sequence, times, outcome and payload hash stays, so idempotency and the ticket
+    /// history are untouched. Unresolved and failed events are never purged. Zero or negative switches the purge off.
+    /// </summary>
+    public int PayloadRetentionDays { get; set; } = 90;
 
     /// <summary>The longest <c>Comment</c> accepted.</summary>
     public int MaxCommentLength { get; set; } = 4000;

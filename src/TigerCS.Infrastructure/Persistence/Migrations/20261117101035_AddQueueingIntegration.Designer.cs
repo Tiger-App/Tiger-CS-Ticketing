@@ -12,7 +12,7 @@ using TigerCS.Infrastructure.Persistence;
 namespace TigerCS.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(TigerCsDbContext))]
-    [Migration("20261117082231_AddQueueingIntegration")]
+    [Migration("20261117101035_AddQueueingIntegration")]
     partial class AddQueueingIntegration
     {
         /// <inheritdoc />
@@ -2266,8 +2266,17 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasColumnType("nvarchar(1000)");
 
                     b.Property<string>("Payload")
-                        .IsRequired()
                         .HasColumnType("nvarchar(max)");
+
+                    b.Property<string>("PayloadHash")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .IsUnicode(false)
+                        .HasColumnType("char(64)")
+                        .IsFixedLength();
+
+                    b.Property<DateTime?>("PayloadPurgedAtUtc")
+                        .HasColumnType("datetime2");
 
                     b.Property<DateTime?>("ProcessedAtUtc")
                         .HasColumnType("datetime2");
@@ -2287,6 +2296,10 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasColumnType("bigint");
 
                     b.HasKey("QueueingEventId");
+
+                    b.HasIndex("ProcessedAtUtc")
+                        .HasDatabaseName("IX_QueueingEvents_PurgeablePayloads")
+                        .HasFilter("[Payload] IS NOT NULL AND [Status] = 2");
 
                     b.HasIndex("Source", "EventId")
                         .IsUnique()

@@ -76,6 +76,11 @@ public sealed class TicketCreationAppService(
     /// <param name="request">The ticket to create.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="answeringAgent">Set only by the Genesys ingestion for a call a human agent already answered; see <see cref="TicketAutoAssignmentService.ApplyAnsweringAgentAsync"/>.</param>
+    /// <param name="beforeCommit">
+    /// Set only by an integration that must persist its own state <b>atomically with the ticket</b> (the Queueing System's queue-state row and inbox row). Called with
+    /// the new ticket - its real id already assigned - immediately before the final SaveChanges, so whatever it stages commits in the very transaction that creates the
+    /// ticket and rolls back with it. Never called when creation is refused.
+    /// </param>
     /// <param name="callerRoles">
     /// The caller's roles, when the caller is a person acting in the UI/API. Needed only for self-assignment: a CS Agent who creates a
     /// ticket by hand owns it unless they chose the Department Queue (see <c>TicketAutoAssignmentService.TrySelfAssignAsync</c>). Left
@@ -83,7 +88,8 @@ public sealed class TicketCreationAppService(
     /// </param>
     public async Task<TicketCreationResult> CreateAsync(
         Guid callerEmployeeId, CreateTicketRequestDto request, CancellationToken cancellationToken = default,
-        IReadOnlyCollection<string>? callerRoles = null, AnsweringAgent? answeringAgent = null)
+        IReadOnlyCollection<string>? callerRoles = null, AnsweringAgent? answeringAgent = null,
+        Func<Ticket, CancellationToken, Task>? beforeCommit = null)
     {
         var intakeRecord = await intakeRecordRepository.GetByIdAsync(request.IntakeRecordId, cancellationToken);
         if (intakeRecord is null)
@@ -616,6 +622,11 @@ public sealed class TicketCreationAppService(
         if (!ticket.SuppressesCustomerNotifications)
         {
             await EnqueueTicketCreatedAsync(ticket, callerEmployeeId, correlationId, now, cancellationToken);
+        }
+
+        if (beforeCommit is not null)
+        {
+            await beforeCommit(ticket, cancellationToken);
         }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);

@@ -42,7 +42,8 @@ public sealed class TicketAssignmentAppService(
     IOutboxWriter? outboxWriter = null,
     IUserTransferDepartmentRepository? transferDepartments = null,
     ITicketUnassignedWorkRepository? unassignedWork = null,
-    TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions? queueingOptions = null)
+    TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions? queueingOptions = null,
+    ITicketStatusHistoryRepository? statusHistoryRepository = null)
 {
     /// <summary>Customer "assigned" and colleague "assigned to you" notification events, written in the operation's own transaction.</summary>
     private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
@@ -302,10 +303,10 @@ public sealed class TicketAssignmentAppService(
     }
 
     /// <summary>
-    /// The Queueing System returned a ticket to its waiting queue: the owner is cleared and the ticket stays in its current department's queue - same status,
-    /// same department, nothing else touched. The current assignment row is superseded (never deleted), so the assignment history keeps who had it and until
-    /// when. When nobody owns it only the audit entry is written. Runs as the integration; the caller's
-    /// <paramref name="beforeCommit"/> commits or rolls back with it.
+    /// The Queueing System returned a ticket to its waiting queue: the owner is released and the ticket goes back to <see cref="TicketStatus.Open"/> in the
+    /// same department (<see cref="Ticket.ReturnToQueue"/> - queue-managed tickets only). The current assignment row is superseded (never deleted) and the
+    /// status change is written to the status history as a system action, so the history keeps who had it, until when, and that it went back to waiting.
+    /// Runs as the integration; the caller's <paramref name="beforeCommit"/> commits or rolls back with it.
     /// </summary>
     public async Task<TicketMutationResult> ReturnToDepartmentQueueAsync(
         Guid integrationEmployeeId,
@@ -331,16 +332,34 @@ public sealed class TicketAssignmentAppService(
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
+        TicketStatus previousStatus;
+        try
+        {
+            previousStatus = ticket.ReturnToQueue();
+        }
+        catch (InvalidTicketStatusTransitionException)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.InvalidStatusTransition);
+        }
+
         if (previousOwner is not null)
         {
-            ticket.ReleaseOwner();
             (await ticketAssignmentRepository.GetCurrentAsync(ticketId, cancellationToken))?.MarkSuperseded();
+        }
+
+        if (previousStatus != TicketStatus.Open && statusHistoryRepository is not null)
+        {
+            await statusHistoryRepository.AddAsync(
+                new TicketStatusHistory(
+                    ticketId, TicketStatusDimension.TicketStatus, (byte)previousStatus, (byte)TicketStatus.Open,
+                    actorEmployeeId: null, actorIsSystem: true, note: reason, correlationId, now),
+                cancellationToken);
         }
 
         await auditWriter.WriteAsync(
             integrationEmployeeId, "ReturnToQueue", "Ticket", ticketId.ToString(),
-            beforeValue: $"CurrentOwnerEmployeeId={previousOwner?.ToString() ?? "DepartmentQueue"}",
-            afterValue: $"CurrentOwnerEmployeeId=DepartmentQueue;DepartmentId={ticket.CurrentDepartmentId};Reason={reason}",
+            beforeValue: $"CurrentOwnerEmployeeId={previousOwner?.ToString() ?? "DepartmentQueue"};Status={previousStatus}",
+            afterValue: $"CurrentOwnerEmployeeId=DepartmentQueue;Status={TicketStatus.Open};DepartmentId={ticket.CurrentDepartmentId};Reason={reason}",
             correlationId, cancellationToken);
 
         beforeCommit?.Invoke(now);

@@ -18,13 +18,13 @@ namespace TigerCS.Tests.QueueingIntegration;
 /// and its same-named category), company + ticket-type mappings, two employees in that department with their queue-user mappings, and the integration's
 /// own service account. Each test uses its own queue ticket (a fresh ExternalTicketId), so tests share the host and never each other's data.
 /// </summary>
-public sealed class QueueingFixture : IAsyncLifetime
+public class QueueingFixture : IAsyncLifetime
 {
     public const string ApiKey = "test-queueing-api-key-0123456789";
     public const string CompanyId = "company-a";
     public const string TicketTypeId = "type-complaint";
 
-    public TigerCsApiFactory Factory { get; private set; } = null!;
+    public TigerCsApiFactory Factory { get; protected set; } = null!;
     public int DepartmentId { get; private set; }
     public int RequestTypeId { get; private set; }
     public Guid ServiceAccountId { get; private set; }
@@ -33,24 +33,26 @@ public sealed class QueueingFixture : IAsyncLifetime
     public string QueueUserA { get; } = "queue-user-a";
     public string QueueUserB { get; } = "queue-user-b";
 
-    public Task InitializeAsync() => InitializeCoreAsync();
+    public virtual Task InitializeAsync() => InitializeCoreAsync();
 
-    public Task DisposeAsync() => Task.CompletedTask;
+    public virtual Task DisposeAsync() => Task.CompletedTask;
 
-    private async Task InitializeCoreAsync()
+    /// <summary>The configuration every host of this fixture runs with: the integration switched on and two valid API keys (the second proves a key can be rotated).</summary>
+    protected static Dictionary<string, string?> HostConfiguration() => new()
     {
-        Factory = new TigerCsApiFactory
-        {
-            ExtraConfiguration = new Dictionary<string, string?>
-            {
-                ["QueueingIntegration:Enabled"] = "true",
-                ["QueueingIntegration:Authentication:ApiKeys:0:KeyId"] = "queue-prod",
-                ["QueueingIntegration:Authentication:ApiKeys:0:Sha256"] = QueueingApiKeyDefaults.Hash(ApiKey),
-                // A second key, to prove rotation: both work at once.
-                ["QueueingIntegration:Authentication:ApiKeys:1:KeyId"] = "queue-next",
-                ["QueueingIntegration:Authentication:ApiKeys:1:Sha256"] = QueueingApiKeyDefaults.Hash(ApiKey + "-next")
-            }
-        };
+        ["QueueingIntegration:Enabled"] = "true",
+        ["QueueingIntegration:Authentication:ApiKeys:0:KeyId"] = "queue-prod",
+        ["QueueingIntegration:Authentication:ApiKeys:0:Sha256"] = QueueingApiKeyDefaults.Hash(ApiKey),
+        ["QueueingIntegration:Authentication:ApiKeys:1:KeyId"] = "queue-next",
+        ["QueueingIntegration:Authentication:ApiKeys:1:Sha256"] = QueueingApiKeyDefaults.Hash(ApiKey + "-next")
+    };
+
+    /// <summary>The host this fixture seeds and reads through. The default is the InMemory one; the SQL Server fixture overrides it.</summary>
+    protected virtual TigerCsApiFactory CreateFactory() => new() { ExtraConfiguration = HostConfiguration() };
+
+    protected async Task InitializeCoreAsync()
+    {
+        Factory = CreateFactory();
 
         await Factory.SeedPrioritiesAsync();
         DepartmentId = await Factory.CreateDepartmentAsync("Queue Customer Service " + Guid.NewGuid().ToString("N")[..6], "Q" + Guid.NewGuid().ToString("N")[..8]);

@@ -16,6 +16,9 @@ public interface IQueueingStore
     /// <summary>Events that are Unresolved and due, oldest first.</summary>
     Task<IReadOnlyList<QueueingEvent>> ListDueForRetryAsync(DateTime nowUtc, int take, CancellationToken cancellationToken = default);
 
+    /// <summary>Successfully processed events whose payload is still held and was processed before <paramref name="processedBeforeUtc"/> - the retention sweep's work list. Never an unresolved, failed, superseded or rejected event.</summary>
+    Task<IReadOnlyList<QueueingEvent>> ListPurgeablePayloadsAsync(DateTime processedBeforeUtc, int take, CancellationToken cancellationToken = default);
+
     /// <summary>The ticket's events still waiting to be applied (Unresolved or interrupted), in sequence order - drained right after the ticket is created.</summary>
     Task<IReadOnlyList<QueueingEvent>> ListWaitingForTicketAsync(string externalTicketId, CancellationToken cancellationToken = default);
 

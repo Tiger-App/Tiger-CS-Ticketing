@@ -24,7 +24,10 @@ public class QueueingEventConfiguration : IEntityTypeConfiguration<QueueingEvent
         builder.Property(e => e.ExternalTicketId).HasMaxLength(QueueingTicketLink.ExternalIdMaxLength).IsRequired();
         builder.Property(e => e.EventSequence).IsRequired();
         builder.Property(e => e.OccurredAtUtc).IsRequired();
-        builder.Property(e => e.Payload).IsRequired();
+        // Nullable: erased after the retention period for a successfully processed event. The hash stays, so idempotency never depends on the payload.
+        builder.Property(e => e.Payload);
+        builder.Property(e => e.PayloadHash).HasMaxLength(64).IsFixedLength().IsUnicode(false).IsRequired();
+        builder.Property(e => e.PayloadPurgedAtUtc);
         builder.Property(e => e.Status).HasConversion<byte>().IsRequired();
         builder.Property(e => e.OutcomeCode).HasMaxLength(64);
         builder.Property(e => e.OutcomeDetail).HasMaxLength(QueueingEvent.DetailMaxLength);
@@ -34,6 +37,8 @@ public class QueueingEventConfiguration : IEntityTypeConfiguration<QueueingEvent
         // Serves the per-ticket drain (events waiting for their ticket / predecessor) and the retry sweep.
         builder.HasIndex(e => new { e.Source, e.ExternalTicketId, e.EventSequence }).HasDatabaseName("IX_QueueingEvents_Ticket_Sequence");
         builder.HasIndex(e => new { e.Status, e.NextRetryAtUtc }).HasDatabaseName("IX_QueueingEvents_Status_NextRetry");
+        // Serves the retention sweep: processed events that still hold a payload, oldest first.
+        builder.HasIndex(e => e.ProcessedAtUtc).HasFilter("[Payload] IS NOT NULL AND [Status] = 2").HasDatabaseName("IX_QueueingEvents_PurgeablePayloads");
     }
 }
 

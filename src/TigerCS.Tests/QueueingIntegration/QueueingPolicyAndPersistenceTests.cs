@@ -64,7 +64,7 @@ public sealed class QueueingPolicyAndPersistenceTests : IClassFixture<QueueingFi
     }
 
     [Fact]
-    public async Task WithTheDefaultClassificationPolicy_AnUnmappedTicketTypeIsClassifiedByTheExistingGeneralRule_AndSaysSo()
+    public async Task AnUnmappedTicketType_OfAMappedCompany_UsesTheDepartmentsGeneralRequestType_AndLogsTheGap()
     {
         var department = await _f.Factory.CreateDepartmentAsync("General Dept " + Guid.NewGuid().ToString("N")[..6], "G" + Guid.NewGuid().ToString("N")[..8]);
         await _f.Factory.CreateCategoryAsync("General", department);
@@ -76,24 +76,30 @@ public sealed class QueueingPolicyAndPersistenceTests : IClassFixture<QueueingFi
             return 0;
         });
 
-        _f.Options.MissingRequestTypePolicy = QueueingMissingRequestTypePolicy.DefaultClassification;
-        try
-        {
-            var id = NewTicketId();
-            var (http, body) = await _f.PostAsync(Created(id, companyId: "company-general", ticketTypeId: "type-never-mapped"));
-            Assert.Equal(HttpStatusCode.Created, http.StatusCode);
-            var ticket = (await _f.FindTicketAsync(id))!;
-            Assert.Equal(general, ticket.RequestTypeId);
-            Assert.Equal(department, ticket.CurrentDepartmentId);
-            Assert.Null(ticket.CurrentOwnerEmployeeId);
-            var audit = await _f.Factory.GetAuditEntriesAsync(ticket.TicketId.ToString());
-            Assert.Contains(audit, a => a.Action == "QueueingTicketCreated" && a.AfterValue!.Contains("RequestTypeMapping=Missing") && a.AfterValue.Contains("DefaultClassification"));
-            Assert.Equal(body!.TicketId, ticket.TicketId);
-        }
-        finally
-        {
-            _f.Options.MissingRequestTypePolicy = QueueingMissingRequestTypePolicy.Hold;
-        }
+        var id = NewTicketId();
+        var (http, body) = await _f.PostAsync(Created(id, companyId: "company-general", ticketTypeId: "type-never-mapped"));
+
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        var ticket = (await _f.FindTicketAsync(id))!;
+        Assert.Equal(general, ticket.RequestTypeId);                              // the department's own General - never another department's
+        Assert.Equal(department, ticket.CurrentDepartmentId);                     // the department came from the company mapping, never guessed
+        Assert.NotNull(ticket.CategoryId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        var audit = await _f.Factory.GetAuditEntriesAsync(ticket.TicketId.ToString());
+        Assert.Contains(audit, a => a.Action == "QueueingTicketCreated"
+            && a.AfterValue!.Contains("RequestTypeMapping=Missing(company=company-general;ticketType=type-never-mapped)")
+            && a.AfterValue.Contains($"Applied=General(RequestTypeId={general})"));
+        Assert.Equal(body!.TicketId, ticket.TicketId);
+    }
+
+    [Fact]
+    public async Task AnUnmappedCompany_IsNeverGuessed_EvenWhenAGeneralRequestTypeExists()
+    {
+        var id = NewTicketId();
+        var (http, body) = await _f.PostAsync(Created(id, companyId: "company-nobody-mapped", ticketTypeId: "type-never-mapped"));
+        Assert.Equal(HttpStatusCode.Accepted, http.StatusCode);
+        Assert.Equal(QueueingOutcomeCodes.CompanyNotMapped, body!.Outcome);
+        Assert.Equal(0, await _f.CountTicketsAsync(id));
     }
 
     [Fact]
