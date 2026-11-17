@@ -94,6 +94,9 @@ public static class CustomerEmailSkipReasons
 
     public const string NoCustomerEmail = "NoCustomerEmail";
 
+    /// <summary>The ticket's lifecycle is owned by an external system (the Queueing System) that notifies the customer itself; TigerCS sends nothing, so the customer never receives two messages.</summary>
+    public const string ManagedByExternalSystem = "ManagedByExternalSystem";
+
     public const string InvalidCustomerEmail = "InvalidCustomerEmail";
 
     public const string EventTooOld = "EventTooOld";

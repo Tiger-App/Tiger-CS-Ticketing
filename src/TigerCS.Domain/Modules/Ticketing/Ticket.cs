@@ -283,6 +283,46 @@ public class Ticket
     public const int ExternalCustomerNameMaxLength = 200;
     public const int ExternalCustomerEmailMaxLength = 256;
 
+    /// <summary>
+    /// The external system that owns this ticket's lifecycle (<see cref="TicketIntegrationSources"/>), or null for every ordinary TigerCS
+    /// ticket - including Genesys tickets, which TigerCS itself drives. Write-once, set only by the creation that an integration performs.
+    /// </summary>
+    public string? IntegrationSource { get; private set; }
+
+    /// <summary>The source system's own id for this ticket. Unique per <see cref="IntegrationSource"/> (a filtered unique index), which is what makes "one external ticket, one TigerCS ticket" a database fact.</summary>
+    public string? ExternalTicketId { get; private set; }
+
+    /// <summary>The human-facing reference the source system showed the customer (the queue number). Display/traceability only - never an identity.</summary>
+    public string? ExternalReference { get; private set; }
+
+    public const int IntegrationSourceMaxLength = 50;
+    public const int ExternalTicketIdMaxLength = 100;
+    public const int ExternalReferenceMaxLength = 100;
+
+    /// <summary>True when an external system (the Queueing System) is the source of truth for this ticket's lifecycle.</summary>
+    public bool IsQueueManaged => string.Equals(IntegrationSource, TicketIntegrationSources.QueueingSystem, StringComparison.Ordinal);
+
+    /// <summary>
+    /// True when TigerCS must not email the customer about this ticket: the Queueing System already tells the customer about their queue ticket,
+    /// so a TigerCS acknowledgement, assignment, resolution or closure email would be a duplicate. Read by ticket creation and by every customer email handler.
+    /// </summary>
+    public bool SuppressesCustomerNotifications => IsQueueManaged;
+
+    /// <summary>Records the originating external system and its ids. Creation-time only and write-once: a second call is refused.</summary>
+    public void RecordExternalOrigin(string source, string externalTicketId, string? externalReference)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(source);
+        ArgumentException.ThrowIfNullOrWhiteSpace(externalTicketId);
+        if (IntegrationSource is not null)
+        {
+            throw new InvalidOperationException("The external origin of a ticket is write-once.");
+        }
+
+        IntegrationSource = source.Trim();
+        ExternalTicketId = externalTicketId.Trim();
+        ExternalReference = string.IsNullOrWhiteSpace(externalReference) ? null : externalReference.Trim();
+    }
+
     public TicketStatus TicketStatus { get; private set; }
     public CrmVerificationStatus VerificationStatus { get; private set; }
     public EscalationLevel EscalationLevel { get; private set; }
@@ -1030,6 +1070,14 @@ public class Ticket
         ClearOwnerOnClosure();
         return previous;
     }
+
+    /// <summary>
+    /// The external system that owns the ticket (the Queueing System) reports it finished: Resolved -> Closed in one step with the given
+    /// <paramref name="outcome"/> - <see cref="ResolutionOutcomeValue.Resolved"/> when the customer was served, <see cref="ResolutionOutcomeValue.Cancelled"/> when the
+    /// queue ticket was cancelled (nothing was fixed, so never "Resolved"). Same preconditions and transition as <see cref="CloseForDocumentDelivery"/>; a
+    /// human owner does not block it, because the owner is exactly who the external system says finished. Returns the status held before.
+    /// </summary>
+    public TicketStatus CloseByExternalSystem(ResolutionOutcomeValue outcome) => CloseForDocumentDelivery(outcome);
 
     /// <summary>
     /// Genesys AI completion: the virtual agent finished the conversation (<c>closedByAi</c>), so the ticket goes Resolved → Closed in one

@@ -273,6 +273,25 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["DELETE /api/admin/workflows/versions/{versionId:int}"] = nameof(Administration.Integration.AdministrationEndpointsTests.Workflows_DesignPublishVersionAndPinTickets)
     };
 
+    private static bool IsApiKeyEndpoint(RouteEndpoint endpoint) =>
+        endpoint.Metadata.GetOrderedMetadata<IAuthorizeData>().Any(a => a.AuthenticationSchemes == "QueueingApiKey");
+
+    [Fact]
+    public void TheOnlyApiKeyEndpointsAreTheQueueingReceiver()
+    {
+        using var scope = _factory.Services.CreateScope();
+        var endpoints = scope.ServiceProvider.GetRequiredService<EndpointDataSource>();
+
+        var keyEndpoints = endpoints.Endpoints
+            .OfType<RouteEndpoint>()
+            .Where(IsApiKeyEndpoint)
+            .SelectMany(e => (e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["*"]).Select(m => $"{m} /{e.RoutePattern.RawText?.TrimStart('/')}"))
+            .Distinct()
+            .ToList();
+
+        Assert.Equal(["POST /api/integrations/queueing/events"], keyEndpoints);
+    }
+
     private static IReadOnlyCollection<string> ProtectedEndpointsOf(EndpointDataSource endpoints) =>
         endpoints.Endpoints
             .OfType<RouteEndpoint>()
@@ -280,6 +299,9 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
             // /api/auth/login, the only two Security-Architecture.md §5
             // allows.
             .Where(e => e.Metadata.GetMetadata<IAllowAnonymous>() is null)
+            // Integration endpoints authenticated by their own API-key scheme sit outside the staff authorization model (no staff account, and so no
+            // System Administrator override, can call them - that is the point). They are pinned separately by TheOnlyApiKeyEndpointsAreTheQueueingReceiver.
+            .Where(e => !IsApiKeyEndpoint(e))
             .SelectMany(e =>
             {
                 var methods = e.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods ?? ["*"];

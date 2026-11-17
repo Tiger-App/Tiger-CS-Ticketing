@@ -38,7 +38,8 @@ public sealed class TicketClaimAppService(
     TicketClaimPolicy claimPolicy,
     TicketAutoAssignmentService autoAssignmentService,
     ITicketWorkflowEventRepository? workflowEventRepository = null,
-    IOutboxWriter? outboxWriter = null)
+    IOutboxWriter? outboxWriter = null,
+    TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions? queueingOptions = null)
 {
     private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
 
@@ -55,6 +56,12 @@ public sealed class TicketClaimAppService(
         if (ticket is null)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        // Queue-managed ticket: the Queueing System decides who serves it (QueueingIntegration:ManualChangePolicy).
+        if (TigerCS.Application.Modules.QueueingIntegration.QueueManagedTicketGuard.Blocks(ticket, queueingOptions))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.QueueManagedTicket);
         }
 
         // Taking a ticket you already hold changes nothing (a double click, a retry after a lost response): success, no writes.

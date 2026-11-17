@@ -24,6 +24,9 @@ public static class PolicyNames
     /// <summary>Any authenticated, active staff member — no role restriction.</summary>
     public const string AuthenticatedStaff = "AuthenticatedStaff";
 
+    /// <summary>The Queueing System integration: the request must authenticate with the integration's own API key scheme. A staff JWT never satisfies it.</summary>
+    public const string QueueingIntegration = "QueueingIntegration";
+
     /// <summary>Resource-scoped: caller must be assigned to the target department, or hold a cross-department role.</summary>
     public const string DepartmentScoped = "DepartmentScoped";
 

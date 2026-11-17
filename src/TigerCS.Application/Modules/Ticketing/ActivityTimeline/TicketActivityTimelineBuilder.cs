@@ -33,6 +33,8 @@ public static class TimelineAuditActions
         AutoCloseCustomerInactivity, AutoCloseByAi, AutoCloseDocumentDelivery, AutoCloseAiOnlyTimeout, HumanActivityAfterClosure,
         "GenesysRoutingChanged", "GenesysTranscriptAppended", "GenesysHumanFollowUpRequired",
         "GenesysHandoffAutoRaisedOnConversationEnd", "GenesysConversationEnded",
+        // The Queueing System integration: the history entries no other table carries (a queue ticket's creation facts, a return to the waiting queue, a recall).
+        "QueueingTicketCreated", "QueueingTicketReturned", "QueueingTicketRecalled",
         .. Notifications
     ];
 }
@@ -598,6 +600,28 @@ public static class TicketActivityTimelineBuilder
                         audit.OccurredAtUtc, "HandoffAutoRaised", "Human follow-up raised automatically", "Handoff", TimelineActorTypes.System, "TigerCS",
                         "An AI conversation ended with nobody taking it, so TigerCS raised pending human work.",
                         SourceAudit, rank: 3));
+                    break;
+
+                case "QueueingTicketCreated":
+                    entries.Add(Make(
+                        audit.OccurredAtUtc, "QueueTicketCreated", "Queue ticket created", "Queueing", TimelineActorTypes.System, "Queueing System",
+                        $"Created from queue ticket {Pick(after, "QueueNumber")} (external id {Pick(after, "ExternalTicketId")}); request type mapping: {Pick(after, "RequestTypeMapping")}.",
+                        SourceAudit, rank: 3));
+                    break;
+
+                case "QueueingTicketReturned":
+                    entries.Add(Make(
+                        audit.OccurredAtUtc, "QueueTicketReturned", "Returned to the waiting queue", "Queueing", TimelineActorTypes.System, "Queueing System",
+                        "The Queueing System returned the ticket to the waiting queue; it has no owner until the queue calls it again.",
+                        SourceAudit, rank: 3, reason: Pick(after, "Reason", string.Empty) is { Length: > 0 } returnReason ? returnReason : null,
+                        previous: $"Counter: {Pick(after, "CounterId")}"));
+                    break;
+
+                case "QueueingTicketRecalled":
+                    entries.Add(Make(
+                        audit.OccurredAtUtc, "QueueTicketRecalled", "Customer recalled", "Queueing", TimelineActorTypes.System, "Queueing System",
+                        $"The Queueing System called the customer again (counter {Pick(after, "CounterId")}).",
+                        SourceAudit, rank: 3, reason: Pick(after, "Reason", string.Empty) is { Length: > 0 } recallReason && recallReason != "(none)" ? recallReason : null));
                     break;
 
                 case TimelineAuditActions.HumanActivityAfterClosure:

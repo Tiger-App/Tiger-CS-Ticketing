@@ -147,6 +147,13 @@ public abstract class CustomerTicketEmailHandler(
             await notificationRepository.AddAsync(notification, cancellationToken);
         }
 
+        if (ticket.SuppressesCustomerNotifications)
+        {
+            // The Queueing System already notifies the customer about their queue ticket: a TigerCS email would be a duplicate. Recorded
+            // as Skipped with this reason (never silently dropped), whatever the provider configuration.
+            return await SkipAsync(ticket, notification, message, CustomerEmailSkipReasons.ManagedByExternalSystem, cancellationToken);
+        }
+
         if (SupersededReason(ticket, message) is { } superseded)
         {
             // Checked before anything provider-related: a superseded event is skipped whatever the configuration, so the reason is the

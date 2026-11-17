@@ -2188,6 +2188,254 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("Notifications", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.QueueingIntegration.QueueingCompanyMapping", b =>
+                {
+                    b.Property<int>("QueueingCompanyMappingId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("QueueingCompanyMappingId"));
+
+                    b.Property<string>("CompanyId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<int>("DepartmentId")
+                        .HasColumnType("int");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.HasKey("QueueingCompanyMappingId");
+
+                    b.HasIndex("CompanyId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueueingCompanyMappings_CompanyId");
+
+                    b.HasIndex("DepartmentId");
+
+                    b.ToTable("QueueingCompanyMappings", (string)null);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent", b =>
+                {
+                    b.Property<long>("QueueingEventId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("QueueingEventId"));
+
+                    b.Property<int>("AttemptCount")
+                        .HasColumnType("int");
+
+                    b.Property<string>("EventId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<long>("EventSequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<byte>("EventType")
+                        .HasColumnType("tinyint");
+
+                    b.Property<string>("ExternalTicketId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime?>("NextRetryAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("OccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("OutcomeCode")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("OutcomeDetail")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("Payload")
+                        .IsRequired()
+                        .HasColumnType("nvarchar(max)");
+
+                    b.Property<DateTime?>("ProcessedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<DateTime>("ReceivedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.Property<byte>("Status")
+                        .HasColumnType("tinyint");
+
+                    b.Property<long?>("TicketId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("QueueingEventId");
+
+                    b.HasIndex("Source", "EventId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueueingEvents_Source_EventId");
+
+                    b.HasIndex("Status", "NextRetryAtUtc")
+                        .HasDatabaseName("IX_QueueingEvents_Status_NextRetry");
+
+                    b.HasIndex("Source", "ExternalTicketId", "EventSequence")
+                        .HasDatabaseName("IX_QueueingEvents_Ticket_Sequence");
+
+                    b.ToTable("QueueingEvents", (string)null);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink", b =>
+                {
+                    b.Property<long>("QueueingTicketLinkId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("QueueingTicketLinkId"));
+
+                    b.Property<string>("AssignedExternalUserId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("CompanyId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("CounterId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("ExternalTicketId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("ExternalTicketTypeId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("LastAppliedOccurredAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<long>("LastAppliedSequence")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("QueueNumber")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<byte>("State")
+                        .HasColumnType("tinyint");
+
+                    b.Property<long>("TicketId")
+                        .HasColumnType("bigint");
+
+                    b.HasKey("QueueingTicketLinkId");
+
+                    b.HasIndex("ExternalTicketId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueueingTicketLinks_ExternalTicketId");
+
+                    b.HasIndex("TicketId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueueingTicketLinks_TicketId");
+
+                    b.ToTable("QueueingTicketLinks", (string)null);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketTypeMapping", b =>
+                {
+                    b.Property<int>("QueueingTicketTypeMappingId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("QueueingTicketTypeMappingId"));
+
+                    b.Property<string>("CompanyId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<int>("RequestTypeId")
+                        .HasColumnType("int");
+
+                    b.Property<string>("TicketTypeId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.HasKey("QueueingTicketTypeMappingId");
+
+                    b.HasIndex("CompanyId", "TicketTypeId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueueingTicketTypeMappings_Company_Type");
+
+                    b.ToTable("QueueingTicketTypeMappings", (string)null);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.QueueingIntegration.QueueingUserMapping", b =>
+                {
+                    b.Property<int>("QueueingUserMappingId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("QueueingUserMappingId"));
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ExternalUserId")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.HasKey("QueueingUserMappingId");
+
+                    b.HasIndex("EmployeeId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueueingUserMappings_EmployeeId");
+
+                    b.HasIndex("ExternalUserId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_QueueingUserMappings_ExternalUserId");
+
+                    b.ToTable("QueueingUserMappings", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.SlaAndEscalation.BusinessCalendar", b =>
                 {
                     b.Property<int>("BusinessCalendarId")
@@ -2860,12 +3108,24 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
+                    b.Property<string>("ExternalReference")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<string>("ExternalTicketId")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<string>("ExternalUnitId")
                         .HasMaxLength(64)
                         .HasColumnType("nvarchar(64)");
 
                     b.Property<DateTime?>("FirstHumanResponseAtUtc")
                         .HasColumnType("datetime2");
+
+                    b.Property<string>("IntegrationSource")
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
 
                     b.Property<string>("ManualProjectName")
                         .HasMaxLength(200)
@@ -2956,6 +3216,11 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("CustomerVerificationSource", "ExternalCustomerId")
                         .HasFilter("[ExternalCustomerId] IS NOT NULL");
+
+                    b.HasIndex("IntegrationSource", "ExternalTicketId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_Tickets_IntegrationSource_ExternalTicketId")
+                        .HasFilter("[IntegrationSource] IS NOT NULL AND [ExternalTicketId] IS NOT NULL");
 
                     b.HasIndex(new[] { "CreatedByEmployeeId" }, "IX_Tickets_CreatedByEmployeeId");
 
@@ -4631,6 +4896,24 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .WithMany()
                         .HasForeignKey("TicketId")
                         .OnDelete(DeleteBehavior.Restrict);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.QueueingIntegration.QueueingCompanyMapping", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Department", null)
+                        .WithMany()
+                        .HasForeignKey("DepartmentId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.Ticketing.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("TicketId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 
             modelBuilder.Entity("TigerCS.Domain.Modules.SlaAndEscalation.BusinessCalendarWorkingDay", b =>

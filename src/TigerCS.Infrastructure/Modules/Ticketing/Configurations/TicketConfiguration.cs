@@ -73,6 +73,16 @@ public class TicketConfiguration : IEntityTypeConfiguration<Ticket>
         builder.HasIndex(t => new { t.CustomerVerificationSource, t.ExternalCustomerId })
             .HasFilter("[ExternalCustomerId] IS NOT NULL");
 
+        // The external system that owns the ticket's lifecycle (the Queueing System) and its ids. The filtered unique index is the
+        // database-level guarantee of "one external ticket, one TigerCS ticket", scoped to the integration source.
+        builder.Property(t => t.IntegrationSource).HasMaxLength(Ticket.IntegrationSourceMaxLength);
+        builder.Property(t => t.ExternalTicketId).HasMaxLength(Ticket.ExternalTicketIdMaxLength);
+        builder.Property(t => t.ExternalReference).HasMaxLength(Ticket.ExternalReferenceMaxLength);
+        builder.HasIndex(t => new { t.IntegrationSource, t.ExternalTicketId })
+            .IsUnique()
+            .HasFilter("[IntegrationSource] IS NOT NULL AND [ExternalTicketId] IS NOT NULL")
+            .HasDatabaseName("UX_Tickets_IntegrationSource_ExternalTicketId");
+
         // MVP-Data-Dictionary.md §2.10 — optimistic concurrency for the
         // assignment/transfer/status-change/resolve/close/reconciliation
         // operations this increment adds (S-13). Deferred by the prior

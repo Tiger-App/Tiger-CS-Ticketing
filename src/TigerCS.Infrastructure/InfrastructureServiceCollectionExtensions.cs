@@ -122,7 +122,9 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<IClaimsTransformation, DepartmentClaimsTransformation>();
 
         services.Configure<JwtOptions>(configuration.GetSection(JwtOptions.SectionName));
-        services.AddSingleton(TimeProvider.System);
+        // The application clock. Identical to TimeProvider.System except inside an IntegrationEventScope (the Queueing System receiving API), where it answers the
+        // event's original time so everything written for that event carries when it happened, not when it was delivered.
+        services.AddSingleton<TimeProvider>(new TigerCS.Application.Modules.QueueingIntegration.IntegrationAwareTimeProvider(TimeProvider.System));
 
         services.AddScoped<IEmployeeRepository, EmployeeRepository>();
         services.AddScoped<IDepartmentRepository, DepartmentRepository>();
@@ -374,6 +376,14 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<GenesysConversationEndAppService>();
         services.AddScoped<GenesysAgentHandoffAppService>();
         services.AddScoped<GenesysTicketUpdateAppService>();
+
+        // Queueing System integration - the receiving API for QR-code queue tickets. Switched off (QueueingIntegration:Enabled) until deliberately enabled.
+        services.Configure<TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions>(
+            configuration.GetSection(TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions.SectionName));
+        services.AddSingleton(sp => sp.GetRequiredService<IOptions<TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions>>().Value);
+        services.AddScoped<TigerCS.Application.Modules.QueueingIntegration.Abstractions.IQueueingStore, TigerCS.Infrastructure.Modules.QueueingIntegration.Repositories.QueueingStore>();
+        services.AddSingleton<TigerCS.Application.Modules.QueueingIntegration.Abstractions.IQueueingEventLock, TigerCS.Infrastructure.Modules.QueueingIntegration.Repositories.InProcessQueueingEventLock>();
+        services.AddScoped<TigerCS.Application.Modules.QueueingIntegration.Services.QueueingEventProcessor>();
         services.AddScoped<ChatbotInactivityCloseAppService>();
         // AI-only 18-hour closure. Off unless AiOnlyAutoClose:Enabled is set; the job is registered only then (see Program.cs).
         services.Configure<AiOnlyAutoCloseOptions>(configuration.GetSection(AiOnlyAutoCloseOptions.SectionName));
@@ -566,6 +576,13 @@ public static class InfrastructureServiceCollectionExtensions
         options.FallbackPolicy = Base().Build();
 
         options.AddPolicy(PolicyNames.AuthenticatedStaff, Base().Build());
+
+        // The Queueing System receiving API: its own authentication scheme (API key), and nothing else. Deliberately not built from Base(): the
+        // staff requirements (active employee, service-identity confinement, read-only guard) are about people and do not apply to a key.
+        options.AddPolicy(PolicyNames.QueueingIntegration, new AuthorizationPolicyBuilder("QueueingApiKey")
+            .RequireAuthenticatedUser()
+            .RequireClaim("tigercs:integration", "queueing")
+            .Build());
 
         options.AddPolicy(PolicyNames.DepartmentScoped, Base()
             .AddRequirements(new DepartmentScopedRequirement(

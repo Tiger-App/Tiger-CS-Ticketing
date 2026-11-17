@@ -176,7 +176,10 @@ public sealed class TicketCreationAppService(
         // fields whenever a caller does supply them.
 
         // Human work: a manual ticket, a Genesys inquiry that needs a person, or a call a person already answered. (See the Call Center comment below.)
-        var needsHuman = request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp || answeringAgent is not null;
+        // An integration that owns the ticket's lifecycle (ExternalOrigin) decides who serves it: nothing here assigns, routes to the Call Center or self-assigns.
+        var externallyManaged = request.ExternalOrigin is not null;
+        var needsHuman = !externallyManaged
+            && (request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp || answeringAgent is not null);
 
         // Default classification: a ticket with no classification that can be trusted - none at all, a partial or ambiguous one, or one
         // that names a category / request type that is not usable - is created General / General within its own department (Customer Services'
@@ -356,6 +359,12 @@ public sealed class TicketCreationAppService(
 
             ticket.RecordCreator(callerEmployeeId);
 
+            if (request.ExternalOrigin is { } externalOrigin)
+            {
+                // Written with the ticket in this transaction: the unique (source, external id) index is what makes a duplicate external ticket impossible.
+                ticket.RecordExternalOrigin(externalOrigin.Source, externalOrigin.ExternalTicketId, externalOrigin.ExternalReference);
+            }
+
             // Deployment cutoff: only a ticket created now follows the Original Human Agent workflow. Tickets that existed before stay legacy.
             ticket.EnableOriginalAgentWorkflow();
 
@@ -488,6 +497,10 @@ public sealed class TicketCreationAppService(
                 await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
             }
         }
+        else if (externallyManaged)
+        {
+            // Unassigned by design: the external system (the Queueing System) names the employee later, through its own events.
+        }
         else if (needsHuman
             && collectionsRouting is not null
             && (await collectionsRouting.RouteAsync(ticket, departmentEntry: true, fromCallCenter: false, now, correlationId, cancellationToken)).Handled)
@@ -600,7 +613,10 @@ public sealed class TicketCreationAppService(
                 correlationId, cancellationToken);
         }
 
-        await EnqueueTicketCreatedAsync(ticket, callerEmployeeId, correlationId, now, cancellationToken);
+        if (!ticket.SuppressesCustomerNotifications)
+        {
+            await EnqueueTicketCreatedAsync(ticket, callerEmployeeId, correlationId, now, cancellationToken);
+        }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);

@@ -67,6 +67,7 @@ public static class BackgroundJobServiceCollectionExtensions
         services.AddScoped<CollectionsAutoDispatchJob>();
         // Holds only the scope factory; it opens one scope per candidate itself.
         services.AddScoped<ChatbotInactivityCloseJob>();
+        services.AddScoped<QueueingEventRetryJob>();
         services.AddScoped<AiOnlyAutoCloseJob>();
 
         if (!options.Enabled)
@@ -168,6 +169,31 @@ public static class BackgroundJobServiceCollectionExtensions
             ChatbotInactivityCloseJob.RecurringJobId,
             job => job.RunAsync(CancellationToken.None),
             "* * * * *");
+    }
+
+    /// <summary>
+    /// Registers the recurring retry of unresolved Queueing System events (every minute) <b>only</b> when <c>QueueingIntegration:Enabled</c> is true, and removes any
+    /// existing registration otherwise. A no-op when <c>BackgroundJobs:Enabled</c> is false - events then wait for a redelivery, which retries them just the same.
+    /// </summary>
+    public static void UseTigerCsRecurringQueueingEventRetry(
+        this IServiceProvider services, BackgroundJobOptions backgroundJobOptions, bool queueingEnabled)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(backgroundJobOptions);
+
+        if (!backgroundJobOptions.Enabled)
+        {
+            return;
+        }
+
+        var manager = services.GetRequiredService<IRecurringJobManager>();
+        if (!queueingEnabled)
+        {
+            manager.RemoveIfExists(QueueingEventRetryJob.RecurringJobId);
+            return;
+        }
+
+        manager.AddOrUpdate<QueueingEventRetryJob>(QueueingEventRetryJob.RecurringJobId, job => job.RunAsync(CancellationToken.None), "* * * * *");
     }
 
     /// <summary>
