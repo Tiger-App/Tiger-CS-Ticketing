@@ -25,8 +25,8 @@ namespace TigerCS.Application.Modules.QueueingIntegration.Services;
 /// <c>TicketCreated</c> = a classified, <b>unassigned</b>, Open ticket on the Walk in channel, in the mapped department, with the mapped request type
 /// (the SLA starts with the default priority at the event's original time); <c>TicketAssigned</c> / <c>TicketReassigned</c> = the existing assignment (to the
 /// real, mapped employee - never the integration account) and, on the first assignment of an Open ticket, the existing Open -> InProgress transition performed
-/// as that employee; <c>TicketReturned</c> = the owner is released and the ticket returns to its department's queue (status unchanged - InProgress -> Open is not a
-/// TigerCS transition); <c>TicketCommentAdded</c> = a ticket note; <c>TicketRecalled</c> = an audited history entry; <c>TicketClosed</c> = the existing system
+/// as that employee; <c>TicketReturned</c> = the owner is released and the ticket returns to <c>Open</c> in its department's queue (queue-managed tickets
+/// only, through <c>Ticket.ReturnToQueue</c>; the generic status table is untouched); <c>TicketCommentAdded</c> = a ticket note; <c>TicketRecalled</c> = an audited history entry; <c>TicketClosed</c> = the existing system
 /// closure with outcome Resolved; <c>TicketCancelled</c> = the same closure with outcome Cancelled.
 /// </para>
 ///
@@ -35,8 +35,9 @@ namespace TigerCS.Application.Modules.QueueingIntegration.Services;
 /// one row and is answered with the stored outcome. State-changing events carry the queue ticket's own sequence: an event older than the applied state is
 /// recorded as superseded and never overwrites it; comments and recalls only add records, so a late one is still recorded. An event that cannot be applied
 /// <i>yet</i> - the ticket does not exist yet, or a mapping is missing - is kept Unresolved with a backoff and retried (by the retry sweep, by redelivery, and
-/// as soon as the ticket is created); nothing is guessed. The integration's own state (link, inbox row) is staged on the same unit of work as the ticket
-/// change, so it commits in the very transaction of that change; if the change is refused or fails, the staged state is discarded and only the failure is recorded.
+/// as soon as the ticket is created); nothing is guessed (a missing request-type mapping holds the event until it exists). Every event is applied in ONE database transaction
+/// together with the integration's own state (link, inbox row, audit); if the change is refused or fails, everything is rolled back and only the failure is recorded
+/// afterwards, in a separate small transaction.
 /// </para>
 /// </summary>
 public sealed class QueueingEventProcessor(
