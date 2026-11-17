@@ -37,7 +37,8 @@ public sealed class DashboardCustomerLocationRenderTests
                 "/api/dashboard/overview" => new DashboardOverviewDto(
                     new DashboardAppliedFiltersDto(new DateOnly(2026, 8, 12), new DateOnly(2026, 9, 10), 2, null, null, null, null, null),
                     new DashboardKpisDto(0, 0, 0, 0, 0, 0), 0, [], [], [], [], [], [], [],
-                    new DashboardFilterOptionsDto([new DashboardFilterOptionDto("2", "Customer Service")], [], [], [], [], []), location),
+                    new DashboardFilterOptionsDto([new DashboardFilterOptionDto("2", "Customer Service")], [], [], [], [], [])),
+                "/api/dashboard/customers-by-location" => (object?)location,
                 "/api/customers" => new CustomerDirectoryListResultDto([], 0, 1, 25),
                 _ => null,
             };

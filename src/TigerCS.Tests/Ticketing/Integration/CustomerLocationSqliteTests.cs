@@ -265,7 +265,7 @@ public sealed class CustomerLocationSqliteTests : IDisposable
     }
 
     [Fact]
-    public async Task AnOverview_CarriesTheCard_WithPercentagesOfTheTotal_AndTheSameNumbersAsTheCustomersList()
+    public async Task TheCard_HasPercentagesOfTheTotal_AndTheSameNumbersAsTheCustomersList()
     {
         using (var context = _db.CreateContext())
         {
@@ -276,15 +276,13 @@ public sealed class CustomerLocationSqliteTests : IDisposable
         }
 
         using var scope = _db.CreateContext();
-        var overview = await _db.CreateService(scope).GetOverviewAsync(Guid.NewGuid(), CrossDepartment, new DashboardOverviewRequestDto(DateFrom: new DateOnly(2026, 9, 1), DateTo: new DateOnly(2026, 9, 10)));
-
-        var card = overview.CustomerLocation!;
+        var request = new DashboardOverviewRequestDto(DateFrom: new DateOnly(2026, 9, 1), DateTo: new DateOnly(2026, 9, 10));
+        var card = (await _db.CreateService(scope).GetCustomerLocationAsync(Guid.NewGuid(), CrossDepartment, request))!;
         Assert.Equal((3, 1, 1, 5), (card.WithinUae, card.OutsideUae, card.Unknown, card.Total));
         Assert.Equal((60.0, 20.0, 20.0), (card.WithinUaePercentage, card.OutsideUaePercentage, card.UnknownPercentage));
 
         // The card's request, replayed against the directory with the applied filters, returns the same number of customers.
-        var f = overview.Filters;
-        var list = await ListAsync(new CustomerDirectoryListRequestDto(DateFrom: f.DateFrom, DateTo: f.DateTo, Location: CustomerLocationKeys.WithinUae));
+        var list = await ListAsync(new CustomerDirectoryListRequestDto(DateFrom: request.DateFrom, DateTo: request.DateTo, Location: CustomerLocationKeys.WithinUae));
         Assert.Equal(card.WithinUae, list.TotalCount);
     }
 
@@ -292,8 +290,8 @@ public sealed class CustomerLocationSqliteTests : IDisposable
     public async Task AnEmptyScope_YieldsZeroEverywhere_WithoutDividingByZero()
     {
         using var scope = _db.CreateContext();
-        var overview = await _db.CreateService(scope).GetOverviewAsync(Guid.NewGuid(), CrossDepartment, new DashboardOverviewRequestDto());
+        var card = await _db.CreateService(scope).GetCustomerLocationAsync(Guid.NewGuid(), CrossDepartment, new DashboardOverviewRequestDto());
 
-        Assert.Equal(new DashboardCustomerLocationDto(0, 0, 0, 0, 0, 0, 0), overview.CustomerLocation);
+        Assert.Equal(new DashboardCustomerLocationDto(0, 0, 0, 0, 0, 0, 0), card);
     }
 }

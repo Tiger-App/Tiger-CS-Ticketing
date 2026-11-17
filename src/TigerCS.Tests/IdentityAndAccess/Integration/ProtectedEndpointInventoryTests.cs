@@ -191,6 +191,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["POST /api/customers/{customerKey}/documents/send"] = nameof(CrmDocuments.CustomerDocumentsEndpointTests.SystemAdministrator_IsAuthorizedOnEveryDocumentsRoute_ThroughTheOverride),
         ["GET /api/dashboard"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboard_Returns200),
         ["GET /api/dashboard/overview"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboardOverview_Returns200),
+        ["GET /api/dashboard/customers-by-location"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboardCustomersByLocation_Returns200),
 
         // Reports (CS Manager tier) — covered by TeamPerformanceEndpointsTests
         // (CS Manager / GM / Chairman succeed, CS Agent and the department

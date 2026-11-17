@@ -179,9 +179,6 @@ public sealed class DashboardAppService(
             requestTypeDepartmentIds: agentScope is null ? scope : null,
             cancellationToken);
 
-        var customerLocation = await GetCustomerLocationAsync(
-            callerEmployeeId, callerRoles, dateFrom, dateTo, request, ticketStatus, cancellationToken);
-
         return new DashboardOverviewDto(
             new DashboardAppliedFiltersDto(
                 dateFrom, dateTo, request.DepartmentId, request.OwnerEmployeeId, request.ChannelId,
@@ -222,23 +219,26 @@ public sealed class DashboardAppService(
                 // its real status in the breakdowns and in its own row; it is
                 // only the filter that stops offering it.
                 TicketStatusTransitions.ActiveStatuses.Select(s => new DashboardFilterOptionDto(s.ToString(), s.ToString())).ToList(),
-                options.Priorities.Select(o => new DashboardFilterOptionDto(o.Id.ToString(), o.Label, o.GroupId, o.IsActive)).ToList()),
-            customerLocation);
+                options.Priorities.Select(o => new DashboardFilterOptionDto(o.Id.ToString(), o.Label, o.GroupId, o.IsActive)).ToList()));
     }
 
     /// <summary>
-    /// Customers by Location, computed by the Customers directory's own query (<see cref="CustomerDirectoryAppService.CountByLocationAsync"/>)
-    /// with the dashboard's range and filters, so the card and the Customers list its counts open are one query over one visibility
-    /// scope. Reads only TigerCS's persisted tickets/intakes — no CRM call — and a failure here never takes the rest of the dashboard down.
+    /// Customers by Location (<c>GET /api/dashboard/customers-by-location</c>), computed by the Customers directory's own query
+    /// (<see cref="CustomerDirectoryAppService.CountByLocationAsync"/>) with the dashboard's range and filters, so the card and the Customers list its
+    /// counts open are one query over one visibility scope. Reads only TigerCS's persisted tickets/intakes — no CRM call. A read of its own, not part of
+    /// the overview: the customer aggregate is the heaviest number on the page, so it neither slows nor can fail the rest of the dashboard.
+    /// Returns null when the Customers directory is not wired.
     /// </summary>
-    private async Task<DashboardCustomerLocationDto?> GetCustomerLocationAsync(
-        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, DateOnly dateFrom, DateOnly dateTo,
-        DashboardOverviewRequestDto request, TicketStatus? ticketStatus, CancellationToken cancellationToken)
+    public async Task<DashboardCustomerLocationDto?> GetCustomerLocationAsync(
+        Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, DashboardOverviewRequestDto request, CancellationToken cancellationToken = default)
     {
         if (customerDirectoryAppService is null)
         {
             return null;
         }
+
+        var (dateFrom, dateTo) = ResolvePeriod(request.DateFrom, request.DateTo, DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime));
+        var ticketStatus = ParseStatus(request.TicketStatus);
 
         var counts = await customerDirectoryAppService.CountByLocationAsync(
             callerEmployeeId, callerRoles,

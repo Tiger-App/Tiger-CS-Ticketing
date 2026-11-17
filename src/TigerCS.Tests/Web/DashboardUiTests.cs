@@ -193,15 +193,20 @@ public sealed class DashboardUiTests
         await model.OnGetAsync(
             new DateOnly(2026, 9, 1), new DateOnly(2026, 9, 10), 2, ViewerId, 1, 9, "InProgress", 2, CancellationToken.None);
 
-        var query = Query(new Uri(handler.Requests.Single().RequestUri).PathAndQuery);
-        Assert.Equal("2026-09-01", query["dateFrom"]);
-        Assert.Equal("2026-09-10", query["dateTo"]);
-        Assert.Equal("2", query["departmentId"]);
-        Assert.Equal(ViewerId.ToString(), query["ownerEmployeeId"]);
-        Assert.Equal("1", query["channelId"]);
-        Assert.Equal("9", query["requestTypeId"]);
-        Assert.Equal("InProgress", query["ticketStatus"]);
-        Assert.Equal("2", query["priorityId"]);
+        // Two reads: the overview, and the Customers by Location card (a read of its own). BOTH carry every filter, so the card counts what the page shows.
+        Assert.Equal(2, handler.Requests.Count);
+        foreach (var path in new[] { "/api/dashboard/overview", "/api/dashboard/customers-by-location" })
+        {
+            var query = Query(new Uri(handler.Requests.Single(r => new Uri(r.RequestUri).AbsolutePath == path).RequestUri).PathAndQuery);
+            Assert.Equal("2026-09-01", query["dateFrom"]);
+            Assert.Equal("2026-09-10", query["dateTo"]);
+            Assert.Equal("2", query["departmentId"]);
+            Assert.Equal(ViewerId.ToString(), query["ownerEmployeeId"]);
+            Assert.Equal("1", query["channelId"]);
+            Assert.Equal("9", query["requestTypeId"]);
+            Assert.Equal("InProgress", query["ticketStatus"]);
+            Assert.Equal("2", query["priorityId"]);
+        }
 
         Assert.True(model.HasFilters);
         Assert.Equal("Collections", model.DepartmentLabel(2));

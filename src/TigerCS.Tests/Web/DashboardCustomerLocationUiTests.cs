@@ -20,16 +20,13 @@ public sealed class DashboardCustomerLocationUiTests
     private static readonly DashboardAppliedFiltersDto Filters =
         new(new DateOnly(2026, 8, 12), new DateOnly(2026, 9, 10), 4, Guid.Parse("11111111-1111-1111-1111-111111111111"), 3, 17, "Open", 2);
 
-    private static DashboardOverviewDto OverviewWith(DashboardCustomerLocationDto? location) =>
-        new(Filters, new DashboardKpisDto(0, 0, 0, 0, 0, 0), 0, [], [], [], [], [], [],
-            [], new DashboardFilterOptionsDto([], [], [], [], [], []), location);
 
     private static readonly DashboardCustomerLocationDto Counts = new(30, 60, 15, 30, 5, 10, 50);
 
     [Fact]
     public void TheCard_ShowsTheApisCountsAndShares_AndNothingIsRecomputed()
     {
-        var card = DashboardModel.BuildCustomerLocationCard(OverviewWith(Counts), canOpenCustomers: true)!;
+        var card = DashboardModel.BuildCustomerLocationCard(Filters, Counts, canOpenCustomers: true)!;
 
         Assert.Equal((30, 60.0), (card.Within.Count, card.Within.Percentage));
         Assert.Equal((15, 30.0), (card.Outside.Count, card.Outside.Percentage));
@@ -40,20 +37,20 @@ public sealed class DashboardCustomerLocationUiTests
     [Fact]
     public void Unknown_IsShownOnlyWhenGreaterThanZero()
     {
-        Assert.NotNull(DashboardModel.BuildCustomerLocationCard(OverviewWith(Counts), true)!.Unknown);
-        Assert.Null(DashboardModel.BuildCustomerLocationCard(OverviewWith(new DashboardCustomerLocationDto(30, 66.7, 15, 33.3, 0, 0, 45)), true)!.Unknown);
+        Assert.NotNull(DashboardModel.BuildCustomerLocationCard(Filters, Counts, true)!.Unknown);
+        Assert.Null(DashboardModel.BuildCustomerLocationCard(Filters, new DashboardCustomerLocationDto(30, 66.7, 15, 33.3, 0, 0, 45), true)!.Unknown);
     }
 
     [Fact]
     public void NoCardIsBuilt_WhenTheApiSentNone()
     {
-        Assert.Null(DashboardModel.BuildCustomerLocationCard(OverviewWith(null), true));
+        Assert.Null(DashboardModel.BuildCustomerLocationCard(Filters, null, true));
     }
 
     [Fact]
     public void BarSegments_AreStylesheetClasses_NeverInlineStyles()
     {
-        var card = DashboardModel.BuildCustomerLocationCard(OverviewWith(Counts), true)!;
+        var card = DashboardModel.BuildCustomerLocationCard(Filters, Counts, true)!;
 
         Assert.Equal("bar-fill--w60", card.Within.WidthClass);
         Assert.Equal("bar-fill--w30", card.Outside.WidthClass);
@@ -65,7 +62,7 @@ public sealed class DashboardCustomerLocationUiTests
     [Fact]
     public void BothCounts_LinkToTheCustomersList_WithEveryDashboardFilter()
     {
-        var card = DashboardModel.BuildCustomerLocationCard(OverviewWith(Counts), true)!;
+        var card = DashboardModel.BuildCustomerLocationCard(Filters, Counts, true)!;
 
         foreach (var (segment, location) in new[] { (card.Within, "within-uae"), (card.Outside, "outside-uae") })
         {
@@ -87,7 +84,7 @@ public sealed class DashboardCustomerLocationUiTests
     [Fact]
     public void WithoutAccessToTheCustomersDirectory_TheCountsAreFiguresNotLinks()
     {
-        var card = DashboardModel.BuildCustomerLocationCard(OverviewWith(Counts), canOpenCustomers: false)!;
+        var card = DashboardModel.BuildCustomerLocationCard(Filters, Counts, canOpenCustomers: false)!;
 
         Assert.All(new[] { card.Within, card.Outside, card.Unknown! }, s => Assert.Null(s.Href));
         Assert.Equal(30, card.Within.Count);
@@ -97,7 +94,7 @@ public sealed class DashboardCustomerLocationUiTests
     [Fact]
     public async Task TheLinkRoundTrips_IntoTheApiRequestTheCustomersPageMakes()
     {
-        var card = DashboardModel.BuildCustomerLocationCard(OverviewWith(Counts), true)!;
+        var card = DashboardModel.BuildCustomerLocationCard(Filters, Counts, true)!;
         var q = HttpUtility.ParseQueryString(new Uri("http://x" + card.Within.Href).Query);
 
         var handler = new FakeApiHandler((_, _) => FakeApiHandler.JsonResponse(HttpStatusCode.OK, new CustomerDirectoryListResultDto([], 0, 1, 25)));

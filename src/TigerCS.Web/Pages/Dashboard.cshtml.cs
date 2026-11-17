@@ -148,6 +148,9 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
     public ClosureSummary? Closure { get; private set; }
     public IReadOnlyList<DashboardBarCard> BreakdownCards { get; private set; } = [];
 
+    /// <summary>The Customers by Location figures from their own Api read; null when that read failed or returned nothing — the card is then simply absent and the rest of the dashboard is unaffected.</summary>
+    public DashboardCustomerLocationDto? CustomerLocationData { get; private set; }
+
     /// <summary>True when the user narrowed anything beyond the defaults — the filter bar then offers "Clear".</summary>
     public bool HasFilters =>
         DateFrom is not null || DateTo is not null || DepartmentId is not null || OwnerEmployeeId is not null
@@ -192,6 +195,11 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
         Cards = BuildCards(Overview, Viewer);
         Closure = BuildClosureSummary(Overview);
         BreakdownCards = BuildBreakdownCards(Overview);
+
+        // The card has a read of its own: a failure there costs only the card, never the dashboard.
+        var location = await dashboardApiClient.GetCustomersByLocationAsync(
+            new DashboardOverviewRequestDto(DateFrom, DateTo, DepartmentId, OwnerEmployeeId, ChannelId, RequestTypeId, TicketStatus, PriorityId), cancellationToken);
+        CustomerLocationData = location.IsSuccess ? location.Value : null;
     }
 
     /// <summary>
@@ -199,14 +207,13 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
     /// (<see cref="DashboardLinks.CustomersByLocation"/>) unless the viewer cannot open it (<paramref name="canOpenCustomers"/> false), in
     /// which case they are plain figures rather than links that would only lead to a refusal.
     /// </summary>
-    public static CustomerLocationCard? BuildCustomerLocationCard(DashboardOverviewDto o, bool canOpenCustomers)
+    public static CustomerLocationCard? BuildCustomerLocationCard(DashboardAppliedFiltersDto f, DashboardCustomerLocationDto? c, bool canOpenCustomers)
     {
-        if (o.CustomerLocation is not { } c)
+        if (c is null)
         {
             return null;
         }
 
-        var f = o.Filters;
         string? Href(TigerCS.Domain.Modules.Ticketing.CustomerLocation location) => canOpenCustomers ? DashboardLinks.CustomersByLocation(f, location) : null;
         return new CustomerLocationCard(
             new CustomerLocationSegment("within", "Within UAE", c.WithinUae, c.WithinUaePercentage, Href(TigerCS.Domain.Modules.Ticketing.CustomerLocation.WithinUae)),

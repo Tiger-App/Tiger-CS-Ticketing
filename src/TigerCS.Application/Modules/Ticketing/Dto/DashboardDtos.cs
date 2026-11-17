@@ -109,7 +109,6 @@ public sealed record DashboardOverviewRequestDto(
 /// <param name="BacklogAgeing">Active tickets by age bucket; percentages are of <see cref="DashboardKpisDto.OpenTickets"/>.</param>
 /// <param name="RecentTickets">The Recent/Critical rows, most urgent first.</param>
 /// <param name="FilterOptions">The picker options, restricted to the caller's scope.</param>
-/// <param name="CustomerLocation">Customers by Location: distinct customers placed by their phone's country code over the same range, filters and visibility; null when the service that computes it is not wired.</param>
 public sealed record DashboardOverviewDto(
     DashboardAppliedFiltersDto Filters,
     DashboardKpisDto Kpis,
@@ -121,11 +120,10 @@ public sealed record DashboardOverviewDto(
     IReadOnlyList<DashboardBreakdownItemDto> PriorityBreakdown,
     IReadOnlyList<DashboardBreakdownItemDto> BacklogAgeing,
     IReadOnlyList<DashboardRecentTicketDto> RecentTickets,
-    DashboardFilterOptionsDto FilterOptions,
-    DashboardCustomerLocationDto? CustomerLocation = null);
+    DashboardFilterOptionsDto FilterOptions);
 
 /// <summary>
-/// The Customers by Location card: DISTINCT customers (the existing customer identity — CRM Buyer id, else external id, else canonical
+/// The Customers by Location card (<c>GET /api/dashboard/customers-by-location</c>, a read of its own so the heavier customer aggregate never slows or fails the overview): DISTINCT customers (the existing customer identity — CRM Buyer id, else external id, else canonical
 /// phone — never tickets) in the dashboard's date range, filters and visibility, placed by their phone number's country code alone.
 /// The three buckets are mutually exclusive, so <see cref="Total"/> = Within + Outside + Unknown and every percentage is of <see cref="Total"/>.
 /// </summary>
