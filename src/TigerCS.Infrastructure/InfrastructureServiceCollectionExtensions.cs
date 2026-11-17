@@ -258,6 +258,11 @@ public static class InfrastructureServiceCollectionExtensions
         // aggregate over Identity role membership and the ticket history
         // tables; the Api's CsManagerOrGeneralManager policy guards it.
         services.AddScoped<ITeamPerformanceQueryRepository, TeamPerformanceQueryRepository>();
+        // Employee response time (Genesys AI -> human voice transfers). TigerCS receives no per-agent offer event and holds no shift / leave
+        // history yet, so the only registrations are the "no data" ones: every offer is then Availability Unknown, never a guess.
+        // Replace both when the integrations in docs/Employee-Response-Time-Reporting.md exist.
+        services.TryAddSingleton<IGenesysOfferHistory, NoGenesysOfferHistory>();
+        services.TryAddSingleton<IEmployeeShiftHistory, NoEmployeeShiftHistory>();
         services.AddScoped<TeamPerformanceAppService>();
         var reopenWindowDays = configuration.GetValue("Ticketing:ReopenWindowDays", ReopenPolicy.DefaultWindowDays);
         if (reopenWindowDays < 1)

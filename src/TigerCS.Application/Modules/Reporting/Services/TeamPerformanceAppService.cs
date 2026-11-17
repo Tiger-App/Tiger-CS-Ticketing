@@ -46,7 +46,9 @@ namespace TigerCS.Application.Modules.Reporting.Services;
 public sealed class TeamPerformanceAppService(
     ITeamPerformanceQueryRepository repository,
     TimeProvider timeProvider,
-    IServiceIdentityRegistry? serviceIdentities = null)
+    IServiceIdentityRegistry? serviceIdentities = null,
+    IGenesysOfferHistory? offerHistory = null,
+    IEmployeeShiftHistory? shiftHistory = null)
 {
     /// <summary>
     /// The Call Center department's code — the same code
@@ -230,6 +232,11 @@ public sealed class TeamPerformanceAppService(
 
         var configuration = await repository.GetSlaConfigurationAsync(cancellationToken);
 
+        // Employee response time is a SEPARATE measurement from the ticket SLA above: nothing computed here feeds back into `evaluations`,
+        // `summary`, the counts or the ticket's recorded SLA state.
+        var employeeResponses = await BuildEmployeeResponsesAsync(
+            employee.EmployeeId, RangeStartUtc(dateFrom), RangeEndUtc(dateTo), cancellationToken);
+
         return new TeamPerformanceSlaDetailsResult(
             TeamPerformanceSlaDetailsOutcome.Success,
             new TeamPerformanceSlaDetailsDto(
@@ -251,8 +258,94 @@ public sealed class TeamPerformanceAppService(
                 sorted.Skip((page - 1) * pageSize).Take(pageSize).ToList(),
                 typeFilter,
                 typeBreakdown,
-                statusCounts));
+                statusCounts,
+                EmployeeResponseSummaryOf(employeeResponses),
+                employeeResponses));
     }
+
+    /// <summary>
+    /// Every Genesys call offer received by THIS employee in the period, classified by <see cref="EmployeeOfferClassifier"/>, plus calls they
+    /// are recorded as having connected to for which no offer event exists (shown as Availability Unknown: their answer time is real, but
+    /// without the offer there is nothing to measure it from). An offer to another agent on the same ticket never appears here, and another
+    /// agent's answer is never attributed to this employee.
+    /// </summary>
+    private async Task<IReadOnlyList<EmployeeOfferResponseDto>> BuildEmployeeResponsesAsync(
+        Guid employeeId, DateTime rangeStartUtc, DateTime rangeEndUtc, CancellationToken cancellationToken)
+    {
+        var offers = await (offerHistory ?? NoOfferHistory).GetOffersAsync(employeeId, rangeStartUtc, rangeEndUtc, cancellationToken);
+        var connected = await repository.GetConnectedCallsAsync(employeeId, rangeStartUtc, rangeEndUtc, cancellationToken);
+        var shifts = shiftHistory ?? NoShiftHistory;
+
+        var offeredTickets = offers.Select(o => o.TicketId).ToHashSet();
+        var withoutOffer = connected.Where(c => !offeredTickets.Contains(c.TicketId)).ToList();
+
+        var numbers = await repository.GetTicketNumbersAsync(
+            offers.Select(o => o.TicketId).Concat(withoutOffer.Select(c => c.TicketId)).Distinct().ToList(), cancellationToken);
+        string NumberOf(long ticketId) => numbers.TryGetValue(ticketId, out var n) ? n : $"#{ticketId}";
+
+        var result = new List<EmployeeOfferResponseDto>();
+        foreach (var offer in offers)
+        {
+            var shift = offer.OfferedAtUtc is { } at
+                ? await shifts.GetVerdictAsync(employeeId, at, cancellationToken)
+                : ShiftVerdict.Unknown;
+            var verdict = EmployeeOfferClassifier.Classify(offer, shift);
+            var counts = verdict.Outcome is EmployeeOfferOutcomes.Answered or EmployeeOfferOutcomes.NotResponding;
+            result.Add(new EmployeeOfferResponseDto(
+                offer.TicketId, NumberOf(offer.TicketId), offer.OfferedAtUtc,
+                verdict.Outcome == EmployeeOfferOutcomes.Answered ? offer.AnsweredAtUtc : null,
+                verdict.ResponseSeconds, FormatSeconds(verdict.ResponseSeconds), verdict.Outcome, verdict.Explanation, counts));
+        }
+
+        foreach (var call in withoutOffer)
+        {
+            var verdict = EmployeeOfferClassifier.Classify(
+                new GenesysOfferRecord(call.TicketId, null, null, GenesysOfferOutcome.Answered, call.ConnectedAtUtc), ShiftVerdict.Unknown);
+            result.Add(new EmployeeOfferResponseDto(
+                call.TicketId, NumberOf(call.TicketId), null, call.ConnectedAtUtc, null, "—", verdict.Outcome, verdict.Explanation, false));
+        }
+
+        return result
+            .OrderByDescending(r => r.OfferedAtUtc ?? r.AnsweredAtUtc)
+            .ThenByDescending(r => r.TicketId)
+            .ToList();
+    }
+
+    private static EmployeeResponseSummaryDto EmployeeResponseSummaryOf(IReadOnlyList<EmployeeOfferResponseDto> rows)
+    {
+        var answered = rows.Where(r => r.Outcome == EmployeeOfferOutcomes.Answered && r.ResponseSeconds is not null).ToList();
+        double? average = answered.Count == 0 ? null : answered.Average(r => r.ResponseSeconds!.Value);
+        return new EmployeeResponseSummaryDto(
+            rows.Count,
+            answered.Count,
+            rows.Count(r => r.Outcome == EmployeeOfferOutcomes.NotResponding),
+            rows.Count(r => r.Outcome == EmployeeOfferOutcomes.OutsideShift),
+            rows.Count(r => r.Outcome == EmployeeOfferOutcomes.AvailabilityUnknown),
+            average,
+            FormatSeconds(average));
+    }
+
+    /// <summary>"12 s", "1 m 5 s", "1 h 2 m 3 s"; "—" for nothing. Whole seconds, rounded.</summary>
+    public static string FormatSeconds(double? seconds)
+    {
+        if (seconds is null)
+        {
+            return "—";
+        }
+
+        var total = (long)Math.Round(seconds.Value, MidpointRounding.AwayFromZero);
+        var h = total / 3600;
+        var m = total % 3600 / 60;
+        var s = total % 60;
+        var parts = new List<string>(3);
+        if (h > 0) parts.Add($"{h} h");
+        if (h > 0 || m > 0) parts.Add($"{m} m");
+        parts.Add($"{s} s");
+        return string.Join(' ', parts);
+    }
+
+    private static readonly IGenesysOfferHistory NoOfferHistory = new NoGenesysOfferHistory();
+    private static readonly IEmployeeShiftHistory NoShiftHistory = new NoEmployeeShiftHistory();
 
     public const int DefaultPageSize = 25;
     public const int MaxPageSize = 100;
