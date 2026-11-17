@@ -411,6 +411,9 @@ public static class EmployeeOfferOutcomes
     public const string Answered = "Answered";
     public const string NotResponding = "Not Responding";
     public const string OutsideShift = "Outside Shift";
+    public const string Declined = "Declined";
+    public const string Redirected = "Redirected";
+    public const string CallerAbandoned = "Caller Abandoned";
     public const string AvailabilityUnknown = "Availability Unknown";
 }
 
@@ -449,7 +452,10 @@ public sealed record EmployeeResponseSummaryDto(
     int OutsideShift,
     int AvailabilityUnknown,
     double? AverageResponseSeconds,
-    string AverageResponseText);
+    string AverageResponseText,
+    int Declined = 0,
+    int Redirected = 0,
+    int CallerAbandoned = 0);
 
 /// <summary>How an SLA details request landed.</summary>
 public enum TeamPerformanceSlaDetailsOutcome

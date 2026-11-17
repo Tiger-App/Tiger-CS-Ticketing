@@ -322,7 +322,10 @@ public sealed class TeamPerformanceAppService(
             rows.Count(r => r.Outcome == EmployeeOfferOutcomes.OutsideShift),
             rows.Count(r => r.Outcome == EmployeeOfferOutcomes.AvailabilityUnknown),
             average,
-            FormatSeconds(average));
+            FormatSeconds(average),
+            rows.Count(r => r.Outcome == EmployeeOfferOutcomes.Declined),
+            rows.Count(r => r.Outcome == EmployeeOfferOutcomes.Redirected),
+            rows.Count(r => r.Outcome == EmployeeOfferOutcomes.CallerAbandoned));
     }
 
     /// <summary>"12 s", "1 m 5 s", "1 h 2 m 3 s"; "—" for nothing. Whole seconds, rounded.</summary>

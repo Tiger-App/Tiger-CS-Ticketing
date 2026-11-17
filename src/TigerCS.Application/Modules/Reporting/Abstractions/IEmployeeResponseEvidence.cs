@@ -12,6 +12,15 @@ public enum GenesysOfferOutcome
     /// <summary>Genesys explicitly confirms the offered agent did not respond to this offer (the offer timed out unanswered). Only Genesys can say this.</summary>
     NoAnswerConfirmed = 2,
 
+    /// <summary>Genesys explicitly confirms the offered agent declined this offer. Shown separately; not performance-scored until a policy is agreed.</summary>
+    Declined = 4,
+
+    /// <summary>Genesys explicitly confirms the offer was redirected/transferred away to another target. Shown separately; not performance-scored until a policy is agreed.</summary>
+    Redirected = 5,
+
+    /// <summary>Genesys explicitly confirms the caller abandoned while this offer was alerting. Shown separately; not performance-scored until a policy is agreed.</summary>
+    CallerAbandoned = 6,
+
     /// <summary>The offer's result is not known or not confirmed — still alerting, declined/redirected/cancelled for a reason the business has not ruled on, or simply not reported.</summary>
     Unverified = 3
 }

@@ -56,6 +56,17 @@ public static class EmployeeOfferClassifier
                     EmployeeOfferOutcomes.NotResponding, null,
                     "Genesys confirms the employee did not respond to this in-shift offer. Tracked separately from the ticket SLA.");
 
+            // Confirmed, but no scoring policy exists yet: reported as what they are, never as Not Responding, and not performance-counted.
+            case GenesysOfferOutcome.Declined:
+                return new EmployeeOfferVerdict(EmployeeOfferOutcomes.Declined, null,
+                    "Genesys confirms the employee declined this offer. Shown separately and excluded from performance scoring until a policy is agreed.");
+            case GenesysOfferOutcome.Redirected:
+                return new EmployeeOfferVerdict(EmployeeOfferOutcomes.Redirected, null,
+                    "Genesys confirms this offer was redirected away. Shown separately and excluded from performance scoring until a policy is agreed.");
+            case GenesysOfferOutcome.CallerAbandoned:
+                return new EmployeeOfferVerdict(EmployeeOfferOutcomes.CallerAbandoned, null,
+                    "Genesys confirms the caller abandoned during this offer. Shown separately and excluded from performance scoring until a policy is agreed.");
+
             default:
                 return Unknown("Genesys did not confirm the outcome of this offer (or its answer time is missing or precedes the offer).");
         }

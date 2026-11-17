@@ -319,6 +319,31 @@ public sealed class EmployeeResponseTimeTests : IDisposable
         Assert.Equal(0, a.EmployeeResponseSummary!.NotResponding);
     }
 
+    [Theory]
+    [InlineData(GenesysOfferOutcome.Declined, "Declined")]
+    [InlineData(GenesysOfferOutcome.Redirected, "Redirected")]
+    [InlineData(GenesysOfferOutcome.CallerAbandoned, "Caller Abandoned")]
+    public async Task ConfirmedDeclinedRedirectedOrAbandoned_AreShownSeparately_NeverNotResponding_AndNotScored(GenesysOfferOutcome outcome, string label)
+    {
+        var offers = new FakeOffers((_agentA, OfferTo(Offer, outcome)));
+
+        var details = await DetailsAsync(_agentA, offers, InShift);
+
+        var row = Assert.Single(details.EmployeeResponses!);
+        Assert.Equal(label, row.Outcome);
+        Assert.False(row.CountsTowardPerformance);
+        Assert.Equal(0, details.EmployeeResponseSummary!.NotResponding);
+        Assert.Equal(1, details.EmployeeResponseSummary.Declined + details.EmployeeResponseSummary.Redirected + details.EmployeeResponseSummary.CallerAbandoned);
+        await AssertTicketSlaUnchangedAsync(_agentA, details);
+    }
+
+    [Fact]
+    public async Task DeclinedOutsideTheShift_IsStillOutsideShift()
+    {
+        var details = await DetailsAsync(_agentA, new FakeOffers((_agentA, OfferTo(Offer, GenesysOfferOutcome.Declined))), new FakeShifts((_, _) => ShiftVerdict.OutsideShift));
+        Assert.Equal("Outside Shift", Assert.Single(details.EmployeeResponses!).Outcome);
+    }
+
     [Fact]
     public async Task OffersOutsideThePeriod_AreNotListed()
     {

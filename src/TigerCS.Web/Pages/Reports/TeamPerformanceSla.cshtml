@@ -202,6 +202,7 @@
                 <p class="sla-secondary">Offers: <strong>@rs.Offers</strong>
                     · Answered: <strong>@rs.Answered</strong>@(rs.Answered > 0 ? $" (average {rs.AverageResponseText})" : "")
                     · Not Responding: <strong>@rs.NotResponding</strong>
+                    · Declined / Redirected / Caller Abandoned (shown separately, not scored): <strong>@rs.Declined</strong> / <strong>@rs.Redirected</strong> / <strong>@rs.CallerAbandoned</strong>
                     · Outside Shift (excluded): <strong>@rs.OutsideShift</strong>
                     · Availability Unknown (excluded): <strong>@rs.AvailabilityUnknown</strong></p>
                 @if (responses.Count == 0)
