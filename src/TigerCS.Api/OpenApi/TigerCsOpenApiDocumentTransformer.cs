@@ -27,6 +27,9 @@ internal sealed class TigerCsOpenApiDocumentTransformer : IOpenApiDocumentTransf
     /// </summary>
     public const string BearerSchemeName = "Bearer";
 
+    /// <summary>The Queueing System's API-key scheme (header <c>X-Queueing-Api-Key</c>), used only by <c>POST /api/integrations/queueing/events</c>.</summary>
+    public const string QueueingApiKeySchemeName = "QueueingApiKey";
+
     public Task TransformAsync(
         OpenApiDocument document, OpenApiDocumentTransformerContext context, CancellationToken cancellationToken)
     {
@@ -60,6 +63,16 @@ internal sealed class TigerCsOpenApiDocumentTransformer : IOpenApiDocumentTransf
             Description =
                 "Paste only the access token returned by POST /api/auth/login — do not include the " +
                 "word \"Bearer\". Swagger UI sends it as: Authorization: Bearer {token}."
+        };
+
+        document.Components.SecuritySchemes[QueueingApiKeySchemeName] = new OpenApiSecurityScheme
+        {
+            Type = SecuritySchemeType.ApiKey,
+            In = ParameterLocation.Header,
+            Name = TigerCS.Api.Integrations.QueueingApiKeyDefaults.DefaultHeaderName,
+            Description =
+                "The Queueing System's own API key (not a staff token). Only the key's SHA-256 is configured in TigerCS " +
+                "(QueueingIntegration:Authentication:ApiKeys). It opens POST /api/integrations/queueing/events and nothing else."
         };
 
         // Declared up-front and in a fixed order so Swagger UI renders the

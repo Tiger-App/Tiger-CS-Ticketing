@@ -1,0 +1,15 @@
+<Project>
+
+  <!--
+    The Queueing System's sending side - a SEPARATE solution from TigerCS (src/). It references nothing from TigerCS: the only coupling is the HTTP contract in
+    docs/QueueingIntegration (and the sample JSON files there, which this project's tests also check).
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <LangVersion>14.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+</Project>

@@ -291,6 +291,9 @@ public enum TicketMutationOutcome
 {
     Success,
 
+    /// <summary>The ticket belongs to the Queueing System, which is the source of truth for its assignment, status and closure; a manual change here is refused (<c>QueueingIntegration:ManualChangePolicy</c>).</summary>
+    QueueManagedTicket,
+
     /// <summary>Reassign was sent with the ticket's own department and no employee: there is nothing to change. Pick an employee, or another department.</summary>
     AssignmentTargetRequired,
     NotFound,

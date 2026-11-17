@@ -67,6 +67,7 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// <param name="RequestTypeId">Optional (Workflow/Automation phase 2): the configured Request Type this ticket follows. Must be an active request type of the department the ticket routes to; when present it drives the workflow capabilities and the automatic assignment rule.</param>
 /// <param name="AssignToDepartmentQueue">Optional. A CS Agent creating a ticket by hand is made its owner when they are eligible (an active member of the ticket's department) and no assignment rule or setting already decided; <c>true</c> is the agent explicitly choosing the Department Queue instead, and is respected. Ignored for every other caller and for Genesys-created tickets.</param>
 /// <param name="SkipDefaultClassification">Set only by the Genesys ingestion when it is about to classify the new ticket with a validated request type itself: the ticket is then created without the Customer Services / General fallback. Every other caller leaves it null - a ticket with no valid classification is created as Customer Services / General.</param>
+/// <param name="ExternalOrigin">Set only by an integration that owns the ticket's lifecycle (the Queueing System): created unassigned, with the source and external ids recorded, and with no customer acknowledgement. Every other caller leaves it null.</param>
 /// <param name="GenesysContext">Optional (Workflow/Automation phase 2): the Genesys-provided interaction context, persisted verbatim for traceability. Absent for Face-to-Face and every other locally-created interaction.</param>
 public sealed record CreateTicketRequestDto(
     long IntakeRecordId,
@@ -93,7 +94,18 @@ public sealed record CreateTicketRequestDto(
     GenesysIntegration.Dto.GenesysInteractionContextDto? GenesysContext = null,
     int? DepartmentId = null,
     bool? AssignToDepartmentQueue = null,
-    bool? SkipDefaultClassification = null);
+    bool? SkipDefaultClassification = null,
+    ExternalTicketOriginDto? ExternalOrigin = null);
+
+/// <summary>
+/// Set only by an integration that owns the new ticket's lifecycle (the Queueing System). The ticket is created classified exactly as the caller
+/// names it, <b>unassigned</b> (no Call Center first, no rule, no rotation, no creator self-assignment - the external system decides who serves it),
+/// carries the source and the external id / reference, and sends the customer no acknowledgement (the source already told the customer).
+/// </summary>
+/// <param name="Source">One of <c>TicketIntegrationSources</c>.</param>
+/// <param name="ExternalTicketId">The source system's id for the ticket; unique per source at the database.</param>
+/// <param name="ExternalReference">The number the customer was shown (the queue number), or null.</param>
+public sealed record ExternalTicketOriginDto(string Source, string ExternalTicketId, string? ExternalReference);
 
 /// <summary>A newly created ticket (MVP-API-Contracts.md §3.1).</summary>
 /// <param name="TicketId">The ticket.</param>

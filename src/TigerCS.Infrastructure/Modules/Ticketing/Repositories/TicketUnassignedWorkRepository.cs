@@ -20,7 +20,9 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
     public async Task<IReadOnlyList<UnassignedTicketEvidence>> ListOpenUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default)
     {
         var tickets = await db.Tickets.AsNoTracking()
-            .Where(t => t.TicketId > afterTicketId && t.TicketStatus == TicketStatus.Open && t.CurrentOwnerEmployeeId == null)
+            // A queue-managed ticket waits unassigned by design: the Queueing System, not a reconciler, names who serves it.
+            .Where(t => t.TicketId > afterTicketId && t.TicketStatus == TicketStatus.Open && t.CurrentOwnerEmployeeId == null
+                && (t.IntegrationSource == null || t.IntegrationSource != TicketIntegrationSources.QueueingSystem))
             .OrderBy(t => t.TicketId)
             .Take(limit)
             .Select(t => new TicketRow(t.TicketId, t.TicketNumber, t.TicketStatus, t.CurrentOwnerEmployeeId, t.CurrentDepartmentId, t.OriginatingDepartmentId, t.CreatedAtUtc, t.FirstHumanResponseAtUtc))
@@ -32,7 +34,8 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
     {
         var tickets = await db.Tickets.AsNoTracking()
             .Where(t => t.TicketId > afterTicketId && t.CurrentOwnerEmployeeId == null
-                && t.TicketStatus != TicketStatus.Resolved && t.TicketStatus != TicketStatus.Closed)
+                && t.TicketStatus != TicketStatus.Resolved && t.TicketStatus != TicketStatus.Closed
+                && (t.IntegrationSource == null || t.IntegrationSource != TicketIntegrationSources.QueueingSystem))
             .OrderBy(t => t.TicketId)
             .Take(limit)
             .Select(t => new TicketRow(t.TicketId, t.TicketNumber, t.TicketStatus, t.CurrentOwnerEmployeeId, t.CurrentDepartmentId, t.OriginatingDepartmentId, t.CreatedAtUtc, t.FirstHumanResponseAtUtc))

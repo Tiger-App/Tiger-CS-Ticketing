@@ -1,0 +1,1556 @@
+{
+  "info": {
+    "name": "TigerCS <-> Queueing System - Receiving API",
+    "description": "The eight events the Queueing System sends to TigerCS (POST /api/integrations/queueing/events). Set baseUrl and apiKey (never commit the key) and the mapped ids in the environment. Folder 2 is one queue ticket's whole life: run it top to bottom - the collection generates the EventId, ExternalTicketId, sequence and timestamps as it goes.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://localhost:7001"
+    },
+    {
+      "key": "apiKey",
+      "value": ""
+    },
+    {
+      "key": "companyId",
+      "value": "company-a"
+    },
+    {
+      "key": "ticketTypeId",
+      "value": "type-complaint"
+    },
+    {
+      "key": "queueUserA",
+      "value": "queue-user-a"
+    },
+    {
+      "key": "queueUserB",
+      "value": "queue-user-b"
+    },
+    {
+      "key": "customerPhone",
+      "value": "+971500000123"
+    },
+    {
+      "key": "externalTicketId",
+      "value": ""
+    },
+    {
+      "key": "eventId",
+      "value": ""
+    },
+    {
+      "key": "sequence",
+      "value": "0"
+    },
+    {
+      "key": "occurredAtUtc",
+      "value": ""
+    },
+    {
+      "key": "ticketId",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Security",
+      "item": [
+        {
+          "name": "1.1 No API key -> 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');",
+                  "// Every run of the collection is a new queue ticket.",
+                  "pm.collectionVariables.set('externalTicketId', 'QT-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-001\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerName\": \"Aisha Khan\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"CustomerEmail\": \"aisha@example.test\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "1.2 Wrong API key -> 401",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "definitely-not-the-key"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-001\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerName\": \"Aisha Khan\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"CustomerEmail\": \"aisha@example.test\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. One queue ticket's whole life (run top to bottom)",
+      "item": [
+        {
+          "name": "2.1 TicketCreated (QR scan)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');",
+                  "// Every run of the collection is a new queue ticket.",
+                  "pm.collectionVariables.set('externalTicketId', 'QT-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = TICKET_CREATED', () => pm.expect(b.outcome).to.eql('TICKET_CREATED'));",
+                  "pm.collectionVariables.set('ticketId', b.ticketId);",
+                  "pm.test('ticket number returned', () => pm.expect(b.ticketNumber).to.be.a('string'));",
+                  "pm.test('created Open', () => pm.expect(b.ticketStatus).to.eql('Open'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-017\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerName\": \"Aisha Khan\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"CustomerEmail\": \"aisha@example.test\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Creates exactly one unassigned TigerCS ticket (Walk in / Kiosk channel, mapped department and request type, SLA started at OccurredAtUtc)."
+          }
+        },
+        {
+          "name": "2.2 TicketCreated again with a new EventId -> still one ticket",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = TICKET_ALREADY_EXISTS', () => pm.expect(b.outcome).to.eql('TICKET_ALREADY_EXISTS'));",
+                  "pm.test('same ticket', () => pm.expect(b.ticketId).to.eql(Number(pm.collectionVariables.get('ticketId'))));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-017\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerName\": \"Aisha Khan\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"CustomerEmail\": \"aisha@example.test\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "2.3 TicketAssigned",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '2');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));",
+                  "pm.test('work started', () => pm.expect(b.ticketStatus).to.eql('InProgress'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketAssigned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"AssignedUserId\": \"{{queueUserA}}\",\n  \"PerformedByUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-3\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "2.4 Resend 2.3 unchanged -> Duplicate",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('redeliver', 'yes');",
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '2');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Duplicate', () => pm.expect(b.status).to.eql('Duplicate'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketAssigned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"AssignedUserId\": \"{{queueUserA}}\",\n  \"PerformedByUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-3\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Same EventId and same content as 2.3: the original outcome is returned and nothing is applied twice."
+          }
+        },
+        {
+          "name": "2.5 TicketCommentAdded",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '3');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCommentAdded\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"PerformedByUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-3\",\n  \"Comment\": \"Customer needs a copy of the title deed.\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "2.6 TicketRecalled",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '4');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketRecalled\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"PerformedByUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-3\",\n  \"Reason\": \"Customer did not respond to the first call\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "2.7 TicketReturned (back to the waiting queue)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '5');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));",
+                  "pm.test('back to Open', () => pm.expect(b.ticketStatus).to.eql('Open'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketReturned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"PerformedByUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-3\",\n  \"Reason\": \"Customer stepped away\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "2.8 TicketReassigned",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '6');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketReassigned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"AssignedUserId\": \"{{queueUserB}}\",\n  \"PerformedByUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-5\",\n  \"Reason\": \"Specialist required\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "2.9 A stale event (older sequence) is superseded, never applied",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '3');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Superseded', () => pm.expect(b.status).to.eql('Superseded'));",
+                  "pm.test('outcome = STALE_EVENT', () => pm.expect(b.outcome).to.eql('STALE_EVENT'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketAssigned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"AssignedUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-3\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": "Sequence 3 arrives after the ticket is at sequence 6: recorded for the audit trail, the ticket is unchanged."
+          }
+        },
+        {
+          "name": "2.10 TicketClosed",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '7');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));",
+                  "pm.test('closed', () => pm.expect(b.ticketStatus).to.eql('Closed'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketClosed\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"PerformedByUserId\": \"{{queueUserB}}\",\n  \"CounterId\": \"counter-5\",\n  \"Reason\": \"Served\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "2.11 A state change after closure is rejected",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '8');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Rejected', () => pm.expect(b.status).to.eql('Rejected'));",
+                  "pm.test('outcome = TICKET_ALREADY_CLOSED', () => pm.expect(b.outcome).to.eql('TICKET_ALREADY_CLOSED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketAssigned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"AssignedUserId\": \"{{queueUserA}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Cancellation",
+      "item": [
+        {
+          "name": "3.1 TicketCreated",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');",
+                  "// Every run of the collection is a new queue ticket.",
+                  "pm.collectionVariables.set('externalTicketId', 'QT-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = TICKET_CREATED', () => pm.expect(b.outcome).to.eql('TICKET_CREATED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-018\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerName\": \"Aisha Khan\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"CustomerEmail\": \"aisha@example.test\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "3.2 TicketCancelled",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '2');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = APPLIED', () => pm.expect(b.outcome).to.eql('APPLIED'));",
+                  "pm.test('closed (Cancelled outcome)', () => pm.expect(b.ticketStatus).to.eql('Closed'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCancelled\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"PerformedByUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-3\",\n  \"Reason\": \"Customer left the branch\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Ordering, mappings and validation",
+      "item": [
+        {
+          "name": "4.1 Event before its ticket -> 202, applied once the ticket is created",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '2');",
+                  "pm.collectionVariables.set('externalTicketId', 'QT-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Pending', () => pm.expect(b.status).to.eql('Pending'));",
+                  "pm.test('outcome = AWAITING_TICKET_CREATED', () => pm.expect(b.outcome).to.eql('AWAITING_TICKET_CREATED'));",
+                  "pm.test('retryable', () => pm.expect(b.retryable).to.eql(true));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketAssigned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"AssignedUserId\": \"{{queueUserA}}\",\n  \"CounterId\": \"counter-3\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "4.2 ...now the ticket is created: the stored assignment is applied",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));",
+                  "pm.test('outcome = TICKET_CREATED', () => pm.expect(b.outcome).to.eql('TICKET_CREATED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-019\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerName\": \"Aisha Khan\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"CustomerEmail\": \"aisha@example.test\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "4.3 Unmapped employee -> 202 USER_NOT_MAPPED, ticket not assigned",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '3');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Pending', () => pm.expect(b.status).to.eql('Pending'));",
+                  "pm.test('outcome = USER_NOT_MAPPED', () => pm.expect(b.outcome).to.eql('USER_NOT_MAPPED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketReassigned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"AssignedUserId\": \"queue-user-not-mapped\",\n  \"CounterId\": \"counter-3\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "4.4 Unmapped company -> 202 COMPANY_NOT_MAPPED, no ticket (a department is never guessed)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');",
+                  "pm.collectionVariables.set('externalTicketId', 'QT-' + Date.now());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 202', () => pm.response.to.have.status(202));",
+                  "const b = pm.response.json();",
+                  "pm.test('status = Pending', () => pm.expect(b.status).to.eql('Pending'));",
+                  "pm.test('outcome = COMPANY_NOT_MAPPED', () => pm.expect(b.outcome).to.eql('COMPANY_NOT_MAPPED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-020\",\n  \"CompanyId\": \"company-not-mapped\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "4.5 Same EventId as 4.4, different content -> 409",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('redeliver', 'yes');",
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 409', () => pm.response.to.have.status(409));",
+                  "pm.test('EVENT_ID_REUSED', () => pm.expect(pm.response.json().outcome).to.eql('EVENT_ID_REUSED'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-DIFFERENT\",\n  \"CompanyId\": \"company-not-mapped\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"CustomerPhone\": \"{{customerPhone}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "4.6 TicketCreated without CustomerPhone -> 400 (mandatory)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '1');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "pm.test('names CustomerPhone', () => pm.expect(Object.keys(pm.response.json().errors)).to.include('CustomerPhone'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"QT-no-phone\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-021\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        },
+        {
+          "name": "4.7 Missing required field -> 400, per event type",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.",
+                  "if (!pm.collectionVariables.get('redeliver')) {",
+                  "  pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));",
+                  "  pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());",
+                  "}",
+                  "pm.collectionVariables.unset('redeliver');",
+                  "pm.collectionVariables.set('sequence', '2');"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 400', () => pm.response.to.have.status(400));",
+                  "const b = pm.response.json();",
+                  "pm.test('names AssignedUserId', () => pm.expect(Object.keys(b.errors)).to.include('AssignedUserId'));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Queueing-Api-Key",
+                "value": "{{apiKey}}"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/integrations/queueing/events",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "integrations",
+                "queueing",
+                "events"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketAssigned\",\n  \"ExternalTicketId\": \"{{externalTicketId}}\",\n  \"EventSequence\": {{sequence}},\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "description": ""
+          }
+        }
+      ]
+    }
+  ]
+}

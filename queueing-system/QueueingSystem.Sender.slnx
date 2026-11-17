@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="src/QueueingSystem.TigerCsSender/QueueingSystem.TigerCsSender.csproj" />
+  <Project Path="tests/QueueingSystem.TigerCsSender.Tests/QueueingSystem.TigerCsSender.Tests.csproj" />
+</Solution>

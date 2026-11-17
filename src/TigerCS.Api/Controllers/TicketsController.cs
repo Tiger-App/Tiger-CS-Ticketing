@@ -1208,6 +1208,12 @@ public class TicketsController(
             detail: "This ticket is Closed and no longer accepts assignment, transfer, status changes, resolution, or closing.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
 
+        TicketMutationOutcome.QueueManagedTicket => Problem(
+            type: "https://tigercs.internal/problems/ticket-managed-by-queueing-system",
+            title: "Ticket is managed by the Queueing System",
+            detail: "This ticket was created by the Queueing System, which controls its assignment, status and closure. Make the change in the Queueing System; comments and notes can still be added here.",
+            statusCode: StatusCodes.Status409Conflict),
+
         TicketMutationOutcome.TicketAlreadyOwned => Problem(
             type: "https://tigercs.internal/problems/ticket-already-owned",
             title: "Ticket already has an owner",

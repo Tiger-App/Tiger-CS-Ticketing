@@ -76,6 +76,11 @@ public sealed class TicketCreationAppService(
     /// <param name="request">The ticket to create.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <param name="answeringAgent">Set only by the Genesys ingestion for a call a human agent already answered; see <see cref="TicketAutoAssignmentService.ApplyAnsweringAgentAsync"/>.</param>
+    /// <param name="beforeCommit">
+    /// Set only by an integration that must persist its own state <b>atomically with the ticket</b> (the Queueing System's queue-state row and inbox row). Called with
+    /// the new ticket - its real id already assigned - immediately before the final SaveChanges, so whatever it stages commits in the very transaction that creates the
+    /// ticket and rolls back with it. Never called when creation is refused.
+    /// </param>
     /// <param name="callerRoles">
     /// The caller's roles, when the caller is a person acting in the UI/API. Needed only for self-assignment: a CS Agent who creates a
     /// ticket by hand owns it unless they chose the Department Queue (see <c>TicketAutoAssignmentService.TrySelfAssignAsync</c>). Left
@@ -83,7 +88,8 @@ public sealed class TicketCreationAppService(
     /// </param>
     public async Task<TicketCreationResult> CreateAsync(
         Guid callerEmployeeId, CreateTicketRequestDto request, CancellationToken cancellationToken = default,
-        IReadOnlyCollection<string>? callerRoles = null, AnsweringAgent? answeringAgent = null)
+        IReadOnlyCollection<string>? callerRoles = null, AnsweringAgent? answeringAgent = null,
+        Func<Ticket, CancellationToken, Task>? beforeCommit = null)
     {
         var intakeRecord = await intakeRecordRepository.GetByIdAsync(request.IntakeRecordId, cancellationToken);
         if (intakeRecord is null)
@@ -176,7 +182,10 @@ public sealed class TicketCreationAppService(
         // fields whenever a caller does supply them.
 
         // Human work: a manual ticket, a Genesys inquiry that needs a person, or a call a person already answered. (See the Call Center comment below.)
-        var needsHuman = request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp || answeringAgent is not null;
+        // An integration that owns the ticket's lifecycle (ExternalOrigin) decides who serves it: nothing here assigns, routes to the Call Center or self-assigns.
+        var externallyManaged = request.ExternalOrigin is not null;
+        var needsHuman = !externallyManaged
+            && (request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp || answeringAgent is not null);
 
         // Default classification: a ticket with no classification that can be trusted - none at all, a partial or ambiguous one, or one
         // that names a category / request type that is not usable - is created General / General within its own department (Customer Services'
@@ -356,6 +365,12 @@ public sealed class TicketCreationAppService(
 
             ticket.RecordCreator(callerEmployeeId);
 
+            if (request.ExternalOrigin is { } externalOrigin)
+            {
+                // Written with the ticket in this transaction: the unique (source, external id) index is what makes a duplicate external ticket impossible.
+                ticket.RecordExternalOrigin(externalOrigin.Source, externalOrigin.ExternalTicketId, externalOrigin.ExternalReference);
+            }
+
             // Deployment cutoff: only a ticket created now follows the Original Human Agent workflow. Tickets that existed before stay legacy.
             ticket.EnableOriginalAgentWorkflow();
 
@@ -488,6 +503,10 @@ public sealed class TicketCreationAppService(
                 await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
             }
         }
+        else if (externallyManaged)
+        {
+            // Unassigned by design: the external system (the Queueing System) names the employee later, through its own events.
+        }
         else if (needsHuman
             && collectionsRouting is not null
             && (await collectionsRouting.RouteAsync(ticket, departmentEntry: true, fromCallCenter: false, now, correlationId, cancellationToken)).Handled)
@@ -600,7 +619,15 @@ public sealed class TicketCreationAppService(
                 correlationId, cancellationToken);
         }
 
-        await EnqueueTicketCreatedAsync(ticket, callerEmployeeId, correlationId, now, cancellationToken);
+        if (!ticket.SuppressesCustomerNotifications)
+        {
+            await EnqueueTicketCreatedAsync(ticket, callerEmployeeId, correlationId, now, cancellationToken);
+        }
+
+        if (beforeCommit is not null)
+        {
+            await beforeCommit(ticket, cancellationToken);
+        }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);

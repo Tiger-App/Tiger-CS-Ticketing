@@ -47,10 +47,15 @@ internal sealed class TigerCsOpenApiOperationTransformer : IOpenApiOperationTran
             return Task.CompletedTask;
         }
 
+        // An endpoint that names the Queueing System's own scheme is opened by its API key, not by a staff token.
+        var usesApiKey = metadata.OfType<IAuthorizeData>().Any(a => a.AuthenticationSchemes == TigerCS.Api.Integrations.QueueingApiKeyDefaults.Scheme);
+
         operation.Security ??= [];
         operation.Security.Add(new OpenApiSecurityRequirement
         {
-            [new OpenApiSecuritySchemeReference(TigerCsOpenApiDocumentTransformer.BearerSchemeName, context.Document)] = []
+            [new OpenApiSecuritySchemeReference(
+                usesApiKey ? TigerCsOpenApiDocumentTransformer.QueueingApiKeySchemeName : TigerCsOpenApiDocumentTransformer.BearerSchemeName,
+                context.Document)] = []
         });
 
         operation.Responses ??= new OpenApiResponses();

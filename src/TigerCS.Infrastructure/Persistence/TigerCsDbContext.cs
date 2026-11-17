@@ -155,6 +155,16 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
 
     public DbSet<GenesysScreenPopLaunch> GenesysScreenPopLaunches => Set<GenesysScreenPopLaunch>();
 
+    public DbSet<TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent> QueueingEvents => Set<TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent>();
+
+    public DbSet<TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink> QueueingTicketLinks => Set<TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink>();
+
+    public DbSet<TigerCS.Domain.Modules.QueueingIntegration.QueueingCompanyMapping> QueueingCompanyMappings => Set<TigerCS.Domain.Modules.QueueingIntegration.QueueingCompanyMapping>();
+
+    public DbSet<TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketTypeMapping> QueueingTicketTypeMappings => Set<TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketTypeMapping>();
+
+    public DbSet<TigerCS.Domain.Modules.QueueingIntegration.QueueingUserMapping> QueueingUserMappings => Set<TigerCS.Domain.Modules.QueueingIntegration.QueueingUserMapping>();
+
     public DbSet<CollectionsReminder> CollectionsReminders => Set<CollectionsReminder>();
 
     public DbSet<CollectionsTowerAssignment> CollectionsTowerAssignments => Set<CollectionsTowerAssignment>();
@@ -279,6 +289,11 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new TicketAgentHandoffConfiguration());
         builder.ApplyConfiguration(new GenesysQueueMappingConfiguration());
         builder.ApplyConfiguration(new GenesysScreenPopLaunchConfiguration());
+        builder.ApplyConfiguration(new TigerCS.Infrastructure.Modules.QueueingIntegration.Configurations.QueueingEventConfiguration());
+        builder.ApplyConfiguration(new TigerCS.Infrastructure.Modules.QueueingIntegration.Configurations.QueueingTicketLinkConfiguration());
+        builder.ApplyConfiguration(new TigerCS.Infrastructure.Modules.QueueingIntegration.Configurations.QueueingCompanyMappingConfiguration());
+        builder.ApplyConfiguration(new TigerCS.Infrastructure.Modules.QueueingIntegration.Configurations.QueueingTicketTypeMappingConfiguration());
+        builder.ApplyConfiguration(new TigerCS.Infrastructure.Modules.QueueingIntegration.Configurations.QueueingUserMappingConfiguration());
 
         builder.ApplyConfiguration(new CollectionsReminderConfiguration());
         builder.ApplyConfiguration(new CollectionsTowerAssignmentConfiguration());

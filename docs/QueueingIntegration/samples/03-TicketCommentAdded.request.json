@@ -1,0 +1,10 @@
+{
+  "EventId": "0f6c1d52-3b7a-4a55-9c53-0d6a1f1b0003",
+  "EventType": "TicketCommentAdded",
+  "ExternalTicketId": "QT-20261110-0001",
+  "EventSequence": 3,
+  "PerformedByUserId": "queue-user-a",
+  "CounterId": "counter-3",
+  "Comment": "Customer needs the title deed copy.",
+  "OccurredAtUtc": "2026-11-10T08:36:00Z"
+}
