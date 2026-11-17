@@ -196,7 +196,7 @@ public static class BackgroundJobServiceCollectionExtensions
         }
 
         manager.AddOrUpdate<QueueingEventRetryJob>(QueueingEventRetryJob.RecurringJobId, job => job.RunAsync(CancellationToken.None), "* * * * *");
-        // Daily, in the quiet hours (UTC): erases the payload of successfully processed events past QueueingIntegration:PayloadRetentionDays.
+        // Daily, in the quiet hours (UTC): erases the payload of successfully processed events past QueueingIntegration:EventPayloadRetentionDays.
         manager.AddOrUpdate<QueueingPayloadRetentionJob>(QueueingPayloadRetentionJob.RecurringJobId, job => job.RunAsync(CancellationToken.None), "17 2 * * *");
     }
 

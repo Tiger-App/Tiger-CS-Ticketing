@@ -37,7 +37,7 @@ public sealed class QueueingEventFactory(IEventSequenceProvider sequences, Func<
 
     /// <summary>A customer took a queue ticket. Must be the ticket's first event (sequence 1).</summary>
     public async Task<QueueingEventRequest> CreatedAsync(
-        string externalTicketId, string queueNumber, string companyId, string ticketTypeId, string customerPhone,
+        string externalTicketId, string queueNumber, string companyId, string ticketTypeId, string? customerPhone,
         string? customerName = null, string? customerEmail = null, DateTime? occurredAtUtc = null, CancellationToken cancellationToken = default)
     {
         var sequence = await sequences.NextAsync(externalTicketId, cancellationToken);

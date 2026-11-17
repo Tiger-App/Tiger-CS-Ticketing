@@ -30,7 +30,7 @@ SLA and reporting consistent with it.
 
 - **Department** comes **only** from the company mapping (`QueueingCompanyMappings`). A company with no active mapping is **never guessed**: the event is held (`COMPANY_NOT_MAPPED`, HTTP 202) and retried.
 - **Request type** comes from the (company, ticket type) mapping (`QueueingTicketTypeMappings`), validated by the existing request-type rules: it must be active, published, belong to the company's department, and pair with exactly one category.
-- **If the company is mapped but the ticket type has no active request-type mapping**, the ticket takes **that department's own configured General request type** (the existing default-classification rule), and the gap is **logged** (a warning with the company, ticket type and department ids) and **audited** on the ticket (`RequestTypeMapping=Missing(company=..;ticketType=..);Applied=General(RequestTypeId=..)`). If the department has no usable General (or the rule excludes the department), the event is held (`TICKET_TYPE_NOT_MAPPED`) - no request type is ever invented.
+- **If the company is mapped but the ticket type has no active request-type mapping**, the event **stays pending** (`TICKET_TYPE_NOT_MAPPED`, HTTP 202, `Unresolved`, retried with exponential backoff and on every redelivery) **until a valid mapping exists**. Nothing is guessed: no General / default request type is applied and no ticket is created. The gap is logged (a warning with the company, ticket type and department ids) so an administrator can add the mapping to `QueueingTicketTypeMappings`; the same event then applies by itself. There is **no setting** that changes this (the former default-classification fallback was removed).
 - A mapping that **exists but is unusable** (wrong department, inactive request type, no paired category) is a configuration error, not a gap: the event is held (`REQUEST_TYPE_UNUSABLE`).
 
 ## 2. Authentication
@@ -140,7 +140,7 @@ public sealed record QueueingEventRequest
     /// <summary>Optional. Max 200.</summary>
     public string? CustomerName { get; init; }
 
-    /// <summary>The customer's mobile number. <b>Required on TicketCreated</b> (used for the CRM lookup). Must contain digits; international format (+971...) preferred. Max 32.</summary>
+    /// <summary>The customer's mobile number (used for the CRM lookup). Optional - TigerCS only makes it mandatory when <c>QueueingIntegration:RequireCustomerMobile</c> is on, which needs the Queueing System owners' confirmation first. When sent it must be a valid number (7-15 digits; international format +971... preferred). Max 32.</summary>
     public string? CustomerPhone { get; init; }
 
     /// <summary>Optional. Max 256.</summary>
@@ -177,7 +177,7 @@ public sealed record QueueingEventRequest
     /// </summary>
     public static IReadOnlyList<string> RequiredMembers(QueueingEventType type) => type switch
     {
-        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone"],
+        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId"],
         QueueingEventType.TicketAssigned or QueueingEventType.TicketReassigned => ["AssignedUserId"],
         QueueingEventType.TicketCommentAdded => ["Comment"],
         _ => []
@@ -234,9 +234,15 @@ public sealed record QueueingEventRequest
         Text(nameof(TicketTypeId), TicketTypeId, 100, required.Contains(nameof(TicketTypeId)));
         Text(nameof(CustomerName), CustomerName, 200, false);
         Text(nameof(CustomerPhone), CustomerPhone, 32, required.Contains(nameof(CustomerPhone)));
-        if (!string.IsNullOrWhiteSpace(CustomerPhone) && !CustomerPhone.Any(char.IsAsciiDigit))
+        if (!string.IsNullOrWhiteSpace(CustomerPhone))
         {
-            errors[nameof(CustomerPhone)] = "CustomerPhone must be a phone number.";
+            // Optional unless TigerCS has QueueingIntegration:RequireCustomerMobile switched on (default off - to be confirmed with the Queueing System's owners);
+            // when sent it must be a valid number, as TigerCS refuses a malformed one.
+            var digits = CustomerPhone.Count(char.IsAsciiDigit);
+            if (CustomerPhone.Any(c => !char.IsAsciiDigit(c) && "+-()./ ".IndexOf(c) < 0) || digits is < 7 or > 15)
+            {
+                errors[nameof(CustomerPhone)] = "CustomerPhone must be a phone number (7 to 15 digits; only digits, spaces, '+', '-', '(' and ')').";
+            }
         }
 
         Text(nameof(CustomerEmail), CustomerEmail, 256, false);
@@ -256,7 +262,7 @@ Always required: `EventId`, `EventType`, `ExternalTicketId`, `EventSequence`, `O
 
 | Event | Also required |
 |---|---|
-| TicketCreated | `QueueNumber`, `CompanyId`, `TicketTypeId`, **`CustomerPhone`** (must contain digits) |
+| TicketCreated | `QueueNumber`, `CompanyId`, `TicketTypeId`. **`CustomerPhone` is optional by default** (`QueueingIntegration:RequireCustomerMobile` = `false`); **when it is sent it must be a valid number** (7-15 digits; digits, spaces and `+ - ( ) . /` only) or the event is refused with a `400` validation response naming `CustomerPhone` (nothing is stored). **Open question - not decided by us:** whether the Queueing System always supplies a mobile has **not** been confirmed with its owners; do not switch `RequireCustomerMobile` on, or tell them it is mandatory, until they have confirmed it. |
 | TicketAssigned / TicketReassigned | `AssignedUserId` |
 | TicketCommentAdded | `Comment` |
 | TicketReturned / TicketRecalled / TicketClosed / TicketCancelled | nothing |
@@ -819,15 +825,15 @@ The sender library implements exactly this (`TigerCsEventSender`, `SendDispositi
 ## 8. Reliability
 
 - **Idempotency in the database.** `QueueingEvents` is unique on `(Source, EventId)`; `Tickets` has a filtered unique index on `(IntegrationSource, ExternalTicketId)`; `QueueingTicketLinks` is unique on `TicketId` and on `ExternalTicketId`. Duplicates and concurrent deliveries - on one node or many - can only ever produce one row; the loser is answered with the winner's result.
-- **Atomic creation.** The ticket, its queue-state row, the customer contact, the history entry and the inbox row are written in **one database transaction**: the queue-state and inbox rows are staged inside ticket creation, immediately before its final save. There is no moment at which a ticket exists without its queue state, and **no later event is ever needed to repair an incomplete creation**; if anything fails, the whole creation rolls back (no ticket, no history, no SLA period, no outbox row) and the event stays stored for retry.
-- **Atomic state changes.** For assignment + start of work, return, close and cancel, the integration's own state (queue state and inbox row) is staged on the same unit of work as the ticket change and commits in the very transaction of that change. A refused or failed change leaves the ticket **and** the queue state exactly as they were.
+- **Atomic creation.** The intake record, the ticket (with its SLA period, status history and creation audit), the queue-state row, the customer contact, the integration's own history entry and the inbox row's "processed" mark are written in **one database transaction**. The services involved each begin their own transaction; the unit of work **joins** them to the outer one (a nested begin returns a non-owning scope, so only the owner commits). There is no moment at which a ticket exists without its queue state, and **no later event is ever needed to repair an incomplete creation** (the former "complete the link on the next event" recovery was removed). If anything fails or is refused, the whole creation rolls back - no intake record, ticket, link, contact, history, SLA period, outbox row or audit row - and only afterwards, in a separate small transaction, is the event recorded as pending for retry.
+- **Atomic state changes.** Assignment (owner + assignment history + Open -> InProgress + queue state + inbox row), return, close and cancel, comment and recall are each **one database transaction**. A refused or failed change leaves the ticket **and** the queue state exactly as they were, and the event is recorded as pending afterwards. Two instances applying the same event, or two events for one ticket, at the same moment are arbitrated by the database only (unique `EventId`, unique `(IntegrationSource, ExternalTicketId)`, the row versions of the ticket, of `QueueingTicketLinks` and of `QueueingEvents`); the in-process lock is an optimisation, never the guarantee. A settled event is never downgraded to pending by a loser of such a race.
 - **Out-of-order.** See section 4.
 - **Unresolved events** are persisted and retried with exponential backoff (30 s doubling, cap 1 h, 12 attempts) by a Hangfire job (`queueing-event-retry`, every minute, when `BackgroundJobs:Enabled`) - or immediately by a redelivery of the same `EventId`. Each event is re-read before it is applied, so one event's failure never affects the rest of the batch. After the last attempt it becomes `Failed`; redelivering it starts a fresh cycle.
 - **Original timestamps.** While an event is applied, the application clock answers `OccurredAtUtc` (never later than now): ticket creation time, **SLA period start**, assignment time, status history, resolution time and audit entries carry when it happened in the queue. Retry scheduling and "processed at" use the real time. Nothing else is affected.
 
 ### 8.1 Payload retention
 
-The payload of a **successfully processed** event (customer name, phone, email and the rest of the body) is erased after `QueueingIntegration:PayloadRetentionDays` (default **90**) by a daily job (`queueing-payload-retention`, 02:17 UTC). The row stays: `EventId`, `ExternalTicketId`, `EventType`, `EventSequence`, `OccurredAtUtc`, outcome, ticket link and a SHA-256 **payload hash** - so idempotency (including "same `EventId`, different content -> 409") and the ticket history are unaffected. **Unresolved, failed, superseded and rejected events are never purged by this job.** Zero or negative disables it.
+The raw payload of a **settled** event (processed, superseded or rejected: customer name, phone, email and the rest of the body) is erased after `QueueingIntegration:EventPayloadRetentionDays` (default **90**) by a daily job (`queueing-payload-retention`, 02:17 UTC). The row stays: `EventId`, `EventType`, `ExternalTicketId`, `EventSequence`, `OccurredAtUtc`, status / outcome codes, ticket id, all timestamps (plus `PayloadPurgedAtUtc`) and a SHA-256 **payload hash** written at receipt - so idempotency is unaffected: the same `EventId` redelivered with identical content is still a `Duplicate`, and with different content is still `EVENT_ID_REUSED` (409). **Pending (received / unresolved) and failed events are never purged**: they still need their payload for the retry. Zero or negative disables the job.
 
 ## 9. SLA and history
 
@@ -856,7 +862,8 @@ The payload of a **successfully processed** event (customer name, phone, email a
 | `QueueingIntegration:DefaultTicketPriority` | Starting priority, by name. | `Normal` |
 | `QueueingIntegration:UserLookupMode` | `Mapping` (queue user -> `QueueingUserMappings`) or `EmployeeId` (the queue user id *is* the TigerCS employee id). | `Mapping` |
 | `QueueingIntegration:ManualChangePolicy` | `Block` or `Allow` (section 10). | `Block` |
-| `QueueingIntegration:PayloadRetentionDays` | Days a processed event's payload is kept (section 8.1). `<= 0` disables. | `90` |
+| `QueueingIntegration:EventPayloadRetentionDays` | Days the raw payload of a settled event is kept (section 8.1). `<= 0` disables. | `90` |
+| `QueueingIntegration:RequireCustomerMobile` | Whether `CustomerPhone` is mandatory on `TicketCreated`. A supplied value is always validated. **Confirm with the Queueing System's owners before switching on.** | `false` |
 | `QueueingIntegration:MaxRetryAttempts` | Retries of an unresolved event before it is `Failed`. | `12` |
 | `QueueingIntegration:RetryBaseDelaySeconds` / `MaxRetryDelaySeconds` | Backoff start (doubles) and cap. | `30` / `3600` |
 | `QueueingIntegration:MaxClockSkewSeconds` | How far in the future `OccurredAtUtc` may be. | `300` |
@@ -889,7 +896,7 @@ INSERT INTO QueueingCompanyMappings (CompanyId, DepartmentId, IsActive, CreatedA
 VALUES (N'company-a', (SELECT DepartmentId FROM Departments WHERE Code = N'CS'), 1, SYSUTCDATETIME());
 
 -- (Company, ticket type) -> request type. The request type must belong to the company's department
--- and have exactly one active same-named category. Without a row, the department's General request type is used (and the gap is logged).
+-- and have exactly one active same-named category. Without a row the event is held (pending, retried) until one exists - no General / default request type is ever applied.
 INSERT INTO QueueingTicketTypeMappings (CompanyId, TicketTypeId, RequestTypeId, IsActive, CreatedAtUtc)
 VALUES (N'company-a', N'type-complaint',
         (SELECT RequestTypeId FROM RequestTypes WHERE Name = N'Complaint' AND DepartmentId = (SELECT DepartmentId FROM Departments WHERE Code = N'CS')),
@@ -909,17 +916,19 @@ Run on 2026-11-17 against a **real SQL Server 2022** (Developer, native Linux in
 | Suite | Result |
 |---|---|
 | Build (`dotnet build src/TigerCS.slnx -c Release`) | 0 errors, 0 warnings |
-| TigerCS - full suite (`dotnet test src/TigerCS.slnx`) | **8,915 passed, 0 failed, 56 skipped** |
+| TigerCS - full suite (`dotnet test src/TigerCS.Tests -c Release`) | **8,940 passed, 0 failed, 56 skipped** |
 | Queueing sender (`dotnet test queueing-system/QueueingSystem.Sender.slnx`) | **40 passed, 0 failed** |
 
 - The 56 skipped tests are all `TIGERCS_PERF_SQL` performance tests (a separate gate that CI does not enable); **none** is skipped for lack of SQL Server, which is what CI's "fail if the SQL Server integration tests were skipped" step checks.
-- Queueing tests: 80 in total - 71 on the InMemory host and at unit level (creation, duplicate creation, assignment / reassignment, return to Open, comment, recall, close, cancel, missing mappings, General fallback, mandatory phone, duplicate / out-of-order / concurrent events, unauthorised requests, SLA start at `OccurredAtUtc`, history, notification suppression, manual-change policy, retention, retry-sweep isolation, every sample in this document), **plus 9 on real SQL Server** (`QueueingSqlServerTests`): the shipped migrations create the unique indexes; duplicate creation across two application nodes; 24 concurrent deliveries of one event, and of one queue ticket under different EventIds, across two nodes -> exactly one ticket, one queue-state row, one inbox row; concurrent state events across two nodes settle on the newest with one current owner; **transaction rollback** - a creation that fails at its last step leaves no ticket, history, SLA period, outbox row or audit entry and then succeeds on its own retry; a return and a closure that fail at commit leave the ticket owned / unclosed with its history untouched; retention on the real schema.
-- The real-SQL-Server tests found one defect the InMemory tests could not (a failed event in a retry batch detached the later events from the unit of work, losing their "processed" mark); it is fixed and has a deterministic regression test that fails against the old behaviour.
+- Queueing tests: 107 in total (every one executed) - on the InMemory host and at unit level: creation, duplicate creation, assignment / reassignment, return to Open (and the SLA period untouched), comment, recall, close, cancel, hold on a missing company / ticket-type mapping, optional-but-validated mobile and `RequireCustomerMobile`, duplicate / out-of-order / concurrent events, unauthorised requests, SLA start at `OccurredAtUtc` (also when the event is held and retried hours later), history, no customer notification queued or sent, manual assignment / status / close / **reopen** refused while comments stay open, retention, retry-sweep isolation, every sample in this document - **plus 18 on real SQL Server** (`QueueingSqlServerTests`, `QueueingAtomicitySqlServerTests`): the shipped migrations create the unique indexes; duplicate creation across two nodes; and, with four independent application instances (own host, DbContext and connection each, a no-op in-process lock, released together through a `TaskCompletionSource` gate): one event delivered 24 times at once, one queue ticket under 16 different EventIds, concurrent assign / reassign / return / close / comment / recall, out-of-order and stale events, rollback of a creation that fails after the ticket insert (three different late faults), of an assignment that fails at its second step, of a return and of a closure, of a comment and a recall - each followed by a clean retry of the same event - the unit of work joining an ambient transaction, and retention of processed / superseded / rejected payloads through the real job with idempotency kept by hash.
+- The real-SQL-Server tests found defects the InMemory tests could not: a failed event in a retry batch detached the later events from the unit of work, losing their "processed" mark; and (found in review of the concurrency model) two instances processing the same state event at once could both reach the "settle the event" step, so `QueueingEvents` now carries a `RowVersion`, and a settled event is never downgraded to pending by the loser of such a race. Both have deterministic regression tests.
 - CI (`.github/workflows/ci.yml`) runs the TigerCS suite with SQL Server and the sender solution as a separate job; `db-migration-validation.yml` pins the new tables and columns.
 
 ## 13. Decisions
 
-**Applied** (confirmed by the business): (1) `TicketReturned` releases the employee and returns the ticket to `Open`, for queue-managed tickets only; (2) an unmapped ticket type of a mapped company uses the department's General request type, logged; the department is never guessed; (3) SLA starts at the original `OccurredAtUtc`; (4) `CustomerPhone` is mandatory on `TicketCreated`; (5) manual assignment, status change, close and reopen stay blocked, comments allowed; (6) 90-day configurable payload retention that keeps identifiers and history and never deletes unresolved events; (7) no TigerCS customer SMS/email for queue tickets; (8) `TicketClosed` = Resolved, `TicketCancelled` = Cancelled.
+**Applied** (confirmed by the business): (1) `TicketReturned` releases the employee and returns the ticket to `Open`, for queue-managed tickets only (`Ticket.ReturnToQueue`; the generic InProgress -> Open rule is untouched); (2) an unmapped ticket type of a mapped company is **held pending until a valid mapping exists** - no General / default request type, no ticket, and no setting to change that; (3) SLA starts at the original `OccurredAtUtc`; (4) `CustomerPhone`: if supplied it must be valid, otherwise the event is refused; making it **mandatory** is the setting `RequireCustomerMobile`, default **off** (see the open question below); (5) manual assignment, status change, close and reopen stay blocked (`ManualChangePolicy=Block`), comments allowed; (6) configurable payload retention (`EventPayloadRetentionDays`, default 90) of settled events that keeps identifiers, outcome, timestamps and a content hash and never purges pending events; (7) no TigerCS customer email for queue tickets - none is queued and none is sent; (8) `TicketClosed` = Resolved, `TicketCancelled` = Cancelled.
+
+**Open question for the Queueing System's owners (not answered by this document):** does the Queueing System **always** supply the customer's mobile number on `TicketCreated`? Until they confirm it, `RequireCustomerMobile` stays `false` and `CustomerPhone` is optional; switching it on makes every creation without a mobile fail validation (HTTP 400, nothing stored).
 
 **Still open**
 
@@ -931,5 +940,5 @@ Run on 2026-11-17 against a **real SQL Server 2022** (Developer, native Linux in
 | D8 | Mapping administration UI. | Tables + SQL only. |
 | D10 | `Failed` events need a person. | Visible in `QueueingEvents` (`Status = 6`); no dashboard yet. |
 | D12 | Rate limiting / lockout of the API key. | A wrong key is a plain `401`; limit it at the network gateway. |
-| D13 | Retention of superseded / rejected events' payloads. | Kept (the 90-day rule covers *successfully processed* events only, as decided). Extend the rule if those payloads should also go. |
+| D13 | Retention of pending / failed events' payloads. | Never purged (they still need the payload for their retry). Settled events (processed, superseded, rejected) are purged after `EventPayloadRetentionDays`. |
 | D14 | A company mapped to the Call Center department. | Such a ticket starts `InProgress` (the existing Call Center rule) and unassigned. Avoid mapping a queue company to it. |

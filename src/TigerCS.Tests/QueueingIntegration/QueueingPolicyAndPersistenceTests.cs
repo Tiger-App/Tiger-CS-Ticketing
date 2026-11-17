@@ -64,32 +64,60 @@ public sealed class QueueingPolicyAndPersistenceTests : IClassFixture<QueueingFi
     }
 
     [Fact]
-    public async Task AnUnmappedTicketType_OfAMappedCompany_UsesTheDepartmentsGeneralRequestType_AndLogsTheGap()
+    public async Task AnUnmappedTicketType_OfAMappedCompany_IsHeldPending_EvenWhenTheDepartmentHasAGeneralRequestType_UntilItIsMapped()
     {
         var department = await _f.Factory.CreateDepartmentAsync("General Dept " + Guid.NewGuid().ToString("N")[..6], "G" + Guid.NewGuid().ToString("N")[..8]);
         await _f.Factory.CreateCategoryAsync("General", department);
         var general = await _f.Factory.CreateRequestTypeAsync("General", department);
+        var company = "company-general-" + Guid.NewGuid().ToString("N")[..6];
         await _f.ReadAsync(async db =>
         {
-            db.QueueingCompanyMappings.Add(new QueueingCompanyMapping("company-general", department, DateTime.UtcNow));
+            db.QueueingCompanyMappings.Add(new QueueingCompanyMapping(company, department, DateTime.UtcNow));
             await db.SaveChangesAsync();
             return 0;
         });
 
         var id = NewTicketId();
-        var (http, body) = await _f.PostAsync(Created(id, companyId: "company-general", ticketTypeId: "type-never-mapped"));
+        var request = Created(id, companyId: company, ticketTypeId: "type-never-mapped");
+        var (http, body) = await _f.PostAsync(request);
 
-        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        // Nothing is guessed: no General request type is applied, no ticket exists, the event is kept pending and retried.
+        Assert.Equal(HttpStatusCode.Accepted, http.StatusCode);
+        Assert.Equal(QueueingResultStatus.Pending, body!.Status);
+        Assert.Equal(QueueingOutcomeCodes.TicketTypeNotMapped, body.Outcome);
+        Assert.True(body.Retryable);
+        Assert.Equal(0, await _f.CountTicketsAsync(id));
+        var held = (await _f.FindEventAsync(request.EventId!))!;
+        Assert.Equal(QueueingEventStatus.Unresolved, held.Status);
+        Assert.NotNull(held.NextRetryAtUtc);
+
+        // Still pending after a retry sweep (the mapping is still missing) - and the backoff grows.
+        await _f.MakeRetriesDueAsync();
+        await _f.RetryAsync();
+        Assert.Equal(0, await _f.CountTicketsAsync(id));
+        Assert.Equal(2, (await _f.FindEventAsync(request.EventId!))!.AttemptCount);
+
+        // Once a valid mapping exists the SAME event applies, with that mapped request type.
+        await _f.ReadAsync(async db =>
+        {
+            db.QueueingTicketTypeMappings.Add(new QueueingTicketTypeMapping(company, "type-never-mapped", general, DateTime.UtcNow));
+            await db.SaveChangesAsync();
+            return 0;
+        });
+        await _f.MakeRetriesDueAsync();
+        await _f.RetryAsync();
         var ticket = (await _f.FindTicketAsync(id))!;
-        Assert.Equal(general, ticket.RequestTypeId);                              // the department's own General - never another department's
-        Assert.Equal(department, ticket.CurrentDepartmentId);                     // the department came from the company mapping, never guessed
-        Assert.NotNull(ticket.CategoryId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        var audit = await _f.Factory.GetAuditEntriesAsync(ticket.TicketId.ToString());
-        Assert.Contains(audit, a => a.Action == "QueueingTicketCreated"
-            && a.AfterValue!.Contains("RequestTypeMapping=Missing(company=company-general;ticketType=type-never-mapped)")
-            && a.AfterValue.Contains($"Applied=General(RequestTypeId={general})"));
-        Assert.Equal(body!.TicketId, ticket.TicketId);
+        Assert.Equal(general, ticket.RequestTypeId);
+        Assert.Equal(department, ticket.CurrentDepartmentId);
+        Assert.Equal(QueueingEventStatus.Processed, (await _f.FindEventAsync(request.EventId!))!.Status);
+    }
+
+    [Fact]
+    public void ThereIsNoSettingThatCanSwitchTheHoldOnAMissingMappingOff()
+    {
+        var names = typeof(TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions).GetProperties().Select(p => p.Name).ToList();
+        Assert.DoesNotContain(names, n => n.Contains("Classification", StringComparison.OrdinalIgnoreCase) || n.Contains("Fallback", StringComparison.OrdinalIgnoreCase)
+            || n.Contains("Default", StringComparison.OrdinalIgnoreCase) && n != nameof(TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions.DefaultTicketPriority));
     }
 
     [Fact]

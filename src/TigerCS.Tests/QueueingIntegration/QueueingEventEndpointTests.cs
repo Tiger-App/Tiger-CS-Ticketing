@@ -73,7 +73,7 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
     // ------------------------------------------------------------------ validation, per event type
 
     [Theory]
-    [InlineData("TicketCreated", "QueueNumber,CompanyId,TicketTypeId,CustomerPhone")]
+    [InlineData("TicketCreated", "QueueNumber,CompanyId,TicketTypeId")]
     [InlineData("TicketAssigned", "AssignedUserId")]
     [InlineData("TicketReassigned", "AssignedUserId")]
     [InlineData("TicketCommentAdded", "Comment")]
@@ -321,6 +321,49 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
     }
 
     // ------------------------------------------------------------------ return to queue, comments, recall
+
+    [Fact]
+    public async Task TheSlaPeriodStartsAtTheOriginalOccurredAt_NotAtProcessingTime_EvenWhenTheEventIsHeldAndRetriedLater()
+    {
+        var at = new DateTime(DateTime.UtcNow.Ticks - DateTime.UtcNow.Ticks % TimeSpan.TicksPerSecond, DateTimeKind.Utc).AddHours(-3);
+        var id = NewTicketId();
+        var request = Created(id, at: at, ticketTypeId: "type-late-mapped");
+
+        var (held, _) = await f.PostAsync(request);                         // held: the type is not mapped yet, so it is processed later
+        Assert.Equal(HttpStatusCode.Accepted, held.StatusCode);
+        await f.ReadAsync(async db => { db.QueueingTicketTypeMappings.Add(new QueueingTicketTypeMapping(CompanyId, "type-late-mapped", f.RequestTypeId, DateTime.UtcNow)); await db.SaveChangesAsync(); return 0; });
+        await f.MakeRetriesDueAsync();
+        await f.RetryAsync();                                               // processed by the retry sweep, hours after it happened
+
+        var ticket = (await f.FindTicketAsync(id))!;
+        var sla = (await f.Factory.GetCurrentSlaInstanceAsync(ticket.TicketId))!;
+        Assert.Equal(at, sla.PeriodStartAtUtc);                             // exactly the event's own time
+        Assert.Equal(at, ticket.CreatedAtUtc);
+        Assert.Equal(at, (await f.FindEventAsync(request.EventId!))!.OccurredAtUtc);
+        Assert.True(sla.FirstResponseDueAtUtc > at && sla.ResolutionDueAtUtc > sla.FirstResponseDueAtUtc);
+        var history = await f.ReadAsync(db => db.TicketStatusHistoryEntries.AsNoTracking().Where(h => h.TicketId == ticket.TicketId).ToListAsync());
+        Assert.NotEmpty(history);
+        Assert.All(history, h => Assert.Equal(at, h.OccurredAtUtc));        // everything recorded at creation carries when it happened in the queue
+        Assert.True((DateTime.UtcNow - ((await f.FindEventAsync(request.EventId!))!.ProcessedAtUtc!.Value)).TotalMinutes < 5, "the inbox row records the real processing time");
+    }
+
+    [Fact]
+    public async Task Return_LeavesTheSlaPeriodUntouched_NoPeriodIsClosedOpenedOrBreached()
+    {
+        var id = NewTicketId();
+        await f.PostAsync(Created(id));
+        await f.PostAsync(f.Assigned(id, 2));
+        var ticket = (await f.FindTicketAsync(id))!;
+        var before = await f.ReadAsync(db => db.TicketSlaInstances.AsNoTracking().Where(i => i.TicketId == ticket.TicketId).ToListAsync());
+
+        await f.PostAsync(Simple("TicketReturned", id, 3));
+
+        var after = await f.ReadAsync(db => db.TicketSlaInstances.AsNoTracking().Where(i => i.TicketId == ticket.TicketId).ToListAsync());
+        Assert.Equal(before.Select(i => i.TicketSlaInstanceId), after.Select(i => i.TicketSlaInstanceId));
+        Assert.All(after, i => Assert.Null(i.PeriodEndAtUtc));
+        Assert.All(after, i => Assert.False(i.FirstResponseBreached));
+        Assert.Null((await f.FindTicketAsync(id))!.FirstHumanResponseAtUtc);                  // still not a first response
+    }
 
     [Fact]
     public async Task Return_ReleasesTheOwner_AndTheTicketWaitsInTheDepartmentQueue()
@@ -730,22 +773,42 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
     // ------------------------------------------------------------------ customer notifications
 
     [Fact]
-    public async Task TheCustomerIsNeverEmailedByTigerCs_ForAQueueTicket()
+    public async Task TheCustomerIsNeverEmailedNorQueuedForAnEmail_ForAnyEventOfAQueueTicket()
     {
-        var id = NewTicketId();
-        var (_, created) = await f.PostAsync(Created(id));
-        await f.PostAsync(f.Assigned(id, 2));
-        await f.PostAsync(Simple("TicketClosed", id, 3));
-        await f.Factory.RunOutboxDispatchAsync();
+        var served = NewTicketId();
+        var cancelled = NewTicketId();
+        var (_, created) = await f.PostAsync(Created(served));
+        var (_, createdCancelled) = await f.PostAsync(Created(cancelled));
+        await f.PostAsync(f.Assigned(served, 2));                                              // assign (Open -> InProgress)
+        await f.PostAsync(f.Assigned(served, 3, f.QueueUserB, type: "TicketReassigned"));      // reassign
+        await f.PostAsync(Simple("TicketReturned", served, 4, reason: "stepped away"));        // return (InProgress -> Open)
+        await f.PostAsync(Simple("TicketCommentAdded", served, 5, comment: "customer asked for a form"));
+        await f.PostAsync(Simple("TicketRecalled", served, 6));
+        await f.PostAsync(f.Assigned(served, 7));                                              // assigned again
+        await f.PostAsync(Simple("TicketClosed", served, 8));                                  // close
+        await f.PostAsync(Simple("TicketCancelled", cancelled, 2));                            // cancel
 
-        var ticketId = created!.TicketId!.Value;
-        var notifications = await f.Factory.GetNotificationsAsync(ticketId);
-        Assert.DoesNotContain(notifications, n => n.DeliveryStatus == NotificationDeliveryStatus.Sent);
-        Assert.NotEmpty(notifications);
-        Assert.All(notifications, n => Assert.Equal(NotificationDeliveryStatus.Skipped, n.DeliveryStatus));
-        Assert.DoesNotContain(f.Factory.EmailSender.Recorded, m => m.Audience == TigerCS.Application.Modules.Notifications.Abstractions.EmailAudience.Customer && m.ToAddress == "aisha@example.test");
-        // The acknowledgement is not even queued.
-        Assert.DoesNotContain(await f.Factory.GetOutboxMessagesAsync(), m => m.EventType == "TicketCreated" && m.Payload.Contains($"\"ticketId\":{ticketId},"));
+        // Nothing was even queued for the customer: the outbox holds no customer-facing event for either ticket (only the internal "assigned to you" one may exist).
+        var ids = new[] { created!.TicketId!.Value, createdCancelled!.TicketId!.Value };
+        var outbox = (await f.Factory.GetOutboxMessagesAsync())
+            .Where(m => ids.Any(id => m.Payload.Contains($"\"ticketId\":{id},") || m.Payload.Contains($"\"ticketId\":{id}}}")))
+            .ToList();
+        Assert.DoesNotContain(outbox, m => m.EventType != TigerCS.Domain.Infrastructure.OutboxEventTypes.TicketAssignedToAgent);
+
+        await f.Factory.RunOutboxDispatchAsync();
+        foreach (var id in ids)
+        {
+            var notifications = await f.Factory.GetNotificationsAsync(id);
+            Assert.DoesNotContain(notifications, n => n.RecipientEmployeeId is null);          // no customer notification row of any status
+            Assert.DoesNotContain(notifications, n => n.DeliveryStatus == NotificationDeliveryStatus.Sent && n.RecipientEmployeeId is null);
+        }
+
+        // ...and the sender received nothing addressed to the customer.
+        Assert.DoesNotContain(f.Factory.EmailSender.Recorded, m =>
+            m.Audience == TigerCS.Application.Modules.Notifications.Abstractions.EmailAudience.Customer
+            && (m.ToAddress == "aisha@example.test"));
+        Assert.Equal(TicketStatus.Closed, (await f.FindTicketAsync(served))!.TicketStatus);
+        Assert.Equal(TicketStatus.Closed, (await f.FindTicketAsync(cancelled))!.TicketStatus);
     }
 
     // ------------------------------------------------------------------ manual changes in TigerCS
@@ -775,6 +838,29 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         var notes = scope.ServiceProvider.GetRequiredService<TicketNoteAppService>();
         var note = await notes.AddNoteAsync(manager, roles, ticketId, new CreateNoteRequestDto("A TigerCS-side comment"));
         Assert.Equal(NoteOutcome.Success, note.Outcome);
+    }
+
+    [Fact]
+    public async Task ManualReopening_OfAClosedQueueTicket_IsRefused_ByDefault_AndTheTicketStaysClosed()
+    {
+        Assert.Equal(QueueingManualChangePolicy.Block, f.Options.ManualChangePolicy);   // the default
+        var id = NewTicketId();
+        var (_, created) = await f.PostAsync(Created(id));
+        await f.PostAsync(f.Assigned(id, 2));
+        await f.PostAsync(Simple("TicketClosed", id, 3));
+        var closed = (await f.FindTicketAsync(id))!;
+        Assert.Equal(TicketStatus.Closed, closed.TicketStatus);
+        var manager = (await f.Factory.SeedEmployeeAsync(Roles.CsManager)).EmployeeId;
+
+        using var scope = f.Factory.Services.CreateScope();
+        var lifecycle = scope.ServiceProvider.GetRequiredService<TicketLifecycleAppService>();
+        var reopen = await lifecycle.ReopenAsync(
+            manager, [Roles.CsManager], created!.TicketId!.Value, new ReopenTicketRequestDto("The customer came back.", f.DepartmentId, closed.RowVersion));
+
+        Assert.Equal(TicketMutationOutcome.QueueManagedTicket, reopen.Outcome);
+        var after = (await f.FindTicketAsync(id))!;
+        Assert.Equal(TicketStatus.Closed, after.TicketStatus);
+        Assert.Equal(closed.ReopenCount, after.ReopenCount);
     }
 
     [Fact]
@@ -830,15 +916,68 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
     }
 
     [Fact]
-    public async Task CustomerPhone_IsMandatoryOnCreation_AndMustLookLikeANumber()
+    public async Task CustomerMobile_IsOptionalByDefault_SoACreationWithoutOneStillCreatesTheTicket()
     {
-        var (http, body) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null });
-        Assert.Equal(HttpStatusCode.BadRequest, http.StatusCode);
-        Assert.Contains("CustomerPhone", body!.Errors!.Keys);
+        Assert.False(f.Options.RequireCustomerMobile);   // default: not confirmed with the Queueing System's owners
+        var id = NewTicketId();
+        var (http, _) = await f.PostAsync(Created(id) with { CustomerPhone = null });
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        Assert.Equal(1, await f.CountTicketsAsync(id));
+    }
 
-        var (http2, body2) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = "not a number" });
-        Assert.Equal(HttpStatusCode.BadRequest, http2.StatusCode);
-        Assert.Contains("CustomerPhone", body2!.Errors!.Keys);
+    [Theory]
+    [InlineData("not a number")]
+    [InlineData("12ab34567")]
+    [InlineData("+")]
+    [InlineData("123")]
+    [InlineData("12345678901234567890")]
+    [InlineData("+971-50-abc-123")]
+    public async Task ASuppliedCustomerMobile_MustBeValid_WhateverTheRequirementSetting_OrTheEventIsRefusedAndStoresNothing(string phone)
+    {
+        var request = Created(NewTicketId()) with { CustomerPhone = phone };
+        var (http, body) = await f.PostAsync(request);
+        Assert.Equal(HttpStatusCode.BadRequest, http.StatusCode);   // the integration's one validation response: 400 + per-field errors
+        Assert.Equal(QueueingResultStatus.Invalid, body!.Status);
+        Assert.Contains("CustomerPhone", body.Errors!.Keys);
+        Assert.Null(await f.FindEventAsync(request.EventId!));
+        Assert.Equal(0, await f.CountTicketsAsync(request.ExternalTicketId!));
+    }
+
+    [Theory]
+    [InlineData("+971500000123")]
+    [InlineData("+971 50 000 0123")]
+    [InlineData("(050) 000-0123")]
+    [InlineData("00971500000123")]
+    public async Task AValidCustomerMobile_IsAccepted_InAnyCommonWriting(string phone)
+    {
+        var (http, _) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = phone });
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+    }
+
+    [Fact]
+    public async Task WhenRequireCustomerMobileIsOn_ACreationWithoutAMobileIsRefused_AndOnlyACreation()
+    {
+        f.Options.RequireCustomerMobile = true;
+        try
+        {
+            var (http, body) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null });
+            Assert.Equal(HttpStatusCode.BadRequest, http.StatusCode);
+            Assert.Contains("CustomerPhone", body!.Errors!.Keys);
+
+            var (blank, blankBody) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = "   " });
+            Assert.Equal(HttpStatusCode.BadRequest, blank.StatusCode);
+            Assert.Contains("CustomerPhone", blankBody!.Errors!.Keys);
+
+            var id = NewTicketId();
+            var (ok, _) = await f.PostAsync(Created(id));
+            Assert.Equal(HttpStatusCode.Created, ok.StatusCode);
+            var (assigned, _) = await f.PostAsync(f.Assigned(id, 2));   // later events never need a mobile
+            Assert.Equal(HttpStatusCode.OK, assigned.StatusCode);
+        }
+        finally
+        {
+            f.Options.RequireCustomerMobile = false;
+        }
     }
 
     [Fact]
@@ -936,8 +1075,8 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
     [Fact]
     public async Task Retention_CanBeSwitchedOff()
     {
-        var previous = f.Options.PayloadRetentionDays;
-        f.Options.PayloadRetentionDays = 0;
+        var previous = f.Options.EventPayloadRetentionDays;
+        f.Options.EventPayloadRetentionDays = 0;
         try
         {
             using var scope = f.Factory.Services.CreateScope();
@@ -945,7 +1084,7 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         }
         finally
         {
-            f.Options.PayloadRetentionDays = previous;
+            f.Options.EventPayloadRetentionDays = previous;
         }
     }
 

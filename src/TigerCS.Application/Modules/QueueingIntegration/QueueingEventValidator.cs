@@ -11,10 +11,17 @@ public static class QueueingEventValidator
 {
     private const int IdMax = QueueingTicketLink.ExternalIdMaxLength;
 
-    /// <summary>The fields each event type requires beyond the envelope (EventId, EventType, ExternalTicketId, EventSequence, OccurredAtUtc).</summary>
+    /// <summary>E.164 allows at most 15 digits; nothing shorter than 7 is a dialable number.</summary>
+    public const int MinPhoneDigits = 7;
+    public const int MaxPhoneDigits = 15;
+
+    /// <summary>
+    /// The fields each event type requires beyond the envelope (EventId, EventType, ExternalTicketId, EventSequence, OccurredAtUtc). <c>CustomerPhone</c> is deliberately not
+    /// here: it is required on TicketCreated only when <c>QueueingIntegration:RequireCustomerMobile</c> is switched on (default off); when supplied it is always validated.
+    /// </summary>
     public static readonly IReadOnlyDictionary<QueueingEventType, string[]> RequiredFields = new Dictionary<QueueingEventType, string[]>
     {
-        [QueueingEventType.TicketCreated] = ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone"],
+        [QueueingEventType.TicketCreated] = ["QueueNumber", "CompanyId", "TicketTypeId"],
         [QueueingEventType.TicketAssigned] = ["AssignedUserId"],
         [QueueingEventType.TicketReassigned] = ["AssignedUserId"],
         [QueueingEventType.TicketReturned] = [],
@@ -115,10 +122,16 @@ public static class QueueingEventValidator
         var comment = Text("Comment", request.Comment, options.MaxCommentLength, required: type == QueueingEventType.TicketCommentAdded);
         var reason = Text("Reason", request.Reason, QueueingEvent.DetailMaxLength, required: false);
         var customerName = Text("CustomerName", request.CustomerName, 200, required: false);
-        var customerPhone = Text("CustomerPhone", request.CustomerPhone, 32, required: type == QueueingEventType.TicketCreated);
-        if (customerPhone is not null && !TigerCS.Domain.Modules.Ticketing.CustomerPhoneNumber.LooksLikeNumber(customerPhone))
+        var customerPhone = Text("CustomerPhone", request.CustomerPhone, 32, required: type == QueueingEventType.TicketCreated && options.RequireCustomerMobile);
+        if (customerPhone is not null)
         {
-            Add("CustomerPhone", "CustomerPhone must be a phone number.");
+            // A mobile that IS supplied must be a real number, whatever RequireCustomerMobile says: a malformed value is refused (400 + the per-field
+            // errors, the integration's one validation response shape) rather than stored or silently dropped.
+            var digits = TigerCS.Domain.Modules.Ticketing.CustomerPhoneNumber.Normalize(customerPhone).Length;
+            if (!TigerCS.Domain.Modules.Ticketing.CustomerPhoneNumber.LooksLikeNumber(customerPhone) || digits is < MinPhoneDigits or > MaxPhoneDigits)
+            {
+                Add("CustomerPhone", $"CustomerPhone must be a phone number: only digits, spaces, '+', '-', '(' and ')', with {MinPhoneDigits} to {MaxPhoneDigits} digits (international format, e.g. +971500000123, preferred).");
+            }
         }
 
         var customerEmail = Text("CustomerEmail", request.CustomerEmail, 256, required: false);

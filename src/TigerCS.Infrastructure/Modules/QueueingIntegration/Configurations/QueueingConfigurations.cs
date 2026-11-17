@@ -32,13 +32,14 @@ public class QueueingEventConfiguration : IEntityTypeConfiguration<QueueingEvent
         builder.Property(e => e.OutcomeCode).HasMaxLength(64);
         builder.Property(e => e.OutcomeDetail).HasMaxLength(QueueingEvent.DetailMaxLength);
         builder.Property(e => e.ReceivedAtUtc).IsRequired();
+        builder.Property(e => e.RowVersion).IsRowVersion();
 
         builder.HasIndex(e => new { e.Source, e.EventId }).IsUnique().HasDatabaseName("UX_QueueingEvents_Source_EventId");
         // Serves the per-ticket drain (events waiting for their ticket / predecessor) and the retry sweep.
         builder.HasIndex(e => new { e.Source, e.ExternalTicketId, e.EventSequence }).HasDatabaseName("IX_QueueingEvents_Ticket_Sequence");
         builder.HasIndex(e => new { e.Status, e.NextRetryAtUtc }).HasDatabaseName("IX_QueueingEvents_Status_NextRetry");
         // Serves the retention sweep: processed events that still hold a payload, oldest first.
-        builder.HasIndex(e => e.ProcessedAtUtc).HasFilter("[Payload] IS NOT NULL AND [Status] = 2").HasDatabaseName("IX_QueueingEvents_PurgeablePayloads");
+        builder.HasIndex(e => e.ProcessedAtUtc).HasFilter("[Payload] IS NOT NULL AND [Status] IN (2, 4, 5)").HasDatabaseName("IX_QueueingEvents_PurgeablePayloads");
     }
 }
 

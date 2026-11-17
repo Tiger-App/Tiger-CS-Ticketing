@@ -53,7 +53,6 @@ public sealed class QueueingEventProcessor(
     TicketCreationAppService ticketCreationAppService,
     CustomerSearchAppService customerSearchAppService,
     ICustomerContactDetailRepository contactDetailRepository,
-    DefaultClassificationService? defaultClassification,
     ITicketRepository ticketRepository,
     TicketAssignmentAppService assignmentAppService,
     TicketLifecycleAppService lifecycleAppService,
@@ -127,7 +126,15 @@ public sealed class QueueingEventProcessor(
         if (existing.Status == QueueingEventStatus.Failed)
         {
             existing.Reopen();   // a redelivery of a Failed event restarts its retry cycle - saved now, so a later discard cannot undo it
-            await unitOfWork.SaveChangesAsync(cancellationToken);
+            try
+            {
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+            catch (TicketConcurrentlyModifiedException)
+            {
+                store.DiscardPendingChanges();
+                return Busy(message, "The event is being changed by another request. Resend the same event.");
+            }
         }
 
         return await ProcessWithLockAsync(existing, message, cancellationToken);
@@ -176,20 +183,20 @@ public sealed class QueueingEventProcessor(
     }
 
     /// <summary>
-    /// The retention sweep: erases the payload of every <b>successfully processed</b> event older than <c>PayloadRetentionDays</c> (default 90). The row stays -
-    /// EventId, ExternalTicketId, sequence, type, times, outcome, ticket link and the payload hash - so idempotency and the ticket history are untouched; an
-    /// unresolved, failed, superseded or rejected event is never purged. Returns how many payloads were erased. Disabled when the retention is zero or negative.
+    /// The retention sweep: erases the raw payload of every <b>settled</b> event (processed, superseded or rejected) older than <c>EventPayloadRetentionDays</c> (default 90).
+    /// The row stays - EventId, EventType, ExternalTicketId, sequence, OccurredAtUtc, outcome, ticket id, times and the payload hash - so idempotency and the audit trail are
+    /// untouched; a pending (received / unresolved) or failed event is never purged. Returns how many payloads were erased. Disabled when the retention is zero or negative.
     /// </summary>
     public async Task<int> PurgeExpiredPayloadsAsync(int batchSize, CancellationToken cancellationToken = default)
     {
-        if (options.PayloadRetentionDays <= 0)
+        if (options.EventPayloadRetentionDays <= 0)
         {
             return 0;
         }
 
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var purged = 0;
-        foreach (var row in await store.ListPurgeablePayloadsAsync(now.AddDays(-options.PayloadRetentionDays), batchSize, cancellationToken))
+        foreach (var row in await store.ListPurgeablePayloadsAsync(now.AddDays(-options.EventPayloadRetentionDays), batchSize, cancellationToken))
         {
             if (row.PurgePayload(now))
             {
@@ -382,7 +389,6 @@ public sealed class QueueingEventProcessor(
         // Request type: mapped explicitly, validated by the existing request-type rules, and it must belong to the company's department.
         RequestType? requestType = null;
         int? categoryId = null;
-        string? classificationNote = null;
         var typeMapping = await store.GetTicketTypeMappingAsync(message.CompanyId!, message.TicketTypeId!, cancellationToken);
         if (typeMapping is { IsActive: true })
         {
@@ -411,29 +417,16 @@ public sealed class QueueingEventProcessor(
         }
         else
         {
-            // The company is mapped (so the department is known and never guessed) but the ticket type has no usable request-type mapping: the ticket takes
-            // the department's own configured General request type - the existing default-classification rule - and the gap is logged and audited. A department
-            // with no General configured (or one the rule excludes) holds the event instead: no request type is ever invented.
-            var general = defaultClassification is null || DefaultClassificationService.IsExcluded(department)
-                ? null
-                : (await defaultClassification.ResolveForDepartmentAsync(department.DepartmentId, cancellationToken)).Value;
-            if (general is null)
-            {
-                logger.LogWarning(
-                    "Queueing ticket type {TicketTypeId} of company {CompanyId} has no request-type mapping and department {DepartmentId} has no usable General request type; event {EventId} is held.",
-                    message.TicketTypeId, message.CompanyId, department.DepartmentId, row.EventId);
-                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.TicketTypeNotMapped,
-                    $"Queueing ticket type '{message.TicketTypeId}' of company '{message.CompanyId}' is not mapped to a request type, and department '{department.Code}' has no usable General request type to fall back to. "
-                    + "Add the mapping to QueueingTicketTypeMappings (or configure the department's General request type); the event is retried automatically.",
-                    null, cancellationToken);
-            }
-
+            // The company is mapped (so the department is known) but the ticket type has no active request-type mapping. NOTHING is guessed: no General / default
+            // request type, no ticket. The event stays pending (Unresolved, retried with backoff by the sweep and by redelivery) until a valid mapping exists, and the
+            // gap is logged so an administrator can add it to QueueingTicketTypeMappings. There is deliberately no setting that changes this.
             logger.LogWarning(
-                "Queueing ticket type {TicketTypeId} of company {CompanyId} has no request-type mapping; ticket for {ExternalTicketId} uses department {DepartmentId}'s General request type.",
-                message.TicketTypeId, message.CompanyId, message.ExternalTicketId, department.DepartmentId);
-            requestType = general.RequestType;
-            categoryId = general.Category.CategoryId;
-            classificationNote = $"RequestTypeMapping=Missing(company={message.CompanyId};ticketType={message.TicketTypeId});Applied=General(RequestTypeId={general.RequestType.RequestTypeId})";
+                "Queueing ticket type {TicketTypeId} of company {CompanyId} (department {DepartmentId}) has no active request-type mapping; event {EventId} is held until it is mapped.",
+                message.TicketTypeId, message.CompanyId, department.DepartmentId, row.EventId);
+            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.TicketTypeNotMapped,
+                $"Queueing ticket type '{message.TicketTypeId}' of company '{message.CompanyId}' is not mapped to a request type. No ticket was created and no request type was guessed. "
+                + "Add the mapping to QueueingTicketTypeMappings; the event is retried automatically.",
+                null, cancellationToken);
         }
 
         var priority = await ResolvePriorityAsync(cancellationToken);
@@ -446,26 +439,9 @@ public sealed class QueueingEventProcessor(
         var phone = CustomerPhoneNumber.FromTelephonyAddress(message.CustomerPhone);
         var lookup = await LookUpCustomerAsync(phone, cancellationToken);
 
-        var intake = await intakeRecordAppService.CreateAsync(
-            serviceAccount,
-            new CreateIntakeRecordRequestDto(
-                ChannelId: channel.ChannelId.ToString(CultureInfo.InvariantCulture),
-                PhoneNumber: phone ?? string.Empty,
-                DepartmentId: department.DepartmentId,
-                IsUnitRelated: false,
-                RawUnitNumberEntered: null,
-                PriorityHint: null),
-            cancellationToken,
-            enforceChannelPhoneRequirement: false);
-        if (intake.Outcome != IntakeRecordOutcome.Success || intake.Response is null)
-        {
-            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.ProcessingFailed,
-                $"The intake record could not be created ({intake.Outcome}).", null, cancellationToken);
-        }
-
         var customerName = FirstNonBlank(message.CustomerName, lookup.CustomerName);
-        var request = new CreateTicketRequestDto(
-            IntakeRecordId: intake.Response.IntakeRecordId,
+        var ticketRequest = new CreateTicketRequestDto(
+            IntakeRecordId: 0,   // set from the intake record created inside the transaction below
             UnitReferenceId: null,
             ContactReferenceId: null,
             CategoryId: categoryId,
@@ -475,51 +451,98 @@ public sealed class QueueingEventProcessor(
             RequestTypeId: requestType?.RequestTypeId,
             ExternalOrigin: new ExternalTicketOriginDto(TicketIntegrationSources.QueueingSystem, message.ExternalTicketId, message.QueueNumber));
 
-        // The queue-state row, the customer contact, the history entry and the inbox row are staged INSIDE ticket creation, immediately before its
-        // final save: they commit in the very transaction that creates the ticket and roll back with it. There is no moment at which a ticket exists
-        // without its queue state, so no later event is ever needed to repair an incomplete creation.
-        Ticket? created = null;
-        async Task StageQueueStateAsync(Ticket newTicket, CancellationToken token)
+        // ONE database transaction: the intake record, the ticket (with its SLA period, status history and creation audit), the queue-state row, the customer contact,
+        // the integration's own history entry and the inbox row's "processed" mark commit together or not at all. The services called below each begin "their own"
+        // transaction; the unit of work joins them to this one, so none of them commits on its own. Anything that fails or is refused rolls the whole attempt back -
+        // no orphan intake, ticket, link or audit row - and only afterwards, in a separate small transaction, is the event's pending state recorded for retry.
+        async Task<(string? Failure, TicketCreationResult Creation, Ticket? Created, QueueingEvent? EventRow)> AttemptAsync()
         {
-            created = newTicket;
-            await store.AddLinkAsync(new QueueingTicketLink(
-                newTicket.TicketId, message.ExternalTicketId, message.QueueNumber, message.CompanyId, message.TicketTypeId,
-                message.EventSequence, message.OccurredAtUtc, Now()), token);
+            await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
-            await SaveCustomerContactIfNewAsync(phone, customerName, message.CustomerEmail, serviceAccount, token);
-
-            await auditWriter.WriteAsync(
-                serviceAccount, QueueingAuditActions.TicketCreated, "Ticket", newTicket.TicketId.ToString(CultureInfo.InvariantCulture),
-                beforeValue: null,
-                afterValue: $"TicketId={newTicket.TicketId};{EventFacts(message)};QueueNumber={message.QueueNumber};CompanyId={message.CompanyId};TicketTypeId={message.TicketTypeId};"
-                    + $"DepartmentId={department.DepartmentId};RequestTypeId={requestType?.RequestTypeId.ToString(CultureInfo.InvariantCulture) ?? "(none)"};"
-                    + $"Channel={channel.Code};CustomerLookup={lookup.Status};{classificationNote ?? "RequestTypeMapping=Resolved"}",
-                Guid.NewGuid(), token);
-
-            row.MarkProcessed(QueueingOutcomeCodes.TicketCreated, null, newTicket.TicketId, Now());
-        }
-
-        TicketCreationResult creation = TicketCreationResult.Failure(TicketCreationOutcome.TicketNumberCollision);
-        for (var attempt = 0; attempt < 3 && creation.Outcome == TicketCreationOutcome.TicketNumberCollision; attempt++)
-        {
-            creation = await ticketCreationAppService.CreateAsync(serviceAccount, request, cancellationToken, beforeCommit: StageQueueStateAsync);
-            if (creation.Outcome == TicketCreationOutcome.TicketNumberCollision
-                && await store.FindTicketAsync(TicketIntegrationSources.QueueingSystem, message.ExternalTicketId, cancellationToken) is { } winner)
+            var intake = await intakeRecordAppService.CreateAsync(
+                serviceAccount,
+                new CreateIntakeRecordRequestDto(
+                    ChannelId: channel.ChannelId.ToString(CultureInfo.InvariantCulture),
+                    PhoneNumber: phone ?? string.Empty,
+                    DepartmentId: department.DepartmentId,
+                    IsUnitRelated: false,
+                    RawUnitNumberEntered: null,
+                    PriorityHint: null),
+                cancellationToken,
+                enforceChannelPhoneRequirement: false);
+            if (intake.Outcome != IntakeRecordOutcome.Success || intake.Response is null)
             {
-                // The unique (source, external id) index: a concurrent creation of the same queue ticket won. Answer with its ticket.
-                store.DiscardPendingChanges();
-                var existing = await store.GetEventAsync(row.EventId, cancellationToken) ?? row;
-                return await ConfirmExistingCreationAsync(existing, message, winner, cancellationToken);
+                return ($"The intake record could not be created ({intake.Outcome}).", TicketCreationResult.Failure(TicketCreationOutcome.IntakeRecordNotFound), null, null);
             }
+
+            // Re-read inside the transaction: after a rolled-back attempt the tracked instance of the row is gone.
+            var eventRow = await store.GetEventAsync(row.EventId, cancellationToken)
+                ?? throw new InvalidOperationException($"Queueing event '{row.EventId}' disappeared while its ticket was being created.");
+
+            Ticket? newTicket = null;
+            async Task StageQueueStateAsync(Ticket created, CancellationToken token)
+            {
+                newTicket = created;
+                await store.AddLinkAsync(new QueueingTicketLink(
+                    created.TicketId, message.ExternalTicketId, message.QueueNumber, message.CompanyId, message.TicketTypeId,
+                    message.EventSequence, message.OccurredAtUtc, Now()), token);
+
+                await SaveCustomerContactIfNewAsync(phone, customerName, message.CustomerEmail, serviceAccount, token);
+
+                await auditWriter.WriteAsync(
+                    serviceAccount, QueueingAuditActions.TicketCreated, "Ticket", created.TicketId.ToString(CultureInfo.InvariantCulture),
+                    beforeValue: null,
+                    afterValue: $"TicketId={created.TicketId};{EventFacts(message)};QueueNumber={message.QueueNumber};CompanyId={message.CompanyId};TicketTypeId={message.TicketTypeId};"
+                        + $"DepartmentId={department.DepartmentId};RequestTypeId={requestType?.RequestTypeId.ToString(CultureInfo.InvariantCulture) ?? "(none)"};"
+                        + $"Channel={channel.Code};CustomerLookup={lookup.Status};RequestTypeMapping=Resolved",
+                    Guid.NewGuid(), token);
+
+                eventRow.MarkProcessed(QueueingOutcomeCodes.TicketCreated, null, created.TicketId, Now());
+            }
+
+            var result = await ticketCreationAppService.CreateAsync(
+                serviceAccount, ticketRequest with { IntakeRecordId = intake.Response.IntakeRecordId }, cancellationToken, beforeCommit: StageQueueStateAsync);
+            if (result.Outcome != TicketCreationOutcome.Success || result.Response is null || newTicket is null)
+            {
+                return (null, result, null, null);   // leaving the scope uncommitted rolls the intake record (and anything else staged) back
+            }
+
+            await transaction.CommitAsync(cancellationToken);
+            return (null, result, newTicket, eventRow);
         }
 
-        if (creation.Outcome != TicketCreationOutcome.Success || creation.Response is null || created is null)
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.ProcessingFailed,
-                $"Ticket creation was refused ({creation.Outcome}).", null, cancellationToken);
+            var (failure, creation, created, eventRow) = await AttemptAsync();
+            if (failure is null && created is not null && eventRow is not null)
+            {
+                return Respond(eventRow, created, QueueingResultStatus.Processed) with { CreatedTicket = true };
+            }
+
+            // Refused or failed: the transaction is already rolled back; forget everything the attempt staged in memory.
+            store.DiscardPendingChanges();
+            if (failure is not null)
+            {
+                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.ProcessingFailed, failure, null, cancellationToken);
+            }
+
+            if (creation.Outcome == TicketCreationOutcome.TicketNumberCollision)
+            {
+                if (await store.FindTicketAsync(TicketIntegrationSources.QueueingSystem, message.ExternalTicketId, cancellationToken) is { } winner)
+                {
+                    // The unique (source, external id) index: a concurrent creation of the same queue ticket won. Answer with its ticket.
+                    var existing = await store.GetEventAsync(row.EventId, cancellationToken) ?? row;
+                    return await ConfirmExistingCreationAsync(existing, message, winner, cancellationToken);
+                }
+
+                continue;   // a plain ticket-number collision: a fresh attempt (new intake record, new number)
+            }
+
+            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.ProcessingFailed, $"Ticket creation was refused ({creation.Outcome}).", null, cancellationToken);
         }
 
-        return Respond(row, created, QueueingResultStatus.Processed) with { CreatedTicket = true };
+        return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.ProcessingFailed,
+            "Ticket creation kept colliding on the ticket number. It will be retried.", null, cancellationToken);
     }
 
     // ------------------------------------------------------------------ assignment
@@ -544,11 +567,33 @@ public sealed class QueueingEventProcessor(
         var note = $"{SourceLabel}: {reason}" + (message.CounterId is null ? string.Empty : $" (counter {message.CounterId})")
             + (message.PerformedByUserId is null ? string.Empty : $" by queue user {message.PerformedByUserId}");
 
+        // ONE database transaction for the whole event: the assignment (owner, assignment history row), the Open -> InProgress transition (status history, audit),
+        // the queue-state row and the inbox row's "processed" mark. The services each begin their own transaction; the unit of work joins them to this one. If any
+        // part is refused or fails, nothing is kept - the ticket is exactly as it was - and the event's pending state is recorded afterwards in a separate transaction.
+        var failure = await ApplyAssignmentTransactionAsync(row, message, ticket.TicketId, serviceAccount, employeeId, note, cancellationToken);
+        if (failure is not null)
+        {
+            store.DiscardPendingChanges();
+            return await FromMutationFailureAsync(row.EventId, failure.Value, ticket.TicketId, cancellationToken);
+        }
+
+        var current = (await ticketRepository.GetByIdAsync(ticket.TicketId, cancellationToken))!;
+        return Respond(row, current, QueueingResultStatus.Processed);
+    }
+
+    /// <summary>The atomic part of an assignment event. Null on success (committed); the refusal's outcome otherwise (rolled back, nothing kept).</summary>
+    private async Task<TicketMutationOutcome?> ApplyAssignmentTransactionAsync(
+        QueueingEvent row, QueueingEventMessage message, long ticketId, Guid serviceAccount, Guid employeeId, string note, CancellationToken cancellationToken)
+    {
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+
+        var ticket = (await ticketRepository.GetByIdAsync(ticketId, cancellationToken))!;
+
         // Step 1 - the assignment itself, by the existing assignment service, to the REAL employee. Skipped when they already own the ticket (redelivery / resume).
         if (ticket.CurrentOwnerEmployeeId != employeeId)
         {
             var assigned = await assignmentAppService.AssignAsync(
-                serviceAccount, [], ticket.TicketId,
+                serviceAccount, [], ticketId,
                 new AssignTicketRequestDto(
                     employeeId, ticket.RowVersion,
                     message.EventType == QueueingEventType.TicketReassigned && ticket.CurrentOwnerEmployeeId is not null ? TicketTransferReason.Other : null,
@@ -556,16 +601,16 @@ public sealed class QueueingEventProcessor(
                 cancellationToken, ticketAccessScope: true);
             if (assigned.Outcome != TicketMutationOutcome.Success)
             {
-                store.DiscardPendingChanges();
-                return await FromMutationFailureAsync(row.EventId, assigned.Outcome, ticket.TicketId, cancellationToken);
+                return assigned.Outcome;
             }
 
-            ticket = (await ticketRepository.GetByIdAsync(ticket.TicketId, cancellationToken))!;
+            ticket = (await ticketRepository.GetByIdAsync(ticketId, cancellationToken))!;
         }
 
         // Step 2 - the work starts: the existing Open -> InProgress transition, performed AS the receiving employee (their own authority as the owner),
-        // with the integration's state staged on this same save. Assignment is deliberately not a first response: nothing here touches the SLA first-response clock.
-        link = (await store.GetLinkAsync(ticket.TicketId, cancellationToken))!;
+        // with the integration's state staged on this same unit of work. Assignment is deliberately not a first response: nothing here touches the SLA first-response clock.
+        var link = (await store.GetLinkAsync(ticketId, cancellationToken))
+            ?? throw new InvalidOperationException($"Queue ticket {message.ExternalTicketId} (ticket {ticketId}) has no queue-state row.");
         StageApplied(link, row, message, QueueingTicketState.Assigned, QueueingOutcomeCodes.Applied, note);
         await WriteEventAuditAsync(serviceAccount, ticket, message, QueueingAuditActions.EventApplied, $"Owner={employeeId}", cancellationToken);
 
@@ -573,11 +618,10 @@ public sealed class QueueingEventProcessor(
         {
             var roles = await roleReader.GetRolesAsync(employeeId, cancellationToken);
             var started = await lifecycleAppService.ChangeStatusAsync(
-                employeeId, roles, ticket.TicketId, new ChangeStatusRequestDto(nameof(TicketStatus.InProgress), ticket.RowVersion), cancellationToken);
+                employeeId, roles, ticketId, new ChangeStatusRequestDto(nameof(TicketStatus.InProgress), ticket.RowVersion), cancellationToken);
             if (started.Outcome != TicketMutationOutcome.Success)
             {
-                store.DiscardPendingChanges();
-                return await FromMutationFailureAsync(row.EventId, started.Outcome, ticket.TicketId, cancellationToken);
+                return started.Outcome;
             }
         }
         else
@@ -585,8 +629,8 @@ public sealed class QueueingEventProcessor(
             await unitOfWork.SaveChangesAsync(cancellationToken);
         }
 
-        var current = (await ticketRepository.GetByIdAsync(ticket.TicketId, cancellationToken))!;
-        return Respond(row, current, QueueingResultStatus.Processed);
+        await transaction.CommitAsync(cancellationToken);
+        return null;
     }
 
     private async Task<QueueingEventResponse> ReturnAsync(
@@ -746,14 +790,9 @@ public sealed class QueueingEventProcessor(
             return existing;
         }
 
-        // The ticket committed but the link did not (a crash in between): rebuilt from the ticket itself.
-        var link = new QueueingTicketLink(
-            ticket.TicketId, ticket.ExternalTicketId ?? message.ExternalTicketId, ticket.ExternalReference,
-            message.CompanyId, message.TicketTypeId,
-            message.EventType == QueueingEventType.TicketCreated ? message.EventSequence : 0,
-            message.EventType == QueueingEventType.TicketCreated ? message.OccurredAtUtc : ticket.CreatedAtUtc, Now());
-        await store.AddLinkAsync(link, cancellationToken);
-        return link;
+        // Ticket creation commits the ticket and its queue-state row in ONE transaction, so a queue ticket without its state row cannot be produced by this
+        // integration. If one is ever found (a manual database edit), it is reported - the event goes to retry and, eventually, Failed - and never silently repaired.
+        throw new InvalidOperationException($"Ticket {ticket.TicketId} for queue ticket '{message.ExternalTicketId}' has no queue-state row.");
     }
 
     private async Task<(Guid? EmployeeId, string? Code, string? Detail)> ResolveEmployeeAsync(
@@ -902,15 +941,32 @@ public sealed class QueueingEventProcessor(
     private async Task<QueueingEventResponse> UnresolveAsync(
         string eventId, string code, string? detail, long? ticketId, CancellationToken cancellationToken)
     {
-        // Re-read so the failure is recorded on a clean row, whatever was staged before.
-        store.DiscardPendingChanges();
-        var row = (await store.GetEventAsync(eventId, cancellationToken))!;
-        var attempt = row.AttemptCount + 1;
-        var delay = Math.Min(options.MaxRetryDelaySeconds, options.RetryBaseDelaySeconds * Math.Pow(2, Math.Min(attempt - 1, 20)));
-        var now = Now();
-        row.MarkUnresolved(code, detail, ticketId, now, now.AddSeconds(delay), options.MaxRetryAttempts);
-        await unitOfWork.SaveChangesAsync(cancellationToken);
-        return await FromRowAsync(row, QueueingResultStatus.Pending, cancellationToken);
+        // The failure is recorded in its own small transaction, AFTER the failed unit of work has been rolled back and forgotten (no ambient transaction is open here).
+        // Re-read, so it lands on a clean row whatever was staged before.
+        for (var attempt = 0; ; attempt++)
+        {
+            store.DiscardPendingChanges();
+            var row = (await store.GetEventAsync(eventId, cancellationToken))!;
+            if (row.IsSettled)
+            {
+                // Another instance applied THIS event while we were failing to: a settled event is never downgraded to pending. Answer from its stored outcome.
+                return await FromRowAsync(row, QueueingResultStatus.Duplicate, cancellationToken);
+            }
+
+            var count = row.AttemptCount + 1;
+            var delay = Math.Min(options.MaxRetryDelaySeconds, options.RetryBaseDelaySeconds * Math.Pow(2, Math.Min(count - 1, 20)));
+            var now = Now();
+            row.MarkUnresolved(code, detail, ticketId, now, now.AddSeconds(delay), options.MaxRetryAttempts);
+            try
+            {
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+                return await FromRowAsync(row, QueueingResultStatus.Pending, cancellationToken);
+            }
+            catch (TicketConcurrentlyModifiedException) when (attempt < 3)
+            {
+                // The row was changed by another instance between our read and our write: look again (it may now be settled).
+            }
+        }
     }
 
     private async Task<QueueingEventResponse> FromMutationFailureAsync(

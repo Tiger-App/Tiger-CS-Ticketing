@@ -76,7 +76,8 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     AttemptCount = table.Column<int>(type: "int", nullable: false),
                     NextRetryAtUtc = table.Column<DateTime>(type: "datetime2", nullable: true),
                     ReceivedAtUtc = table.Column<DateTime>(type: "datetime2", nullable: false),
-                    ProcessedAtUtc = table.Column<DateTime>(type: "datetime2", nullable: true)
+                    ProcessedAtUtc = table.Column<DateTime>(type: "datetime2", nullable: true),
+                    RowVersion = table.Column<byte[]>(type: "rowversion", rowVersion: true, nullable: false)
                 },
                 constraints: table =>
                 {
@@ -168,7 +169,7 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                 name: "IX_QueueingEvents_PurgeablePayloads",
                 table: "QueueingEvents",
                 column: "ProcessedAtUtc",
-                filter: "[Payload] IS NOT NULL AND [Status] = 2");
+                filter: "[Payload] IS NOT NULL AND [Status] IN (2, 4, 5)");
 
             migrationBuilder.CreateIndex(
                 name: "IX_QueueingEvents_Status_NextRetry",

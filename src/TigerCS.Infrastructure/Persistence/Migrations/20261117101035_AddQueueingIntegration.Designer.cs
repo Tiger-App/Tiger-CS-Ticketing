@@ -2284,6 +2284,12 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime>("ReceivedAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
                     b.Property<string>("Source")
                         .IsRequired()
                         .HasMaxLength(50)
@@ -2299,7 +2305,7 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
 
                     b.HasIndex("ProcessedAtUtc")
                         .HasDatabaseName("IX_QueueingEvents_PurgeablePayloads")
-                        .HasFilter("[Payload] IS NOT NULL AND [Status] = 2");
+                        .HasFilter("[Payload] IS NOT NULL AND [Status] IN (2, 4, 5)");
 
                     b.HasIndex("Source", "EventId")
                         .IsUnique()

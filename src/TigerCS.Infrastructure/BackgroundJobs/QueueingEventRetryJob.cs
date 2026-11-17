@@ -35,7 +35,7 @@ public sealed class QueueingEventRetryJob(IServiceScopeFactory scopeFactory, ILo
 
 /// <summary>
 /// The daily retention sweep for the Queueing System event inbox: erases the payload of successfully processed events older than
-/// <c>QueueingIntegration:PayloadRetentionDays</c> (default 90), in batches. It only schedules: <see cref="QueueingEventProcessor.PurgeExpiredPayloadsAsync"/> owns the rule
+/// <c>QueueingIntegration:EventPayloadRetentionDays</c> (default 90), in batches. It only schedules: <see cref="QueueingEventProcessor.PurgeExpiredPayloadsAsync"/> owns the rule
 /// (and never touches an unresolved event, an identifier or the ticket history).
 /// </summary>
 public sealed class QueueingPayloadRetentionJob(IServiceScopeFactory scopeFactory, ILogger<QueueingPayloadRetentionJob> logger)

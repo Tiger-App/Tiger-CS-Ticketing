@@ -59,11 +59,19 @@ public sealed class QueueingIntegrationOptions
     public int MaxClockSkewSeconds { get; set; } = 300;
 
     /// <summary>
-    /// How many days the payload of a <b>successfully processed</b> event is kept before it is erased (default 90). Only the payload (customer name, phone, email and
-    /// the rest of the body) goes: the row with its EventId, ExternalTicketId, sequence, times, outcome and payload hash stays, so idempotency and the ticket
-    /// history are untouched. Unresolved and failed events are never purged. Zero or negative switches the purge off.
+    /// How many days the raw payload of a <b>settled</b> event (processed, superseded or rejected) is kept before it is erased (default 90). Only the payload (customer
+    /// name, phone, email and the rest of the body) goes: the row with its EventId, EventType, ExternalTicketId, sequence, OccurredAtUtc, outcome, ticket id, timestamps and the
+    /// SHA-256 payload hash stays, so idempotency (a redelivery is still a Duplicate, or EVENT_ID_REUSED when its content differs) and the audit trail are untouched. Pending
+    /// (received / unresolved) and failed events are never purged. Zero or negative switches the purge off.
     /// </summary>
-    public int PayloadRetentionDays { get; set; } = 90;
+    public int EventPayloadRetentionDays { get; set; } = 90;
+
+    /// <summary>
+    /// Whether <c>CustomerPhone</c> (the customer's mobile number) is <b>mandatory</b> on <c>TicketCreated</c>. <b>Default false.</b> Whatever this is set to, a mobile that IS
+    /// supplied must be a valid number or the event is refused with a validation error (HTTP 422). <b>Open question:</b> whether the Queueing System always supplies a mobile
+    /// has NOT been confirmed with its owners; do not switch this on (nor tell them it is mandatory) until they have confirmed it.
+    /// </summary>
+    public bool RequireCustomerMobile { get; set; }
 
     /// <summary>The longest <c>Comment</c> accepted.</summary>
     public int MaxCommentLength { get; set; } = 4000;

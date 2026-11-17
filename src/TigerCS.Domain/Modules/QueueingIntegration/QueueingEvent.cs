@@ -66,6 +66,12 @@ public class QueueingEvent
     public DateTime ReceivedAtUtc { get; private set; }
     public DateTime? ProcessedAtUtc { get; private set; }
 
+    /// <summary>
+    /// Optimistic-concurrency token. Every way an event is settled (applied, superseded, rejected, parked for retry) updates this row in the same transaction as the ticket change,
+    /// so two instances that process the SAME event at once cannot both win: the second one's update affects no row and its whole transaction rolls back.
+    /// </summary>
+    public byte[] RowVersion { get; private set; } = [];
+
     private QueueingEvent() { }
 
     public QueueingEvent(
@@ -92,15 +98,15 @@ public class QueueingEvent
     public bool HasSamePayloadAs(string canonicalPayload) => string.Equals(PayloadHash, HashOf(canonicalPayload), StringComparison.Ordinal);
 
     /// <summary>
-    /// Erases the payload of a <b>successfully processed</b> event (the retention rule). Everything that gives the event its identity - the ids, sequence, type,
-    /// timestamps, outcome, ticket link and <see cref="PayloadHash"/> - is kept. Refused for every other status: an unresolved event is still waiting to be retried
-    /// from its payload and must never be purged. Returns false when there was nothing to purge.
+    /// Erases the payload of a <b>settled</b> event - applied, superseded or rejected (<see cref="IsSettled"/>) - as the retention rule requires. Everything that gives the
+    /// event its identity - the ids, sequence, type, timestamps, outcome, ticket link and <see cref="PayloadHash"/> - is kept. Refused for every other status: a pending
+    /// (Received / Unresolved) or Failed event is still waiting to be retried from its payload and must never be purged. Returns false when there was nothing to purge.
     /// </summary>
     public bool PurgePayload(DateTime nowUtc)
     {
-        if (Status != QueueingEventStatus.Processed)
+        if (!IsSettled)
         {
-            throw new InvalidOperationException("Only the payload of a successfully processed event can be purged.");
+            throw new InvalidOperationException("Only the payload of a settled event (processed, superseded or rejected) can be purged.");
         }
 
         if (Payload is null)

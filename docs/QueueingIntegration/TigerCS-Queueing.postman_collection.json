@@ -1420,7 +1420,7 @@
           }
         },
         {
-          "name": "4.6 TicketCreated without CustomerPhone -> 400 (mandatory)",
+          "name": "4.6 TicketCreated with an invalid CustomerPhone -> 400 (optional, but validated when sent)",
           "event": [
             {
               "listen": "prerequest",
@@ -1474,7 +1474,7 @@
             },
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"QT-no-phone\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-021\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
+              "raw": "{\n  \"EventId\": \"{{eventId}}\",\n  \"EventType\": \"TicketCreated\",\n  \"ExternalTicketId\": \"QT-bad-phone\",\n  \"CustomerPhone\": \"not a number\",\n  \"EventSequence\": {{sequence}},\n  \"QueueNumber\": \"A-021\",\n  \"CompanyId\": \"{{companyId}}\",\n  \"TicketTypeId\": \"{{ticketTypeId}}\",\n  \"OccurredAtUtc\": \"{{occurredAtUtc}}\"\n}",
               "options": {
                 "raw": {
                   "language": "json"

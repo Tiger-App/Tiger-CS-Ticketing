@@ -38,7 +38,7 @@ public class QueueingFixture : IAsyncLifetime
     public virtual Task DisposeAsync() => Task.CompletedTask;
 
     /// <summary>The configuration every host of this fixture runs with: the integration switched on and two valid API keys (the second proves a key can be rotated).</summary>
-    protected static Dictionary<string, string?> HostConfiguration() => new()
+    public static Dictionary<string, string?> HostConfiguration() => new()
     {
         ["QueueingIntegration:Enabled"] = "true",
         ["QueueingIntegration:Authentication:ApiKeys:0:KeyId"] = "queue-prod",

@@ -63,6 +63,7 @@ BEGIN
         [NextRetryAtUtc] datetime2 NULL,
         [ReceivedAtUtc] datetime2 NOT NULL,
         [ProcessedAtUtc] datetime2 NULL,
+        [RowVersion] rowversion NOT NULL,
         CONSTRAINT [PK_QueueingEvents] PRIMARY KEY ([QueueingEventId])
     );
 END;
@@ -151,7 +152,7 @@ IF NOT EXISTS (
     WHERE [MigrationId] = N'20261117101035_AddQueueingIntegration'
 )
 BEGIN
-    EXEC(N'CREATE INDEX [IX_QueueingEvents_PurgeablePayloads] ON [QueueingEvents] ([ProcessedAtUtc]) WHERE [Payload] IS NOT NULL AND [Status] = 2');
+    EXEC(N'CREATE INDEX [IX_QueueingEvents_PurgeablePayloads] ON [QueueingEvents] ([ProcessedAtUtc]) WHERE [Payload] IS NOT NULL AND [Status] IN (2, 4, 5)');
 END;
 
 IF NOT EXISTS (

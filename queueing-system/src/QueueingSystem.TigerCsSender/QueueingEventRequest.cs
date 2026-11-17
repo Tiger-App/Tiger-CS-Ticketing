@@ -39,7 +39,7 @@ public sealed record QueueingEventRequest
     /// <summary>Optional. Max 200.</summary>
     public string? CustomerName { get; init; }
 
-    /// <summary>The customer's mobile number. <b>Required on TicketCreated</b> (used for the CRM lookup). Must contain digits; international format (+971...) preferred. Max 32.</summary>
+    /// <summary>The customer's mobile number (used for the CRM lookup). Optional - TigerCS only makes it mandatory when <c>QueueingIntegration:RequireCustomerMobile</c> is on, which needs the Queueing System owners' confirmation first. When sent it must be a valid number (7-15 digits; international format +971... preferred). Max 32.</summary>
     public string? CustomerPhone { get; init; }
 
     /// <summary>Optional. Max 256.</summary>
@@ -76,7 +76,7 @@ public sealed record QueueingEventRequest
     /// </summary>
     public static IReadOnlyList<string> RequiredMembers(QueueingEventType type) => type switch
     {
-        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone"],
+        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId"],
         QueueingEventType.TicketAssigned or QueueingEventType.TicketReassigned => ["AssignedUserId"],
         QueueingEventType.TicketCommentAdded => ["Comment"],
         _ => []
@@ -133,9 +133,15 @@ public sealed record QueueingEventRequest
         Text(nameof(TicketTypeId), TicketTypeId, 100, required.Contains(nameof(TicketTypeId)));
         Text(nameof(CustomerName), CustomerName, 200, false);
         Text(nameof(CustomerPhone), CustomerPhone, 32, required.Contains(nameof(CustomerPhone)));
-        if (!string.IsNullOrWhiteSpace(CustomerPhone) && !CustomerPhone.Any(char.IsAsciiDigit))
+        if (!string.IsNullOrWhiteSpace(CustomerPhone))
         {
-            errors[nameof(CustomerPhone)] = "CustomerPhone must be a phone number.";
+            // Optional unless TigerCS has QueueingIntegration:RequireCustomerMobile switched on (default off - to be confirmed with the Queueing System's owners);
+            // when sent it must be a valid number, as TigerCS refuses a malformed one.
+            var digits = CustomerPhone.Count(char.IsAsciiDigit);
+            if (CustomerPhone.Any(c => !char.IsAsciiDigit(c) && "+-()./ ".IndexOf(c) < 0) || digits is < 7 or > 15)
+            {
+                errors[nameof(CustomerPhone)] = "CustomerPhone must be a phone number (7 to 15 digits; only digits, spaces, '+', '-', '(' and ')').";
+            }
         }
 
         Text(nameof(CustomerEmail), CustomerEmail, 256, false);

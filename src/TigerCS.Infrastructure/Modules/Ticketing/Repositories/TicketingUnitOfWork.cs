@@ -12,8 +12,23 @@ namespace TigerCS.Infrastructure.Modules.Ticketing.Repositories;
 /// <summary>Mirrors CustomerVerificationUnitOfWork's translation exactly — see its remarks for the SQL-Server-only detection rationale and the InMemory-provider caveat. Additionally translates a lost optimistic-concurrency race on VerificationSession consumption or on a Ticket's own RowVersion (see ITicketingUnitOfWork's remarks and TigerCsDbContext's supplemental concurrency-token configuration).</summary>
 public sealed class TicketingUnitOfWork(TigerCsDbContext dbContext) : ITicketingUnitOfWork
 {
-    public async Task<ITicketingTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default) =>
-        new EfTicketingTransaction(await dbContext.Database.BeginTransactionAsync(cancellationToken));
+    /// <summary>
+    /// Starts a database transaction - or JOINS the one already running on this context. A caller that must make several application services atomic (the
+    /// Queueing integration: intake + ticket + queue state + audit + inbox row) opens the outer transaction; every service it calls then begins "its own"
+    /// transaction as before and receives a non-owning scope: its <c>CommitAsync</c> does nothing (only the owner commits) and disposing it without committing
+    /// does nothing either (the owner's disposal rolls everything back). A <see cref="ITicketingTransaction.RollbackAsync"/> on a joined scope rolls the
+    /// whole transaction back, so a participant can never be "rolled back" while the owner commits the rest. With no transaction running the behaviour is exactly
+    /// what it always was, so every existing caller is unaffected.
+    /// </summary>
+    public async Task<ITicketingTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default)
+    {
+        if (dbContext.Database.CurrentTransaction is { } ambient)
+        {
+            return new JoinedTicketingTransaction(ambient);
+        }
+
+        return new EfTicketingTransaction(await dbContext.Database.BeginTransactionAsync(cancellationToken));
+    }
 
     public async Task SaveChangesAsync(CancellationToken cancellationToken = default)
     {
@@ -75,6 +90,15 @@ public sealed class TicketingUnitOfWork(TigerCsDbContext dbContext) : ITicketing
         }
 
         return false;
+    }
+
+    private sealed class JoinedTicketingTransaction(IDbContextTransaction owner) : ITicketingTransaction
+    {
+        public Task CommitAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+
+        public Task RollbackAsync(CancellationToken cancellationToken = default) => owner.RollbackAsync(cancellationToken);
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class EfTicketingTransaction(IDbContextTransaction inner) : ITicketingTransaction

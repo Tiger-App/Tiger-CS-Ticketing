@@ -38,7 +38,7 @@ public sealed class TicketNotificationEvents(IOutboxWriter outboxWriter, IAuditE
 
     /// <summary>The <c>TicketCreated</c> event — the acknowledgement email. One per ticket, ever.</summary>
     public Task QueueTicketCreatedAsync(Ticket ticket, Guid? actorEmployeeId, Guid correlationId, DateTime nowUtc, CancellationToken cancellationToken) =>
-        WriteAsync(
+        ticket.SuppressesCustomerNotifications ? Task.CompletedTask : WriteAsync(
             OutboxEventTypes.TicketCreated,
             new TicketCreatedEventPayload(ticket.TicketId, OutboxEventTypes.TicketCreatedVersion).ToJson(),
             OutboxEventTypes.IdempotencyKeyFor(OutboxEventTypes.TicketCreated, ticket.TicketId, OutboxEventTypes.TicketCreatedVersion),
@@ -52,7 +52,8 @@ public sealed class TicketNotificationEvents(IOutboxWriter outboxWriter, IAuditE
     public Task QueueLifecycleAsync(
         string eventType, int eventVersion, Ticket ticket, Guid? actorEmployeeId, Guid correlationId, DateTime nowUtc, CancellationToken cancellationToken,
         string? closureKind = null) =>
-        WriteAsync(
+        // A customer-facing event: never queued for a ticket whose lifecycle an external system owns (the Queueing System tells the customer itself).
+        ticket.SuppressesCustomerNotifications ? Task.CompletedTask : WriteAsync(
             eventType,
             new TicketLifecycleEventPayload(ticket.TicketId, eventVersion, ticket.ReopenCount, closureKind).ToJson(),
             OutboxEventTypes.LifecycleIdempotencyKeyFor(eventType, ticket.TicketId, eventVersion, ticket.ReopenCount),
@@ -74,7 +75,7 @@ public sealed class TicketNotificationEvents(IOutboxWriter outboxWriter, IAuditE
             _ => (null, 0)
         };
 
-        if (eventType is null || previousStatus == newStatus || ticket.TicketId <= 0)
+        if (eventType is null || previousStatus == newStatus || ticket.TicketId <= 0 || ticket.SuppressesCustomerNotifications)
         {
             return Task.CompletedTask;
         }
@@ -114,7 +115,7 @@ public sealed class TicketNotificationEvents(IOutboxWriter outboxWriter, IAuditE
 
         var createdInThisTransaction = ticket.CreatedAtUtc == nowUtc;
         var gainedOwner = previousOwnerEmployeeId is null && ticket.TicketStatus is not (TicketStatus.Resolved or TicketStatus.Closed);
-        if (gainedOwner && !createdInThisTransaction)
+        if (gainedOwner && !createdInThisTransaction && !ticket.SuppressesCustomerNotifications)
         {
             var payload = new TicketAssignedEventPayload(
                 ticket.TicketId, OutboxEventTypes.TicketAssignedVersion, ticket.ReopenCount, assignedEmployeeId, previousOwnerEmployeeId,

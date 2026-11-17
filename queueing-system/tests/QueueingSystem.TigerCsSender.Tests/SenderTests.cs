@@ -58,7 +58,7 @@ public sealed class QueueingEventFactoryTests
     }
 
     [Theory]
-    [InlineData(QueueingEventType.TicketCreated, "QueueNumber,CompanyId,TicketTypeId,CustomerPhone")]
+    [InlineData(QueueingEventType.TicketCreated, "QueueNumber,CompanyId,TicketTypeId")]
     [InlineData(QueueingEventType.TicketAssigned, "AssignedUserId")]
     [InlineData(QueueingEventType.TicketReassigned, "AssignedUserId")]
     [InlineData(QueueingEventType.TicketCommentAdded, "Comment")]
