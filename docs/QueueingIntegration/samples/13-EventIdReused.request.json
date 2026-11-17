@@ -1,0 +1,13 @@
+{
+  "EventId": "0f6c1d52-3b7a-4a55-9c53-0d6a1f1b0001",
+  "EventType": "TicketCreated",
+  "ExternalTicketId": "QT-20261110-0001",
+  "EventSequence": 1,
+  "QueueNumber": "A-018",
+  "CompanyId": "company-a",
+  "TicketTypeId": "type-complaint",
+  "CustomerName": "Aisha Khan",
+  "CustomerPhone": "+971500000123",
+  "CustomerEmail": "aisha@example.test",
+  "OccurredAtUtc": "2026-11-10T08:30:00Z"
+}

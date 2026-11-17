@@ -1,5 +1,7 @@
 @page "/Customers"
 @model TigerCS.Web.Pages.CustomersModel
+@using TigerCS.Application.Modules.Ticketing.Dto
+@using TigerCS.Domain.Modules.Ticketing
 @{
     ViewData["Title"] = "Customers";
     ViewData["ActiveNav"] = "customers";
@@ -53,6 +55,12 @@
             </div>
         }
 
+        @* Opened from the Dashboard's Customers by Location card: keep its location and filters through Apply, and say what the list is. *@
+        @foreach (var (name, value) in Model.DashboardQuery())
+        {
+            <input type="hidden" name="@name" value="@value" />
+        }
+
         <label class="field-check">
             <input type="checkbox" name="openOnly" value="true" checked="@Model.OpenOnly" data-autosubmit />
             With open tickets
@@ -63,6 +71,18 @@
             <a class="btn btn-ghost btn-sm" href="/Customers">Clear</a>
         </div>
     </form>
+
+    @if (Model.LocationLabel is { } locationLabel)
+    {
+        <p class="customers-scope" data-customers-scope="@CustomerLocationKeys.ToKey(Model.Location)">
+            <span class="customers-scope__chip customers-scope__chip--@(Model.Location == CustomerLocation.WithinUae ? "uae" : Model.Location == CustomerLocation.OutsideUae ? "intl" : "unknown")">@locationLabel</span>
+            @if (Model.DashboardPeriodLabel is { } periodLabel)
+            {
+                <span class="text-secondary">Customers with tickets created @periodLabel, from the Dashboard's Customers by Location.</span>
+            }
+            <a class="link-muted" href="/Customers">Show all customers</a>
+        </p>
+    }
 
     <div class="panel">
         <div class="panel__header">

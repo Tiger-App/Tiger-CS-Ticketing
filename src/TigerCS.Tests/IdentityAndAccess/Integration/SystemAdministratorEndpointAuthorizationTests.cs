@@ -1378,6 +1378,15 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
+    public async Task GetDashboardCustomersByLocation_Returns200()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+
+        var response = await client.GetAsync("/api/dashboard/customers-by-location?dateFrom=2026-08-01&dateTo=2026-09-01");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task GetDashboardOverview_Returns200()
     {
         var (client, _) = await CreateAdministratorAsync();

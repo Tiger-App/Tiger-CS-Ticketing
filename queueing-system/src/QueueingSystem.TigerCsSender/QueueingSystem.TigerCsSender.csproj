@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>QueueingSystem.TigerCsSender</RootNamespace>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);1591</NoWarn>
+    <Description>Sends Queueing System events to the TigerCS receiving API (POST /api/integrations/queueing/events).</Description>
+  </PropertyGroup>
+
+</Project>

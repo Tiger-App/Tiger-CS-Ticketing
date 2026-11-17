@@ -1,0 +1,11 @@
+{
+  "eventId": "0f6c1d52-3b7a-4a55-9c53-0d6a1f1b0030",
+  "externalTicketId": "QT-20261110-0001",
+  "status": "Superseded",
+  "outcome": "STALE_EVENT",
+  "ticketId": 1042,
+  "ticketNumber": "TG-CS-20261110-0007",
+  "ticketStatus": "Closed",
+  "detail": "Sequence 3 is not newer than the applied sequence 7; the ticket was not changed.",
+  "retryable": false
+}

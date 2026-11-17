@@ -3472,3 +3472,44 @@ a.tw-who__name:hover { color: var(--tw-gold-text); }
 .reassign-search { margin-bottom: 6px; }
 .reassign-list { width: 100%; height: auto; }
 .reassign-list option[hidden] { display: none; }
+
+/* ---- Dashboard: Customers by Location (compact card) ----
+   Same panel / summary-card language as Status and Volume by Channel. Green = Within UAE, blue = Outside UAE (the app's own success and info
+   tokens); Unknown is neutral. Segment widths come from the shared bar-fill--wNN classes (the CSP allows no inline style). */
+.dashboard-workspace .dash-card--location { --ic: var(--color-success); grid-column: 1 / -1; }
+.dashboard-workspace .dash-card--location .panel__header { align-items: center; }
+.dashboard-workspace .loc-total { font-size: var(--text-md); font-weight: 700; font-variant-numeric: tabular-nums; color: var(--color-text); white-space: nowrap; }
+.dashboard-workspace .loc-total__label { font-size: var(--text-xs); font-weight: 500; color: var(--color-text-secondary); }
+.dashboard-workspace .loc-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-3); padding: 2px 14px 10px; }
+.dashboard-workspace .loc-stat { display: flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; padding: 5px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-md, 8px); color: var(--color-text); text-decoration: none; background: var(--color-surface); }
+.dashboard-workspace a.loc-stat:hover { border-color: var(--loc-tone); box-shadow: 0 0 0 2px color-mix(in srgb, var(--loc-tone) 18%, transparent); }
+.dashboard-workspace a.loc-stat:focus-visible { outline: 2px solid var(--loc-tone); outline-offset: 2px; }
+.dashboard-workspace .loc-stat--uae { --loc-tone: var(--color-success); }
+.dashboard-workspace .loc-stat--intl { --loc-tone: var(--color-info); }
+.dashboard-workspace .loc-stat__dot { width: 10px; height: 10px; border-radius: 3px; background: var(--loc-tone); flex: none; }
+.dashboard-workspace .loc-stat__label { font-size: var(--text-xs); color: var(--color-text-secondary); line-height: 1.2; }
+.dashboard-workspace .loc-stat__figures { margin-left: auto; display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.dashboard-workspace .loc-stat__count { font-size: var(--text-lg, 1.25rem); line-height: 1.2; font-variant-numeric: tabular-nums; color: var(--loc-tone); }
+.dashboard-workspace .loc-stat__pct { font-size: var(--text-sm); color: var(--color-text-secondary); font-variant-numeric: tabular-nums; }
+.dashboard-workspace .loc-bar { display: flex; height: 8px; margin: 0 14px 10px; overflow: hidden; border-radius: 999px; background: var(--dash-track); }
+.dashboard-workspace .loc-seg { flex: 0 1 auto; height: 100%; }
+.dashboard-workspace .loc-seg + .loc-seg { margin-left: 1px; }
+.dashboard-workspace .loc-seg--uae { background: var(--color-success); }
+.dashboard-workspace .loc-seg--intl { background: var(--color-info); }
+.dashboard-workspace .loc-seg--unknown { background: var(--color-border-strong); }
+.dashboard-workspace .loc-unknown { margin: 0; padding: 0 14px 10px; font-size: var(--text-xs); color: var(--color-text-secondary); display: flex; gap: 8px; flex-wrap: wrap; }
+.dashboard-workspace .loc-unknown a { color: inherit; text-decoration: underline dotted; }
+.dashboard-workspace .loc-unknown strong { color: var(--color-text); font-variant-numeric: tabular-nums; }
+.dashboard-workspace .loc-unknown__hint { opacity: .85; }
+
+/* Customers list opened from the card: what the list is limited to. */
+.customers-scope { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 0 0 var(--space-3, 12px); font-size: var(--text-sm); }
+.customers-scope__chip { display: inline-flex; align-items: center; padding: 2px 10px; border-radius: 999px; font-weight: 600; border: 1px solid var(--color-border); }
+.customers-scope__chip--uae { background: var(--color-success-pale); color: var(--color-success); border-color: var(--color-success-line); }
+.customers-scope__chip--intl { background: var(--color-info-tint); color: var(--color-info); border-color: var(--color-info-line); }
+.customers-scope__chip--unknown { background: var(--color-surface-muted, #f3f4f6); color: var(--color-text-secondary); }
+
+@media (max-width: 640px) {
+  .dashboard-workspace .loc-stat { padding: 5px 8px; gap: 2px 6px; }
+  .dashboard-workspace .loc-total__label { display: none; }
+}

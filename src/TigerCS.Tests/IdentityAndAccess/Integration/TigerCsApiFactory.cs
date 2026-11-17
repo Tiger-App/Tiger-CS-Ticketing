@@ -56,6 +56,12 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
     /// </summary>
     public string CrmProvider { get; init; } = "Mock";
 
+    /// <summary>
+    /// When set, the host runs on this REAL SQL Server database (already migrated by the caller) instead of the per-instance InMemory one: real transactions,
+    /// real unique indexes, real row versions. Several factories given the same connection string behave as several application nodes sharing one database.
+    /// </summary>
+    public string? SqlServerConnectionString { get; init; }
+
     /// <summary>Extra test-only service registrations, applied last (e.g. a fixed clock for one module).</summary>
     public Action<IServiceCollection>? ExtraServices { get; init; }
 
@@ -182,6 +188,11 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
             services.RemoveAll<TigerCS.Application.Modules.Ticketing.Abstractions.ICallCenterReconciliationRunLock>();
             services.AddSingleton<TigerCS.Application.Modules.Ticketing.Abstractions.ICallCenterReconciliationRunLock, InProcessRunLock>();
 
+            if (SqlServerConnectionString is not null)
+            {
+                services.AddDbContext<TigerCsDbContext>(options => options.UseSqlServer(SqlServerConnectionString));
+            }
+            else
             services.AddDbContext<TigerCsDbContext>(options => options
                 .UseInMemoryDatabase(DatabaseName)
                 // The InMemory provider does not support real transactions

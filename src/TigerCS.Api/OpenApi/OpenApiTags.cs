@@ -48,6 +48,7 @@ public static class OpenApiTags
     public const string SlaAndEscalation = "SLA and Escalation";
     public const string RequestTypes = "Request Types";
     public const string Genesys = "Genesys";
+    public const string QueueingIntegration = "Queueing Integration";
     public const string CustomerReviews = "Customer Reviews";
     public const string Collections = "Collections";
     public const string PendingCustomerInteractions = "Pending Customer Interactions";
@@ -130,6 +131,12 @@ public static class OpenApiTags
             + "supplied messageId), and human-handoff state. It carries no field for category, "
             + "priority, status, owner or closure: those move through their own TigerCS operations, and ending a "
             + "conversation never closes the ticket."),
+        (QueueingIntegration,
+            "The receiving API for the Queueing System (QR-code queue tickets): one authenticated endpoint takes the eight queue events "
+            + "(TicketCreated, TicketAssigned, TicketReassigned, TicketReturned, TicketCommentAdded, TicketRecalled, TicketClosed, TicketCancelled) and "
+            + "mirrors them onto exactly one TigerCS ticket per queue ticket. The Queueing System is the source of truth for these tickets' lifecycle. "
+            + "Idempotent on EventId, ordered by EventSequence, with unresolved events kept and retried. Authenticated by the integration's own API key, "
+            + "not by a staff account."),
         (Collections,
             "Collections: balances, instalments and posted payments read from the authoritative financial source (never "
             + "calculated or stored by TigerCS — 503 while no source is integrated), payment reminders with duplicate "

@@ -54,7 +54,8 @@ public sealed class TicketLifecycleAppService(
     IUserPermissionOverrideRepository? permissionOverrides = null,
     ITicketAssignmentRepository? ticketAssignmentRepository = null,
     CollectionsTransferGuard? collectionsGuard = null,
-    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null)
+    TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null,
+    TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions? queueingOptions = null)
 {
     /// <summary>Matches the <c>TicketStatusHistory.Note</c> column, so a long reason is never lost to a database truncation error mid-transaction.</summary>
     public const int ReopenReasonMaxLength = 1000;
@@ -73,6 +74,13 @@ public sealed class TicketLifecycleAppService(
         if (ticket is null)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        // The Queueing System is the source of truth for a queue ticket's assignment, status and closure; a person's manual change would only be
+        // overwritten by its next event (QueueingIntegration:ManualChangePolicy). The integration's own writes run inside an IntegrationEventScope.
+        if (TigerCS.Application.Modules.QueueingIntegration.QueueManagedTicketGuard.Blocks(ticket, queueingOptions))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.QueueManagedTicket);
         }
 
         if (!Enum.TryParse<TicketStatus>(request.NewStatus, ignoreCase: true, out var newStatus))
@@ -238,6 +246,13 @@ public sealed class TicketLifecycleAppService(
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
         }
 
+        // The Queueing System is the source of truth for a queue ticket's assignment, status and closure; a person's manual change would only be
+        // overwritten by its next event (QueueingIntegration:ManualChangePolicy). The integration's own writes run inside an IntegrationEventScope.
+        if (TigerCS.Application.Modules.QueueingIntegration.QueueManagedTicketGuard.Blocks(ticket, queueingOptions))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.QueueManagedTicket);
+        }
+
         if (!Enum.TryParse<ResolutionOutcome>(request.ResolutionOutcome, ignoreCase: true, out var outcome))
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.InvalidStatusTransition);
@@ -389,6 +404,13 @@ public sealed class TicketLifecycleAppService(
         if (ticket is null)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        // The Queueing System is the source of truth for a queue ticket's assignment, status and closure; a person's manual change would only be
+        // overwritten by its next event (QueueingIntegration:ManualChangePolicy). The integration's own writes run inside an IntegrationEventScope.
+        if (TigerCS.Application.Modules.QueueingIntegration.QueueManagedTicketGuard.Blocks(ticket, queueingOptions))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.QueueManagedTicket);
         }
 
         // Whoever the ticket is currently assigned to may close it, whatever their role or department; everyone else needs
@@ -558,6 +580,13 @@ public sealed class TicketLifecycleAppService(
         if (ticket is null)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        // The Queueing System is the source of truth for a queue ticket's assignment, status and closure; a person's manual change would only be
+        // overwritten by its next event (QueueingIntegration:ManualChangePolicy). The integration's own writes run inside an IntegrationEventScope.
+        if (TigerCS.Application.Modules.QueueingIntegration.QueueManagedTicketGuard.Blocks(ticket, queueingOptions))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.QueueManagedTicket);
         }
 
         // Approved rule: the CS layer reopens (Agent/Supervisor/CS Manager).
@@ -1030,6 +1059,24 @@ public sealed class TicketLifecycleAppService(
                 return ticket.CloseForAiCompletion();
             },
             beforeCommit, cancellationToken);
+
+    /// <summary>
+    /// The Queueing System reported that a queue ticket finished (<paramref name="outcome"/> Resolved: the customer was served) or was cancelled
+    /// (<paramref name="outcome"/> Cancelled): the same system Resolved -> Closed closure as document delivery, written in one transaction with the status history,
+    /// resolution row, SLA settlement and the superseded assignment. The caller's <paramref name="beforeCommit"/> runs before the single SaveChanges, so the
+    /// integration's own state commits or rolls back with the closure. A ticket already Closed is left exactly as it is.
+    /// </summary>
+    public Task<TicketMutationResult> CloseForQueueingAsync(
+        Guid integrationEmployeeId,
+        long ticketId,
+        ResolutionOutcome outcome,
+        string reason,
+        string detail,
+        Action<DateTime>? beforeCommit = null,
+        CancellationToken cancellationToken = default) =>
+        CloseBySystemAsync(
+            integrationEmployeeId, ticketId, outcome, reason, detail, "AutoCloseQueueingSystem", ClosureKinds.QueueingSystem,
+            ticket => ticket.CloseByExternalSystem(outcome), beforeCommit, cancellationToken);
 
     /// <summary>
     /// Closed tickets have no owner. The domain already cleared <see cref="Ticket.CurrentOwnerEmployeeId"/>; this ends the active

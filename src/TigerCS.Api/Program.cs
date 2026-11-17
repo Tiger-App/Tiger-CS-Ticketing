@@ -50,7 +50,13 @@ builder.Services.AddTigerCsIntegrations(builder.Configuration);
 // than read from builder.Configuration inline here — the latter would run before
 // test/host configuration overrides (e.g. WebApplicationFactory) are merged in.
 builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer();
+    .AddJwtBearer()
+    // The Queueing System's own scheme. Not a default scheme: only the endpoint that names it ever evaluates it.
+    .AddScheme<Microsoft.AspNetCore.Authentication.AuthenticationSchemeOptions, TigerCS.Api.Integrations.QueueingApiKeyAuthenticationHandler>(
+        TigerCS.Api.Integrations.QueueingApiKeyDefaults.Scheme, configureOptions: null);
+
+builder.Services.Configure<TigerCS.Api.Integrations.QueueingApiKeyOptions>(
+    builder.Configuration.GetSection(TigerCS.Api.Integrations.QueueingApiKeyOptions.SectionName));
 
 builder.Services.AddOptions<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme)
     .Configure<IOptions<JwtOptions>, IHostEnvironment>((bearerOptions, jwtOptions, env) =>
@@ -311,6 +317,11 @@ using (var backgroundJobScope = app.Services.CreateScope())
     // so it is safe across restarts. Also a no-op when BackgroundJobs:Enabled
     // is false.
     app.Services.UseTigerCsRecurringChatbotInactivityClose(backgroundJobOptions);
+
+    // Retry of unresolved Queueing System events - registered only while QueueingIntegration:Enabled is true.
+    app.Services.UseTigerCsRecurringQueueingEventRetry(
+        backgroundJobOptions,
+        backgroundJobScope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions>().Enabled);
 
     // AI-only 18-hour closure — registered only where AiOnlyAutoClose:Enabled is true (default false everywhere, Production included).
     app.Services.UseTigerCsRecurringAiOnlyAutoClose(

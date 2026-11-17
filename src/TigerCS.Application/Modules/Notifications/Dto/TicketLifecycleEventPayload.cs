@@ -57,4 +57,7 @@ public static class ClosureKinds
 
     /// <summary>A document-delivery workflow ended.</summary>
     public const string DocumentDelivery = "DocumentDelivery";
+
+    /// <summary>The Queueing System, which owns the ticket's lifecycle, closed or cancelled it. (No customer email is sent for such a ticket.)</summary>
+    public const string QueueingSystem = "QueueingSystem";
 }
