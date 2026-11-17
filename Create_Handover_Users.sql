@@ -48,6 +48,7 @@
 -- Requires SQL Server 2016+ (same as the application).
 
 SET NOCOUNT ON;
+SET QUOTED_IDENTIFIER ON;   -- required for the filtered indexes on AspNetUsers and the XML base64 decode (SSMS default; sqlcmd needs it explicit)
 SET XACT_ABORT ON;
 
 -- =============================================================================================
@@ -67,6 +68,7 @@ DECLARE @RoleName       nvarchar(256) = N'Department Employee';
 -- 1. Target guard (nothing is read or written before this passes)
 -- =============================================================================================
 DECLARE @msg nvarchar(2000);
+DECLARE @CreatedCount int, @ExistingCount int;
 SET @msg = N'Server [' + CAST(@@SERVERNAME AS nvarchar(128)) + N'], database [' + ISNULL(DB_NAME(), N'?')
          + N'], PreviewMode=' + CAST(@PreviewMode AS nvarchar(1));
 PRINT @msg;
@@ -341,8 +343,13 @@ BEGIN TRY
     ELSE
     BEGIN
         COMMIT TRANSACTION;
-        PRINT N'COMMITTED. Users created: ' + CAST((SELECT COUNT(*) FROM @Users WHERE Status = N'NEW') AS nvarchar(10))
-            + N'; already existing / not modified: ' + CAST((SELECT COUNT(*) FROM @Users WHERE Status <> N'NEW') AS nvarchar(10)) + N'.';
+        -- PRINT accepts only scalar expressions (no subqueries): compute the counts first.
+        SELECT @CreatedCount  = COUNT(CASE WHEN Status =  N'NEW' THEN 1 END),
+               @ExistingCount = COUNT(CASE WHEN Status <> N'NEW' THEN 1 END)
+        FROM @Users;
+        SET @msg = N'COMMITTED. Users created: ' + CAST(@CreatedCount AS nvarchar(10))
+                 + N'; already existing / not modified: ' + CAST(@ExistingCount AS nvarchar(10)) + N'.';
+        PRINT @msg;
     END;
 END TRY
 BEGIN CATCH
