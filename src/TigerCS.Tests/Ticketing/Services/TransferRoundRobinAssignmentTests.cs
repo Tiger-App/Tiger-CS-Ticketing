@@ -639,7 +639,8 @@ public class TransferRoundRobinAssignmentTests
         paused.PauseSla();
         var slaStates = new[] { running.SlaState, paused.SlaState };
 
-        var allowedToChange = new HashSet<string> { nameof(Ticket.CurrentDepartmentId), nameof(Ticket.CurrentOwnerEmployeeId), nameof(Ticket.RowVersion) };
+        var allowedToChange = new HashSet<string> { nameof(Ticket.CurrentDepartmentId), nameof(Ticket.CurrentOwnerEmployeeId), nameof(Ticket.RowVersion),
+            nameof(Ticket.AssignedOwnerEmployeeId) };   // derived: the human owner, else the AI Agent - it simply follows the owner
         foreach (var ticket in new[] { running, paused })
         {
             var before = Snapshot(ticket);
