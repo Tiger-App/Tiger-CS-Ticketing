@@ -612,16 +612,151 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         Assert.Equal(QueueingEventStatus.Unresolved, (await f.FindEventAsync(request.EventId!))!.Status);
     }
 
-    [Fact]
-    public async Task ARequestTypeOfAnotherDepartment_IsRefusedAsInconsistentConfiguration()
+    // ---- routing: explicit (company, ticket type) mapping decides request type AND department; company mapping is only the default
+
+    private async Task<(int DepartmentId, int RequestTypeId)> SeedRoutableTypeAsync(string name)
     {
-        var otherDepartment = await f.Factory.CreateDepartmentAsync("Mismatch " + Guid.NewGuid().ToString("N")[..6], "M" + Guid.NewGuid().ToString("N")[..8]);
-        await f.Factory.CreateCategoryAsync("Mismatch Type", otherDepartment);
-        var foreignType = await f.Factory.CreateRequestTypeAsync("Mismatch Type", otherDepartment);
-        await f.ReadAsync(async db => { db.QueueingTicketTypeMappings.Add(new QueueingTicketTypeMapping(CompanyId, "type-foreign", foreignType, DateTime.UtcNow)); await db.SaveChangesAsync(); return 0; });
+        var department = await f.Factory.CreateDepartmentAsync(name + " " + Guid.NewGuid().ToString("N")[..6], "R" + Guid.NewGuid().ToString("N")[..8]);
+        await f.Factory.CreateCategoryAsync(name, department);
+        return (department, await f.Factory.CreateRequestTypeAsync(name, department));
+    }
+
+    private Task MapTicketTypeAsync(string company, string ticketType, int requestTypeId) =>
+        f.ReadAsync(async db => { db.QueueingTicketTypeMappings.Add(new QueueingTicketTypeMapping(company, ticketType, requestTypeId, DateTime.UtcNow)); await db.SaveChangesAsync(); return 0; });
+
+    [Fact]
+    public async Task AnExplicitTicketTypeMapping_DecidesTheDepartment_OverTheCompanysDefaultDepartment()
+    {
+        var (otherDepartment, otherType) = await SeedRoutableTypeAsync("Routed Elsewhere");
+        var ticketType = "type-" + Guid.NewGuid().ToString("N")[..8];
+        await MapTicketTypeAsync(CompanyId, ticketType, otherType);   // CompanyId's default department is f.DepartmentId
 
         var id = NewTicketId();
-        var (_, body) = await f.PostAsync(Created(id, ticketTypeId: "type-foreign"));
+        var (http, _) = await f.PostAsync(Created(id, ticketTypeId: ticketType));
+
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        var ticket = (await f.FindTicketAsync(id))!;
+        Assert.Equal(otherType, ticket.RequestTypeId);
+        Assert.Equal(otherDepartment, ticket.CurrentDepartmentId);
+        Assert.Equal(otherDepartment, ticket.OriginatingDepartmentId);
+        Assert.NotEqual(f.DepartmentId, ticket.CurrentDepartmentId);
+    }
+
+    [Fact]
+    public async Task OneCompany_WithTicketTypesOfSeveralDepartments_RoutesEachToItsOwnDepartment()
+    {
+        var company = "company-multi-" + Guid.NewGuid().ToString("N")[..6];
+        var (departmentOne, typeOne) = await SeedRoutableTypeAsync("Multi One");
+        var (departmentTwo, typeTwo) = await SeedRoutableTypeAsync("Multi Two");
+        await MapTicketTypeAsync(company, "t-1", typeOne);
+        await MapTicketTypeAsync(company, "t-2", typeTwo);
+
+        var first = NewTicketId();
+        var second = NewTicketId();
+        Assert.Equal(HttpStatusCode.Created, (await f.PostAsync(Created(first, companyId: company, ticketTypeId: "t-1"))).Http.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await f.PostAsync(Created(second, companyId: company, ticketTypeId: "t-2"))).Http.StatusCode);
+
+        var one = (await f.FindTicketAsync(first))!;
+        var two = (await f.FindTicketAsync(second))!;
+        Assert.Equal((typeOne, departmentOne), (one.RequestTypeId, one.CurrentDepartmentId));
+        Assert.Equal((typeTwo, departmentTwo), (two.RequestTypeId, two.CurrentDepartmentId));
+    }
+
+    [Fact]
+    public async Task AnExplicitTicketTypeMapping_DoesNotNeedACompanyMapping()
+    {
+        var company = "company-explicit-only-" + Guid.NewGuid().ToString("N")[..6];
+        var (department, requestType) = await SeedRoutableTypeAsync("Explicit Only");
+        await MapTicketTypeAsync(company, "t-1", requestType);
+
+        var id = NewTicketId();
+        var (http, _) = await f.PostAsync(Created(id, companyId: company, ticketTypeId: "t-1"));
+
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        Assert.Equal(department, (await f.FindTicketAsync(id))!.CurrentDepartmentId);
+    }
+
+    [Fact]
+    public async Task AnInactiveExplicitMapping_IsIgnored_AndTheCompanyDefaultApplies()
+    {
+        var company = "company-inactive-map-" + Guid.NewGuid().ToString("N")[..6];
+        var (_, elsewhereType) = await SeedRoutableTypeAsync("Inactive Mapping Target");
+        var (defaultDepartment, general) = await SeedRoutableTypeAsync("General");
+        await f.ReadAsync(async db =>
+        {
+            var mapping = new QueueingTicketTypeMapping(company, "t-1", elsewhereType, DateTime.UtcNow);
+            mapping.Repoint(elsewhereType, isActive: false);
+            db.QueueingTicketTypeMappings.Add(mapping);
+            db.QueueingCompanyMappings.Add(new QueueingCompanyMapping(company, defaultDepartment, DateTime.UtcNow));
+            await db.SaveChangesAsync();
+            return 0;
+        });
+
+        var id = NewTicketId();
+        var (http, _) = await f.PostAsync(Created(id, companyId: company, ticketTypeId: "t-1"));
+
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        var ticket = (await f.FindTicketAsync(id))!;
+        Assert.Equal(defaultDepartment, ticket.CurrentDepartmentId);
+        Assert.Equal(general, ticket.RequestTypeId);
+    }
+
+    [Fact]
+    public async Task AnExplicitMapping_WinsOverTheCompanyDefault_EvenWhenTheCompanyIsMapped_AndNeverFallsBackWhenUnusable()
+    {
+        // The company default (f.DepartmentId) has a usable request type, but the explicit mapping points at an INACTIVE request type: the event is held,
+        // never silently routed to the company's department.
+        var (_, inactiveType) = await SeedRoutableTypeAsync("Soon Inactive");
+        await f.ReadAsync(async db => { (await db.RequestTypes.FindAsync(inactiveType))!.Deactivate(); await db.SaveChangesAsync(); return 0; });
+        var ticketType = "type-" + Guid.NewGuid().ToString("N")[..8];
+        await MapTicketTypeAsync(CompanyId, ticketType, inactiveType);
+
+        var id = NewTicketId();
+        var (http, body) = await f.PostAsync(Created(id, ticketTypeId: ticketType));
+
+        Assert.Equal(HttpStatusCode.Accepted, http.StatusCode);
+        Assert.Equal(QueueingOutcomeCodes.RequestTypeUnusable, body!.Outcome);
+        Assert.Equal(0, await f.CountTicketsAsync(id));
+    }
+
+    [Fact]
+    public async Task AnExplicitMapping_ToARequestTypeWithoutAPublishedWorkflow_IsHeld()
+    {
+        var department = await f.Factory.CreateDepartmentAsync("No Workflow " + Guid.NewGuid().ToString("N")[..6], "W" + Guid.NewGuid().ToString("N")[..8]);
+        await f.Factory.CreateCategoryAsync("No Workflow Type", department);
+        var requestTypeId = await f.ReadAsync(async db =>
+        {
+            // Points at a workflow id that has no Published version.
+            var rt = new TigerCS.Domain.Modules.WorkflowConfiguration.RequestType(
+                department, "No Workflow Type", workflowId: 987654321, (byte)PriorityLevel.Medium,
+                allowAgentPriorityChange: false, allowPendingCustomer: true, allowPendingInternal: true, allowReopen: true);
+            db.RequestTypes.Add(rt);
+            await db.SaveChangesAsync();
+            return rt.RequestTypeId;
+        });
+        var ticketType = "type-" + Guid.NewGuid().ToString("N")[..8];
+        await MapTicketTypeAsync(CompanyId, ticketType, requestTypeId);
+
+        var id = NewTicketId();
+        var (http, body) = await f.PostAsync(Created(id, ticketTypeId: ticketType));
+
+        Assert.Equal(HttpStatusCode.Accepted, http.StatusCode);
+        Assert.Equal(QueueingOutcomeCodes.RequestTypeUnusable, body!.Outcome);
+        Assert.Contains("published workflow", body.Detail, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, await f.CountTicketsAsync(id));
+    }
+
+    [Fact]
+    public async Task AnExplicitMapping_ToAnInactiveDepartmentsRequestType_IsHeld()
+    {
+        var (department, requestType) = await SeedRoutableTypeAsync("Inactive Dept");
+        await f.ReadAsync(async db => { (await db.Departments.FindAsync(department))!.Deactivate(); await db.SaveChangesAsync(); return 0; });
+        var ticketType = "type-" + Guid.NewGuid().ToString("N")[..8];
+        await MapTicketTypeAsync(CompanyId, ticketType, requestType);
+
+        var id = NewTicketId();
+        var (_, body) = await f.PostAsync(Created(id, ticketTypeId: ticketType));
+
         Assert.Equal(QueueingOutcomeCodes.RequestTypeUnusable, body!.Outcome);
         Assert.Equal(0, await f.CountTicketsAsync(id));
     }
