@@ -122,8 +122,9 @@ public class CollectionsAccessTests
         foreach (var controller in ModuleOnlyControllers)
         {
             Assert.Contains(P.CollectionsAccess, RequiredPermissions(controller));
-            Assert.NotEmpty(controller.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-                .Where(m => m.GetCustomAttributes().Any(a => a.GetType().Name.StartsWith("Http", StringComparison.Ordinal))));
+            Assert.Contains(
+                controller.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly),
+                m => m.GetCustomAttributes().Any(a => a.GetType().Name.StartsWith("Http", StringComparison.Ordinal)));
         }
     }
 

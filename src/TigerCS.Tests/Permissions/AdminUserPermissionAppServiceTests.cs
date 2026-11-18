@@ -314,7 +314,7 @@ public class AdminUserPermissionAppServiceTests
         Assert.Equal(AdminOutcome.Success, granted.Outcome);
         Assert.True(State(granted.Value!, P.CollectionsAccess).IsEffective);
         Assert.Equal("Granted", State(granted.Value!, P.CollectionsAccess).Source);
-        Assert.True(CollectionsAccess.IsAllowed([Roles.CsAgent], f.Overrides.GetEffectsAsync(agent).Result));
+        Assert.True(CollectionsAccess.IsAllowed([Roles.CsAgent], await f.Overrides.GetEffectsAsync(agent)));
 
         var revoked = await f.Service.SetAsync(admin, agent, Req());
         Assert.Equal(AdminOutcome.Success, revoked.Outcome);
