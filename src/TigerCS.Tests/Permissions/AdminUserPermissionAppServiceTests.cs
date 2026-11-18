@@ -298,4 +298,91 @@ public class AdminUserPermissionAppServiceTests
         Assert.Equal(AdminOutcome.NotFound, (await f.Service.GetAsync(admin, Guid.NewGuid())).Outcome);
         Assert.Equal(AdminOutcome.NotFound, (await f.Service.SetAsync(admin, Guid.NewGuid(), Req())).Outcome);
     }
+
+    // ------------------------------------------------------------ Collections module access
+
+    [Fact]
+    public async Task Collections_access_can_be_granted_and_then_revoked_and_each_change_is_audited()
+    {
+        var f = new Fixture();
+        var admin = f.Seed("Root Admin", Roles.SystemAdministrator);
+        var agent = f.Seed("Alice Agent", Roles.CsAgent);
+
+        Assert.False(State((await f.Service.GetAsync(admin, agent)).Value!, P.CollectionsAccess).IsEffective);
+
+        var granted = await f.Service.SetAsync(admin, agent, Req((P.CollectionsAccess, "Grant")));
+        Assert.Equal(AdminOutcome.Success, granted.Outcome);
+        Assert.True(State(granted.Value!, P.CollectionsAccess).IsEffective);
+        Assert.Equal("Granted", State(granted.Value!, P.CollectionsAccess).Source);
+        Assert.True(CollectionsAccess.IsAllowed([Roles.CsAgent], await f.Overrides.GetEffectsAsync(agent)));
+
+        var revoked = await f.Service.SetAsync(admin, agent, Req());
+        Assert.Equal(AdminOutcome.Success, revoked.Outcome);
+        Assert.False(State(revoked.Value!, P.CollectionsAccess).IsEffective);
+        Assert.Empty(f.Overrides.Rows);
+
+        Assert.Equal(2, f.Audit.Entries.Count);
+        Assert.Contains("Permission=Collections.Access;Override=Grant;Effective=true", f.Audit.Entries[0].AfterValue, StringComparison.Ordinal);
+        Assert.Contains("Permission=Collections.Access;Override=Inherit;Effective=false", f.Audit.Entries[1].AfterValue, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Changing_collections_access_leaves_the_users_other_overrides_alone()
+    {
+        var f = new Fixture();
+        var admin = f.Seed("Root Admin", Roles.SystemAdministrator);
+        var agent = f.Seed("Alice Agent", Roles.CsAgent);
+        await f.Service.SetAsync(admin, agent, Req((P.TicketsReopen, "Deny"), (P.CollectionsSend, "Grant")));
+
+        var result = await f.Service.SetAsync(admin, agent,
+            Req((P.TicketsReopen, "Deny"), (P.CollectionsSend, "Grant"), (P.CollectionsAccess, "Grant")));
+
+        Assert.Equal(AdminOutcome.Success, result.Outcome);
+        Assert.Equal("Deny", State(result.Value!, P.TicketsReopen).Override);
+        Assert.Equal("Grant", State(result.Value!, P.CollectionsSend).Override);
+        Assert.Equal("Grant", State(result.Value!, P.CollectionsAccess).Override);
+    }
+
+    [Theory]
+    [InlineData(Roles.SystemAdministrator)]
+    [InlineData(Roles.CsManager)]
+    public async Task Collections_access_cannot_be_denied_to_a_role_that_always_has_it(string role)
+    {
+        var f = new Fixture();
+        var admin = f.Seed("Root Admin", Roles.SystemAdministrator);
+        var other = f.Seed("Second Person", Roles.SystemAdministrator);
+        var target = role == Roles.SystemAdministrator ? other : f.Seed("Mona Manager", role);
+
+        var result = await f.Service.SetAsync(admin, target, Req((P.CollectionsAccess, "Deny")));
+
+        Assert.Equal(AdminOutcome.Conflict, result.Outcome);
+        Assert.Empty(f.Overrides.Rows);
+        Assert.Empty(f.Audit.Entries);
+    }
+
+    [Fact]
+    public async Task Collections_access_can_be_denied_to_everyone_else()
+    {
+        var f = new Fixture();
+        var admin = f.Seed("Root Admin", Roles.SystemAdministrator);
+        var supervisor = f.Seed("Sam Supervisor", Roles.CsSupervisor);
+
+        var result = await f.Service.SetAsync(admin, supervisor, Req((P.CollectionsAccess, "Deny")));
+
+        Assert.Equal(AdminOutcome.Success, result.Outcome);
+        Assert.Equal("Denied", State(result.Value!, P.CollectionsAccess).Source);
+    }
+
+    [Fact]
+    public async Task Only_someone_who_can_manage_permissions_may_change_collections_access()
+    {
+        var f = new Fixture();
+        var agent = f.Seed("Alice Agent", Roles.CsAgent);
+        var manager = f.Seed("Mona Manager", Roles.CsManager);
+
+        var result = await f.Service.SetAsync(manager, agent, Req((P.CollectionsAccess, "Grant")));
+
+        Assert.Equal(AdminOutcome.Forbidden, result.Outcome);
+        Assert.Empty(f.Overrides.Rows);
+    }
 }

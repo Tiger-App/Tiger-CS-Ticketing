@@ -36,6 +36,17 @@ public sealed class CollectionsGenesysHistoryEndpointsTests
         ExtraServices = services => services.AddScoped<IPactReceivablesSource>(_ => source)
     };
 
+    /// <summary>A signed-in employee of <paramref name="role"/> who has been explicitly granted Collections module access (the role alone no longer opens it).</summary>
+    private static async Task<HttpClient> ClientWithModuleAccess(TigerCsApiFactory factory, string role)
+    {
+        var (username, password, employeeId) = await factory.SeedEmployeeAsync(role);
+        await factory.SetPermissionOverrideAsync(employeeId, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsAccess, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Grant);
+        var client = factory.CreateClient();
+        var login = await (await client.PostAsJsonAsync("/api/auth/login", new LoginRequestDto(username, password))).Content.ReadFromJsonAsync<LoginResponseDto>();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.AccessToken);
+        return client;
+    }
+
     private static async Task<HttpClient> Client(TigerCsApiFactory factory, string role)
     {
         var (username, password, _) = await factory.SeedEmployeeAsync(role);
@@ -90,7 +101,7 @@ public sealed class CollectionsGenesysHistoryEndpointsTests
     public async Task AFinancialReaderSeesSubmissions_ButOnlyASenderSeesDownloadedFiles()
     {
         using var factory = Factory(new Source());
-        using var agent = await Client(factory, Roles.CsAgent);
+        using var agent = await ClientWithModuleAccess(factory, Roles.CsAgent);   // module access is explicit; the granular permissions below still decide what the agent may do
         var asAgent = await CallEveryRouteAsync(agent);
         Assert.Equal(HttpStatusCode.OK, asAgent["submissions"]);
         Assert.Equal(HttpStatusCode.NotFound, asAgent["submission"]);
@@ -129,5 +140,75 @@ public sealed class CollectionsGenesysHistoryEndpointsTests
             Assert.Equal(HttpStatusCode.BadRequest, (await manager.GetAsync($"{Base}/submissions?{query}")).StatusCode);
         Assert.Equal(HttpStatusCode.BadRequest, (await manager.GetAsync($"{Base}/exports?from=2026-10-05&to=2026-10-01")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await manager.GetAsync($"{Base}/submissions?pageSize=100000&page=-4")).StatusCode);          // paging is clamped, not an error
+    }
+
+    // ------------------------------------------------------------ Collections module access (the gate)
+
+    [Fact]
+    public async Task ModuleAccess_IsDeniedByDefault_ForEveryRoleThatIsNotASystemAdministratorOrCsManager()
+    {
+        using var factory = Factory(new Source());
+        foreach (var role in Roles.All.Where(r => r != Roles.SystemAdministrator && r != Roles.CsManager))
+        {
+            using var client = await Client(factory, role);
+            var results = await CallEveryRouteAsync(client);
+            Assert.All(results, r => Assert.True(r.Value == HttpStatusCode.Forbidden, $"{role} {r.Key}: {r.Value}"));
+        }
+    }
+
+    [Fact]
+    public async Task ModuleAccess_IsOpenToSystemAdministratorAndCsManager_WithNoGrant_AndEvenWhenTheOverrideSaysDeny()
+    {
+        using var factory = Factory(new Source());
+        using var admin = await Client(factory, Roles.SystemAdministrator);
+        Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync($"{Base}/submissions")).StatusCode);
+
+        var (username, password, managerId) = await factory.SeedEmployeeAsync(Roles.CsManager);
+        using var manager = await SignInAsync(factory, username, password);
+        Assert.Equal(HttpStatusCode.OK, (await manager.GetAsync($"{Base}/submissions")).StatusCode);
+
+        // The role is the entitlement: an override cannot take it away.
+        await factory.SetPermissionOverrideAsync(managerId, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsAccess,
+            TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Deny);
+        Assert.Equal(HttpStatusCode.OK, (await manager.GetAsync($"{Base}/submissions")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ModuleAccess_IsGrantedExplicitly_TakesEffectOnTheNextRequest_AndStopsWhenRevoked()
+    {
+        using var factory = Factory(new Source());
+        var (username, password, agentId) = await factory.SeedEmployeeAsync(Roles.CsAgent);
+        using var agent = await SignInAsync(factory, username, password);
+        var key = TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsAccess;
+
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.GetAsync($"{Base}/submissions")).StatusCode);
+
+        await factory.SetPermissionOverrideAsync(agentId, key, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Grant);
+        Assert.Equal(HttpStatusCode.OK, (await agent.GetAsync($"{Base}/submissions")).StatusCode);   // same token: overrides are read on every request
+
+        await factory.ClearPermissionOverrideAsync(agentId, key);
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.GetAsync($"{Base}/submissions")).StatusCode);
+
+        await factory.SetPermissionOverrideAsync(agentId, key, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Deny);
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.GetAsync($"{Base}/submissions")).StatusCode);
+    }
+
+    [Fact]
+    public async Task ModuleAccess_DoesNotWidenTheGranularRights_AGrantedAgentStillCannotSendOrExport()
+    {
+        using var factory = Factory(new Source());
+        using var agent = await ClientWithModuleAccess(factory, Roles.CsAgent);
+        var results = await CallEveryRouteAsync(agent);
+        Assert.Equal(HttpStatusCode.OK, results["submissions"]);
+        Assert.Equal(HttpStatusCode.Forbidden, results["exports"]);
+        Assert.Equal(HttpStatusCode.Forbidden, results["sync"]);
+    }
+
+    private static async Task<HttpClient> SignInAsync(TigerCsApiFactory factory, string username, string password)
+    {
+        var client = factory.CreateClient();
+        var login = await (await client.PostAsJsonAsync("/api/auth/login", new LoginRequestDto(username, password))).Content.ReadFromJsonAsync<LoginResponseDto>();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.AccessToken);
+        return client;
     }
 }

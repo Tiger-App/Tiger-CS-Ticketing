@@ -93,12 +93,84 @@ public sealed class NavigationPermissionsTests : IDisposable
     {
         var (_, agentHtml) = await GetAsync("/Tickets", Roles.CsAgent);
         var agent = Nav(agentHtml);
-        Assert.Contains("href=\"/Collections/CampaignList\"", agent, StringComparison.Ordinal);
+        // Collections is a gated module now: a CS Agent no longer gets it from the role alone (see the Collections access tests below).
+        Assert.DoesNotContain("href=\"/Collections/CampaignList\"", agent, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/Reports/TeamPerformance\"", agent, StringComparison.Ordinal);
         Assert.DoesNotContain("href=\"/Admin\"", agent, StringComparison.Ordinal);
 
         var (_, adminHtml) = await GetAsync("/Tickets", Roles.SystemAdministrator);
         Assert.Contains("href=\"/Admin\"", Nav(adminHtml), StringComparison.Ordinal);
+    }
+
+    // ------------------------------------------------------------ Collections module access
+
+    private const string CollectionsLink = "href=\"/Collections/CampaignList\"";
+
+    [Theory]
+    [InlineData(Roles.SystemAdministrator)]
+    [InlineData(Roles.CsManager)]
+    public async Task Collections_is_always_shown_and_open_to_system_administrators_and_cs_managers(string role)
+    {
+        var (_, html) = await GetAsync("/Tickets", role);
+        Assert.Contains(CollectionsLink, Nav(html), StringComparison.Ordinal);
+
+        var (status, _) = await GetAsync("/Collections/CampaignList", role);
+        Assert.NotEqual(HttpStatusCode.Forbidden, status);
+    }
+
+    [Fact]
+    public async Task Collections_cannot_be_taken_away_from_a_cs_manager_by_a_denial_of_module_access()
+    {
+        _denied = [P.CollectionsAccess];
+
+        var (_, html) = await GetAsync("/Tickets", Roles.CsManager);
+        Assert.Contains(CollectionsLink, Nav(html), StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(Roles.CsAgent)]
+    [InlineData(Roles.CsSupervisor)]
+    [InlineData(Roles.GeneralManager)]
+    public async Task Collections_is_hidden_and_its_pages_refused_for_everyone_else_by_default(string role)
+    {
+        var (_, html) = await GetAsync("/Tickets", role);
+        Assert.DoesNotContain(CollectionsLink, Nav(html), StringComparison.Ordinal);
+
+        // Direct URLs are refused too, not merely unlinked - the Collections landing page and a deeper one.
+        Assert.Equal(HttpStatusCode.Forbidden, (await GetAsync("/Collections/CampaignList", role)).Status);
+        Assert.Equal(HttpStatusCode.Forbidden, (await GetAsync("/Collections/Receivables", role)).Status);
+    }
+
+    [Fact]
+    public async Task An_explicit_grant_shows_Collections_and_opens_its_pages_and_revoking_it_closes_them_again()
+    {
+        _granted = [P.CollectionsAccess];
+        var (_, granted) = await GetAsync("/Tickets", Roles.CsAgent);
+        Assert.Contains(CollectionsLink, Nav(granted), StringComparison.Ordinal);
+        Assert.NotEqual(HttpStatusCode.Forbidden, (await GetAsync("/Collections/CampaignList", Roles.CsAgent)).Status);
+
+        _granted = [];
+        var (_, revoked) = await GetAsync("/Tickets", Roles.CsAgent);
+        Assert.DoesNotContain(CollectionsLink, Nav(revoked), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Forbidden, (await GetAsync("/Collections/CampaignList", Roles.CsAgent)).Status);
+    }
+
+    [Fact]
+    public async Task The_granular_view_permission_alone_never_opens_Collections()
+    {
+        _granted = [P.CollectionsView, P.CampaignsView];
+        var (_, html) = await GetAsync("/Tickets", Roles.CsAgent);
+        Assert.DoesNotContain(CollectionsLink, Nav(html), StringComparison.Ordinal);
+        Assert.Equal(HttpStatusCode.Forbidden, (await GetAsync("/Collections/CampaignList", Roles.CsAgent)).Status);
+    }
+
+    [Fact]
+    public async Task A_denial_of_module_access_overrides_a_grant_of_the_granular_permissions()
+    {
+        _granted = [P.CollectionsView];
+        _denied = [P.CollectionsAccess];
+        var (_, html) = await GetAsync("/Tickets", Roles.CsAgent);
+        Assert.DoesNotContain(CollectionsLink, Nav(html), StringComparison.Ordinal);
     }
 
     [Fact]

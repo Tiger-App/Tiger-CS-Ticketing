@@ -145,6 +145,12 @@ public sealed class AdminUserPermissionAppService(
                     errors.Add($"'{definition.Name}' cannot be granted: this employee holds only read-only roles (Chairman/CEO, Reporting User). Assign a working role first.");
                 }
             }
+            else if (key == Permissions.CollectionsAccess && CollectionsAccess.IsAlwaysAllowed(targetRoles))
+            {
+                // The role is the entitlement: an override that could never take effect is refused rather than stored.
+                return AdminResult<UserPermissionsDto>.Conflict(
+                    $"Cannot deny '{definition.Name}': {employee.DisplayName} holds a role (System Administrator or CS Manager) that always has Collections access. Change their roles instead.");
+            }
             else if (definition.IsReserved
                 && employee.IsActive
                 && targetBaseline.Contains(key)
