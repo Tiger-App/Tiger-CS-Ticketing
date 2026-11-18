@@ -33,7 +33,7 @@ public static class TimelineAuditActions
     [
         AutoCloseCustomerInactivity, AutoCloseByAi, AutoCloseDocumentDelivery, AutoCloseAiOnlyTimeout, AutoCloseQueueingSystem, HumanActivityAfterClosure,
         "GenesysRoutingChanged", "GenesysTranscriptAppended", "GenesysHumanFollowUpRequired",
-        "GenesysHandoffAutoRaisedOnConversationEnd", "GenesysConversationEnded",
+        "GenesysHandoffAutoRaisedOnConversationEnd", "GenesysConversationEnded", "GenesysEventIgnoredOnClosedTicket",
         // The Queueing System integration: the history entries no other table carries (a queue ticket's creation facts, a return to the waiting queue, a recall).
         "QueueingTicketCreated", "QueueingTicketReturned", "QueueingTicketRecalled",
         .. Notifications
@@ -66,6 +66,9 @@ public sealed class TicketTimelineSources
     public IReadOnlyList<TicketWorkflowEvent> WorkflowEvents { get; init; } = [];
     public IReadOnlyList<TicketStatusHistory> StatusHistory { get; init; } = [];
     public IReadOnlyList<TicketAssignment> Assignments { get; init; } = [];
+
+    /// <summary>The Genesys ownership history (the AI Agent as initial assignee, the human who accepted, call transfers). Empty when not read.</summary>
+    public IReadOnlyList<TicketAssignmentHistoryEntry> AssignmentHistory { get; init; } = [];
     public IReadOnlyList<AuditEntry> AuditEntries { get; init; } = [];
     public IReadOnlyDictionary<Guid, string> EmployeeNames { get; init; } = new Dictionary<Guid, string>();
     public IReadOnlyDictionary<int, string> DepartmentNames { get; init; } = new Dictionary<int, string>();
@@ -282,6 +285,15 @@ public static class TicketActivityTimelineBuilder
                 ? "Genesys did not supply a start time; showing when TigerCS recorded the interaction."
                 : null;
             var started = aiMessages.Count > 0;
+            if (isGenesys && interaction.InteractionStartedAtUtc is { } reportedStart && messages.Count > 0
+                && reportedStart - messages.Min(m => m.SentAtUtc) > DelayTolerance)
+            {
+                // A conversation cannot start after its own first message. Stored before inbound timestamps were normalized to UTC, a start time
+                // that carried an offset was kept as UAE wall-clock and then shifted by the UI a second time. Shown as recorded, never rewritten.
+                startNote = "The recorded start time is later than the conversation's first message; it was probably stored in the wrong time zone and is shown as recorded.";
+                gaps.Add("A Genesys start time is later than the first recorded message of that conversation (stored in the wrong time zone before the UTC fix).");
+            }
+
             entries.Add(Make(
                 startedAt,
                 started ? "AiConversationStarted" : "ConversationStarted",
@@ -638,6 +650,14 @@ public static class TicketActivityTimelineBuilder
                         SourceAudit, rank: 3, reason: Pick(after, "Reason", string.Empty) is { Length: > 0 } recallReason && recallReason != "(none)" ? recallReason : null));
                     break;
 
+                case "GenesysEventIgnoredOnClosedTicket":
+                    entries.Add(Make(
+                        audit.OccurredAtUtc, "LateEventIgnoredAfterClosure", "Late event recorded after closure", "Anomaly",
+                        TimelineActorTypes.System, "Genesys",
+                        "A delayed, duplicate or replayed Genesys event reached this ticket after it was Closed. It was recorded as evidence only: the ticket was not reopened and its status, owner, department, SLA and closure were not changed.",
+                        SourceAudit, rank: 8, severity: "Info", reason: $"Signal: {Pick(after, "HumanSignal")}"));
+                    break;
+
                 case TimelineAuditActions.HumanActivityAfterClosure:
                     entries.Add(Make(
                         audit.OccurredAtUtc, "HumanActivityReceivedAfterClosure", "Human reply received after closure", "Anomaly",
@@ -738,6 +758,9 @@ public static class TicketActivityTimelineBuilder
                 .Cast<Guid?>()
                 .LastOrDefault();
 
+            // Nobody owned it before: when the AI Agent was the recorded initial assignee, THAT is the previous owner - not "Unassigned".
+            var aiWasPrevious = previousOwner is null && AiAgentBefore(s, transfer.OccurredAtUtc);
+
             var movedDepartment = transfer.FromDepartmentId != transfer.ToDepartmentId;
             var isEscalation = transfer.IsEscalation;
             var released = transfer.ToEmployeeId is null;
@@ -746,9 +769,10 @@ public static class TicketActivityTimelineBuilder
                 : released ? "Ownership released"
                 : "Ownership changed";
 
+            var previousLabel = aiWasPrevious ? AiAgentLabel : OwnerLabel(ctx, previousOwner);
             var previous = movedDepartment
-                ? $"{ctx.Department(transfer.FromDepartmentId)} / {OwnerLabel(ctx, previousOwner)}"
-                : OwnerLabel(ctx, previousOwner);
+                ? $"{ctx.Department(transfer.FromDepartmentId)} / {previousLabel}"
+                : previousLabel;
             var next = movedDepartment
                 ? $"{ctx.Department(transfer.ToDepartmentId)} / {(released ? "department queue (unassigned)" : ctx.Name(transfer.ToEmployeeId))}"
                 : released ? "department queue (unassigned)" : ctx.Name(transfer.ToEmployeeId);
@@ -784,13 +808,19 @@ public static class TicketActivityTimelineBuilder
                     "Ownership", actorType, actor,
                     $"Assigned to {ctx.Name(assignment.AssignedEmployeeId)} in {ctx.Department(assignment.AssignedDepartmentId)}.",
                     SourceAssignment, rank: 5,
-                    previous: first ? "Unassigned (department queue)" : ctx.Name(previousAssignee),
+                    previous: first ? (AiAgentBefore(s, assignment.AssignedAtUtc) ? AiAgentLabel : "Unassigned (department queue)") : ctx.Name(previousAssignee),
                     next: ctx.Name(assignment.AssignedEmployeeId)));
             }
 
             previousAssignee = assignment.AssignedEmployeeId;
         }
     }
+
+    /// <summary>How the AI Agent reads as a previous owner. It is a history-only assignee (the ticket itself keeps no owner while the AI handles it).</summary>
+    public const string AiAgentLabel = "AI Agent";
+
+    private static bool AiAgentBefore(TicketTimelineSources s, DateTime atUtc) =>
+        s.AssignmentHistory.Any(h => h.Source == TicketAssignmentSource.GenesysAiAgent && (h.SourceEventAtUtc ?? h.ChangedAtUtc) <= atUtc);
 
     private static string OwnerLabel(Context ctx, Guid? owner) => owner is null ? "Unassigned (department queue)" : ctx.Name(owner);
 
@@ -845,6 +875,20 @@ public static class TicketActivityTimelineBuilder
                         next: Named<ResolutionOutcome>(change.NewValue)));
                     break;
 
+                case TicketStatusDimension.SlaState when change.OldValue == change.NewValue:
+                    // Not a state change. The only such row is the one written when the first human response is recorded (the SLA stays
+                    // Running); it is the First Response MILESTONE, placed where the response actually happened, not where it was processed.
+                    if (change.Note is { } milestoneNote && milestoneNote.StartsWith(FirstResponseNotePrefix, StringComparison.Ordinal))
+                    {
+                        var actualAt = ParseFirstResponseInstant(milestoneNote) ?? change.OccurredAtUtc;
+                        entries.Add(Make(
+                            actualAt, "FirstResponseRecorded", "First response recorded (SLA)", "Sla", TimelineActorTypes.System, "System",
+                            "The first human response was recorded; the First Response SLA is measured to this actual moment, not to when TigerCS processed the event.",
+                            SourceHistory, rank: 6, recordedAtUtc: change.OccurredAtUtc, reason: milestoneNote));
+                    }
+
+                    break;
+
                 case TicketStatusDimension.SlaState:
                     entries.Add(Make(
                         change.OccurredAtUtc, "SlaStateChanged", "SLA state changed", "Sla", TimelineActorTypes.System, "System",
@@ -862,6 +906,18 @@ public static class TicketActivityTimelineBuilder
                     break;
             }
         }
+    }
+
+    private const string FirstResponseNotePrefix = "First human response recorded";
+
+    /// <summary>The instant the response happened, from the recorder's note "First human response recorded (source) at {O}; entered at {O}."</summary>
+    private static DateTime? ParseFirstResponseInstant(string note)
+    {
+        var match = System.Text.RegularExpressions.Regex.Match(note, @"\) at (?<at>[^;]+);");
+        return match.Success
+            && DateTime.TryParse(match.Groups["at"].Value, CultureInfo.InvariantCulture, DateTimeStyles.AdjustToUniversal | DateTimeStyles.AssumeUniversal, out var at)
+            ? at
+            : null;
     }
 
     private static string StatusName(byte? value) => value is { } v ? Named<TicketStatus>(v) : TimelineWording.NotRecorded;

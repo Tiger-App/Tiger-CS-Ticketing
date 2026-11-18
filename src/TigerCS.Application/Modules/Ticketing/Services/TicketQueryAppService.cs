@@ -183,18 +183,21 @@ public sealed class TicketQueryAppService(
             return [];
         }
 
-        var candidates = tickets
-            .Where(t => t.CurrentOwnerEmployeeId is null && (t.TicketStatus is TicketStatus.Open or TicketStatus.InProgress))
-            .Select(t => t.TicketId)
-            .ToList();
+        var active = tickets.Where(t => t.CurrentOwnerEmployeeId is null && (t.TicketStatus is TicketStatus.Open or TicketStatus.InProgress)).ToList();
+
+        // A ticket the AI Agent actually owns IS the virtual agent's - no inference, no staleness window. Tickets from before AI ownership was
+        // persisted (no owner stored) keep the evidence-based rule below.
+        var owned = active.Where(t => t.AiAgentOwnerEmployeeId is not null).Select(t => t.TicketId).ToHashSet();
+        var candidates = active.Where(t => t.AiAgentOwnerEmployeeId is null).Select(t => t.TicketId).ToList();
         if (candidates.Count == 0)
         {
-            return [];
+            return owned;
         }
 
         var now = timeProvider.GetUtcNow().UtcDateTime;
         var evidence = await unassignedWorkRepository.ListEvidenceAsync(candidates, cancellationToken);
-        return evidence.Where(e => AiVirtualAgentRule.IsActive(e, now)).Select(e => e.TicketId).ToHashSet();
+        owned.UnionWith(evidence.Where(e => AiVirtualAgentRule.IsActive(e, now)).Select(e => e.TicketId));
+        return owned;
     }
 
     public async Task<TicketQueryResultDto<TicketDetailDto>> GetDetailAsync(

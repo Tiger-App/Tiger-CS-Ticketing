@@ -1,4 +1,5 @@
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
+using TigerCS.Application.Modules.GenesysIntegration.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
@@ -322,7 +323,10 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         Assert.Contains("new ticket", result.Detail);
         Assert.Empty(w.F.Handoffs.All);
         Assert.Equal(0, TransfersToCallCenter(w, ticketId));
-        Assert.Equal(audit, w.F.Audit.Entries.Count);
+        // Nothing is queued or moved. The refusal leaves exactly ONE audit row - the evidence that a late event reached a Closed ticket.
+        Assert.Equal(audit + 1, w.F.Audit.Entries.Count);
+        Assert.Equal(GenesysAuditActions.EventIgnoredOnClosedTicket, w.F.Audit.Entries[^1].Action);
+        Assert.Contains("TicketChanged=false", w.F.Audit.Entries[^1].AfterValue);
         Assert.Equal(TicketStatus.Closed, w.Ticket(ticketId).TicketStatus);
     }
 

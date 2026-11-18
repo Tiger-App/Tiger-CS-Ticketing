@@ -84,6 +84,9 @@ public sealed class GenesysTicketUpdateAppService(
     {
         ArgumentNullException.ThrowIfNull(request);
 
+        // Every instant Genesys sent is UTC from here on (see GenesysTimestamps): an offset-bearing or zoneless value is never stored as local wall-clock time.
+        request = GenesysTimestamps.Normalize(request);
+
         if (!options.Enabled)
         {
             return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.IntegrationDisabled);
@@ -156,6 +159,15 @@ public sealed class GenesysTicketUpdateAppService(
         // up front instead - nothing written - so Genesys learns the ticket is closed and can open a new one (a new serviceRequestId) for the new request.
         if (request.Handoff is { Required: true } && ticket.TicketStatus == TicketStatus.Closed)
         {
+            // Refused for the caller, and recorded as evidence: the same conversation arriving after closure is audit-only, never a change.
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.EventIgnoredOnClosedTicket, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"TicketId={ticket.TicketId};ConversationId={conversationId};TicketStatus={ticket.TicketStatus};HumanSignal=None;"
+                    + $"RoutingAgentId=(none);HandoffRequired=True;EventAtUtc=(none);RecordedAtUtc={timeProvider.GetUtcNow().UtcDateTime:O};TicketChanged=false",
+                Guid.NewGuid(), cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+
             return GenesysTicketUpdateResult.Failure(
                 GenesysTicketUpdateOutcome.TicketClosed,
                 "The ticket is closed, so human follow-up cannot be queued on it. Create a new ticket for the new request "
@@ -204,7 +216,11 @@ public sealed class GenesysTicketUpdateAppService(
         // A ticket a person is now asked to handle (human follow-up, a handoff, or a connected agent) must carry a valid classification: a request
         // type applied above wins; otherwise one that is still missing, partial or invalid takes the default. Classification only - the owner, the
         // department, the priority, the SLA and the status are untouched, and a valid classification is never replaced.
+        // Closed is terminal: a late event never classifies, routes, assigns or reopens a Closed ticket (see ClosedTicketGuard).
+        var ticketIsClosed = ClosedTicketGuard.IsTerminal(ticket);
+
         if (defaultClassification is not null
+            && !ticketIsClosed
             && (request.HumanFollowUpRequired == true || request.Handoff is { Required: true } || NullIfBlank(request.Routing?.AgentId) is not null)
             && await defaultClassification.EnsureClassifiedAsync(
                 ticket, "A person was asked to handle a ticket without a valid classification", callerEmployeeId, save: true, cancellationToken)
@@ -334,7 +350,7 @@ public sealed class GenesysTicketUpdateAppService(
         // directly, in the Call Center, not to the next agent in the rotation. An agent who cannot take it (unmapped, deactivated, locked
         // out ...) leaves the ticket in the Call Center queue flagged for manual assignment. A human owner, or a person's transfer, stands:
         // later events never overwrite either. Idempotent per agent.
-        if (options.AssignOnAnswer && answeringAgentAssignment is not null && NullIfBlank(request.Routing?.AgentId) is { } answeringAgentId)
+        if (!ticketIsClosed && options.AssignOnAnswer && answeringAgentAssignment is not null && NullIfBlank(request.Routing?.AgentId) is { } answeringAgentId)
         {
             var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
                 callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken,
@@ -350,7 +366,7 @@ public sealed class GenesysTicketUpdateAppService(
         // routing.agentId arrived: that mapped person owns the ticket - never the next name in the rotation. An agent who cannot take it
         // (not a CS Agent / Call Center member, deactivated, ...) leaves the ticket flagged in the Call Center queue. An id that maps to
         // nobody is not guessed at: the line still counts as human work and the ticket takes the Round Robin route below.
-        if (options.AssignOnAnswer && answeringAgentAssignment is not null
+        if (!ticketIsClosed && options.AssignOnAnswer && options.AssignOnTranscriptEvidence && answeringAgentAssignment is not null
             && NullIfBlank(request.Routing?.AgentId) is null
             && GenesysHumanHandlingEvidence.FirstHumanSenderId(request) is { } humanSenderId
             && (await answeringAgentAssignment.ResolveSenderAsync(humanSenderId, cancellationToken)).Issue
@@ -359,7 +375,12 @@ public sealed class GenesysTicketUpdateAppService(
             var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
                 callerEmployeeId, ticket, interaction, humanSenderId, source: "Transcript", cancellationToken,
                 firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, humanSenderId),
-                identityIsTranscriptSenderId: true);
+                identityIsTranscriptSenderId: true,
+                // NOT back-dated: this is late evidence, not an acceptance event, so the assignment happens (and is recorded) when TigerCS
+                // received it. The reply's own time is kept beside it for the audit trail only.
+                evidenceAtUtc: GenesysHumanHandlingEvidence.HumanSenderIds(request)
+                    .Where(h => string.Equals(h.SenderId, humanSenderId, StringComparison.OrdinalIgnoreCase))
+                    .Select(h => (DateTime?)h.FirstSentAtUtc).FirstOrDefault());
             if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
             {
                 return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);
@@ -372,7 +393,8 @@ public sealed class GenesysTicketUpdateAppService(
         // while it is WaitingForAgent — work a TigerCS agent is already
         // handling is never reassigned by a Genesys routing event — and never
         // when this same update states the handoff explicitly.
-        if (NullIfBlank(request.Routing?.AgentId) is { } connectedAgentId
+        if (!ticketIsClosed
+            && NullIfBlank(request.Routing?.AgentId) is { } connectedAgentId
             && request.Handoff is not { Required: true } && NullIfBlank(request.Handoff?.AssignedAgentId) is null
             && await handoffRepository.GetOpenByInteractionIdAsync(interaction.TicketInteractionId, cancellationToken)
                 is { Status: AgentHandoffStatus.WaitingForAgent })
@@ -429,7 +451,8 @@ public sealed class GenesysTicketUpdateAppService(
         // for an agent acting is the agent-context endpoint. The agent a
         // routing change connected counts too: on a voice call that is how
         // Genesys first names the agent at all.
-        if ((NullIfBlank(request.AgentId) ?? NullIfBlank(request.Routing?.AgentId)) is { } reportedAgentId
+        if (!ticketIsClosed
+            && (NullIfBlank(request.AgentId) ?? NullIfBlank(request.Routing?.AgentId)) is { } reportedAgentId
             && interaction.HandledByUserId is null
             && await agentResolution.ResolveByGenesysUserIdAsync(reportedAgentId, cancellationToken) is { IsResolved: true } agent
             && interaction.RecordHandlingAgentIfAbsent(agent.Agent!.GenesysUserId, agent.Agent.UserId))
@@ -452,7 +475,9 @@ public sealed class GenesysTicketUpdateAppService(
         // Every agent Genesys reports as connected is a handler of the interaction — not only the first. A transfer arrives as a routing
         // update naming the receiving agent; recording each one is what lets that agent (and the one who transferred away) keep seeing the
         // ticket. An agent that is merely ringing/assigned is never sent here, a bot or unmapped id resolves to nothing and is skipped.
-        if (handlerRecorder is not null)
+        // Not on a Closed ticket: a handler row raises a ticket-level "agent connected" event and widens who may act on the ticket. The late
+        // evidence is kept in the audit trail (EventIgnoredOnClosedTicket) instead.
+        if (handlerRecorder is not null && !ticketIsClosed)
         {
             await handlerRecorder.RecordAsync(
                 callerEmployeeId, interaction, NullIfBlank(request.Routing?.AgentId),
@@ -505,7 +530,23 @@ public sealed class GenesysTicketUpdateAppService(
             humanSignal = GenesysHumanSignal.AiEndedUnresolved;
         }
 
-        if (humanSignal != GenesysHumanSignal.None)
+        if (ticketIsClosed)
+        {
+            // Evidence only: what arrived is recorded, and nothing about the ticket moves. No owner, department, status, SLA, closure fact,
+            // human-follow-up flag or notification — a delayed or replayed event is history, not work.
+            if (humanSignal != GenesysHumanSignal.None || routingAgentId is not null || request.Handoff is { Required: true })
+            {
+                await auditWriter.WriteAsync(
+                    callerEmployeeId, GenesysAuditActions.EventIgnoredOnClosedTicket, "Ticket", ticket.TicketId.ToString(),
+                    beforeValue: null,
+                    afterValue: $"TicketId={ticket.TicketId};ConversationId={conversationId};TicketStatus={ticket.TicketStatus};HumanSignal={humanSignal};"
+                        + $"RoutingAgentId={routingAgentId ?? "(none)"};HandoffRequired={request.Handoff is { Required: true }};"
+                        + $"EventAtUtc={(request.Routing?.ConnectedAtUtc ?? request.Ended?.EndedAtUtc)?.ToString("O") ?? "(none)"};RecordedAtUtc={timeProvider.GetUtcNow().UtcDateTime:O};TicketChanged=false",
+                    Guid.NewGuid(), cancellationToken);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+            }
+        }
+        else if (humanSignal != GenesysHumanSignal.None)
         {
             await MarkHumanFollowUpAsync(callerEmployeeId, ticket, interaction, humanSignal, cancellationToken);
         }
