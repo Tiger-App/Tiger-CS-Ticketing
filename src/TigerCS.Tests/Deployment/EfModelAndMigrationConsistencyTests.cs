@@ -99,21 +99,23 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         // AddOriginalAgentWorkflowCutoff (one NOT NULL bit column defaulting to 0: the deployment cutoff that keeps every pre-existing ticket on the legacy workflow) is the newest and is deployed by its own script.
         // AddGenesysAssignmentHistorySource (three nullable columns on TicketAssignmentHistory: source, Genesys event time and conversation id for Genesys-driven assignments) was added after that and is deployed by its own script.
         // AddTicketAssignmentSupersededAt (one nullable datetime2 column on TicketAssignments: when an assignment ended, so SLA reporting can tell who held a ticket at a past moment) is the newest and is deployed by its own script.
-        // AddQueueingIntegration (the Queueing System receiving API: origin columns on Tickets plus the event inbox, per-ticket state and mapping tables) is the newest and is deployed by its own script.
-        Assert.Equal("20261117101035_AddQueueingIntegration", migrations[^1]);
-        Assert.Equal("20261112071745_AddTicketAssignmentSupersededAt", migrations[^2]);
-        Assert.Equal("20261112065853_AddGenesysAssignmentHistorySource", migrations[^3]);
-        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^4]);
-        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^5]);
-        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^6]);
-        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^7]);
-        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^8]);
-        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^9]);
-        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^10]);
-        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^11]);
-        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^12]);
-        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^13]);
-        Assert.Equal(FourPendingMigrations, migrations.SkipLast(13).TakeLast(4));
+        // AddQueueingIntegration (the Queueing System receiving API: origin columns on Tickets plus the event inbox, per-ticket state and mapping tables) was added after that and is deployed by its own script.
+        // AddCustomerProfileOverrides (one new table: the phone, project and unit an authorised user corrected for a Customers-directory customer) is the newest and is deployed by its own script.
+        Assert.Equal("20261118120000_AddCustomerProfileOverrides", migrations[^1]);
+        Assert.Equal("20261117101035_AddQueueingIntegration", migrations[^2]);
+        Assert.Equal("20261112071745_AddTicketAssignmentSupersededAt", migrations[^3]);
+        Assert.Equal("20261112065853_AddGenesysAssignmentHistorySource", migrations[^4]);
+        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^5]);
+        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^6]);
+        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^7]);
+        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^8]);
+        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^9]);
+        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^10]);
+        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^11]);
+        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^12]);
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^13]);
+        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^14]);
+        Assert.Equal(FourPendingMigrations, migrations.SkipLast(14).TakeLast(4));
     }
 
     [Fact]
