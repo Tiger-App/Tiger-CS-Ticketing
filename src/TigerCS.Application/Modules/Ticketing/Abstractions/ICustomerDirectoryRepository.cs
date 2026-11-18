@@ -38,6 +38,12 @@ public sealed record CustomerLocationCounts(int WithinUae, int OutsideUae, int U
     public int Total => WithinUae + OutsideUae + Unknown;
 }
 
+/// <summary>
+/// Why one customer is Unknown: the number(s) exactly as stored (never rewritten) and the reason. <see cref="OtherPhone"/> is a second, different
+/// stored number when the customer has more than one.
+/// </summary>
+public sealed record CustomerLocationDiagnosis(string CustomerKey, string? OriginalPhone, string? OtherPhone, CustomerPhoneLocationReason Reason);
+
 public sealed record CustomerDirectoryPage(IReadOnlyList<CustomerDirectoryRowDto> Items, int TotalCount);
 
 /// <summary>
@@ -55,6 +61,15 @@ public interface ICustomerDirectoryRepository
     /// <see cref="ListAsync"/> would list for the same query (its <c>Location</c> is ignored) — aggregated in the database, never a CRM call.
     /// </summary>
     Task<CustomerLocationCounts> CountByLocationAsync(CustomerDirectoryQuery query, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Read-only: why each customer that <see cref="ListAsync"/> would list for <c>Location = Unknown</c> is Unknown — the same customers, ordered and
+    /// paged like the list when <paramref name="paged"/>, else all of them (capped at <see cref="MaxDiagnosed"/>). Stored numbers are never changed.
+    /// </summary>
+    Task<IReadOnlyList<CustomerLocationDiagnosis>> DiagnoseUnknownAsync(CustomerDirectoryQuery query, bool paged, CancellationToken cancellationToken = default);
+
+    /// <summary>The most Unknown customers one unpaged diagnosis reads.</summary>
+    const int MaxDiagnosed = 20000;
 
     /// <summary>Everything persisted about one identity within the visible departments, or null when no visible ticket carries it.</summary>
     Task<CustomerDirectoryProfileDto?> GetProfileAsync(

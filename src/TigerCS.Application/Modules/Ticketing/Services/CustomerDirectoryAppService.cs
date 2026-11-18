@@ -29,11 +29,39 @@ public sealed class CustomerDirectoryAppService(
         var page = request.Page < 1 ? 1 : request.Page;
         var pageSize = request.PageSize is < 1 or > MaxPageSize ? DefaultPageSize : request.PageSize;
 
-        var result = await repository.ListAsync(
-            await BuildQueryAsync(callerEmployeeId, callerRoles, request, page, pageSize, cancellationToken),
-            cancellationToken);
+        var query = await BuildQueryAsync(callerEmployeeId, callerRoles, request, page, pageSize, cancellationToken);
+        var result = await repository.ListAsync(query, cancellationToken);
 
-        return new CustomerDirectoryListResultDto(result.Items, result.TotalCount, page, pageSize);
+        var items = result.Items;
+        if (items.Count > 0 && CustomerLocationKeys.Parse(request.Location) == CustomerLocation.Unknown)
+        {
+            // Unknown list: say, per customer, which number(s) as stored and why (the same customers, same order and page, one extra query).
+            var diagnoses = (await repository.DiagnoseUnknownAsync(query, paged: true, cancellationToken)).ToDictionary(d => d.CustomerKey);
+            items = items
+                .Select(row => diagnoses.TryGetValue(row.CustomerKey, out var d)
+                    ? row with { LocationReason = d.Reason.ToString(), LocationReasonText = CustomerLocationKeys.ReasonText(d.Reason), LocationPhone = d.OriginalPhone, LocationOtherPhone = d.OtherPhone }
+                    : row)
+                .ToList();
+        }
+
+        return new CustomerDirectoryListResultDto(items, result.TotalCount, page, pageSize);
+    }
+
+    /// <summary>The Unknown customers of the same query as the list and the Dashboard card, counted by why they are Unknown. Read-only.</summary>
+    public async Task<CustomerLocationBreakdownDto> UnknownBreakdownAsync(
+        Guid callerEmployeeId,
+        IReadOnlyCollection<string> callerRoles,
+        CustomerDirectoryListRequestDto request,
+        CancellationToken cancellationToken = default)
+    {
+        var diagnoses = await repository.DiagnoseUnknownAsync(
+            await BuildQueryAsync(callerEmployeeId, callerRoles, request, 1, DefaultPageSize, cancellationToken), paged: false, cancellationToken);
+        var reasons = diagnoses
+            .GroupBy(d => d.Reason)
+            .OrderByDescending(g => g.Count())
+            .Select(g => new CustomerLocationReasonCountDto(g.Key.ToString(), CustomerLocationKeys.ReasonText(g.Key), g.Count()))
+            .ToList();
+        return new CustomerLocationBreakdownDto(diagnoses.Count, reasons, diagnoses.Count >= ICustomerDirectoryRepository.MaxDiagnosed);
     }
 
     /// <summary>

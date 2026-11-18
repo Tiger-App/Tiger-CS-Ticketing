@@ -38,6 +38,20 @@ public class CustomersController(CustomerDirectoryAppService customerDirectoryAp
         return Ok(result);
     }
 
+    /// <summary>Read-only: the Unknown customers of the same query as the list and the Dashboard's Customers by Location card, counted by why they are Unknown.</summary>
+    [HttpGet("unknown-breakdown")]
+    [ProducesResponseType<CustomerLocationBreakdownDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> UnknownBreakdown([FromQuery] CustomerDirectoryListRequestDto request, CancellationToken cancellationToken)
+    {
+        var employeeId = GetEmployeeId();
+        if (employeeId is null)
+        {
+            return Unauthorized();
+        }
+
+        return Ok(await customerDirectoryAppService.UnknownBreakdownAsync(employeeId.Value, GetRoles(), request, cancellationToken));
+    }
+
     /// <summary>One customer's profile by directory key (<c>crm:{id}</c>, <c>ext:{source}:{externalCustomerId}</c>, <c>phone:{number}</c>).</summary>
     [HttpGet("profile/{customerKey}")]
     [ProducesResponseType<CustomerDirectoryProfileDto>(StatusCodes.Status200OK)]
