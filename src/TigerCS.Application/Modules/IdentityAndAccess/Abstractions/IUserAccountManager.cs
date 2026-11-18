@@ -65,6 +65,12 @@ public interface IUserAccountManager
 
     Task<UserAccountResult> UpdateEmailAsync(Guid employeeId, string? email, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Changes the login name through <c>UserManager.SetUserNameAsync</c> (which maintains the normalized name, enforces
+    /// case-insensitive uniqueness and rotates the security stamp, so every existing session stops working). The account's id is unchanged.
+    /// </summary>
+    Task<UserAccountResult> SetUserNameAsync(Guid employeeId, string userName, CancellationToken cancellationToken = default);
+
     /// <summary>Replaces the user's role set with exactly the given fixed roles (adds the missing, removes the extra).</summary>
     Task<UserAccountResult> SetRolesAsync(Guid employeeId, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken = default);
 

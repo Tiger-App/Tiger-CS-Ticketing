@@ -13,6 +13,7 @@ namespace TigerCS.Api.Controllers;
 [ApiController]
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Route("api/collections/campaigns")]
+[RequirePermission(Permissions.CollectionsAccess)]  // module gate: System Administrator / CS Manager, or an explicit grant
 [Tags(OpenApiTags.Collections)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class CollectionsCampaignsController(CollectionsCampaignAppService service) : ControllerBase

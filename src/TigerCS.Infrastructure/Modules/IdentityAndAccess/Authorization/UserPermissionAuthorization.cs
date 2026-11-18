@@ -52,8 +52,17 @@ public sealed class NoPermissionRequiredAttribute(string reason) : Attribute
 ///   department scoping are restrictions, and a grant never lifts a restriction. Administrator-only permissions are
 ///   never honoured as grants.</description></item>
 /// </list>
-/// An endpoint without <see cref="RequirePermissionAttribute"/>, or a caller without overrides, is not affected at all -
-/// existing roles keep working unchanged.
+///
+/// <para>
+/// <b>Module gates</b> (<see cref="PermissionDefinition.IsModuleGate"/>, today <see cref="Permissions.CollectionsAccess"/>) are the one
+/// exception to "overrides only adjust the role policies": a gate is evaluated on its own terms by <see cref="CollectionsAccess"/> -
+/// open for System Administrator and CS Manager (always), otherwise only through an explicit grant - and <i>fails</i> the evaluation
+/// when closed, even for a caller with no overrides at all. Because it fails rather than succeeds, it also refuses a caller the System
+/// Administrator override would not have admitted (nobody else), and it never lifts any other restriction.
+/// </para>
+///
+/// An endpoint without <see cref="RequirePermissionAttribute"/> is not affected at all, and for ordinary (non-gate) permissions a
+/// caller without overrides is not affected either - existing roles keep working unchanged.
 /// </summary>
 public sealed class UserPermissionAuthorizationHandler(IUserPermissionOverrideRepository overrides) : IAuthorizationHandler
 {
@@ -74,12 +83,25 @@ public sealed class UserPermissionAuthorizationHandler(IUserPermissionOverrideRe
         }
 
         var effects = await overrides.GetEffectsAsync(employeeId, http.RequestAborted);
+
+        // Module gates first: closed unless the role carries it or it was granted, and never open against an explicit denial
+        // (except for the roles that always hold it).
+        var roles = context.User.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList();
+        foreach (var gate in required.Where(a => PermissionCatalog.Find(a.Permission) is { IsModuleGate: true }))
+        {
+            if (!IsGateOpen(gate.Permission, roles, effects))
+            {
+                context.Fail(new AuthorizationFailureReason(this, $"Access to the module behind '{gate.Permission}' has not been granted to this user."));
+                return;
+            }
+        }
+
         if (effects.Count == 0)
         {
             return;
         }
 
-        foreach (var attribute in required)
+        foreach (var attribute in required.Where(a => PermissionCatalog.Find(a.Permission) is not { IsModuleGate: true }))
         {
             if (effects.TryGetValue(attribute.Permission, out var effect) && effect == PermissionEffect.Deny)
             {
@@ -88,7 +110,8 @@ public sealed class UserPermissionAuthorizationHandler(IUserPermissionOverrideRe
             }
         }
 
-        var allGranted = required.All(a =>
+        var allGranted = required.Where(a => PermissionCatalog.Find(a.Permission) is not { IsModuleGate: true }).ToList() is { Count: > 0 } granular
+            && granular.All(a =>
             effects.TryGetValue(a.Permission, out var effect)
             && effect == PermissionEffect.Grant
             && PermissionCatalog.Find(a.Permission) is { IsReserved: false });
@@ -102,4 +125,10 @@ public sealed class UserPermissionAuthorizationHandler(IUserPermissionOverrideRe
             context.Succeed(requirement);
         }
     }
+
+    /// <summary>The gate decision for one module-gate permission. Collections is the only gate; a future one falls back to the generic effective-permission rule (role baseline or grant, never when denied).</summary>
+    private static bool IsGateOpen(string permission, IReadOnlyCollection<string> roles, IReadOnlyDictionary<string, PermissionEffect> effects) =>
+        string.Equals(permission, Permissions.CollectionsAccess, StringComparison.Ordinal)
+            ? CollectionsAccess.IsAllowed(roles, effects)
+            : EffectivePermissions.IsEffective(EffectivePermissions.Resolve(permission, RolePermissionDefaults.ForRoles(roles), effects));
 }

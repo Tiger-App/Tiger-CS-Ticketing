@@ -312,4 +312,85 @@ public class AdminUserAppServiceTests
         Assert.Equal(2, (await f.Service.ListAsync(null, true, 1, 10)).TotalCount);
         Assert.Equal(AdminOutcome.NotFound, (await f.Service.UpdateProfileAsync(Admin, Guid.NewGuid(), new UpdateUserProfileRequestDto("x", null, false))).Outcome);
     }
+
+    // ------------------------------------------------------------ username change
+
+    [Fact]
+    public async Task UpdateProfile_changes_the_username_keeps_the_identity_rotates_the_stamp_and_audits_old_and_new()
+    {
+        var f = Create();
+        var id = SeedUser(f, "Lina M", Roles.CsAgent);
+        var stampBefore = f.Accounts.SecurityStampOf(id);
+
+        var result = await f.Service.UpdateProfileAsync(Admin, id, new UpdateUserProfileRequestDto("Lina M", null, false, "  lina.new  "));
+
+        Assert.Equal(AdminOutcome.Success, result.Outcome);
+        Assert.Equal("lina.new", result.Value!.UserName);
+        Assert.Equal(id, result.Value.EmployeeId);
+        Assert.Equal([Roles.CsAgent], result.Value.Roles);
+        Assert.NotEqual(stampBefore, f.Accounts.SecurityStampOf(id));
+        var entry = Assert.Single(f.Audit.Entries, e => e.Action == "AdminChangeUserName");
+        Assert.Equal(Admin, entry.ActorEmployeeId);
+        Assert.Equal("UserName=lina.m", entry.BeforeValue);
+        Assert.Contains("UserName=lina.new", entry.AfterValue, StringComparison.Ordinal);
+        Assert.Contains(f.Audit.Entries, e => e.Action == "AdminUpdateUserProfile" && e.BeforeValue!.Contains("UserName=lina.m", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task UpdateProfile_rejects_a_blank_username_without_changing_anything()
+    {
+        var f = Create();
+        var id = SeedUser(f, "Lina M", Roles.CsAgent);
+        var stampBefore = f.Accounts.SecurityStampOf(id);
+
+        var result = await f.Service.UpdateProfileAsync(Admin, id, new UpdateUserProfileRequestDto("Renamed", null, false, "   "));
+
+        Assert.Equal(AdminOutcome.ValidationFailed, result.Outcome);
+        Assert.Contains("User name is required.", result.Errors!);
+        Assert.Equal("lina.m", (await f.Service.GetAsync(id))!.UserName);
+        Assert.Equal("Lina M", (await f.Service.GetAsync(id))!.DisplayName);
+        Assert.Equal(stampBefore, f.Accounts.SecurityStampOf(id));
+        Assert.Empty(f.Audit.Entries);
+    }
+
+    [Fact]
+    public async Task UpdateProfile_rejects_a_duplicate_username_case_insensitively()
+    {
+        var f = Create();
+        SeedUser(f, "Ahmed S", Roles.CsAgent);
+        var id = SeedUser(f, "Lina M", Roles.CsAgent);
+
+        var result = await f.Service.UpdateProfileAsync(Admin, id, new UpdateUserProfileRequestDto("Lina M", null, false, "AHMED.S"));
+
+        Assert.Equal(AdminOutcome.ValidationFailed, result.Outcome);
+        Assert.Contains(result.Errors!, e => e.Contains("already taken", StringComparison.Ordinal));
+        Assert.Equal("lina.m", (await f.Service.GetAsync(id))!.UserName);
+        Assert.Empty(f.Audit.Entries);
+    }
+
+    [Fact]
+    public async Task UpdateProfile_allows_a_case_only_change_to_the_users_own_name()
+    {
+        var f = Create();
+        var id = SeedUser(f, "Lina M", Roles.CsAgent);
+
+        var result = await f.Service.UpdateProfileAsync(Admin, id, new UpdateUserProfileRequestDto("Lina M", null, false, "Lina.M"));
+
+        Assert.Equal(AdminOutcome.Success, result.Outcome);
+        Assert.Equal("Lina.M", result.Value!.UserName);
+    }
+
+    [Fact]
+    public async Task UpdateProfile_without_a_username_or_with_the_same_one_leaves_the_account_and_sessions_alone()
+    {
+        var f = Create();
+        var id = SeedUser(f, "Lina M", Roles.CsAgent);
+        var stampBefore = f.Accounts.SecurityStampOf(id);
+
+        Assert.Equal(AdminOutcome.Success, (await f.Service.UpdateProfileAsync(Admin, id, new UpdateUserProfileRequestDto("Lina M2", null, false))).Outcome);
+        Assert.Equal(AdminOutcome.Success, (await f.Service.UpdateProfileAsync(Admin, id, new UpdateUserProfileRequestDto("Lina M3", null, false, "lina.m"))).Outcome);
+
+        Assert.Equal(stampBefore, f.Accounts.SecurityStampOf(id));
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AdminChangeUserName");
+    }
 }

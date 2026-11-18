@@ -39,6 +39,11 @@ builder.Services.AddRazorPages(options =>
     // managers and the System Administrator. The Api (CollectionsTeam.CanManageTowersAsync) is the real protection.
     options.Conventions.AuthorizePage("/Collections/TowerAssignments", TowerAssignmentsPolicy.Name);
 
+    // The Collections module: every page under /Collections needs module access (System Administrator / CS Manager, or an explicit
+    // grant). It combines with the page-specific gates above (both must pass). The Api enforces the same rule on the module's
+    // endpoints, so this only decides what the Web renders.
+    options.Conventions.AuthorizeFolder("/Collections", CollectionsAccessRequirement.PolicyName);
+
     // The History page is now the Campaign List (/Collections/CampaignList). The former URLs keep working so bookmarks and links already sent still open it.
     options.Conventions.AddPageRoute("/Collections/CampaignHistory", "Collections/CampaignHistory");
     options.Conventions.AddPageRoute("/Collections/CampaignHistoryDetails", "Collections/CampaignHistory/{id:guid}");
@@ -57,6 +62,7 @@ builder.Services.AddTransient<BearerTokenHandler>();
 builder.Services.AddScoped<TicketNameResolver>();
 builder.Services.AddScoped<ViewerAccessService>();
 builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, ViewerPermissionHandler>();
+builder.Services.AddScoped<Microsoft.AspNetCore.Authorization.IAuthorizationHandler, CollectionsAccessHandler>();
 
 // AuthApiClient signs in/out and changes the caller's own password. Login
 // and Screen Pop run before any session exists (the handler then attaches
@@ -143,6 +149,7 @@ builder.Services.AddAuthorization(options =>
         new ViewerPermissionRequirement([AdministrationPolicy.RequiredRole], Permissions.AdminUsersView, Permissions.AdminConfigurationView)));
     options.AddPolicy(ReportsPolicy.Name, policy => policy.RequireAuthenticatedUser().AddRequirements(
         new ViewerPermissionRequirement(ReportsPolicy.AllowedRoles, Permissions.ReportsView)));
+    options.AddPolicy(CollectionsAccessRequirement.PolicyName, policy => policy.RequireAuthenticatedUser().AddRequirements(new CollectionsAccessRequirement()));
     options.AddPolicy(TowerAssignmentsPolicy.Name, policy => policy.RequireAuthenticatedUser().AddRequirements(
         new ViewerPermissionRequirement(TowerAssignmentsPolicy.AllowedRoles, Permissions.CollectionsEdit)));
 });

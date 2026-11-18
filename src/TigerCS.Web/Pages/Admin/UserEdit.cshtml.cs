@@ -26,6 +26,13 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     /// <summary>Identity's configured password rules; null if they could not be loaded (the server still validates).</summary>
     public PasswordPolicyDto? PasswordPolicy { get; private set; }
 
+    /// <summary>
+    /// The user's Collections module access as the permission service reports it (role baseline plus overrides); null when it could not
+    /// be read, in which case the panel says so and offers no change.
+    /// </summary>
+    public CollectionsAccessInfo? CollectionsAccessState { get; private set; }
+
+    [BindProperty] public CollectionsAccessInput CollectionsAccessForm { get; set; } = new();
     [BindProperty] public CreateInput Create { get; set; } = new();
     [BindProperty] public ProfileInput Profile { get; set; } = new();
     [BindProperty] public RolesInput RolesForm { get; set; } = new();
@@ -66,9 +73,11 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
             var transfer = await adminApi.GetUserTransferDepartmentsAsync(employeeId, cancellationToken);
             TransferDepartmentIds = transfer.IsSuccess && transfer.Value is not null ? transfer.Value.DepartmentIds : [];
             await LoadPasswordPolicyAsync(cancellationToken);
+            await LoadCollectionsAccessAsync(employeeId, cancellationToken);
             Profile = new ProfileInput
             {
-                DisplayName = UserRecord!.DisplayName,
+                UserName = UserRecord!.UserName,
+                DisplayName = UserRecord.DisplayName,
                 Email = UserRecord.Email,
                 IsGeynessStaff = UserRecord.IsGeynessStaff
             };
@@ -115,8 +124,59 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     }
 
     public Task<IActionResult> OnPostProfileAsync(Guid id, CancellationToken cancellationToken) =>
-        ApplyAsync(id, adminApi.UpdateUserProfileAsync(id, new UpdateUserProfileRequestDto(Profile.DisplayName, Profile.Email, Profile.IsGeynessStaff), cancellationToken),
-            "Profile saved.", "The profile could not be saved.");
+        ApplyAsync(id, adminApi.UpdateUserProfileAsync(id, new UpdateUserProfileRequestDto(Profile.DisplayName, Profile.Email, Profile.IsGeynessStaff, Profile.UserName), cancellationToken),
+            "Profile saved. If the username was changed, the user's existing sessions have been signed out.", "The profile could not be saved.");
+
+    /// <summary>
+    /// Grants or revokes the Collections module access permission. It changes exactly one override: the Api takes the user's COMPLETE
+    /// override set, so the current set is read back first and only <c>Collections.Access</c> is added (grant) or removed (revoke);
+    /// every other grant and denial - including the granular Collections and Campaign permissions - is sent back unchanged. System
+    /// Administrators and CS Managers always have access through their role, so there is nothing to change for them. The Api
+    /// re-checks everything (who may change permissions, not your own, never an integration account) and audits the change.
+    /// </summary>
+    public async Task<IActionResult> OnPostCollectionsAccessAsync(Guid id, CancellationToken cancellationToken)
+    {
+        var current = await adminApi.GetUserPermissionsAsync(id, cancellationToken);
+        if (!current.IsSuccess || current.Value is null)
+        {
+            ErrorMessage = DescribeFailure(current, "The user's permissions could not be read.");
+            return RedirectToPage("/Admin/UserEdit", new { id });
+        }
+
+        var key = TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsAccess;
+        var overrides = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var state in current.Value.Modules.SelectMany(m => m.Permissions))
+        {
+            if (!string.Equals(state.Override, "Inherit", StringComparison.OrdinalIgnoreCase))
+            {
+                overrides[state.Key] = state.Override;
+            }
+        }
+
+        if (CollectionsAccessForm.Enabled)
+        {
+            overrides[key] = "Grant";
+        }
+        else
+        {
+            overrides.Remove(key);
+        }
+
+        var result = await adminApi.SetUserPermissionsAsync(
+            id, new SetUserPermissionsRequestDto(overrides, CollectionsAccessForm.Reason), cancellationToken);
+        if (result.IsSuccess)
+        {
+            StatusMessage = CollectionsAccessForm.Enabled
+                ? "Collections access granted."
+                : "Collections access revoked.";
+        }
+        else
+        {
+            ErrorMessage = DescribeFailure(result, "Collections access could not be changed.");
+        }
+
+        return RedirectToPage("/Admin/UserEdit", new { id });
+    }
 
     public Task<IActionResult> OnPostRolesAsync(Guid id, CancellationToken cancellationToken) =>
         ApplyAsync(id, adminApi.SetUserRolesAsync(id, new SetUserRolesRequestDto(RolesForm.Roles ?? []), cancellationToken),
@@ -207,6 +267,36 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
         return RedirectToPage("/Admin/UserEdit", new { id });
     }
 
+    private async Task LoadCollectionsAccessAsync(Guid employeeId, CancellationToken cancellationToken)
+    {
+        var permissions = await adminApi.GetUserPermissionsAsync(employeeId, cancellationToken);
+        if (!permissions.IsSuccess || permissions.Value is null)
+        {
+            return;
+        }
+
+        var all = permissions.Value.Modules.SelectMany(m => m.Permissions).ToList();
+        var access = all.FirstOrDefault(p => p.Key == TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsAccess);
+        if (access is null)
+        {
+            return;
+        }
+
+        var view = all.FirstOrDefault(p => p.Key == TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsView);
+        var alwaysAllowed = TigerCS.Domain.Modules.IdentityAndAccess.Permissions.CollectionsAccess.IsAlwaysAllowed(permissions.Value.Roles);
+        CollectionsAccessState = new CollectionsAccessInfo(
+            IsEffective: access.IsEffective,
+            IsGranted: string.Equals(access.Override, "Grant", StringComparison.OrdinalIgnoreCase),
+            AlwaysAllowedByRole: alwaysAllowed,
+            CanChange: !alwaysAllowed && !permissions.Value.IsServiceIdentity && !permissions.Value.IsSelf && access.CanGrant,
+            ChangeBlockedReason: alwaysAllowed ? "Always allowed by this user's role (System Administrator or CS Manager)."
+                : permissions.Value.IsServiceIdentity ? "This is an integration account; its access is fixed."
+                : permissions.Value.IsSelf ? "You cannot change your own permissions. Ask another System Administrator."
+                : !access.CanGrant ? "Not available for this user's roles." : null,
+            HoldsViewPermission: view?.IsEffective ?? false);
+        CollectionsAccessForm = new CollectionsAccessInput { Enabled = access.IsEffective };
+    }
+
     private async Task LoadPasswordPolicyAsync(CancellationToken cancellationToken)
     {
         var policy = await adminApi.GetPasswordPolicyAsync(cancellationToken);
@@ -234,8 +324,19 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
         public int? PrimaryDepartmentId { get; set; }
     }
 
+    /// <summary>What the Collections access panel shows. <see cref="HoldsViewPermission"/> is informational: module access opens the door, the View permission decides what is readable inside.</summary>
+    public sealed record CollectionsAccessInfo(
+        bool IsEffective, bool IsGranted, bool AlwaysAllowedByRole, bool CanChange, string? ChangeBlockedReason, bool HoldsViewPermission);
+
+    public sealed class CollectionsAccessInput
+    {
+        public bool Enabled { get; set; }
+        public string? Reason { get; set; }
+    }
+
     public sealed class ProfileInput
     {
+        [Required] public string UserName { get; set; } = string.Empty;
         [Required] public string DisplayName { get; set; } = string.Empty;
         public string? Email { get; set; }
         public bool IsGeynessStaff { get; set; }
