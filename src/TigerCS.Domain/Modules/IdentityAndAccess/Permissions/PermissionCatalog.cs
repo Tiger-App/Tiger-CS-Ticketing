@@ -37,6 +37,12 @@ public enum PermissionAction
 /// effective only when a role baseline carries it or an administrator granted it, so "no grant" means "no access". See
 /// <see cref="CollectionsAccess"/>.
 /// </param>
+/// <param name="EnforceEffective">
+/// Evaluated on its own terms, like a module gate but for a single action rather than a whole module: the endpoint is open only to
+/// callers whose role baseline carries the permission or who were explicitly granted it, and an explicit denial always refuses. Ordinary
+/// permissions only adjust what the role policies already allow, which cannot express "managers and administrators, anyone else by grant"
+/// on an endpoint every signed-in employee may otherwise reach (today: <see cref="Permissions.CustomersEdit"/>).
+/// </param>
 /// <param name="IsReserved">
 /// A reserved ("administrator-only") permission can never be <i>granted</i>
 /// to a user whose roles do not already carry it. These are the permissions
@@ -51,7 +57,8 @@ public sealed record PermissionDefinition(
     string Name,
     string Description,
     bool IsReserved = false,
-    bool IsModuleGate = false)
+    bool IsModuleGate = false,
+    bool EnforceEffective = false)
 {
     /// <summary>True for permissions that change data (everything except <see cref="PermissionAction.View"/>); a read-only caller is never granted these.</summary>
     public bool IsMutating => Action != PermissionAction.View;
@@ -96,6 +103,9 @@ public static class Permissions
 
     public const string CustomersView = "Customers.View";
     public const string CustomersSend = "Customers.Send";
+
+    /// <summary>Edit a customer's phone number, project and unit from the Customers directory. Enforced on its own terms: System Administrator and CS Manager, or an explicit grant.</summary>
+    public const string CustomersEdit = "Customers.Edit";
 
     /// <summary>Module gate: may the employee use the Collections module (its pages and module-only endpoints) at all. Separate from the granular View / Edit / Send and Campaigns permissions, which still decide what they may do inside it.</summary>
     public const string CollectionsAccess = "Collections.Access";
@@ -142,6 +152,9 @@ public static class PermissionCatalog
 
         new(Permissions.CustomersView, PermissionModules.Customers, PermissionAction.View, "View customers", "Search customers, open customer profiles, history and documents."),
         new(Permissions.CustomersSend, PermissionModules.Customers, PermissionAction.Send, "Send customer documents", "Send customer documents by e-mail / SMS."),
+        new(Permissions.CustomersEdit, PermissionModules.Customers, PermissionAction.Edit, "Edit customers",
+            "Correct a customer's phone number, project and unit from the Customers directory. System Administrators and CS Managers have it; anyone else needs it granted. Local to Tiger Ticketing: nothing is sent to Tiger CRM, PACT or Tasleeh and no ticket is changed.",
+            EnforceEffective: true),
 
         new(Permissions.CollectionsAccess, PermissionModules.Collections, PermissionAction.View, "Access Collections module",
             "Open the Collections module: campaigns, receivables, review and dispatch, reconciliation, Genesys history and tower assignments. System Administrators and CS Managers always have it; anyone else needs it granted. It opens the door only: what the user can do inside still follows the View / Run / Send / Campaign permissions, and it does not affect tickets assigned to the Collections department or the Payment tab on customers and tickets.",

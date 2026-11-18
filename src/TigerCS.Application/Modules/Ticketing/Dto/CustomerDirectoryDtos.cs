@@ -215,7 +215,12 @@ public sealed record CustomerDirectoryRowDto(
     string LastTicketNumber,
     string LastTicketStatus,
     DateTime LastTicketCreatedAtUtc,
-    DateTime? LastInteractionAtUtc);
+    DateTime? LastInteractionAtUtc,
+    IReadOnlyList<string>? EditedFields = null)
+{
+    /// <summary>True when an authorised user corrected at least one of the phone, project or unit shown on this row.</summary>
+    public bool IsEdited => EditedFields is { Count: > 0 };
+}
 
 public sealed record CustomerDirectoryListResultDto(IReadOnlyList<CustomerDirectoryRowDto> Items, int TotalCount, int Page, int PageSize);
 
@@ -269,7 +274,68 @@ public sealed record CustomerDirectoryProfileDto(
     long LastTicketId,
     IReadOnlyList<CustomerDirectoryUnitDto> Units,
     IReadOnlyList<CustomerDirectoryTicketDto> Tickets,
-    IReadOnlyList<CustomerDirectoryInteractionDto> Interactions);
+    IReadOnlyList<CustomerDirectoryInteractionDto> Interactions,
+    CustomerProfileEditStateDto? Edit = null);
+
+/// <summary>
+/// What the Edit form needs and what the audit trail must record: the phone / project / unit the customer's tickets say (<c>Derived*</c>,
+/// placeholders already treated as missing) next to whatever an authorised user entered over them (<c>Override*</c>, null = not edited).
+/// The value the directory shows for a field is the override when there is one, else the derived value.
+/// </summary>
+public sealed record CustomerProfileEditStateDto(
+    string? DerivedPhoneNumber,
+    string? DerivedProjectName,
+    string? DerivedUnitNumber,
+    string? OverridePhoneNumber,
+    string? OverrideProjectName,
+    string? OverrideUnitNumber,
+    DateTime? EditedAtUtc)
+{
+    public string? PhoneNumber => OverridePhoneNumber ?? DerivedPhoneNumber;
+    public string? ProjectName => OverrideProjectName ?? DerivedProjectName;
+    public string? UnitNumber => OverrideUnitNumber ?? DerivedUnitNumber;
+
+    /// <summary>The names of the fields an authorised user has edited (<c>PhoneNumber</c>, <c>ProjectName</c>, <c>UnitNumber</c>); empty when none.</summary>
+    public IReadOnlyList<string> EditedFields()
+    {
+        var edited = new List<string>(3);
+        if (OverridePhoneNumber is not null) edited.Add(nameof(PhoneNumber));
+        if (OverrideProjectName is not null) edited.Add(nameof(ProjectName));
+        if (OverrideUnitNumber is not null) edited.Add(nameof(UnitNumber));
+        return edited;
+    }
+}
+
+/// <summary>
+/// PUT api/customers/profile/{customerKey}. Each value is the one the customer should show: blank clears that edit (the customer shows what
+/// their tickets say again). Project and unit are entered together. The phone is normalized to its international form.
+/// </summary>
+public sealed record UpdateCustomerProfileRequestDto(string? PhoneNumber, string? ProjectName, string? UnitNumber);
+
+/// <summary>The customer after an edit: the values the directory now shows, and which of them are edited.</summary>
+public sealed record CustomerProfileEditedDto(
+    string CustomerKey, string? PhoneNumber, string? ProjectName, string? UnitNumber, IReadOnlyList<string> EditedFields, bool Changed);
+
+public enum CustomerProfileEditOutcome
+{
+    Success,
+    Forbidden,
+    InvalidKey,
+    NotFound,
+    Invalid,
+}
+
+public sealed record CustomerProfileEditResult(
+    CustomerProfileEditOutcome Outcome, CustomerProfileEditedDto? Response = null, IReadOnlyDictionary<string, string[]>? Errors = null)
+{
+    public static CustomerProfileEditResult Failure(CustomerProfileEditOutcome outcome) => new(outcome);
+
+    public static CustomerProfileEditResult Success(string customerKey, CustomerProfileEditStateDto state, bool changed) =>
+        new(CustomerProfileEditOutcome.Success,
+            new CustomerProfileEditedDto(customerKey, state.PhoneNumber, state.ProjectName, state.UnitNumber, state.EditedFields(), changed));
+
+    public static CustomerProfileEditResult Invalid(Dictionary<string, string[]> errors) => new(CustomerProfileEditOutcome.Invalid, null, errors);
+}
 
 public enum CustomerDirectoryProfileOutcome
 {

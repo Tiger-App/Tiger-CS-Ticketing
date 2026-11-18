@@ -35,6 +35,10 @@ public sealed class CustomersApiClient(HttpClient httpClient, ILogger<CustomersA
         return GetAsync<CustomerDirectoryListResultDto>($"api/customers?{query}", cancellationToken);
     }
 
+    /// <summary>Corrects the phone, project and unit a customer is shown with (<c>PUT api/customers/profile/{customerKey}</c>). Local to Tiger Ticketing; the Api decides who may and validates every value.</summary>
+    public Task<ApiResult<CustomerProfileEditedDto>> UpdateProfileAsync(string customerKey, UpdateCustomerProfileRequestDto request, CancellationToken cancellationToken) =>
+        PutAsync<UpdateCustomerProfileRequestDto, CustomerProfileEditedDto>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}", request, cancellationToken);
+
     public Task<ApiResult<CustomerDirectoryProfileDto>> GetProfileAsync(string customerKey, CancellationToken cancellationToken) =>
         GetAsync<CustomerDirectoryProfileDto>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}", cancellationToken);
 }

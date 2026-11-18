@@ -1,5 +1,8 @@
+using System.Text.Json;
 using TigerCS.Application.Modules.Ticketing.CustomerNames;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.Mvc.RazorPages;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Web.Models;
@@ -18,7 +21,8 @@ namespace TigerCS.Web.Pages;
 /// (Tiger CRM / PACT / Tasleeh) for customers with no ticket yet lives at
 /// `/Customers/Lookup`. Every row opens the Customer Profile.
 /// </summary>
-public sealed class CustomersModel(CustomersApiClient customersApiClient, TicketNameResolver nameResolver) : PageModel
+public sealed class CustomersModel(
+    CustomersApiClient customersApiClient, TicketNameResolver nameResolver, ViewerAccessService viewerAccess, ProjectCatalogApiClient projectCatalogApiClient) : PageModel
 {
     public const int DefaultPageSize = 25;
 
@@ -60,6 +64,19 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
     public CurrentUser? Viewer { get; private set; }
     public bool CanCreateTicket { get; private set; }
 
+    /// <summary>May the viewer edit a customer's phone, project and unit (<c>Customers.Edit</c>: System Administrator and CS Manager, or an explicit grant)? Hides the Edit action otherwise; the Api enforces it regardless.</summary>
+    public bool CanEdit { get; private set; }
+
+    /// <summary>The known project names, offered as suggestions in the Edit form (the Api still validates what is entered). Empty unless the viewer can edit.</summary>
+    public IReadOnlyList<string> ProjectOptions { get; private set; } = [];
+
+    /// <summary>Outcome of the last Edit, carried across the redirect.</summary>
+    public string? EditStatus { get; private set; }
+    public string? EditError { get; private set; }
+
+    /// <summary>The rejected Edit's customer and typed values (JSON), so the form reopens with them and the error beside it.</summary>
+    public string? EditReopenJson { get; private set; }
+
     /// <summary>The phone-lookup page, carrying the current search text forward when it looks like a phone number.</summary>
     public string LookupHref =>
         !string.IsNullOrWhiteSpace(Search) && Search.Any(char.IsDigit)
@@ -73,6 +90,15 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
     {
         Viewer = CurrentUser.FromPrincipal(User);
         CanCreateTicket = TicketCreationPolicy.AppliesTo(Viewer);
+        CanEdit = (await viewerAccess.GetAsync(cancellationToken)).HoldsEffective(Permissions.CustomersEdit, Viewer?.Roles ?? []);
+        EditStatus = TempData["CustomerEditStatus"] as string;
+        EditError = TempData["CustomerEditError"] as string;
+        EditReopenJson = TempData["CustomerEditReopen"] as string;
+        if (CanEdit)
+        {
+            var projects = await projectCatalogApiClient.ListProjectsAsync(cancellationToken);
+            ProjectOptions = projects.IsSuccess && projects.Value is not null ? projects.Value.Select(p => p.Name).ToList() : [];
+        }
 
         // The Dashboard's customer search still posts `phoneNumber`; here it
         // is simply a search term over the directory.
@@ -110,6 +136,43 @@ public sealed class CustomersModel(CustomersApiClient customersApiClient, Ticket
             TotalCount = result.Value.TotalCount;
         }
     }
+
+    /// <summary>
+    /// Saves the Edit form. The Api does everything that matters - who may edit, the phone's normalization, the project / unit check, the
+    /// audit - so this only forwards the values and carries the outcome back to the list the user was on (the same search, filters and page).
+    /// A rejected edit reopens the form with what was typed and the reasons.
+    /// </summary>
+    public async Task<IActionResult> OnPostEditAsync(
+        string customerKey, string? phoneNumber, string? projectName, string? unitNumber, string? returnUrl, CancellationToken cancellationToken)
+    {
+        var result = await customersApiClient.UpdateProfileAsync(
+            customerKey, new UpdateCustomerProfileRequestDto(phoneNumber, projectName, unitNumber), cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            TempData["CustomerEditStatus"] = result.Value is { Changed: false } ? "Nothing to change." : "Customer updated.";
+        }
+        else
+        {
+            TempData["CustomerEditError"] = result.Outcome switch
+            {
+                ApiOutcome.ValidationError => result.Detail ?? "The values are not valid.",
+                ApiOutcome.Forbidden or ApiOutcome.Unauthorized => "You are not allowed to edit customers.",
+                ApiOutcome.NotFound => "That customer is no longer in the directory.",
+                ApiOutcome.Unreachable or ApiOutcome.BadGateway => "Tiger Ticketing System could not reach the ticketing service.",
+                _ => result.Detail ?? "The customer could not be saved.",
+            };
+            TempData["CustomerEditReopen"] = JsonSerializer.Serialize(new { key = customerKey, phone = phoneNumber, project = projectName, unit = unitNumber });
+        }
+
+        // Back to the list as it was - local URLs under /Customers only.
+        return LocalRedirect(!string.IsNullOrEmpty(returnUrl) && Url.IsLocalUrl(returnUrl) && returnUrl.StartsWith("/Customers", StringComparison.Ordinal)
+            ? returnUrl
+            : "/Customers");
+    }
+
+    /// <summary>The list as the viewer has it now (path and query), posted back with the Edit form so they return to the same search, filters and page.</summary>
+    public string CurrentUrl => $"{Request.Path}{Request.QueryString}";
 
     /// <summary>Remembers this list (search, filters, page) so a Customer Profile can lead back to it.</summary>
     private void RememberContext()
