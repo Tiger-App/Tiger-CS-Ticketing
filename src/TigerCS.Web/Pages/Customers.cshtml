@@ -87,7 +87,11 @@
     <div class="panel">
         <div class="panel__header">
             <span class="panel__title">Customers</span>
-            <span class="text-secondary">@Model.TotalCount @(Model.TotalCount == 1 ? "customer" : "customers")@(Model.HasFilters ? " match" : "")</span>
+            @* A count only when the list actually loaded: after a failed Api read TotalCount is just the default 0, and printing it would claim nobody matches. *@
+            @if (Model.Outcome == ApiOutcome.Success)
+            {
+                <span class="text-secondary" data-customers-count="@Model.TotalCount">@Model.TotalCount @(Model.TotalCount == 1 ? "customer" : "customers")@(Model.HasFilters ? " match" : "")</span>
+            }
         </div>
 
         @if (Model.Outcome == ApiOutcome.Unauthorized)
