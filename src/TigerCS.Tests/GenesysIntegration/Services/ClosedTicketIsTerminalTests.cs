@@ -1,6 +1,9 @@
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
 using TigerCS.Application.Modules.GenesysIntegration.Services;
+using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
+using TigerCS.Domain.Modules.WorkflowConfiguration;
+using TigerCS.Tests.Ticketing.Fakes;
 using TigerCS.Tests.GenesysIntegration.Fakes;
 
 namespace TigerCS.Tests.GenesysIntegration.Services;
@@ -17,17 +20,19 @@ public class ClosedTicketIsTerminalTests
 
     private sealed record Snapshot(
         TicketStatus Status, Guid? Owner, int Department, byte? Outcome, SlaState Sla, DateTime? FirstResponse, int Reopens,
-        int Assignments, int WorkflowEvents, int StatusHistory, int HistoryEntries, int Outbox);
+        int Assignments, int WorkflowEvents, int StatusHistory, int HistoryEntries, int Outbox,
+        int? Category, int? RequestType, byte? Priority, EscalationLevel Escalation, DateTime? AcknowledgedAt);
 
     private static Snapshot Capture(GenesysServiceFixture f, Ticket t) => new(
         t.TicketStatus, t.CurrentOwnerEmployeeId, t.CurrentDepartmentId, t.ResolutionOutcome, t.SlaState, t.FirstHumanResponseAtUtc, t.ReopenCount,
         f.TicketAssignments.Added.Count(a => a.TicketId == t.TicketId), f.WorkflowEvents.All.Count(e => e.TicketId == t.TicketId),
         f.StatusHistory.Added.Count(h => h.TicketId == t.TicketId), f.AssignmentHistory.Entries.Count(e => e.TicketId == t.TicketId),
-        f.Outbox.Committed.Count + f.Outbox.Staged.Count);
+        f.Outbox.Committed.Count + f.Outbox.Staged.Count,
+        t.CategoryId, t.RequestTypeId, t.PriorityId, t.EscalationLevel, t.AcknowledgementSentAtUtc);
 
     public enum Closer { Person, Ai, Inactivity, AiOnlyTimeout }
 
-    private sealed record Closed(GenesysServiceFixture F, Ticket Ticket, string ConversationId, string AgentGenesysId, Guid AgentId);
+    private sealed record Closed(GenesysServiceFixture F, Ticket Ticket, string ConversationId, string AgentGenesysId, Guid AgentId, int ValidRequestTypeId = 0);
 
     private static async Task<Closed> ClosedTicketAsync(Closer closer, GenesysChannel channel = GenesysChannel.WhatsApp)
     {
@@ -35,6 +40,13 @@ public class ClosedTicketIsTerminalTests
         var (cs, _) = f.SeedGenesysDepartment("Customer Service", "CS");
         var agentGenesysId = "g-late-agent";
         var agentId = f.AddAgent(agentGenesysId, "Late Agent");
+
+        // A real, valid request type in another department: a late classification must be refused because the ticket is CLOSED, not because the type is bogus.
+        var finance = f.Departments.AddDepartment("Finance", "FIN");
+        var template = f.WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: 300));
+        var requestType = f.RequestTypes.Add(new RequestType(
+            finance.DepartmentId, "Payment Receipt", template.WorkflowId, (byte)PriorityLevel.Medium,
+            allowAgentPriorityChange: false, allowPendingCustomer: true, allowPendingInternal: true, allowReopen: true));
         const string conv = "conv-closed";
         if (closer == Closer.Inactivity)
         {
@@ -80,7 +92,7 @@ public class ClosedTicketIsTerminalTests
         }
 
         Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
-        return new Closed(f, ticket, conv, agentGenesysId, agentId);
+        return new Closed(f, ticket, conv, agentGenesysId, agentId, requestType.RequestTypeId);
     }
 
     /// <summary>Every kind of late event that used to be able to move a ticket: connect, human line, handoff, flag, end.</summary>
@@ -136,6 +148,61 @@ public class ClosedTicketIsTerminalTests
         Assert.Contains(c.F.Audit.Entries, e => e.Action == GenesysAuditActions.EventIgnoredOnClosedTicket
             && e.AfterValue!.Contains("TicketChanged=false", StringComparison.Ordinal));
         Assert.DoesNotContain(c.F.Audit.Entries, e => e.Action is "AssignOnAnswer" or "Transfer" or "AnswerAssignmentSkipped");
+    }
+
+    /// <summary>
+    /// A late event never reclassifies, re-routes, restarts the SLA clock or escalates a Closed ticket: the snapshot above covers category, request type,
+    /// priority, escalation and SLA state, and the audit trail shows no classification, SLA, escalation, assignment, transfer or reopen action was written.
+    /// </summary>
+    [Theory]
+    [InlineData(Closer.Person)]
+    [InlineData(Closer.Ai)]
+    [InlineData(Closer.Inactivity)]
+    [InlineData(Closer.AiOnlyTimeout)]
+    public async Task LateEvents_NeverReclassify_RestartTheSla_Escalate_OrReopen(Closer closer)
+    {
+        var c = await ClosedTicketAsync(closer);
+        var auditBefore = c.F.Audit.Entries.Count;
+        var before = Capture(c.F, c.Ticket);
+
+        await DeliverLateEventsAsync(c);
+        // ... and a late bot classification of the same conversation.
+        var classify = await c.F.TicketUpdate.UpdateAsync(ServiceAccount, c.Ticket.TicketId,
+            new GenesysTicketUpdateDto(c.ConversationId, RequestType: new GenesysRequestTypeDto(c.ValidRequestTypeId)));
+
+        Assert.Equal(GenesysTicketUpdateOutcome.TicketClosed, classify.Outcome);
+        Assert.Equal(before, Capture(c.F, c.Ticket));
+
+        var forbidden = new[] { "Classif", "Sla", "Escalat", "Assign", "Transfer", "Reopen", "Resolve", "Close", "Unassign" };
+        var written = c.F.Audit.Entries.Skip(auditBefore).Select(e => e.Action).Distinct().ToList();
+        Assert.DoesNotContain(written, a => forbidden.Any(f => a.Contains(f, StringComparison.OrdinalIgnoreCase) && a != GenesysAuditActions.EventIgnoredOnClosedTicket));
+        Assert.Contains(GenesysAuditActions.EventIgnoredOnClosedTicket, written);
+    }
+
+    [Theory]
+    [InlineData(Closer.Person)]
+    [InlineData(Closer.Ai)]
+    [InlineData(Closer.Inactivity)]
+    [InlineData(Closer.AiOnlyTimeout)]
+    public async Task ANewConversation_AfterAnyClosure_GetsItsOwnTicket_AndTheClosedOneIsUntouched(Closer closer)
+    {
+        var c = await ClosedTicketAsync(closer);
+        var before = Capture(c.F, c.Ticket);
+        var notificationsBefore = c.F.Outbox.Committed.Concat(c.F.Outbox.Staged).ToList();
+
+        var fresh = await c.F.Ingestion.IngestAsync(
+            ServiceAccount, new GenesysInquiryDto("conv-brand-new-2", GenesysChannel.WhatsApp, CustomerPhone: "+971500000001", DepartmentId: c.Ticket.OriginatingDepartmentId));
+
+        Assert.Equal(GenesysIngestionOutcome.TicketCreated, fresh.Outcome);
+        Assert.NotEqual(c.Ticket.TicketId, fresh.Ticket!.TicketId);
+        Assert.Equal(TicketStatus.Open, c.F.Tickets.All.Single(t => t.TicketId == fresh.Ticket.TicketId).TicketStatus);
+
+        // The outbox is shared by every ticket (the NEW ticket announces its own creation), so it is compared by ticket: nothing new may concern the closed one.
+        Assert.Equal(before with { Outbox = 0 }, Capture(c.F, c.Ticket) with { Outbox = 0 });
+        var added = c.F.Outbox.Committed.Concat(c.F.Outbox.Staged).Except(notificationsBefore).ToList();
+        Assert.NotEmpty(added);
+        Assert.DoesNotContain(added, m => m.Payload.Contains($"\"ticketId\":{c.Ticket.TicketId},", StringComparison.Ordinal)
+                                           || m.Payload.Contains($"\"ticketId\":{c.Ticket.TicketId}}}", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -649,6 +649,10 @@ public class TransferRoundRobinAssignmentTests
 
             var changed = before.Keys.Where(k => !Equals(before[k], after[k])).ToList();
             Assert.DoesNotContain(changed, k => !allowedToChange.Contains(k));                             // SlaState, escalation, priority, first response, timestamps, status...
+            // The derived property is only ever the human owner (else the AI Agent): it can follow the owner and nothing else, and the stored AI owner is untouched.
+            Assert.Equal(ticket.CurrentOwnerEmployeeId, ticket.AssignedOwnerEmployeeId);
+            Assert.Null(ticket.AiAgentOwnerEmployeeId);
+            Assert.DoesNotContain(nameof(Ticket.AiAgentOwnerEmployeeId), changed);
         }
 
         Assert.Equal(slaStates, new[] { running.SlaState, paused.SlaState });                              // a paused SLA stays paused, a running one running

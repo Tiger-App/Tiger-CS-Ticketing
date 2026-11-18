@@ -92,6 +92,24 @@ public class AiAgentOwnershipTests
     }
 
     [Fact]
+    public async Task WhenTheAiOwnedTicketIsAlreadyInTheCallCenter_AcceptanceEndsTheAiOwnership_ThroughTheAssignmentItself()
+    {
+        // No department move happens here (a move would clear the AI owner on its own), so only the person's assignment can end the AI's ownership.
+        var (f, _) = World();
+        var agent = f.AddAgent("g-in-cc", "Call Center Agent");
+        var ticket = await IngestAsync(f, f.CallCenter!, "conv-in-cc");
+        Assert.True(ticket.IsOwnedByAiAgent);
+        Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+
+        await f.TicketUpdate.UpdateAsync(AiAgent, ticket.TicketId, new GenesysTicketUpdateDto(
+            "conv-in-cc", Routing: new GenesysRoutingUpdateDto(AgentId: "g-in-cc", ConnectedAtUtc: DateTime.UtcNow)));
+
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.AiAgentOwnerEmployeeId);
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "Transfer");
+    }
+
+    [Fact]
     public async Task AnOfferedAgent_DoesNotEndTheAiOwnership()
     {
         var (f, cs) = World();
