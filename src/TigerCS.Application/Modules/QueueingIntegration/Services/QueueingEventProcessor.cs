@@ -8,6 +8,7 @@ using TigerCS.Application.Modules.QueueingIntegration.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.QueueingIntegration;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
@@ -365,23 +366,16 @@ public sealed class QueueingEventProcessor(
                 $"No active channel has the code '{options.ChannelCode}' (QueueingIntegration:ChannelCode).", null, cancellationToken);
         }
 
-        var companyMapping = await store.GetCompanyMappingAsync(message.CompanyId!, cancellationToken);
-        if (companyMapping is not { IsActive: true })
-        {
-            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.CompanyNotMapped,
-                $"Queueing company '{message.CompanyId}' is not mapped to a department. Add it to QueueingCompanyMappings; the event is retried automatically.", null, cancellationToken);
-        }
-
-        var department = await departmentRepository.GetByIdAsync(companyMapping.DepartmentId, cancellationToken);
-        if (department is not { IsActive: true })
-        {
-            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.CompanyNotMapped,
-                $"Queueing company '{message.CompanyId}' is mapped to department {companyMapping.DepartmentId}, which does not exist or is inactive.", null, cancellationToken);
-        }
-
-        // Request type: mapped explicitly, validated by the existing request-type rules, and it must belong to the company's department.
-        RequestType? requestType = null;
-        int? categoryId = null;
+        // Routing precedence:
+        //  1. An explicit, active (company, ticket type) mapping decides the request type AND, through it, the department. One company may therefore
+        //     serve ticket types of several departments; the company mapping is not consulted and need not exist.
+        //  2. Only when no active explicit mapping exists does the company mapping supply the default department, and the department's General
+        //     request type classifies the ticket.
+        // An explicit mapping that exists but cannot be used (request type missing / inactive / no published workflow / inactive department / no
+        // category pairing) HOLDS the event: it never silently falls back to the company default, which would misroute the ticket.
+        Department department;
+        RequestType? requestType;
+        int? categoryId;
         string? classificationNote = null;
         var typeMapping = await store.GetTicketTypeMappingAsync(message.CompanyId!, message.TicketTypeId!, cancellationToken);
         if (typeMapping is { IsActive: true })
@@ -390,14 +384,7 @@ public sealed class QueueingEventProcessor(
             if (!resolution.IsValid || resolution.RequestType is null)
             {
                 return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.RequestTypeUnusable,
-                    $"Ticket type '{message.TicketTypeId}' maps to request type {typeMapping.RequestTypeId}, which cannot be used: {resolution.Detail}", null, cancellationToken);
-            }
-
-            if (resolution.RequestType.DepartmentId != department.DepartmentId)
-            {
-                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.RequestTypeUnusable,
-                    $"Ticket type '{message.TicketTypeId}' maps to request type '{resolution.RequestType.Name}' of department {resolution.RequestType.DepartmentId}, but company '{message.CompanyId}' maps to department {department.DepartmentId}. Fix one of the mappings.",
-                    null, cancellationToken);
+                    $"Ticket type '{message.TicketTypeId}' of company '{message.CompanyId}' maps to request type {typeMapping.RequestTypeId}, which cannot be used: {resolution.Detail}", null, cancellationToken);
             }
 
             categoryId = await requestTypeRouting.ResolveCategoryIdAsync(resolution.RequestType, cancellationToken);
@@ -407,13 +394,38 @@ public sealed class QueueingEventProcessor(
                     $"Request type '{resolution.RequestType.Name}' has no unique matching category in its department, so a complete classification is impossible.", null, cancellationToken);
             }
 
+            // ResolveAsync has already proven the request type's department exists and is active.
+            var requestTypeDepartment = await departmentRepository.GetByIdAsync(resolution.RequestType.DepartmentId, cancellationToken);
+            if (requestTypeDepartment is not { IsActive: true })
+            {
+                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.RequestTypeUnusable,
+                    $"Request type '{resolution.RequestType.Name}' belongs to department {resolution.RequestType.DepartmentId}, which does not exist or is inactive.", null, cancellationToken);
+            }
+
+            department = requestTypeDepartment;
             requestType = resolution.RequestType;
         }
         else
         {
-            // The company is mapped (so the department is known and never guessed) but the ticket type has no usable request-type mapping: the ticket takes
-            // the department's own configured General request type - the existing default-classification rule - and the gap is logged and audited. A department
-            // with no General configured (or one the rule excludes) holds the event instead: no request type is ever invented.
+            var companyMapping = await store.GetCompanyMappingAsync(message.CompanyId!, cancellationToken);
+            if (companyMapping is not { IsActive: true })
+            {
+                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.CompanyNotMapped,
+                    $"Ticket type '{message.TicketTypeId}' of company '{message.CompanyId}' has no explicit request-type mapping and the company has no default department. Add the ticket type to QueueingTicketTypeMappings or the company to QueueingCompanyMappings; the event is retried automatically.", null, cancellationToken);
+            }
+
+            var defaultDepartment = await departmentRepository.GetByIdAsync(companyMapping.DepartmentId, cancellationToken);
+            if (defaultDepartment is not { IsActive: true })
+            {
+                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.CompanyNotMapped,
+                    $"Queueing company '{message.CompanyId}' is mapped to department {companyMapping.DepartmentId}, which does not exist or is inactive.", null, cancellationToken);
+            }
+
+            department = defaultDepartment;
+
+            // The company's default department is known (never guessed) but the ticket type has no usable request-type mapping: the ticket takes the
+            // department's own configured General request type - the existing default-classification rule - and the gap is logged and audited. A
+            // department with no General configured (or one the rule excludes) holds the event instead: no request type is ever invented.
             var general = defaultClassification is null || DefaultClassificationService.IsExcluded(department)
                 ? null
                 : (await defaultClassification.ResolveForDepartmentAsync(department.DepartmentId, cancellationToken)).Value;
