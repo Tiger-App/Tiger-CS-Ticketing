@@ -355,6 +355,15 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 // A name or e-mail an agent typed in is searchable too (it is what the row will be shown under).
                 || (m.CanonicalIntakePhone != null && dbContext.CustomerContactDetails.Any(c =>
                     c.PhoneKey == m.CanonicalIntakePhone && (c.Name.Contains(search) || (c.Email != null && c.Email.Contains(search)))))
+                // The phone / project / unit an authorised user corrected are searchable too: they are what the row is shown with.
+                || dbContext.CustomerProfileOverrides.Any(o => o.IdentityKind == m.Kind
+                    && ((m.Kind == CrmKind && o.CrmBuyerCustomerId == m.CrmId)
+                        || (m.Kind == ExternalKind && o.ExternalSource == m.Source && o.ExternalCustomerId == m.ExternalId)
+                        || (m.Kind == PhoneKind && o.IdentityPhone == m.Phone))
+                    && ((o.ProjectName != null && o.ProjectName.Contains(search))
+                        || (o.UnitNumber != null && o.UnitNumber.Contains(search))
+                        || (o.PhoneNumber != null && o.PhoneNumber.Contains(search))
+                        || (searchIsPhoneShaped && o.PhoneNumber != null && o.PhoneNumber.Contains(searchDigits))))
                 || dbContext.TicketInteractions.Any(i => i.TicketId == m.Ticket.TicketId
                     && ((i.CustomerName != null && i.CustomerName.Contains(search))
                         || i.CustomerPhone.Contains(search)
@@ -391,9 +400,28 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
     {
         // One row per customer, placed once: every located ticket must agree (CustomerPhoneLocation.Resolve), so a customer is in exactly
         // one of the three buckets however many tickets or numbers they have. The whole thing is one grouped COUNT in the database.
-        var perCustomer = FilteredCandidates(query with { Location = null }, withLocation: true)
+        var perTicketLocation = FilteredCandidates(query with { Location = null }, withLocation: true)
             .GroupBy(x => new { x.Kind, x.CrmId, x.Source, x.ExternalId, x.Phone })
-            .Select(g => new { Sum = g.Sum(x => x.LocationWeight), Qualifies = g.Max(x => x.Qualifies) });
+            .Select(g => new { g.Key.Kind, g.Key.CrmId, g.Key.Source, g.Key.ExternalId, g.Key.Phone, Sum = g.Sum(x => x.LocationWeight), Qualifies = g.Max(x => x.Qualifies) });
+
+        // A customer whose phone an authorised user corrected is placed by that number instead of the ones their tickets captured. The edited
+        // number's place was worked out once, when it was saved (CustomerPhoneLocation), so this is a plain per-customer comparison after the
+        // grouping, never the per-ticket location expression again.
+        var edited = dbContext.CustomerProfileOverrides.AsNoTracking().Where(o => o.PhoneLocation != null);
+        var perCustomer =
+            from c in perTicketLocation
+            join o in edited
+                on new { c.Kind, c.CrmId, c.Source, c.ExternalId, c.Phone }
+                equals new { Kind = o.IdentityKind, CrmId = o.CrmBuyerCustomerId, Source = o.ExternalSource, ExternalId = o.ExternalCustomerId, Phone = o.IdentityPhone }
+                into overrides
+            from o in overrides.DefaultIfEmpty()
+            select new
+            {
+                Sum = o == null
+                    ? c.Sum
+                    : o.PhoneLocation == CustomerLocation.WithinUae ? WithinWeight : o.PhoneLocation == CustomerLocation.OutsideUae ? OutsideWeight : 0L,
+                c.Qualifies,
+            };
         if (query.TicketFilter is not null)
         {
             // Customers with at least one ticket matching the Dashboard's filters; their location still comes from ALL their visible tickets.
@@ -445,6 +473,25 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         {
             grouped = grouped.Where(g => g.Qualifies == 1);
         }
+
+        // The same per-customer adjustment as ListAsync and CountByLocationAsync: a customer whose phone an authorised user corrected is placed by
+        // that number, so they are not Unknown and are neither listed nor explained here - the breakdown then always adds up to the Unknown card.
+        var editedLocations = dbContext.CustomerProfileOverrides.AsNoTracking().Where(o => o.PhoneLocation != null);
+        grouped =
+            from g in grouped
+            join o in editedLocations
+                on new { g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone }
+                equals new { Kind = o.IdentityKind, CrmId = o.CrmBuyerCustomerId, Source = o.ExternalSource, ExternalId = o.ExternalCustomerId, Phone = o.IdentityPhone }
+                into overrides
+            from o in overrides.DefaultIfEmpty()
+            select new
+            {
+                g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone, g.OpenTickets, g.LastTicketId, g.LastTicketCreatedAtUtc,
+                LocationSum = o == null
+                    ? g.LocationSum
+                    : o.PhoneLocation == CustomerLocation.WithinUae ? WithinWeight : o.PhoneLocation == CustomerLocation.OutsideUae ? OutsideWeight : 0L,
+                g.Qualifies, g.MinPhone, g.MaxPhone,
+            };
 
         grouped = grouped.Where(g => (g.LocationSum % OutsideWeight > 0) == (g.LocationSum / OutsideWeight > 0));
         if (query.OpenOnly)
@@ -526,6 +573,25 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
 
         if (query.Location is { } wanted)
         {
+            // Same per-customer adjustment as CountByLocationAsync, so the list a Dashboard card opens is the customers it counted.
+            var editedLocations = dbContext.CustomerProfileOverrides.AsNoTracking().Where(o => o.PhoneLocation != null);
+            grouped =
+                from g in grouped
+                join o in editedLocations
+                    on new { g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone }
+                    equals new { Kind = o.IdentityKind, CrmId = o.CrmBuyerCustomerId, Source = o.ExternalSource, ExternalId = o.ExternalCustomerId, Phone = o.IdentityPhone }
+                    into overrides
+                from o in overrides.DefaultIfEmpty()
+                select new
+                {
+                    g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone, g.TotalTickets, g.OpenTickets, g.LastTicketId, g.LastNamedTicketId,
+                    g.LastTicketCreatedAtUtc, g.LastInteractionAtUtc,
+                    LocationSum = o == null
+                        ? g.LocationSum
+                        : o.PhoneLocation == CustomerLocation.WithinUae ? WithinWeight : o.PhoneLocation == CustomerLocation.OutsideUae ? OutsideWeight : 0L,
+                    g.Qualifies,
+                };
+
             grouped = wanted switch
             {
                 CustomerLocation.WithinUae => grouped.Where(g => g.LocationSum % OutsideWeight > 0 && g.LocationSum / OutsideWeight == 0),
@@ -580,6 +646,12 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 .Where(c => rowPhoneKeys.Contains(c.PhoneKey))
                 .ToDictionaryAsync(c => c.PhoneKey, cancellationToken);
 
+        // The phone / project / unit an authorised user corrected, one batched read for the page, matched on the directory key.
+        var pageKeys = page.Select(g => ToIdentity(g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone).Key).ToList();
+        var edits = await dbContext.CustomerProfileOverrides.AsNoTracking()
+            .Where(o => pageKeys.Contains(o.CustomerKey))
+            .ToDictionaryAsync(o => o.CustomerKey, cancellationToken);
+
         var rows = new List<CustomerDirectoryRowDto>(page.Count);
         foreach (var g in page)
         {
@@ -594,6 +666,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             // cannot do without a query per row; the row sees the latest
             // ticket's conversation name only, as it always has.
             var namedTicket = g.LastNamedTicketId is { } namedId ? lastTickets.GetValueOrDefault(namedId) : null;
+            var derived = DerivedFacts(last, snapshot, identity.PhoneNumber);
+            var edit = edits.GetValueOrDefault(identity.Key);
             var manual = manualContacts.GetValueOrDefault(CustomerPhoneNumber.Normalize(snapshot.IntakePhone ?? snapshot.InteractionPhone ?? g.Phone));
             var displayName = manual?.Name
                 ?? DisplayNameFor(last, snapshot)
@@ -604,10 +678,11 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 identity.Kind.ToString(),
                 displayName,
                 // The number as the latest ticket captured it — the canonical
-                // form identifies the customer, it is not how they are shown.
-                snapshot.IntakePhone ?? snapshot.InteractionPhone ?? identity.PhoneNumber,
-                last.CrmBuyerProjectName ?? last.ManualProjectName ?? snapshot.SnapshotProperty,
-                last.CrmBuyerUnitNumber ?? last.ManualUnitNumber ?? snapshot.SnapshotUnit,
+                // form identifies the customer, it is not how they are shown —
+                // unless an authorised user corrected it.
+                edit?.PhoneNumber ?? derived.Phone,
+                edit?.ProjectName ?? derived.Project,
+                edit?.UnitNumber ?? derived.Unit,
                 VerificationSourceFor(identity),
                 g.OpenTickets,
                 g.TotalTickets,
@@ -615,7 +690,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 last.TicketNumber,
                 last.TicketStatus.ToString(),
                 g.LastTicketCreatedAtUtc,
-                g.LastInteractionAtUtc));
+                g.LastInteractionAtUtc,
+                EditedFields: EditedFieldsOf(edit)));
         }
 
         return new CustomerDirectoryPage(rows, totalCount);
@@ -688,8 +764,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
 
             return new CustomerDirectoryTicketDto(
                 t.TicketId, t.TicketNumber, t.TicketStatus.ToString(), t.PriorityId, t.CurrentDepartmentId, t.CreatedAtUtc,
-                t.CrmBuyerProjectName ?? t.ManualProjectName ?? snapshot.SnapshotProperty,
-                t.CrmBuyerUnitNumber ?? t.ManualUnitNumber ?? snapshot.SnapshotUnit,
+                FirstClean(t.CrmBuyerProjectName, t.ManualProjectName, snapshot.SnapshotProperty),
+                FirstClean(t.CrmBuyerUnitNumber, t.ManualUnitNumber, snapshot.SnapshotUnit),
                 t.RequestSummary,
                 lastActivity,
                 resolvedAt.TryGetValue(t.TicketId, out var r) ? r : null,
@@ -699,8 +775,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         var units = tickets
             .Select(x => new
             {
-                Project = x.Ticket.CrmBuyerProjectName ?? x.Ticket.ManualProjectName ?? snapshots.GetValueOrDefault(x.Ticket.TicketId).SnapshotProperty,
-                Unit = x.Ticket.CrmBuyerUnitNumber ?? x.Ticket.ManualUnitNumber ?? snapshots.GetValueOrDefault(x.Ticket.TicketId).SnapshotUnit,
+                Project = FirstClean(x.Ticket.CrmBuyerProjectName, x.Ticket.ManualProjectName, snapshots.GetValueOrDefault(x.Ticket.TicketId).SnapshotProperty),
+                Unit = FirstClean(x.Ticket.CrmBuyerUnitNumber, x.Ticket.ManualUnitNumber, snapshots.GetValueOrDefault(x.Ticket.TicketId).SnapshotUnit),
                 Source = x.Ticket.CrmBuyerUnitId != null ? "Crm" : x.Ticket.ExternalUnitId != null ? x.Ticket.CustomerVerificationSource ?? "External" : "Manual",
                 x.Ticket.CrmBuyerUnitId,
                 x.Ticket.ExternalUnitId,
@@ -751,6 +827,22 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             .ToList();
 
         var last = tickets[0].Ticket;
+
+        // What an authorised user entered over the phone / project / unit the tickets say. The numbers lead with the edited one (one entry
+        // per real number), the units lead with an "Edited" entry (the tickets' own units stay below it, as history), and the derived values
+        // are returned next to the edit so the Edit form and the audit trail can say what was shown before.
+        var edit = await dbContext.CustomerProfileOverrides.AsNoTracking()
+            .FirstOrDefaultAsync(o => o.CustomerKey == identity.Key, cancellationToken);
+        var derived = DerivedFacts(last, snapshots.GetValueOrDefault(last.TicketId), identity.PhoneNumber);
+        var shownPhones = edit?.PhoneNumber is { } editedPhone
+            ? new[] { editedPhone }.Concat(phones.Where(p => CustomerPhoneNumber.Normalize(p) != CustomerPhoneNumber.Normalize(editedPhone))).ToList()
+            : phones;
+        var shownUnits = edit is { ProjectName: not null } or { UnitNumber: not null }
+            ? new[] { new CustomerDirectoryUnitDto(edit.ProjectName, edit.UnitNumber, "Edited", 0, edit.UpdatedAtUtc, null, null) }.Concat(units).ToList()
+            : units;
+        var editState = new CustomerProfileEditStateDto(
+            derived.Phone, derived.Project, derived.Unit, edit?.PhoneNumber, edit?.ProjectName, edit?.UnitNumber, edit?.UpdatedAtUtc);
+
         // The latest ticket first; then the same precedence widened across
         // every ticket this customer has, so a name captured once is not lost
         // because their most recent ticket happened not to carry one.
@@ -764,7 +856,7 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             identity.Key,
             identity.Kind.ToString(),
             displayName,
-            phones,
+            shownPhones,
             emails,
             VerificationSourceFor(identity),
             identity.CrmBuyerCustomerId,
@@ -775,15 +867,52 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             tickets[^1].Ticket.CreatedAtUtc,
             last.CreatedAtUtc,
             last.TicketId,
-            units,
+            shownUnits,
             ticketDtos,
             interactions.Select(i => new CustomerDirectoryInteractionDto(
                 i.TicketInteractionId, i.TicketId, ticketNumbers.GetValueOrDefault(i.TicketId, string.Empty), i.ChannelId,
                 channelNames.GetValueOrDefault(i.ChannelId), i.Direction, i.InteractionStartedAtUtc ?? i.CreatedAtUtc, i.EndedAtUtc,
-                i.EndedAtUtc is null ? "Active" : "Ended", i.GenesysAgentName, i.IsOriginatingInteraction)).ToList());
+                i.EndedAtUtc is null ? "Active" : "Ended", i.GenesysAgentName, i.IsOriginatingInteraction)).ToList(),
+            editState);
     }
 
     // ---- helpers ----
+
+    /// <summary>
+    /// The phone, project and unit a customer's latest ticket says, each with a source's placeholder ("NOT_REGISTERED", "UNKNOWN", "N/A")
+    /// treated as missing - cleaned candidate by candidate, so a placeholder from one source never hides a real value from the next.
+    /// </summary>
+    private static (string? Phone, string? Project, string? Unit) DerivedFacts(Ticket last, TicketSnapshot snapshot, string? identityPhone) =>
+        (FirstClean(snapshot.IntakePhone, snapshot.InteractionPhone, identityPhone),
+         FirstClean(last.CrmBuyerProjectName, last.ManualProjectName, snapshot.SnapshotProperty),
+         FirstClean(last.CrmBuyerUnitNumber, last.ManualUnitNumber, snapshot.SnapshotUnit));
+
+    private static string? FirstClean(params string?[] candidates)
+    {
+        foreach (var candidate in candidates)
+        {
+            if (CustomerFieldText.Clean(candidate) is { } clean)
+            {
+                return clean;
+            }
+        }
+
+        return null;
+    }
+
+    private static IReadOnlyList<string>? EditedFieldsOf(CustomerProfileOverride? edit)
+    {
+        if (edit is null)
+        {
+            return null;
+        }
+
+        var edited = new List<string>(3);
+        if (edit.PhoneNumber is not null) edited.Add("PhoneNumber");
+        if (edit.ProjectName is not null) edited.Add("ProjectName");
+        if (edit.UnitNumber is not null) edited.Add("UnitNumber");
+        return edited.Count == 0 ? null : edited;
+    }
 
     /// <summary>The per-ticket facts that are not on the Ticket row itself: intake phone, originating interaction name/phone, requester snapshot.</summary>
     private readonly record struct TicketSnapshot(string? IntakePhone, string? InteractionName, string? InteractionPhone, string? SnapshotName, string? SnapshotProperty, string? SnapshotUnit);

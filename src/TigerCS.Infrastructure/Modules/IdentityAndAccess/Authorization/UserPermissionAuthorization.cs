@@ -87,7 +87,7 @@ public sealed class UserPermissionAuthorizationHandler(IUserPermissionOverrideRe
         // Module gates first: closed unless the role carries it or it was granted, and never open against an explicit denial
         // (except for the roles that always hold it).
         var roles = context.User.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList();
-        foreach (var gate in required.Where(a => PermissionCatalog.Find(a.Permission) is { IsModuleGate: true }))
+        foreach (var gate in required.Where(a => IsEnforcedOnItsOwnTerms(a.Permission)))
         {
             if (!IsGateOpen(gate.Permission, roles, effects))
             {
@@ -101,7 +101,7 @@ public sealed class UserPermissionAuthorizationHandler(IUserPermissionOverrideRe
             return;
         }
 
-        foreach (var attribute in required.Where(a => PermissionCatalog.Find(a.Permission) is not { IsModuleGate: true }))
+        foreach (var attribute in required.Where(a => !IsEnforcedOnItsOwnTerms(a.Permission)))
         {
             if (effects.TryGetValue(attribute.Permission, out var effect) && effect == PermissionEffect.Deny)
             {
@@ -110,7 +110,7 @@ public sealed class UserPermissionAuthorizationHandler(IUserPermissionOverrideRe
             }
         }
 
-        var allGranted = required.Where(a => PermissionCatalog.Find(a.Permission) is not { IsModuleGate: true }).ToList() is { Count: > 0 } granular
+        var allGranted = required.Where(a => !IsEnforcedOnItsOwnTerms(a.Permission)).ToList() is { Count: > 0 } granular
             && granular.All(a =>
             effects.TryGetValue(a.Permission, out var effect)
             && effect == PermissionEffect.Grant
@@ -125,6 +125,10 @@ public sealed class UserPermissionAuthorizationHandler(IUserPermissionOverrideRe
             context.Succeed(requirement);
         }
     }
+
+    /// <summary>A module gate (<see cref="PermissionDefinition.IsModuleGate"/>) or a permission flagged <see cref="PermissionDefinition.EnforceEffective"/>: decided by role baseline plus explicit grant, never merely by adjusting a role policy.</summary>
+    private static bool IsEnforcedOnItsOwnTerms(string permission) =>
+        PermissionCatalog.Find(permission) is { IsModuleGate: true } or { EnforceEffective: true };
 
     /// <summary>The gate decision for one module-gate permission. Collections is the only gate; a future one falls back to the generic effective-permission rule (role baseline or grant, never when denied).</summary>
     private static bool IsGateOpen(string permission, IReadOnlyCollection<string> roles, IReadOnlyDictionary<string, PermissionEffect> effects) =>

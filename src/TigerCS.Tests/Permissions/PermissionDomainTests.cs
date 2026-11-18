@@ -110,9 +110,9 @@ public class PermissionDomainTests
     }
 
     [Fact]
-    public void The_catalog_has_the_expected_30_permissions_including_resolve_and_transfer()
+    public void The_catalog_has_the_expected_31_permissions_including_resolve_and_transfer()
     {
-        Assert.Equal(30, PermissionCatalog.All.Count);
+        Assert.Equal(31, PermissionCatalog.All.Count);
         Assert.True(PermissionCatalog.IsKnown(TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsResolve));
         Assert.True(PermissionCatalog.IsKnown(TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.TicketsTransfer));
     }

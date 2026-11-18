@@ -245,6 +245,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<CustomerDirectoryAppService>();
         services.AddScoped<ICustomerContactDetailRepository, CustomerContactDetailRepository>();
         services.AddScoped<CustomerContactAppService>();
+        services.AddScoped<ICustomerProfileOverrideRepository, CustomerProfileOverrideRepository>();
+        services.AddScoped<CustomerProfileEditAppService>();
         services.AddScoped<IProjectCatalogRepository, ProjectCatalogRepository>();
         services.AddScoped<ProjectCatalogAppService>();
 

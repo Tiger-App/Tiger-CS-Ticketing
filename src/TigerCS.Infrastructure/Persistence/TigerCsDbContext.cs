@@ -96,6 +96,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
 
     public DbSet<TicketNote> TicketNotes => Set<TicketNote>();
     public DbSet<CustomerContactDetail> CustomerContactDetails => Set<CustomerContactDetail>();
+    public DbSet<CustomerProfileOverride> CustomerProfileOverrides => Set<CustomerProfileOverride>();
 
     public DbSet<SlaPolicy> SlaPolicies => Set<SlaPolicy>();
 
@@ -258,6 +259,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new TicketResolutionConfiguration());
         builder.ApplyConfiguration(new TicketNoteConfiguration());
         builder.ApplyConfiguration(new CustomerContactDetailConfiguration());
+        builder.ApplyConfiguration(new CustomerProfileOverrideConfiguration());
 
         builder.ApplyConfiguration(new SlaPolicyConfiguration());
         builder.ApplyConfiguration(new BusinessCalendarConfiguration());

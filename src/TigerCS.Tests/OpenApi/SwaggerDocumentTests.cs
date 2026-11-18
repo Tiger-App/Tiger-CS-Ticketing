@@ -127,6 +127,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "GET /api/customers/search",
         "GET /api/customers",
         "GET /api/customers/profile/{customerKey}",
+        "PUT /api/customers/profile/{customerKey}",
         "GET /api/customers/contact",
         "PUT /api/customers/contact",
         "GET /api/projects",

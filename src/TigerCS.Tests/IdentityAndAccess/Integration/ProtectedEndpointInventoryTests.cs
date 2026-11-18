@@ -182,6 +182,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["GET /api/customers/search"] = nameof(SystemAdministratorEndpointAuthorizationTests.SearchCustomers_Returns200),
         ["GET /api/customers"] = nameof(SystemAdministratorEndpointAuthorizationTests.ListCustomers_Returns200),
         ["GET /api/customers/profile/{customerKey}"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetCustomerProfileByKey_Returns200),
+        ["PUT /api/customers/profile/{customerKey}"] = nameof(Customers.CustomerProfileEditEndpointTests.Edit_IsRestrictedToAdministratorsCsManagersAndGrantedUsers_AndCanBeRevoked),
         ["GET /api/customers/contact"] = nameof(SystemAdministratorEndpointAuthorizationTests.CustomerContact_SaveAndGet_AreAuthorizedThroughTheOverride),
         ["PUT /api/customers/contact"] = nameof(SystemAdministratorEndpointAuthorizationTests.CustomerContact_SaveAndGet_AreAuthorizedThroughTheOverride),
         ["GET /api/projects"] = nameof(SystemAdministratorEndpointAuthorizationTests.ProjectCatalog_Projects_Returns200),

@@ -24,6 +24,15 @@
         </div>
     </div>
 
+    @if (!string.IsNullOrEmpty(Model.EditStatus))
+    {
+        <div class="alert alert-success" role="status"><span>@Model.EditStatus</span></div>
+    }
+    @if (!string.IsNullOrEmpty(Model.EditError))
+    {
+        <div class="alert alert-error" role="alert"><span>@Model.EditError</span></div>
+    }
+
     <form class="filter-bar" id="customerFilters" method="get" action="/Customers">
         <div class="search-field filter-bar__search">
             <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="11" cy="11" r="7" stroke="currentColor" stroke-width="2" /><path d="M21 21L16.65 16.65" stroke="currentColor" stroke-width="2" stroke-linecap="round" /></svg>
@@ -167,6 +176,10 @@
                             <th class="col-num">Total Tickets</th>
                             <th>Last Ticket</th>
                             <th>Last Interaction</th>
+                            @if (Model.CanEdit)
+                            {
+                                <th class="col-actions"><span class="visually-hidden">Actions</span></th>
+                            }
                         </tr>
                     </thead>
                     <tbody>
@@ -183,8 +196,17 @@
                                         </span>
                                     </a>
                                 </td>
+                                @* A source's placeholder (NOT_REGISTERED...) is missing data: it is shown as "Not provided", never printed. An edited value is marked, so staff can tell it differs from the tickets. *@
                                 <td class="text-mono">
-                                    @(string.IsNullOrWhiteSpace(row.PhoneNumber) ? "—" : row.PhoneNumber)
+                                    @if (string.IsNullOrWhiteSpace(row.PhoneNumber))
+                                    {
+                                        <span class="text-secondary">@CustomerFieldText.NotProvided</span>
+                                    }
+                                    else
+                                    {
+                                        @row.PhoneNumber
+                                        @if (row.EditedFields?.Contains("PhoneNumber") == true) { <span class="badge badge-neutral" title="Edited in Tiger Ticketing">Edited</span> }
+                                    }
                                     @if (row.LocationReasonText is { } reasonText)
                                     {
                                         <span class="cell-sub" data-unknown-row-reason="@row.LocationReason">
@@ -195,12 +217,14 @@
                                 <td>
                                     @if (row.ProjectName is null && row.UnitNumber is null)
                                     {
-                                        <span class="text-secondary">—</span>
+                                        <span class="text-secondary">@CustomerFieldText.NotProvided</span>
                                     }
                                     else
                                     {
-                                        <span class="cell-primary">@(row.UnitNumber ?? "—")</span>
-                                        <span class="cell-sub">@(row.ProjectName ?? "")</span>
+                                        <span class="cell-primary">@(row.UnitNumber ?? CustomerFieldText.NotProvided)</span>
+                                        <span class="cell-sub">@(row.ProjectName ?? CustomerFieldText.NotProvided)
+                                            @if (row.EditedFields?.Contains("ProjectName") == true || row.EditedFields?.Contains("UnitNumber") == true) { <span class="badge badge-neutral" title="Edited in Tiger Ticketing">Edited</span> }
+                                        </span>
                                     }
                                 </td>
                                 <td><span class="badge badge-source-@CustomersModel.SourceCssKey(row.VerificationSource)">@CustomersModel.SourceLabel(row.VerificationSource)</span></td>
@@ -213,6 +237,14 @@
                                 <td class="text-secondary" title="@(row.LastInteractionAtUtc?.ToLocalTime().ToString("MMM d, yyyy HH:mm"))">
                                     @(row.LastInteractionAtUtc is { } lastInteraction ? TicketDisplay.AgoLabel(lastInteraction, nowUtc) : "—")
                                 </td>
+                                @if (Model.CanEdit)
+                                {
+                                    <td class="col-actions">
+                                        <button type="button" class="btn btn-sm" data-customer-edit aria-haspopup="dialog"
+                                                data-key="@row.CustomerKey" data-name="@CustomersModel.NameOrPlaceholder(row)"
+                                                data-phone="@row.PhoneNumber" data-project="@row.ProjectName" data-unit="@row.UnitNumber">Edit</button>
+                                    </td>
+                                }
                             </tr>
                         }
                     </tbody>
@@ -242,4 +274,49 @@
             </nav>
         </div>
     </div>
+
+    @if (Model.CanEdit)
+    {
+        @* One compact modal (a native <dialog>: focus trap, Escape, dimmed backdrop) shared by every row; the Edit button fills it from the row. The post is
+           the Edit handler, which forwards to the Api - the Api decides who may edit, normalizes the phone, checks project and unit, and audits. *@
+        <dialog class="reassign-modal" id="customer-edit-dialog" data-customer-edit-dialog aria-labelledby="customer-edit-title" data-reopen="@Model.EditReopenJson">
+            <form method="post" asp-page-handler="Edit" class="reassign-modal__form" novalidate>
+                <input type="hidden" name="customerKey" data-edit-key />
+                <input type="hidden" name="returnUrl" value="@Model.CurrentUrl" />
+                <div class="reassign-modal__head">
+                    <h2 class="reassign-modal__title" id="customer-edit-title">Edit customer</h2>
+                    <button type="button" class="reassign-modal__close" data-edit-cancel aria-label="Close">&times;</button>
+                </div>
+                <div class="reassign-modal__body">
+                    <p class="field-hint" data-edit-name></p>
+                    <div class="field-group">
+                        <label class="field-label" for="customer-edit-phone">Phone number</label>
+                        <input class="field-input" id="customer-edit-phone" name="phoneNumber" type="tel" autocomplete="off" placeholder="+971 50 123 4567" data-edit-phone />
+                        <span class="field-hint">With its country code, e.g. +971 50 123 4567. Leave blank to use the number on the customer's tickets.</span>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="customer-edit-project">Project</label>
+                        <input class="field-input" id="customer-edit-project" name="projectName" list="customer-edit-projects" autocomplete="off" data-edit-project />
+                        <datalist id="customer-edit-projects">
+                            @foreach (var project in Model.ProjectOptions)
+                            {
+                                <option value="@project"></option>
+                            }
+                        </datalist>
+                    </div>
+                    <div class="field-group">
+                        <label class="field-label" for="customer-edit-unit">Unit</label>
+                        <input class="field-input" id="customer-edit-unit" name="unitNumber" autocomplete="off" data-edit-unit />
+                        <span class="field-hint">Enter project and unit together, or clear both to use the tickets' own.</span>
+                    </div>
+                    <p class="field-hint">Saved in Tiger Ticketing only. Nothing is sent to Tiger CRM, PACT or Tasleeh, and no ticket changes.</p>
+                </div>
+                <div class="reassign-modal__foot">
+                    <button type="button" class="btn-reassign-cancel" data-edit-cancel>Cancel</button>
+                    <button type="submit" class="btn-reassign">Save</button>
+                </div>
+            </form>
+        </dialog>
+        <script src="~/js/customer-edit.js" asp-append-version="true"></script>
+    }
 </div>
