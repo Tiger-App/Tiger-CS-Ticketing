@@ -138,7 +138,8 @@ public class AdministrationEndpointsTests : IClassFixture<TigerCsApiFactory>
         Assert.Equal(created.Roles, renamed.Roles);
         Assert.Equal(created.Departments, renamed.Departments);
 
-        Assert.Equal(HttpStatusCode.Unauthorized, (await user.GetAsync("/api/users/me")).StatusCode);
+        // A token whose security stamp no longer matches fails the ActiveEmployee requirement, which the pipeline reports as 403.
+        Assert.Equal(HttpStatusCode.Forbidden, (await user.GetAsync("/api/users/me")).StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await _factory.CreateClient().PostAsJsonAsync("/api/auth/login", new LoginRequestDto(oldName, "Str0ng-Pass!"))).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await _factory.CreateClient().PostAsJsonAsync("/api/auth/login", new LoginRequestDto(newName, "Str0ng-Pass!"))).StatusCode);
 
