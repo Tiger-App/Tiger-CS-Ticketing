@@ -192,6 +192,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["GET /api/dashboard"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboard_Returns200),
         ["GET /api/dashboard/overview"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboardOverview_Returns200),
         ["GET /api/dashboard/customers-by-location"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboardCustomersByLocation_Returns200),
+        ["GET /api/customers/unknown-breakdown"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetCustomersUnknownBreakdown_Returns200),
 
         // Reports (CS Manager tier) — covered by TeamPerformanceEndpointsTests
         // (CS Manager / GM / Chairman succeed, CS Agent and the department

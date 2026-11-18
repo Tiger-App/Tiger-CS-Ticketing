@@ -13,7 +13,14 @@ namespace TigerCS.Web.Services.Api;
 /// </summary>
 public sealed class CustomersApiClient(HttpClient httpClient, ILogger<CustomersApiClient> logger) : ApiClientBase(httpClient, logger)
 {
-    public Task<ApiResult<CustomerDirectoryListResultDto>> ListAsync(CustomerDirectoryListRequestDto request, CancellationToken cancellationToken)
+    public Task<ApiResult<CustomerDirectoryListResultDto>> ListAsync(CustomerDirectoryListRequestDto request, CancellationToken cancellationToken) =>
+        GetAsync<CustomerDirectoryListResultDto>($"api/customers?{BuildQuery(request)}", cancellationToken);
+
+    /// <summary>The Unknown customers of the same query, counted by why they are Unknown.</summary>
+    public Task<ApiResult<CustomerLocationBreakdownDto>> GetUnknownBreakdownAsync(CustomerDirectoryListRequestDto request, CancellationToken cancellationToken) =>
+        GetAsync<CustomerLocationBreakdownDto>($"api/customers/unknown-breakdown?{BuildQuery(request)}", cancellationToken);
+
+    private static System.Collections.Specialized.NameValueCollection BuildQuery(CustomerDirectoryListRequestDto request)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         if (!string.IsNullOrWhiteSpace(request.Search)) query["search"] = request.Search;
@@ -32,7 +39,7 @@ public sealed class CustomersApiClient(HttpClient httpClient, ILogger<CustomersA
         query["page"] = request.Page.ToString(CultureInfo.InvariantCulture);
         query["pageSize"] = request.PageSize.ToString(CultureInfo.InvariantCulture);
 
-        return GetAsync<CustomerDirectoryListResultDto>($"api/customers?{query}", cancellationToken);
+        return query;
     }
 
     public Task<ApiResult<CustomerDirectoryProfileDto>> GetProfileAsync(string customerKey, CancellationToken cancellationToken) =>

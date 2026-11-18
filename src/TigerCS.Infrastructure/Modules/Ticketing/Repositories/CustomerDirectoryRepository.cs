@@ -51,6 +51,7 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
     {
         public Ticket Ticket { get; init; } = null!;
         public string? IntakePhone { get; init; }
+        public string? InteractionPhone { get; init; }
         public string? CanonicalIntakePhone { get; init; }
         public int Kind { get; init; }
         public int? CrmId { get; init; }
@@ -168,6 +169,7 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         {
             Ticket = x.Ticket,
             IntakePhone = x.IntakePhone,
+            InteractionPhone = x.InteractionPhone,
             CanonicalIntakePhone = x.CanonicalIntakePhone,
             LastInteractionAtUtc = x.LastInteractionAtUtc,
             LocationWeight = x.LocationWeight,
@@ -203,7 +205,7 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         var filterChannel = filter.ChannelId;
         return identifiedRows.Select(x => new IdentifiedTicket
         {
-            Ticket = x.Ticket, IntakePhone = x.IntakePhone, CanonicalIntakePhone = x.CanonicalIntakePhone, LastInteractionAtUtc = x.LastInteractionAtUtc,
+            Ticket = x.Ticket, IntakePhone = x.IntakePhone, InteractionPhone = x.InteractionPhone, CanonicalIntakePhone = x.CanonicalIntakePhone, LastInteractionAtUtc = x.LastInteractionAtUtc,
             LocationWeight = x.LocationWeight, Kind = x.Kind, CrmId = x.CrmId, Source = x.Source, ExternalId = x.ExternalId, Phone = x.Phone,
             Qualifies = (createdFrom == null || x.Ticket.CreatedAtUtc >= createdFrom)
                 && (createdTo == null || x.Ticket.CreatedAtUtc < createdTo)
@@ -411,6 +413,66 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         return counts is null
             ? new CustomerLocationCounts(0, 0, 0)
             : new CustomerLocationCounts(counts.Within, counts.Outside, counts.Total - counts.Within - counts.Outside);
+    }
+
+    public async Task<IReadOnlyList<CustomerLocationDiagnosis>> DiagnoseUnknownAsync(CustomerDirectoryQuery query, bool paged, CancellationToken cancellationToken = default)
+    {
+        // The Unknown customers exactly as ListAsync selects them (same candidates, same fold, same Unknown predicate), with the two extreme stored
+        // phones folded in the same grouped pass. Unknown customers only — never every customer — and only identity + two strings per customer.
+        var grouped = FilteredCandidates(query with { Location = CustomerLocation.Unknown }, withLocation: true)
+            .GroupBy(x => new { x.Kind, x.CrmId, x.Source, x.ExternalId, x.Phone })
+            .Select(g => new
+            {
+                g.Key.Kind,
+                g.Key.CrmId,
+                g.Key.Source,
+                g.Key.ExternalId,
+                g.Key.Phone,
+                OpenTickets = g.Count(x =>
+                    x.Ticket.TicketStatus == TicketStatus.Open
+                    || x.Ticket.TicketStatus == TicketStatus.InProgress
+                    || x.Ticket.TicketStatus == TicketStatus.PendingCustomer
+                    || x.Ticket.TicketStatus == TicketStatus.PendingThirdParty),
+                LastTicketId = g.Max(x => x.Ticket.TicketId),
+                LastTicketCreatedAtUtc = g.Max(x => x.Ticket.CreatedAtUtc),
+                LocationSum = g.Sum(x => x.LocationWeight),
+                Qualifies = g.Max(x => x.Qualifies),
+                MinPhone = g.Min(x => x.IntakePhone != null && x.IntakePhone != "" ? x.IntakePhone : x.InteractionPhone),
+                MaxPhone = g.Max(x => x.IntakePhone != null && x.IntakePhone != "" ? x.IntakePhone : x.InteractionPhone),
+            });
+
+        if (query.TicketFilter is not null)
+        {
+            grouped = grouped.Where(g => g.Qualifies == 1);
+        }
+
+        grouped = grouped.Where(g => (g.LocationSum % OutsideWeight > 0) == (g.LocationSum / OutsideWeight > 0));
+        if (query.OpenOnly)
+        {
+            grouped = grouped.Where(g => g.OpenTickets > 0);
+        }
+
+        var ordered = grouped.OrderByDescending(g => g.LastTicketCreatedAtUtc).ThenByDescending(g => g.LastTicketId);
+        var rows = await (paged
+                ? ordered.Skip((query.Page - 1) * query.PageSize).Take(query.PageSize)
+                : ordered.Take(ICustomerDirectoryRepository.MaxDiagnosed))
+            .ToListAsync(cancellationToken);
+
+        var result = new List<CustomerLocationDiagnosis>(rows.Count);
+        foreach (var g in rows)
+        {
+            var key = ToIdentity(g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone).Key;
+            var first = g.MaxPhone;
+            var other = g.MinPhone != g.MaxPhone ? g.MinPhone : null;
+            // Both a UAE and a foreign number on the customer's tickets → ambiguous; otherwise the (unplaced) number says why.
+            var conflicting = g.LocationSum % OutsideWeight > 0 && g.LocationSum / OutsideWeight > 0;
+            var reason = conflicting
+                ? CustomerPhoneLocationReason.ConflictingCountries
+                : CustomerPhoneLocation.Diagnose(first).Reason;
+            result.Add(new CustomerLocationDiagnosis(key, first, other, reason));
+        }
+
+        return result;
     }
 
     public async Task<CustomerDirectoryPage> ListAsync(CustomerDirectoryQuery query, CancellationToken cancellationToken = default)

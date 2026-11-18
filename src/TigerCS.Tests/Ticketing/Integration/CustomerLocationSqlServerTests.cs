@@ -266,6 +266,61 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
         Assert.Equal(samples.Length, counts.Total);
     }
 
+    /// <summary>The Unknown breakdown: every Unknown customer has exactly one reason, the reasons sum to the card's Unknown, and the stored number is shown untouched.</summary>
+    [VisibilitySqlServerFact]
+    public async Task TheUnknownBreakdown_ExplainsEveryUnknownCustomer_SumsToTheCardsUnknown_AndShowsTheStoredNumberUntouched()
+    {
+        CreateDatabase();
+        string?[] unknownPhones =
+        [
+            null, "0501234567", "05 0123 4567", "04 123 4567", "501234567", "447911123456", "+97141234567", "00971501234", "+1234567",
+            "+0441234567", "call me", "0112345678",
+        ];
+        using (var context = CreateContext())
+        {
+            for (var i = 0; i < unknownPhones.Length; i++) CrmCustomer(context, 7000 + i, unknownPhones[i]);
+            CrmCustomer(context, 7100, "+971501234567");   // placed: not in the breakdown
+            CrmCustomer(context, 7101, "+447911123456");   // placed
+            var both = CrmCustomer(context, 7200, "+971501234567");   // one customer, a UAE and a foreign number: ambiguous
+            LinkIntakeOnNewTicketFor(context, both, "+447911123456");
+        }
+
+        var counts = await CountsAsync();
+        using var db = CreateContext();
+        var service = Service(db);
+        var breakdown = await service.UnknownBreakdownAsync(Guid.NewGuid(), CrossDepartment, new CustomerDirectoryListRequestDto());
+        Assert.Equal(counts.Unknown, breakdown.Total);
+        Assert.Equal(unknownPhones.Length + 1, breakdown.Total);
+        Assert.Equal(breakdown.Total, breakdown.Reasons.Sum(r => r.Count));
+        Assert.Contains(breakdown.Reasons, r => r.Reason == nameof(CustomerPhoneLocationReason.ConflictingCountries) && r.Count == 1);
+        Assert.Contains(breakdown.Reasons, r => r.Reason == nameof(CustomerPhoneLocationReason.Missing) && r.Count == 1);
+        Assert.Contains(breakdown.Reasons, r => r.Reason == nameof(CustomerPhoneLocationReason.UaeLocalFormat) && r.Count == 3);
+
+        var list = await ListAsync(new CustomerDirectoryListRequestDto(Location: "unknown"));
+        Assert.Equal(counts.Unknown, list.TotalCount);
+        foreach (var row in list.Items)
+        {
+            Assert.NotNull(row.LocationReason);
+            Assert.NotNull(row.LocationReasonText);
+            if (row.CustomerKey == "crm:7200") continue;
+            var index = int.Parse(row.CustomerKey[4..]) - 7000;
+            Assert.Equal(unknownPhones[index], row.LocationPhone);   // exactly as stored
+            Assert.Equal(CustomerPhoneLocation.Diagnose(unknownPhones[index]).Reason.ToString(), row.LocationReason);
+        }
+    }
+
+    private void LinkIntakeOnNewTicketFor(TigerCsDbContext context, Ticket sibling, string phone)
+    {
+        // A second ticket of the SAME CRM customer (same buyer id) carrying a different number.
+        var n = ++_seq;
+        var ticket = Ticket.CreateVerifiedFromCrmBuyer(
+            $"TG-LS-{n:D6}", _departmentId, sibling.CrmBuyerCustomerId!.Value, 1, n, 7, "Customer", "Tiger Tower", $"U-{n}",
+            _categoryId, (byte)PriorityLevel.Medium, $"CRM ticket {n}", Now.AddHours(-n));
+        context.Tickets.Add(ticket);
+        context.SaveChanges();
+        LinkIntake(context, ticket, phone);
+    }
+
     /// <summary>The query must stay cheap over thousands of customers (EF generated one grouped statement; nothing runs per customer).</summary>
     [VisibilitySqlServerFact]
     public async Task OverThousandsOfCustomers_TheCountIsExactAndFast_ForAnEmployeeScopeToo()

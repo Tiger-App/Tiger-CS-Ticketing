@@ -84,6 +84,20 @@
         </p>
     }
 
+    @if (Model.UnknownBreakdown is { Total: > 0 } breakdown)
+    {
+        <div class="panel" data-unknown-breakdown>
+            <div class="panel__header"><span class="panel__title">Why @breakdown.Total customers are Unknown</span></div>
+            <ul class="stack-list">
+                @foreach (var reason in breakdown.Reasons)
+                {
+                    <li data-unknown-reason="@reason.Reason"><strong>@reason.Count</strong> — @reason.Text</li>
+                }
+            </ul>
+            <p class="text-secondary">Numbers are shown exactly as stored; none is rewritten and none is assumed to be UAE.@(breakdown.Truncated ? " Showing the first " + breakdown.Total + "." : "")</p>
+        </div>
+    }
+
     <div class="panel">
         <div class="panel__header">
             <span class="panel__title">Customers</span>
@@ -169,7 +183,15 @@
                                         </span>
                                     </a>
                                 </td>
-                                <td class="text-mono">@(string.IsNullOrWhiteSpace(row.PhoneNumber) ? "—" : row.PhoneNumber)</td>
+                                <td class="text-mono">
+                                    @(string.IsNullOrWhiteSpace(row.PhoneNumber) ? "—" : row.PhoneNumber)
+                                    @if (row.LocationReasonText is { } reasonText)
+                                    {
+                                        <span class="cell-sub" data-unknown-row-reason="@row.LocationReason">
+                                            Stored: @(string.IsNullOrWhiteSpace(row.LocationPhone) ? "(none)" : row.LocationPhone)@(row.LocationOtherPhone is { } other ? " / " + other : "") — @reasonText
+                                        </span>
+                                    }
+                                </td>
                                 <td>
                                     @if (row.ProjectName is null && row.UnitNumber is null)
                                     {
