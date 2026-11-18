@@ -96,6 +96,9 @@ public class TicketConfiguration : IEntityTypeConfiguration<Ticket>
 
         // First eligible Human Agent to own the ticket (write-once). Audit-style fact, so no foreign key; indexed for diagnostics and the return-to-Call-Center lookup.
         builder.Property(t => t.OriginalHumanAgentId);
+        builder.Property(t => t.AiAgentOwnerEmployeeId);
+        builder.Ignore(t => t.AssignedOwnerEmployeeId);
+        builder.Ignore(t => t.IsOwnedByAiAgent);
         builder.HasIndex(t => t.OriginalHumanAgentId, "IX_Tickets_OriginalHumanAgentId");
 
         // Deployment cutoff for the Original Human Agent workflow: false (the column default) for every ticket that existed before the feature, true only for a ticket the

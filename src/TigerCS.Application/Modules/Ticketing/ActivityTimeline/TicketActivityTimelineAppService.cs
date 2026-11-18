@@ -31,7 +31,8 @@ public sealed class TicketActivityTimelineAppService(
     IEmployeeRepository employeeRepository,
     IDepartmentRepository departmentRepository,
     IUserRoleReader roleReader,
-    TicketQueryAppService ticketQueryAppService)
+    TicketQueryAppService ticketQueryAppService,
+    ITicketAssignmentHistoryRepository? assignmentHistoryRepository = null)
 {
     public async Task<TicketQueryResultDto<TicketActivityTimelineDto>> GetAsync(
         Guid callerEmployeeId,
@@ -70,6 +71,9 @@ public sealed class TicketActivityTimelineAppService(
         var workflowEvents = await workflowEventRepository.ListByTicketIdAsync(ticketId, cancellationToken);
         var history = await statusHistoryRepository.ListByTicketIdAsync(ticketId, cancellationToken);
         var assignments = await assignmentRepository.ListByTicketIdAsync(ticketId, cancellationToken);
+        var assignmentHistory = assignmentHistoryRepository is null
+            ? []
+            : await assignmentHistoryRepository.ListByTicketIdAsync(ticketId, cancellationToken);
 
         var conversationIds = interactions.Select(i => i.GenesysConversationId).OfType<string>().Distinct(StringComparer.Ordinal).ToList();
         var audit = await auditReader.ListForTicketAsync(ticketId, conversationIds, TimelineAuditActions.All, cancellationToken);
@@ -91,6 +95,7 @@ public sealed class TicketActivityTimelineAppService(
         workflowEvents.ToList().ForEach(e => { Add(e.ActorEmployeeId); Add(e.ToEmployeeId); });
         history.ToList().ForEach(h => Add(h.ActorEmployeeId));
         assignments.ToList().ForEach(a => { Add(a.AssignedEmployeeId); Add(a.AssigningActorEmployeeId); });
+        assignmentHistory.ToList().ForEach(h => Add(h.NewEmployeeId));
 
         var names = new Dictionary<Guid, string>();
         var supervisors = new HashSet<Guid>();
@@ -148,6 +153,7 @@ public sealed class TicketActivityTimelineAppService(
             WorkflowEvents = workflowEvents,
             StatusHistory = history,
             Assignments = assignments,
+            AssignmentHistory = assignmentHistory,
             AuditEntries = audit,
             EmployeeNames = names,
             DepartmentNames = departmentNames,

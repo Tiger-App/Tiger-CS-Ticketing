@@ -487,7 +487,7 @@ public sealed class TicketCreationAppService(
                     ticket, answeringAgent, "Inquiry", now, correlationId, callerEmployeeId,
                     routeToCallCenterIfAgentUnavailable: true, cancellationToken,
                     genesysEvent: request.GenesysContext is { } answeredContext
-                        ? new GenesysAnswerEvent(answeredContext.InteractionStartedAtUtc, answeredContext.ConversationId, AllowOwnerTransfer: false)
+                        ? new GenesysAnswerEvent(answeredContext.InteractionStartedAtUtc, answeredContext.ConversationId, AllowOwnerTransfer: false, intakeRecord.ChannelId)
                         : null);
             }
             else if (request.GenesysContext is null

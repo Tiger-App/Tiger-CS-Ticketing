@@ -75,6 +75,7 @@ public sealed class GenesysAgentHandoffAppService(
         Guid callerEmployeeId, GenesysHandoffRequestDto request, string? connectedAgentId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        request = GenesysTimestamps.Normalize(request);
 
         if (!options.Enabled)
         {
@@ -352,6 +353,7 @@ public sealed class GenesysAgentHandoffAppService(
         Guid callerEmployeeId, GenesysHandoffAssignmentDto request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        request = GenesysTimestamps.Normalize(request);
 
         if (!options.Enabled)
         {
