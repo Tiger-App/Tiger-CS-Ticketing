@@ -36,6 +36,17 @@ public sealed class CollectionsReviewEndpointsTests
         ExtraServices = services => services.AddScoped<IPactReceivablesSource>(_ => source)
     };
 
+    /// <summary>A signed-in employee of <paramref name="role"/> who has been explicitly granted Collections module access (the role alone no longer opens it).</summary>
+    private static async Task<HttpClient> ClientWithModuleAccess(TigerCsApiFactory factory, string role)
+    {
+        var (username, password, employeeId) = await factory.SeedEmployeeAsync(role);
+        await factory.SetPermissionOverrideAsync(employeeId, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsAccess, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect.Grant);
+        var client = factory.CreateClient();
+        var login = await (await client.PostAsJsonAsync("/api/auth/login", new LoginRequestDto(username, password))).Content.ReadFromJsonAsync<LoginResponseDto>();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.AccessToken);
+        return client;
+    }
+
     private static async Task<HttpClient> Client(TigerCsApiFactory factory, string role)
     {
         var (username, password, _) = await factory.SeedEmployeeAsync(role);
@@ -109,7 +120,7 @@ public sealed class CollectionsReviewEndpointsTests
     {
         var source = new Source();
         using var factory = Factory(source);
-        using var agent = await Client(factory, Roles.CsAgent);
+        using var agent = await ClientWithModuleAccess(factory, Roles.CsAgent);   // module access is explicit; the granular permissions below still decide what the agent may do
         var results = await CallEveryRouteAsync(agent);
         Assert.Equal(HttpStatusCode.OK, results["records"]);
         Assert.Equal(HttpStatusCode.OK, results["dispatches"]);
