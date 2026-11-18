@@ -658,7 +658,7 @@ else
                         <div class="tw-fact__body">
                             <span class="tw-fact__k">Assigned To</span>
                             <div class="tw-owner__row">
-                            <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved, t.IsAiVirtualAgent, isClosed)</span>
+                            <span class="tw-fact__v">@TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName, !isClosed && !isResolved, t.IsAiVirtualAgent, isClosed)@if (isClosed && !string.IsNullOrWhiteSpace(t.LastResponsibleName)) { <text>@t.LastResponsibleName <span class="is-muted">(last responsible)</span></text> }</span>
                             @if (Model.CanAssignInCollections && !isClosed)
                             {
                                 @* Assign / Reassign: one blue button beside the name opens a centred modal (a native <dialog>: focus trap, Escape, dimmed backdrop).

@@ -168,6 +168,8 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="IsReopenEligible">Whether FR-RES-04's lifecycle rule currently allows Reopen — Closed, closed as Resolved, and within the ISSUE-011 window measured from closure. Lifecycle only, never a permission statement: the Reopen endpoint separately enforces TicketRoleSets.Reopen AND the caller's access to the ticket. Populated on detail reads; false on write responses.</param>
 /// <param name="ClosedAtUtc">When the ticket reached Closed, in UTC, read from lifecycle history — the moment the reopen window is measured from. Null while the ticket is not closed. Populated on detail reads.</param>
 /// <param name="CurrentOwnerName">The owner's full display name from the employee directory; null when unassigned or when the employee row cannot be found. Never a raw id.</param>
+/// <param name="LastResponsibleEmployeeId">Closed Queueing System tickets only: the employee on the ticket's last assignment. Display only - a closed ticket has no owner and this creates no assignment.</param>
+/// <param name="LastResponsibleName">That employee's display name.</param>
 /// <param name="IsAiVirtualAgent">Display only: unowned, Open/In Progress, Genesys conversation still live AI with activity in the last 6 hours. Not an assignment.</param>
 public sealed record TicketDetailDto(
     long TicketId,
@@ -230,7 +232,9 @@ public sealed record TicketDetailDto(
     bool CanAssignInCollections = false,
     string? CurrentOwnerName = null,
     bool IsAiVirtualAgent = false,
-    bool ViewerCanTransferAnyTicket = false);
+    bool ViewerCanTransferAnyTicket = false,
+    Guid? LastResponsibleEmployeeId = null,
+    string? LastResponsibleName = null);
 
 public enum TicketQueryOutcome
 {
@@ -459,8 +463,9 @@ public sealed record CreateNoteRequestDto(string NoteText);
 /// <param name="TicketId">The ticket it belongs to.</param>
 /// <param name="NoteText">The note's text.</param>
 /// <param name="AuthorEmployeeId">Who wrote it.</param>
+/// <param name="AuthorName">The author's display name from the employee directory (null when the row cannot be found) - so a note by someone other than the viewer is named, never "Name unavailable".</param>
 /// <param name="CreatedAtUtc">When it was written, in UTC.</param>
-public sealed record TicketNoteResponseDto(long TicketNoteId, long TicketId, string NoteText, Guid AuthorEmployeeId, DateTime CreatedAtUtc);
+public sealed record TicketNoteResponseDto(long TicketNoteId, long TicketId, string NoteText, Guid AuthorEmployeeId, DateTime CreatedAtUtc, string? AuthorName = null);
 
 public enum NoteOutcome
 {

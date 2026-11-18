@@ -27,6 +27,22 @@ public sealed class TicketDetailsRedesignUnitTests
                 started ? null : "No SLA is running: this ticket has no priority.", "rule", "pause", []));
 
     [Fact]
+    public void AFinishedTicketWithNoRecordedReply_IsNotShownAsAwaitingAPerson()
+    {
+        // A closed queue ticket never had a first human response recorded: the clock must not read "Awaiting a person's reply" for a ticket that ended.
+        var view = TicketSlaView.Build(Sla(state: "Met", frDue: Now.AddMinutes(10), resDue: Now.AddDays(1)), "Closed", Now);
+
+        Assert.Equal("No person reply recorded", view.FirstResponse.State);
+        Assert.Equal("na", view.FirstResponse.CssKey);
+    }
+
+    [Fact]
+    public void AnActiveTicketWithNoReply_IsStillAwaitingAPerson()
+    {
+        Assert.StartsWith("Awaiting a person's reply", TicketSlaView.Build(Sla(frDue: Now.AddMinutes(10), resDue: Now.AddDays(1)), "InProgress", Now).FirstResponse.State);
+    }
+
+    [Fact]
     public void SlaNotStarted_BothClocksSayNotStarted_AndTheReasonIsKept()
     {
         var view = TicketSlaView.Build(Sla(state: "NotApplicable", started: false), "Open", Now);

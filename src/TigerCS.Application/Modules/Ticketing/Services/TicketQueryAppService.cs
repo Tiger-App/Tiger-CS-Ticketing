@@ -39,7 +39,8 @@ public sealed class TicketQueryAppService(
     TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTeam? collectionsTeam = null,
     ITicketUnassignedWorkRepository? unassignedWorkRepository = null,
     Microsoft.Extensions.Logging.ILogger<TicketQueryAppService>? logger = null,
-    IUserPermissionOverrideRepository? permissionOverrides = null)
+    IUserPermissionOverrideRepository? permissionOverrides = null,
+    ITicketAssignmentRepository? ticketAssignmentRepository = null)
 {
     /// <summary>Whether the caller may use the supervisor escalation-review filter (<c>escalated=true</c>).</summary>
     public static bool CanReviewEscalations(IReadOnlyCollection<string> callerRoles) =>
@@ -265,6 +266,18 @@ public sealed class TicketQueryAppService(
                 && ticket.CurrentOwnerEmployeeId == callerEmployeeId
                 && callerRoles.Contains(TigerCS.Domain.Modules.IdentityAndAccess.Roles.CsAgent)
         };
+
+        // A closed Queueing System ticket has no owner, but the person who last held it is still shown (display only - no assignment is created).
+        if (ticket.IsQueueManaged && ticket.TicketStatus == TicketStatus.Closed && ticketAssignmentRepository is not null)
+        {
+            var last = (await ticketAssignmentRepository.ListByTicketIdAsync(ticketId, cancellationToken))
+                .OrderByDescending(a => a.TicketAssignmentId).FirstOrDefault();
+            if (last is not null)
+            {
+                var names = await ResolveOwnerNamesAsync([last.AssignedEmployeeId], cancellationToken);
+                detail = detail with { LastResponsibleEmployeeId = last.AssignedEmployeeId, LastResponsibleName = names.GetValueOrDefault(last.AssignedEmployeeId) };
+            }
+        }
 
         // Whether the stored category + request type ARE the default classification (resolved from configuration, not from names on the ticket).
         if (defaultClassification is not null)

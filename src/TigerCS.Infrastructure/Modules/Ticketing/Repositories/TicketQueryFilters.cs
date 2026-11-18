@@ -262,7 +262,8 @@ internal static class TicketQueryFilters
             TicketClosureCategory.NotReviewed => closed.Where(t => !dbContext.TicketReviews.Any(r =>
                 r.TicketId == t.TicketId && r.ReopenCycle == t.ReopenCount && r.IsTest == reviewsAreTest)),
             TicketClosureCategory.ClosedByAi => closed.Where(LatestClosureIs(dbContext, TicketClosureAuditActions.ClosedByAi)),
-            TicketClosureCategory.ClosedByAgent => closed.Where(LatestClosureIs(dbContext, TicketClosureAuditActions.ClosedByAgent)),
+            // A Queueing System closure counts as a Human Agent closure only when it named an identifiable employee; one it could not attribute stays a system closure.
+            TicketClosureCategory.ClosedByAgent => closed.Where(LatestClosureIs(dbContext, TicketClosureAuditActions.ClosedByAgent, queueingClosuresByEmployee: true)),
             _ => closed.Where(_ => false)
         };
     }
@@ -300,13 +301,15 @@ internal static class TicketQueryFilters
     /// is judged by its last closure; an inactivity or document-delivery
     /// closure is the latest closure of its own, matching neither AI nor agent.
     /// </summary>
-    private static Expression<Func<Ticket, bool>> LatestClosureIs(TigerCsDbContext dbContext, string action)
+    private static Expression<Func<Ticket, bool>> LatestClosureIs(TigerCsDbContext dbContext, string action, bool queueingClosuresByEmployee = false)
     {
         var closingActions = TicketClosureAuditActions.AllClosures.ToList();
         return t => dbContext.AuditEntries.Any(a =>
             a.EntityType == TicketClosureAuditActions.EntityType
             && a.EntityId == t.TicketId.ToString()
-            && a.Action == action
+            && (a.Action == action
+                || (queueingClosuresByEmployee && a.Action == TicketClosureAuditActions.ClosedByQueueingSystem
+                    && a.AfterValue != null && a.AfterValue.Contains("ClosedByEmployeeId=") && !a.AfterValue.Contains("ClosedByEmployeeId=(none)")))
             && !dbContext.AuditEntries.Any(later =>
                 later.EntityType == TicketClosureAuditActions.EntityType
                 && later.EntityId == a.EntityId
