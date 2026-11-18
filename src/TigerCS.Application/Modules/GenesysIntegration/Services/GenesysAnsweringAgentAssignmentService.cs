@@ -104,7 +104,7 @@ public sealed class GenesysAnsweringAgentAssignmentService(
             ticket, agent, source, timeProvider.GetUtcNow().UtcDateTime, Guid.NewGuid(), callerEmployeeId,
             routeToCallCenterIfAgentUnavailable: humanManaged, cancellationToken,
             firstResponseIsFromTheAnsweringAgent: firstResponseIsFromTheAnsweringAgent,
-            genesysEvent: new GenesysAnswerEvent(connectedAtUtc, interaction.GenesysConversationId, allowOwnerTransfer));
+            genesysEvent: new GenesysAnswerEvent(connectedAtUtc, interaction.GenesysConversationId, allowOwnerTransfer, interaction.ChannelId));
 
         if (!result.Wrote)
         {

@@ -1054,6 +1054,13 @@ public sealed class TicketAutoAssignmentService(
         var currentAssignment = await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken);
         var wrote = false;
 
+        // When the ownership change HAPPENED, as opposed to when TigerCS processed the event that proves it (nowUtc, which stays on the audit and
+        // notification rows). A person who accepted at 15:21 and whose first reply only reached TigerCS with the end of the conversation at 15:34
+        // took the ticket at 15:21. Never before the ticket existed, never before the assignment it replaces (so the history stays in order), never in
+        // the future.
+        var occurredAtUtc = ResolveOccurredAt(eventAtUtc, ticket.CreatedAtUtc, currentAssignment?.AssignedAtUtc, nowUtc);
+        var channelId = genesysEvent?.ChannelId;
+
         // Call Center first. TransferToDepartment clears the owner, so a stale automatic pre-assignment in the old department is released.
         if (ticket.CurrentDepartmentId != callCenter.DepartmentId)
         {
@@ -1066,7 +1073,7 @@ public sealed class TicketAutoAssignmentService(
             await auditWriter.WriteAsync(
                 actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
                 beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId={previousOwner?.ToString() ?? "DepartmentQueue"}",
-                afterValue: $"DepartmentId={callCenter.DepartmentId};Reason=Call answered by a Call Center agent — routed to Call Center;"
+                afterValue: $"DepartmentId={callCenter.DepartmentId};Reason={AnswerWording.RoutedReason(channelId)};"
                     + $"OriginatingDepartmentId={ticket.OriginatingDepartmentId} (unchanged);Source={source}"
                     + (previousOwner is not null ? ";AutomaticPreAssignmentReleased=true" : string.Empty),
                 correlationId, cancellationToken);
@@ -1075,9 +1082,9 @@ public sealed class TicketAutoAssignmentService(
             {
                 await workflowEventRepository.AddAsync(
                     TicketWorkflowEvent.ForTransfer(
-                        ticket.TicketId, nowUtc, actorEmployeeId: null, TicketTransferReason.SystemRouting,
+                        ticket.TicketId, occurredAtUtc, actorEmployeeId: null, TicketTransferReason.SystemRouting,
                         fromDepartmentId, callCenter.DepartmentId, issue == AnsweringAgentIssue.None ? agent.EmployeeId : null,
-                        "Call answered by a Call Center agent — Call Center first", correlationId),
+                        AnswerWording.TransferNote(channelId), correlationId),
                     cancellationToken);
             }
         }
@@ -1091,14 +1098,14 @@ public sealed class TicketAutoAssignmentService(
 
             // The answering agent is the assigning actor: a human act, like a self-assignment, so this is NOT an automatic pre-assignment.
             await ticketAssignmentRepository.AddAsync(
-                new TicketAssignment(ticket.TicketId, agentId, callCenter.DepartmentId, nowUtc, assigningActorEmployeeId: agentId),
+                new TicketAssignment(ticket.TicketId, agentId, callCenter.DepartmentId, occurredAtUtc, assigningActorEmployeeId: agentId),
                 cancellationToken);
 
             await auditWriter.WriteAsync(
                 agentId, "AssignOnAnswer", "Ticket", ticket.TicketId.ToString(),
                 beforeValue: previousOwner?.ToString() ?? "DepartmentQueue",
                 afterValue: $"AssignedEmployeeId={agentId};DepartmentId={callCenter.DepartmentId};Mode=DirectToAnsweringAgent;"
-                    + $"Trigger=GenesysAnswered;Source={source};GenesysUserId={agent.GenesysUserId}"
+                    + $"Trigger=GenesysAnswered;Source={source};GenesysUserId={agent.GenesysUserId};OccurredAtUtc={occurredAtUtc:O};RecordedAtUtc={nowUtc:O}"
                     + (reportedByEmployeeId is { } by ? $";ReportedBy={by}" : string.Empty)
                     + (previousOwner is not null && ticket.CurrentDepartmentId == callCenter.DepartmentId && !wrote ? $";ReplacedAutomaticPreAssignment={previousOwner}" : string.Empty),
                 correlationId, cancellationToken);
@@ -1113,7 +1120,7 @@ public sealed class TicketAutoAssignmentService(
                         ticket.TicketId, callCenter.DepartmentId, previousAssignee, agentId,
                         previousAssignee is null ? TicketAssignmentSource.GenesysDirectCall : TicketAssignmentSource.GenesysCallTransfer,
                         changedByEmployeeId: null, nowUtc, eventAtUtc, genesysEvent.ConversationId,
-                        previousAssignee is null ? "Genesys direct call: answered by the human agent" : "Genesys call transfer: the next human agent answered"),
+                        previousAssignee is null ? AnswerWording.DirectHandlerReason(channelId) : AnswerWording.TransferHandlerReason(channelId)),
                     cancellationToken);
             }
 
@@ -1181,6 +1188,17 @@ public sealed class TicketAutoAssignmentService(
     }
 
     /// <summary>
+    /// The instant an ownership change took place: the event's own time, kept inside [creation of the ticket, the assignment it replaces] .. now.
+    /// Without an event time (anything that is not a Genesys event) it is simply now.
+    /// </summary>
+    internal static DateTime ResolveOccurredAt(DateTime eventAtUtc, DateTime ticketCreatedAtUtc, DateTime? replacedAssignmentAtUtc, DateTime nowUtc)
+    {
+        var floor = replacedAssignmentAtUtc is { } replaced && replaced > ticketCreatedAtUtc ? replaced : ticketCreatedAtUtc;
+        var occurred = eventAtUtc < floor ? floor : eventAtUtc;
+        return occurred > nowUtc ? nowUtc : occurred;
+    }
+
+    /// <summary>
     /// True when the current owner got the ticket from a Genesys connect event (the answering agent's own act, mirrored by the latest human Genesys
     /// history entry). A manual or supervisor assignment - even to the same person - carries another actor or is newer, so it is never "set by Genesys".
     /// Legacy tickets with no Genesys history are treated as person-owned: nothing is moved on a guess.
@@ -1210,7 +1228,8 @@ public sealed class TicketAutoAssignmentService(
     {
         ArgumentNullException.ThrowIfNull(ticket);
 
-        if (assignmentHistoryRepository is null || aiAgentEmployeeId == Guid.Empty)
+        // A delayed AI event for a ticket that is already Closed is not ownership history: Closed is terminal for automated flows.
+        if (assignmentHistoryRepository is null || aiAgentEmployeeId == Guid.Empty || ticket.TicketStatus == TicketStatus.Closed)
         {
             return false;
         }

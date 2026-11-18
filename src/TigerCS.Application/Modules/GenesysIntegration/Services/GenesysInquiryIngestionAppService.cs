@@ -118,6 +118,7 @@ public sealed class GenesysInquiryIngestionAppService(
         Guid callerEmployeeId, GenesysInquiryDto inquiry, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(inquiry);
+        inquiry = GenesysTimestamps.Normalize(inquiry);   // StartedAtUtc is UTC from here on, whatever zone the text carried
 
         if (!options.Enabled)
         {
@@ -783,6 +784,12 @@ public static class GenesysAuditActions
 
     /// <summary>The customer replied, or human follow-up was requested: the inactivity timer was cancelled.</summary>
     public const string CustomerReplyTimerCancelled = "GenesysCustomerReplyTimerCancelled";
+
+    /// <summary>
+    /// A late, duplicate, replayed or out-of-order Genesys event reached a ticket that is already Closed. Closed is terminal for every automated
+    /// flow: the event is recorded here as evidence and the ticket (status, owner, department, SLA, closure date and reason) is not touched.
+    /// </summary>
+    public const string EventIgnoredOnClosedTicket = "GenesysEventIgnoredOnClosedTicket";
 
     /// <summary>A Genesys agent was resolved to a Ticketing user and recorded as the handler of an interaction.</summary>
     public const string InteractionHandlerRecorded = "GenesysInteractionHandlerRecorded";

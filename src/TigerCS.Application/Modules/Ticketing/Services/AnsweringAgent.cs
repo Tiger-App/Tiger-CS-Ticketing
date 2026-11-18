@@ -1,3 +1,5 @@
+using TigerCS.Domain.Modules.Ticketing;
+
 namespace TigerCS.Application.Modules.Ticketing.Services;
 
 /// <summary>
@@ -84,4 +86,44 @@ public sealed record AnswerAssignmentResult(
 /// Genesys reports it (null: arrival time), used to ignore older, out-of-order events. <paramref name="AllowOwnerTransfer"/> lets an agent Genesys
 /// connects LATER take over from an owner Genesys itself set (a call transfer); a person's ownership is never moved either way.
 /// </summary>
-public sealed record GenesysAnswerEvent(DateTime? EventAtUtc, string? ConversationId, bool AllowOwnerTransfer);
+public sealed record GenesysAnswerEvent(DateTime? EventAtUtc, string? ConversationId, bool AllowOwnerTransfer, byte? ChannelId = null);
+
+/// <summary>
+/// Channel-specific wording for an ownership change caused by a person taking a Genesys conversation. A WhatsApp, chat or social conversation is
+/// <i>accepted</i>, never "answered" like a phone call — the same sentence for every channel told a supervisor that a WhatsApp conversation was
+/// a voice call. Pure; the channel id is the interaction's own <see cref="WellKnownChannels"/> value, an unknown one reads as a neutral "Conversation".
+/// </summary>
+public static class AnswerWording
+{
+    /// <summary>"Call" for voice; "WhatsApp conversation", "Live chat conversation", … for everything else.</summary>
+    public static string Noun(byte? channelId) => channelId switch
+    {
+        WellKnownChannels.Phone => "Call",
+        WellKnownChannels.WhatsApp or WellKnownChannels.WhatsAppOrLiveChat => "WhatsApp conversation",
+        WellKnownChannels.LiveChat => "Live chat conversation",
+        WellKnownChannels.Website or WellKnownChannels.AppOrWebsite => "Website chat conversation",
+        WellKnownChannels.MobileApp => "App conversation",
+        WellKnownChannels.Instagram => "Instagram conversation",
+        WellKnownChannels.Facebook => "Facebook conversation",
+        WellKnownChannels.SocialMediaDirectMessage => "Social media conversation",
+        _ => "Conversation"
+    };
+
+    private static string Verb(byte? channelId) => channelId == WellKnownChannels.Phone ? "answered" : "accepted";
+
+    /// <summary>"Call answered by a Call Center agent — routed to Call Center" / "WhatsApp conversation accepted by a Call Center agent — routed to Call Center".</summary>
+    public static string RoutedReason(byte? channelId) => $"{Noun(channelId)} {Verb(channelId)} by a Call Center agent — routed to Call Center";
+
+    /// <summary>The typed transfer event's note.</summary>
+    public static string TransferNote(byte? channelId) => $"{Noun(channelId)} {Verb(channelId)} by a Call Center agent — Call Center first";
+
+    /// <summary>The ownership-history reason for the first human taking the conversation.</summary>
+    public static string DirectHandlerReason(byte? channelId) => channelId == WellKnownChannels.Phone
+        ? "Genesys direct call: answered by the human agent"
+        : $"Genesys {Noun(channelId).ToLowerInvariant()}: accepted by the human agent";
+
+    /// <summary>The ownership-history reason for the next human taking it after a transfer.</summary>
+    public static string TransferHandlerReason(byte? channelId) => channelId == WellKnownChannels.Phone
+        ? "Genesys call transfer: the next human agent answered"
+        : $"Genesys {Noun(channelId).ToLowerInvariant()} transfer: the next human agent accepted";
+}

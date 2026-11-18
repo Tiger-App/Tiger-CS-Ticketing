@@ -78,6 +78,7 @@ public sealed class GenesysConversationEndAppService(
         Guid callerEmployeeId, GenesysConversationEndDto request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
+        request = GenesysTimestamps.Normalize(request);   // end time and every transcript line are UTC from here on
 
         if (!options.Enabled)
         {
@@ -194,6 +195,8 @@ public sealed class GenesysConversationEndAppService(
         Guid callerEmployeeId, string conversationId, IReadOnlyList<GenesysTranscriptMessageDto>? transcript,
         CancellationToken cancellationToken = default, long? ticketId = null)
     {
+        transcript = GenesysTimestamps.Normalize(transcript);
+
         if (!options.Enabled)
         {
             return GenesysTranscriptAppendResult.Failure(GenesysTranscriptAppendOutcome.IntegrationDisabled);
