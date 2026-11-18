@@ -50,6 +50,7 @@ public class GenesysScreenPopAppServiceTests
         public Task<IReadOnlyDictionary<Guid, UserAccountInfo>> GetAccountsAsync(IReadOnlyCollection<Guid> employeeIds, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<UserAccountResult> CreateAccountAsync(string userName, string? email, string initialPassword, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<UserAccountResult> UpdateEmailAsync(Guid employeeId, string? email, CancellationToken cancellationToken = default) => throw new NotSupportedException();
+        public Task<UserAccountResult> SetUserNameAsync(Guid employeeId, string userName, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<UserAccountResult> SetRolesAsync(Guid employeeId, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<IReadOnlyCollection<Guid>> SearchAccountIdsAsync(string search, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<PasswordChangeResult> ResetPasswordAsync(Guid employeeId, string newPassword, CancellationToken cancellationToken = default) => throw new NotSupportedException();
