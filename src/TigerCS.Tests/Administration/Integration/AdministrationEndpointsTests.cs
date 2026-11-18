@@ -116,6 +116,65 @@ public class AdministrationEndpointsTests : IClassFixture<TigerCsApiFactory>
     }
 
     [Fact]
+    public async Task Users_ChangeUserName_UsesIdentity_KeepsTheAccount_InvalidatesSessions_AndIsAudited()
+    {
+        var (admin, _) = await CreateClientAsync(Roles.SystemAdministrator);
+        var departmentId = await _factory.CreateDepartmentAsync(Unique("Collections"), Guid.NewGuid().ToString("N")[..8]);
+        var oldName = $"o{Guid.NewGuid():N}"[..20];
+        var newName = $"n{Guid.NewGuid():N}"[..20];
+        var created = await ReadAsync<AdminUserDto>(await admin.PostAsJsonAsync("/api/admin/users",
+            new CreateUserRequestDto(oldName, null, "Rename Me", false, "Str0ng-Pass!", [Roles.DepartmentEmployee], departmentId)));
+
+        // The user signs in with the old name; that token must die when the name changes.
+        var user = _factory.CreateClient();
+        var login = await ReadAsync<LoginResponseDto>(await user.PostAsJsonAsync("/api/auth/login", new LoginRequestDto(oldName, "Str0ng-Pass!")));
+        user.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login.AccessToken);
+        Assert.Equal(HttpStatusCode.OK, (await user.GetAsync("/api/users/me")).StatusCode);
+
+        var renamed = await ReadAsync<AdminUserDto>(await admin.PutAsJsonAsync($"/api/admin/users/{created.EmployeeId}/profile",
+            new UpdateUserProfileRequestDto("Rename Me", null, false, newName.ToUpperInvariant())));
+        Assert.Equal(created.EmployeeId, renamed.EmployeeId);
+        Assert.Equal(newName.ToUpperInvariant(), renamed.UserName);
+        Assert.Equal(created.Roles, renamed.Roles);
+        Assert.Equal(created.Departments, renamed.Departments);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, (await user.GetAsync("/api/users/me")).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await _factory.CreateClient().PostAsJsonAsync("/api/auth/login", new LoginRequestDto(oldName, "Str0ng-Pass!"))).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await _factory.CreateClient().PostAsJsonAsync("/api/auth/login", new LoginRequestDto(newName, "Str0ng-Pass!"))).StatusCode);
+
+        using var scope = _factory.Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        var account = await db.Users.AsNoTracking().SingleAsync(u => u.Id == created.EmployeeId);
+        Assert.Equal(newName.ToUpperInvariant(), account.UserName);
+        Assert.Equal(newName.ToUpperInvariant(), account.NormalizedUserName);
+        var audit = Assert.Single(await db.AuditEntries.Where(a => a.EntityId == created.EmployeeId.ToString() && a.Action == "AdminChangeUserName").ToListAsync());
+        Assert.Contains(oldName, audit.BeforeValue, StringComparison.Ordinal);
+        Assert.Contains(newName.ToUpperInvariant(), audit.AfterValue, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Users_ChangeUserName_IsValidatedUniqueAndRestrictedToAdministrators()
+    {
+        var (admin, _) = await CreateClientAsync(Roles.SystemAdministrator);
+        var takenName = $"t{Guid.NewGuid():N}"[..20];
+        var targetName = $"g{Guid.NewGuid():N}"[..20];
+        await ReadAsync<AdminUserDto>(await admin.PostAsJsonAsync("/api/admin/users",
+            new CreateUserRequestDto(takenName, null, "Taken", false, "Str0ng-Pass!", [], null)));
+        var target = await ReadAsync<AdminUserDto>(await admin.PostAsJsonAsync("/api/admin/users",
+            new CreateUserRequestDto(targetName, null, "Target", false, "Str0ng-Pass!", [], null)));
+        var url = $"/api/admin/users/{target.EmployeeId}/profile";
+
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync(url, new UpdateUserProfileRequestDto("Target", null, false, "  "))).StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, (await admin.PutAsJsonAsync(url, new UpdateUserProfileRequestDto("Target", null, false, takenName.ToUpperInvariant()))).StatusCode);
+
+        var (agent, _) = await CreateClientAsync(Roles.CsAgent);
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.PutAsJsonAsync(url, new UpdateUserProfileRequestDto("Target", null, false, "hijack"))).StatusCode);
+
+        var unchanged = await ReadAsync<AdminUserDto>(await admin.GetAsync($"/api/admin/users/{target.EmployeeId}"));
+        Assert.Equal(targetName, unchanged.UserName);
+    }
+
+    [Fact]
     public async Task Users_TransferDepartments_AreSeparateFromMembership_ValidatedAuditedAndShownOnMe()
     {
         var (admin, _) = await CreateClientAsync(Roles.SystemAdministrator);

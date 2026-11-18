@@ -42,7 +42,7 @@
                             <div class="form-group">
                                 <label class="form-label" asp-for="Create.UserName">User name *</label>
                                 <input class="form-control" asp-for="Create.UserName" required aria-required="true" autocomplete="off" />
-                                <span class="field-hint">Used to sign in. Cannot be changed later.</span>
+                                <span class="field-hint">Used to sign in. An administrator can change it later.</span>
                             </div>
                         </div>
                         <div class="form-row">
@@ -183,6 +183,11 @@
                 <form method="post" asp-page-handler="Profile" asp-route-id="@u.EmployeeId" class="admin-form">
                     <fieldset class="form-section">
                         <legend class="form-section__title">Identity</legend>
+                        <div class="form-group">
+                            <label class="form-label" asp-for="Profile.UserName">Username *</label>
+                            <input class="form-control" asp-for="Profile.UserName" required aria-required="true" autocomplete="off" />
+                            <span class="field-hint">The sign-in name. Must be unique (not case-sensitive). Changing it signs the user out everywhere; their history, roles and departments are kept.</span>
+                        </div>
                         <div class="form-group">
                             <label class="form-label" asp-for="Profile.DisplayName">Display name *</label>
                             <input class="form-control" asp-for="Profile.DisplayName" required aria-required="true" />

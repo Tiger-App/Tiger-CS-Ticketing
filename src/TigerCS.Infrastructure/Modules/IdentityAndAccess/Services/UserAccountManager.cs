@@ -61,6 +61,30 @@ public sealed class UserAccountManager(UserManager<ApplicationUser> userManager,
             : UserAccountResult.Failure(result.Errors.Select(e => e.Description).ToList());
     }
 
+    public async Task<UserAccountResult> SetUserNameAsync(Guid employeeId, string userName, CancellationToken cancellationToken = default)
+    {
+        var user = await userManager.FindByIdAsync(employeeId.ToString());
+        if (user is null)
+        {
+            return UserAccountResult.Failure(["The user account was not found."]);
+        }
+
+        // Friendly, case-insensitive duplicate check (FindByNameAsync looks up the normalized name). Identity's own validator
+        // would also refuse it; this just gives a clearer message. The same account re-cased ("bob" -> "Bob") is allowed.
+        var existing = await userManager.FindByNameAsync(userName);
+        if (existing is not null && existing.Id != user.Id)
+        {
+            return UserAccountResult.Failure([$"The user name '{userName}' is already taken."]);
+        }
+
+        // SetUserNameAsync sets UserName, re-normalizes NormalizedUserName, rotates the security stamp (invalidating issued
+        // tokens) and runs Identity's user validators before saving.
+        var result = await userManager.SetUserNameAsync(user, userName);
+        return result.Succeeded
+            ? UserAccountResult.Success(user.Id)
+            : UserAccountResult.Failure(result.Errors.Select(e => e.Description).ToList());
+    }
+
     public async Task<UserAccountResult> SetRolesAsync(
         Guid employeeId, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken = default)
     {
