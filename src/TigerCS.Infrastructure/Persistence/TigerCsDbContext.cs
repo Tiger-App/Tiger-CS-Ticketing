@@ -96,6 +96,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
 
     public DbSet<TicketNote> TicketNotes => Set<TicketNote>();
     public DbSet<CustomerContactDetail> CustomerContactDetails => Set<CustomerContactDetail>();
+    public DbSet<CustomerProfileOverride> CustomerProfileOverrides => Set<CustomerProfileOverride>();
 
     public DbSet<SlaPolicy> SlaPolicies => Set<SlaPolicy>();
 
@@ -220,7 +221,9 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
             var superseded = entry.Property(a => a.SupersededAtUtc);
             if (isCurrent.IsModified && isCurrent.OriginalValue && !isCurrent.CurrentValue && superseded.CurrentValue is null)
             {
-                superseded.CurrentValue = DateTime.UtcNow;
+                // Inside a Queueing event the assignment ends at the event's own time (the same clock the next assignment starts on), so the gap between a
+                // Return and the following Reassignment, and each holder's duration, are measured on the queue's timeline - not on when TigerCS received the event.
+                superseded.CurrentValue = TigerCS.Application.Modules.QueueingIntegration.IntegrationEventScope.EffectiveAtUtc ?? DateTime.UtcNow;
             }
         }
     }
@@ -258,6 +261,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new TicketResolutionConfiguration());
         builder.ApplyConfiguration(new TicketNoteConfiguration());
         builder.ApplyConfiguration(new CustomerContactDetailConfiguration());
+        builder.ApplyConfiguration(new CustomerProfileOverrideConfiguration());
 
         builder.ApplyConfiguration(new SlaPolicyConfiguration());
         builder.ApplyConfiguration(new BusinessCalendarConfiguration());

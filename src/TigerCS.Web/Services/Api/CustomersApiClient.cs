@@ -13,7 +13,14 @@ namespace TigerCS.Web.Services.Api;
 /// </summary>
 public sealed class CustomersApiClient(HttpClient httpClient, ILogger<CustomersApiClient> logger) : ApiClientBase(httpClient, logger)
 {
-    public Task<ApiResult<CustomerDirectoryListResultDto>> ListAsync(CustomerDirectoryListRequestDto request, CancellationToken cancellationToken)
+    public Task<ApiResult<CustomerDirectoryListResultDto>> ListAsync(CustomerDirectoryListRequestDto request, CancellationToken cancellationToken) =>
+        GetAsync<CustomerDirectoryListResultDto>($"api/customers?{BuildQuery(request)}", cancellationToken);
+
+    /// <summary>The Unknown customers of the same query, counted by why they are Unknown.</summary>
+    public Task<ApiResult<CustomerLocationBreakdownDto>> GetUnknownBreakdownAsync(CustomerDirectoryListRequestDto request, CancellationToken cancellationToken) =>
+        GetAsync<CustomerLocationBreakdownDto>($"api/customers/unknown-breakdown?{BuildQuery(request)}", cancellationToken);
+
+    private static System.Collections.Specialized.NameValueCollection BuildQuery(CustomerDirectoryListRequestDto request)
     {
         var query = HttpUtility.ParseQueryString(string.Empty);
         if (!string.IsNullOrWhiteSpace(request.Search)) query["search"] = request.Search;
@@ -32,8 +39,12 @@ public sealed class CustomersApiClient(HttpClient httpClient, ILogger<CustomersA
         query["page"] = request.Page.ToString(CultureInfo.InvariantCulture);
         query["pageSize"] = request.PageSize.ToString(CultureInfo.InvariantCulture);
 
-        return GetAsync<CustomerDirectoryListResultDto>($"api/customers?{query}", cancellationToken);
+        return query;
     }
+
+    /// <summary>Corrects the phone, project and unit a customer is shown with (<c>PUT api/customers/profile/{customerKey}</c>). Local to Tiger Ticketing; the Api decides who may and validates every value.</summary>
+    public Task<ApiResult<CustomerProfileEditedDto>> UpdateProfileAsync(string customerKey, UpdateCustomerProfileRequestDto request, CancellationToken cancellationToken) =>
+        PutAsync<UpdateCustomerProfileRequestDto, CustomerProfileEditedDto>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}", request, cancellationToken);
 
     public Task<ApiResult<CustomerDirectoryProfileDto>> GetProfileAsync(string customerKey, CancellationToken cancellationToken) =>
         GetAsync<CustomerDirectoryProfileDto>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}", cancellationToken);

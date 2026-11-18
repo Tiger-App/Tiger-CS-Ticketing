@@ -17,6 +17,7 @@ namespace TigerCS.Api.Controllers;
 [ApiController]
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Route("api/collections/genesys-history")]
+[RequirePermission(Permissions.CollectionsAccess)]  // module gate: System Administrator / CS Manager, or an explicit grant
 [Tags(OpenApiTags.Collections)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class CollectionsGenesysHistoryController(GenesysHistoryService history, GenesysCampaignSyncService sync) : ControllerBase

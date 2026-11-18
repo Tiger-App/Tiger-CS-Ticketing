@@ -226,6 +226,61 @@ public sealed class QueueingSqlServerTests(QueueingSqlServerFixture f) : IClassF
         Assert.Equal(1, await CountAsync(db => db.TicketAssignments.Where(a => a.TicketId == ticket.TicketId && a.IsCurrent)));
     }
 
+    // ------------------------------------------------------------------ the 1686 lifecycle, persisted
+
+    [VisibilitySqlServerFact]
+    public async Task TheFullLifecycle_PersistsTheQueuesTimes_TheClosureActor_AndTheInteractionEnd_OnRealSqlServer()
+    {
+        var id = NewTicketId();
+        var t0 = DateTime.UtcNow.AddMinutes(-60);
+        await f.PostAsync(Created(id, at: t0), f.CreateClient());
+        await f.PostAsync(f.Assigned(id, 2, f.QueueUserA, t0.AddMinutes(10)), f.CreateSecondNodeClient());
+        await f.PostAsync(new TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingEventRequest(
+            NewEventId(), "TicketCommentAdded", id, 3, Comment: "note", PerformedByUserId: f.QueueUserA, OccurredAtUtc: t0.AddMinutes(12)), f.CreateClient());
+        await f.PostAsync(Simple("TicketReturned", id, 4, t0.AddMinutes(20)), f.CreateSecondNodeClient());
+        await f.PostAsync(f.Assigned(id, 5, f.QueueUserB, t0.AddMinutes(30), "TicketReassigned"), f.CreateClient());
+        var (http, _) = await f.PostAsync(new TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingEventRequest(
+            NewEventId(), "TicketClosed", id, 6, PerformedByUserId: f.QueueUserB, OccurredAtUtc: t0.AddMinutes(40)), f.CreateSecondNodeClient());
+        Assert.Equal(HttpStatusCode.OK, http.StatusCode);
+
+        var ticket = (await f.FindTicketAsync(id))!;
+        var assignments = (await f.ReadAsync(db => db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticket.TicketId).ToListAsync())).OrderBy(a => a.AssignedAtUtc).ToList();
+        Assert.Equal(2, assignments.Count);
+        Assert.Equal(t0.AddMinutes(20), assignments[0].SupersededAtUtc!.Value, TimeSpan.FromMilliseconds(5));
+        Assert.Equal(t0.AddMinutes(30), assignments[1].AssignedAtUtc, TimeSpan.FromMilliseconds(5));
+        Assert.Equal(t0.AddMinutes(40), assignments[1].SupersededAtUtc!.Value, TimeSpan.FromMilliseconds(5));
+        Assert.DoesNotContain(assignments, a => a.IsCurrent);
+
+        var interaction = await f.ReadAsync(db => db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticket.TicketId));
+        Assert.Equal(t0.AddMinutes(40), interaction.EndedAtUtc!.Value, TimeSpan.FromMilliseconds(5));
+        Assert.Equal("QueueTicketClosed", interaction.EndReason);
+
+        var resolution = await f.ReadAsync(db => db.TicketResolutions.AsNoTracking().SingleAsync(r => r.TicketId == ticket.TicketId));
+        Assert.Equal(f.EmployeeB, resolution.ResolvingEmployeeId);
+        var closing = await f.ReadAsync(db => db.TicketStatusHistoryEntries.AsNoTracking()
+            .Where(h => h.TicketId == ticket.TicketId && h.NewValue == (byte)TicketStatus.Closed).ToListAsync());
+        Assert.All(closing, h => { Assert.Equal(f.EmployeeB, h.ActorEmployeeId); Assert.False(h.ActorIsSystem); });
+        var note = await f.ReadAsync(db => db.TicketNotes.AsNoTracking().SingleAsync(n => n.TicketId == ticket.TicketId));
+        Assert.Equal(f.EmployeeA, note.AuthorEmployeeId);
+        Assert.Null(ticket.FirstHumanResponseAtUtc);
+
+        // The Human Agent closure card and the employee's closed count, evaluated by SQL Server (the audit-value predicate included).
+        using var scope = f.Factory.Services.CreateScope();
+        var repo = scope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Ticketing.Abstractions.ITicketRepository>();
+        async Task<bool> CountedAsync(Guid employee) =>
+            (await repo.SearchAsync(new TigerCS.Application.Modules.Ticketing.Abstractions.TicketQuery(
+                null, null, null, null, null, null, null, null, TigerCS.Application.Modules.Ticketing.Abstractions.TicketSortBy.CreatedAtUtc, true, 1, 50,
+                ClosureCategory: TigerCS.Application.Modules.Ticketing.Abstractions.TicketClosureCategory.ClosedByAgent, ClosedAssigneeEmployeeId: employee)))
+            .Items.Any(t => t.TicketId == ticket.TicketId);
+        Assert.True(await CountedAsync(f.EmployeeB));
+        Assert.False(await CountedAsync(f.EmployeeA));
+
+        // Team Performance: the resolution is credited to the holder at the closure instant, which is exactly when the assignment ended.
+        var events = await scope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.Reporting.Abstractions.ITeamPerformanceQueryRepository>()
+            .GetSlaEventsAsync([f.EmployeeA, f.EmployeeB], t0.AddHours(-1), DateTime.UtcNow.AddHours(1));
+        Assert.Contains(events.Met, e => e.TicketId == ticket.TicketId && e.EmployeeId == f.EmployeeB);
+    }
+
     // ------------------------------------------------------------------ transaction rollback
 
     [VisibilitySqlServerFact]

@@ -18,6 +18,7 @@ namespace TigerCS.Api.Controllers;
 [ApiController]
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Route("api/collections/tower-assignments")]
+[RequirePermission(Permissions.CollectionsAccess)]  // module gate: System Administrator / CS Manager, or an explicit grant
 [Tags(OpenApiTags.Collections)]
 [ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class CollectionsTowerAssignmentsController(CollectionsTowerAssignmentAppService service) : ControllerBase

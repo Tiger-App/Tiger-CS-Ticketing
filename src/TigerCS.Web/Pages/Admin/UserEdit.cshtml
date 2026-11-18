@@ -205,6 +205,43 @@
                 </form>
             </section>
 
+            @if (Model.CollectionsAccessState is { } collections)
+            {
+                <section class="panel panel--tone admin-form-panel" aria-labelledby="collections-access-title">
+                    <div class="panel__header">
+                        <h2 class="panel__title" id="collections-access-title">Collections access</h2>
+                        <span class="panel__hint">Whether this user can open the Collections module</span>
+                    </div>
+                    <form method="post" asp-page-handler="CollectionsAccess" asp-route-id="@u.EmployeeId" class="admin-form">
+                        <label class="checkbox-field">
+                            <input type="checkbox" asp-for="CollectionsAccessForm.Enabled" disabled="@(collections.CanChange ? null : "disabled")" />
+                            Allow access to the Collections module
+                        </label>
+                        @if (collections.ChangeBlockedReason is { } blocked)
+                        {
+                            <p class="field-hint">@blocked</p>
+                        }
+                        else
+                        {
+                            <p class="field-hint">@(collections.IsEffective ? "Access is currently granted." : "No access. Collections is hidden from this user and its pages and endpoints are refused.")</p>
+                        }
+                        @if (collections.IsEffective && !collections.HoldsViewPermission)
+                        {
+                            <p class="field-hint">This user can open the module but does not hold "View collections", so most of it will be empty. Grant it under <a href="/Admin/Users/@u.EmployeeId/Permissions">Manage Permissions</a>.</p>
+                        }
+                        <p class="field-hint">This only opens the module. What the user can do inside (view, run jobs, send, campaign export) is set under Manage Permissions, and it does not change their department or the tickets assigned to them.</p>
+                        @if (collections.CanChange)
+                        {
+                            <div class="form-group">
+                                <label class="form-label" asp-for="CollectionsAccessForm.Reason">Reason</label>
+                                <input class="form-control" asp-for="CollectionsAccessForm.Reason" placeholder="Optional — recorded in the audit trail" />
+                            </div>
+                            <div class="form-actions"><button type="submit" class="btn btn-gold btn-sm">Save Collections Access</button></div>
+                        }
+                    </form>
+                </section>
+            }
+
             <section class="panel panel--tone admin-form-panel" aria-labelledby="roles-title">
                 <div class="panel__header">
                     <h2 class="panel__title" id="roles-title">Roles <span class="panel__count">@u.Roles.Count</span></h2>

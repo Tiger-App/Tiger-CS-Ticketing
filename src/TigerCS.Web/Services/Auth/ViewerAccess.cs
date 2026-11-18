@@ -53,6 +53,31 @@ public sealed record ViewerPermissions(IReadOnlySet<string> Granted, IReadOnlySe
     public bool IsDenied(string permission) => Denied.Contains(permission);
 
     /// <summary>
+    /// May this viewer use the Collections module? The same rule the Api enforces (<see cref="CollectionsAccess"/>): System Administrator
+    /// and CS Manager always; anyone else only with an explicit grant, never when denied. Presentation only - the Api refuses the
+    /// module's endpoints on its own, and when /me could not be read this falls back to the roles alone (so a granted user is hidden, never exposed).
+    /// </summary>
+    /// <summary>
+    /// Does this viewer effectively hold a permission that the Api enforces on its own terms (role baseline or explicit grant, never when
+    /// denied) - for example <see cref="Permissions.CustomersEdit"/>? Presentation only: the Api refuses the endpoint on its own.
+    /// </summary>
+    public bool HoldsEffective(string permission, IEnumerable<string> roles)
+    {
+        var effects = new Dictionary<string, PermissionEffect>(StringComparer.Ordinal);
+        foreach (var key in Granted) { effects[key] = PermissionEffect.Grant; }
+        foreach (var key in Denied) { effects[key] = PermissionEffect.Deny; }
+        return EffectivePermissions.IsEffective(EffectivePermissions.Resolve(permission, RolePermissionDefaults.ForRoles(roles), effects));
+    }
+
+    public bool CanAccessCollections(IEnumerable<string> roles)
+    {
+        var effects = new Dictionary<string, PermissionEffect>(StringComparer.Ordinal);
+        foreach (var key in Granted) { effects[key] = PermissionEffect.Grant; }
+        foreach (var key in Denied) { effects[key] = PermissionEffect.Deny; }
+        return CollectionsAccess.IsAllowed(roles, effects);
+    }
+
+    /// <summary>
     /// The same decision the Api's endpoint makes: never when denied; otherwise through the
     /// role/policy rule (<paramref name="roleRuleSatisfied"/>) or an explicit grant of a grantable permission.
     /// </summary>
@@ -76,6 +101,24 @@ public sealed class ViewerPermissionHandler(ViewerAccessService access) : Author
         var holdsRole = requirement.AllowedRoles.Any(r => context.User.IsInRole(r));
         var permissions = await access.GetAsync();
         if (requirement.Permissions.Any(p => permissions.CanReach(p, holdsRole)))
+        {
+            context.Succeed(requirement);
+        }
+    }
+}
+
+/// <summary>Page gate for the whole Collections module (<c>/Collections/*</c>): <see cref="ViewerPermissions.CanAccessCollections"/>.</summary>
+public sealed class CollectionsAccessRequirement : IAuthorizationRequirement
+{
+    public const string PolicyName = "CollectionsAccess";
+}
+
+public sealed class CollectionsAccessHandler(ViewerAccessService access) : AuthorizationHandler<CollectionsAccessRequirement>
+{
+    protected override async Task HandleRequirementAsync(AuthorizationHandlerContext context, CollectionsAccessRequirement requirement)
+    {
+        var roles = context.User.FindAll(System.Security.Claims.ClaimTypes.Role).Select(c => c.Value).ToList();
+        if ((await access.GetAsync()).CanAccessCollections(roles))
         {
             context.Succeed(requirement);
         }

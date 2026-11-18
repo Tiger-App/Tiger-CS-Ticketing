@@ -1605,7 +1605,7 @@ public sealed class TicketDetailsModel(
 
         foreach (var note in notes)
         {
-            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? TicketDisplay.UnknownEmployeeLabel;
+            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? note.AuthorName ?? TicketDisplay.UnknownEmployeeLabel;
             entries.Add(new ActivityEntry(note.CreatedAtUtc, "note", author, "added a note", note.NoteText, true));
         }
 
@@ -1755,7 +1755,7 @@ public sealed class TicketDetailsModel(
 
         foreach (var note in notes)
         {
-            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? TicketDisplay.UnknownEmployeeLabel;
+            var author = TicketNameResolver.ResolveSelfAuthorName(note.AuthorEmployeeId, viewer) ?? note.AuthorName ?? TicketDisplay.UnknownEmployeeLabel;
             entries.Add(new ActivityEntry(note.CreatedAtUtc, "note", author, "added a note", note.NoteText, true));
         }
 

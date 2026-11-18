@@ -13,6 +13,7 @@ namespace TigerCS.Api.Controllers;
 [ApiController]
 [Authorize(Policy = PolicyNames.AuthenticatedStaff)]
 [Route("api/collections/receivables/customers")]
+[RequirePermission(Permissions.CollectionsAccess)]  // module gate: System Administrator / CS Manager, or an explicit grant
 [Tags(OpenApiTags.Collections)]
 public sealed class PactReceivablesController(PactReceivableCustomersAppService service, PactInstalmentsAppService instalments) : ControllerBase
 {

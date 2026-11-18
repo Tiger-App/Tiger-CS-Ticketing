@@ -182,6 +182,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["GET /api/customers/search"] = nameof(SystemAdministratorEndpointAuthorizationTests.SearchCustomers_Returns200),
         ["GET /api/customers"] = nameof(SystemAdministratorEndpointAuthorizationTests.ListCustomers_Returns200),
         ["GET /api/customers/profile/{customerKey}"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetCustomerProfileByKey_Returns200),
+        ["PUT /api/customers/profile/{customerKey}"] = nameof(Customers.CustomerProfileEditEndpointTests.Edit_IsRestrictedToAdministratorsCsManagersAndGrantedUsers_AndCanBeRevoked),
         ["GET /api/customers/contact"] = nameof(SystemAdministratorEndpointAuthorizationTests.CustomerContact_SaveAndGet_AreAuthorizedThroughTheOverride),
         ["PUT /api/customers/contact"] = nameof(SystemAdministratorEndpointAuthorizationTests.CustomerContact_SaveAndGet_AreAuthorizedThroughTheOverride),
         ["GET /api/projects"] = nameof(SystemAdministratorEndpointAuthorizationTests.ProjectCatalog_Projects_Returns200),
@@ -192,6 +193,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["GET /api/dashboard"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboard_Returns200),
         ["GET /api/dashboard/overview"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboardOverview_Returns200),
         ["GET /api/dashboard/customers-by-location"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetDashboardCustomersByLocation_Returns200),
+        ["GET /api/customers/unknown-breakdown"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetCustomersUnknownBreakdown_Returns200),
 
         // Reports (CS Manager tier) — covered by TeamPerformanceEndpointsTests
         // (CS Manager / GM / Chairman succeed, CS Agent and the department

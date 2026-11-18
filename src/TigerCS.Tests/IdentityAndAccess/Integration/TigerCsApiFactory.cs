@@ -278,6 +278,34 @@ public sealed class TigerCsApiFactory : WebApplicationFactory<Program>
         return (username, password, user.Id);
     }
 
+    /// <summary>Test setup: writes (or replaces) one per-user permission override directly, as an administrator's grant/denial would.</summary>
+    public async Task SetPermissionOverrideAsync(Guid employeeId, string permissionKey, TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect effect)
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        var existing = await db.UserPermissionOverrides.FirstOrDefaultAsync(o => o.EmployeeId == employeeId && o.PermissionKey == permissionKey);
+        if (existing is not null)
+        {
+            db.UserPermissionOverrides.Remove(existing);
+        }
+
+        db.UserPermissionOverrides.Add(new TigerCS.Domain.Modules.IdentityAndAccess.Permissions.UserPermissionOverride(employeeId, permissionKey, effect, null, DateTime.UtcNow));
+        await db.SaveChangesAsync();
+    }
+
+    /// <summary>Test setup: removes the employee's override of one permission (revocation of a grant), if any.</summary>
+    public async Task ClearPermissionOverrideAsync(Guid employeeId, string permissionKey)
+    {
+        using var scope = Services.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<TigerCsDbContext>();
+        var existing = await db.UserPermissionOverrides.FirstOrDefaultAsync(o => o.EmployeeId == employeeId && o.PermissionKey == permissionKey);
+        if (existing is not null)
+        {
+            db.UserPermissionOverrides.Remove(existing);
+            await db.SaveChangesAsync();
+        }
+    }
+
     /// <summary>Gives an existing test employee a further role (a person may hold several).</summary>
     public async Task AddRoleAsync(Guid employeeId, string roleName)
     {

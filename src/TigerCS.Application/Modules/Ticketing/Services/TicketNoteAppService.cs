@@ -19,7 +19,8 @@ public sealed class TicketNoteAppService(
     TicketQueryAppService ticketQueryAppService,
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    TigerCS.Application.Modules.IdentityAndAccess.Abstractions.IEmployeeRepository? employeeRepository = null)
 {
     public async Task<NoteResult> AddNoteAsync(
         Guid callerEmployeeId,
@@ -87,8 +88,14 @@ public sealed class TicketNoteAppService(
         var notes = await ticketNoteRepository.ListByTicketIdAsync(ticketId, page, pageSize, cancellationToken);
         var totalCount = await ticketNoteRepository.CountByTicketIdAsync(ticketId, cancellationToken);
 
+        var names = new Dictionary<Guid, string?>();
+        foreach (var authorId in notes.Select(n => n.AuthorEmployeeId).Distinct())
+        {
+            names[authorId] = employeeRepository is null ? null : (await employeeRepository.GetByIdAsync(authorId, cancellationToken))?.DisplayName;
+        }
+
         var items = notes
-            .Select(n => new TicketNoteResponseDto(n.TicketNoteId, n.TicketId, n.NoteText, n.AuthorEmployeeId, n.CreatedAtUtc))
+            .Select(n => new TicketNoteResponseDto(n.TicketNoteId, n.TicketId, n.NoteText, n.AuthorEmployeeId, n.CreatedAtUtc, names.GetValueOrDefault(n.AuthorEmployeeId)))
             .ToList();
 
         return TicketQueryResultDto<TicketNoteListResultDto>.Success(new TicketNoteListResultDto(items, totalCount, page, pageSize));

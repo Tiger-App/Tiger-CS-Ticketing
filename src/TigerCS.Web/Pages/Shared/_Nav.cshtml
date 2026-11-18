@@ -20,7 +20,13 @@
     Add("dashboard", "Dashboard", "/Dashboard", Permissions.DashboardView);
     Add("customers", "Customers", "/Customers", Permissions.CustomersView);
     Add("tickets", "Tickets", "/Tickets", Permissions.TicketsView);
-    Add("collections", "Collections", "/Collections/CampaignList", Permissions.CollectionsView);
+    // Collections is a gated module: module access (System Administrator / CS Manager, or an explicit grant) AND the view permission.
+    // Hidden otherwise, here and in the mobile menu - both render this same partial.
+    var collectionsAccess = access.CanAccessCollections(roles);
+    if (collectionsAccess)
+    {
+        Add("collections", "Collections", "/Collections/CampaignList", Permissions.CollectionsView);
+    }
     // Management reports and Administration are role-gated at the Api: the role, or an explicit grant.
     Add("reports", "Team Performance", "/Reports/TeamPerformance", Permissions.ReportsView, ReportsPolicy.AppliesTo(currentUser));
     var adminRole = AdministrationPolicy.AppliesTo(currentUser);
@@ -28,7 +34,7 @@
     {
         items.Add(("admin", "Administration", "/Admin"));
     }
-    else if (access.CanReach(Permissions.CollectionsEdit, TowerAssignmentsPolicy.AppliesTo(currentUser)))
+    else if (collectionsAccess && access.CanReach(Permissions.CollectionsEdit, TowerAssignmentsPolicy.AppliesTo(currentUser)))
     {
         // A Collections manager who is not a System Administrator reaches only Administration -> Collections Tower Assignments.
         items.Add(("admin", "Administration", TowerAssignmentsPolicy.Route));
