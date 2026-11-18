@@ -159,6 +159,15 @@ public sealed class GenesysTicketUpdateAppService(
         // up front instead - nothing written - so Genesys learns the ticket is closed and can open a new one (a new serviceRequestId) for the new request.
         if (request.Handoff is { Required: true } && ticket.TicketStatus == TicketStatus.Closed)
         {
+            // Refused for the caller, and recorded as evidence: the same conversation arriving after closure is audit-only, never a change.
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.EventIgnoredOnClosedTicket, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"TicketId={ticket.TicketId};ConversationId={conversationId};TicketStatus={ticket.TicketStatus};HumanSignal=None;"
+                    + $"RoutingAgentId=(none);HandoffRequired=True;EventAtUtc=(none);RecordedAtUtc={timeProvider.GetUtcNow().UtcDateTime:O};TicketChanged=false",
+                Guid.NewGuid(), cancellationToken);
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+
             return GenesysTicketUpdateResult.Failure(
                 GenesysTicketUpdateOutcome.TicketClosed,
                 "The ticket is closed, so human follow-up cannot be queued on it. Create a new ticket for the new request "
@@ -357,7 +366,7 @@ public sealed class GenesysTicketUpdateAppService(
         // routing.agentId arrived: that mapped person owns the ticket - never the next name in the rotation. An agent who cannot take it
         // (not a CS Agent / Call Center member, deactivated, ...) leaves the ticket flagged in the Call Center queue. An id that maps to
         // nobody is not guessed at: the line still counts as human work and the ticket takes the Round Robin route below.
-        if (!ticketIsClosed && options.AssignOnAnswer && answeringAgentAssignment is not null
+        if (!ticketIsClosed && options.AssignOnAnswer && options.AssignOnTranscriptEvidence && answeringAgentAssignment is not null
             && NullIfBlank(request.Routing?.AgentId) is null
             && GenesysHumanHandlingEvidence.FirstHumanSenderId(request) is { } humanSenderId
             && (await answeringAgentAssignment.ResolveSenderAsync(humanSenderId, cancellationToken)).Issue
@@ -367,9 +376,9 @@ public sealed class GenesysTicketUpdateAppService(
                 callerEmployeeId, ticket, interaction, humanSenderId, source: "Transcript", cancellationToken,
                 firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, humanSenderId),
                 identityIsTranscriptSenderId: true,
-                // The person took the conversation when they first wrote to the customer - not when this update (often the end of the conversation,
-                // the first time TigerCS hears about them) happened to arrive.
-                connectedAtUtc: GenesysHumanHandlingEvidence.HumanSenderIds(request)
+                // NOT back-dated: this is late evidence, not an acceptance event, so the assignment happens (and is recorded) when TigerCS
+                // received it. The reply's own time is kept beside it for the audit trail only.
+                evidenceAtUtc: GenesysHumanHandlingEvidence.HumanSenderIds(request)
                     .Where(h => string.Equals(h.SenderId, humanSenderId, StringComparison.OrdinalIgnoreCase))
                     .Select(h => (DateTime?)h.FirstSentAtUtc).FirstOrDefault());
             if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)

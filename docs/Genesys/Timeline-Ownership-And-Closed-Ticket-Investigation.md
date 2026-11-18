@@ -39,7 +39,11 @@ ORDER BY MinutesLater DESC;
 * "Call answered by a Call Center agent": a literal used for every channel.
 * `SLA Running → Running`: `FirstHumanResponseRecorder` writes a same-value `SlaState` history row as its ledger entry; the timeline rendered it as a state change.
 
-**Fix.** The ownership change now carries *when it happened* (`TicketAssignment.AssignedAtUtc`, the transfer event) = the first human line's time
+> **Revised after review.** Back-dating does not make an assignment real-time, so the transcript fallback no longer back-dates: it assigns when
+> TigerCS *receives* the evidence and is labelled `AcceptanceEvent=false` (section 5). Only a genuine acceptance event with its own
+> `routing.connectedAtUtc` is dated at that time, because that is the real acceptance time, not a simulation.
+
+**Original fix (superseded for the transcript path).** The ownership change now carries *when it happened* (`TicketAssignment.AssignedAtUtc`, the transfer event) = the first human line's time
 (or `routing.connectedAtUtc`), clamped to [ticket creation, the assignment it replaces, now]; the audit row and the history entry keep the processing
 time separately (`OccurredAtUtc=` / `RecordedAtUtc=`, `SourceEventAtUtc` / `ChangedAtUtc`). Wording is channel-specific (`AnswerWording`): voice "answered",
 everything else "accepted" ("WhatsApp conversation accepted by a Call Center agent"). The timeline shows the AI Agent as previous owner and turns the
@@ -76,3 +80,55 @@ SLA itself was already measured from the first human line's `SentAtUtc` and is u
 * **Missing upstream (Genesys / TigerGroupWeb, not invented here):** a real-time "agent accepted" signal for messaging (script load may not fire
   for WhatsApp after a bot transfer — confirm in Genesys execution history); `connectedAtUtc` in the *Update Routing* template; live transcript
   PATCHes while the conversation runs. Until then TigerCS can only date the acceptance by the first human line.
+
+## 5. Interaction states — what each one is, and what TigerCS does with it
+
+| State | Genesys source today | Reaches TigerCS as | Assigns a person? |
+|---|---|---|---|
+| **Offered** (ringing / alerting a specific agent) | `user.start` trigger | **Never sent** (by contract; "a ringing call never reaches TigerCS") | **No** — an offered agent never owns the ticket |
+| **Accepted / Connected** | Agent script load (*Update Routing* data action 03) → `routing.agentId`; phone pickup on the create call | `routing.agentId` (+ optional `routing.connectedAtUtc`) | **Yes, immediately** (answering-agent rule); the only real-time trigger |
+| **First human response** | A `HumanAgent` transcript line | `transcript` (live PATCH) or `ended.transcript` | Only as *late evidence* (switchable: `Genesys:AssignOnTranscriptEvidence`), at receipt time, flagged `AcceptanceEvent=false`. Always sets First Response SLA from the line's own `sentAtUtc` |
+| **Disconnected** | `customer.end` trigger → `disconnectType` | `ended.endReason` | No |
+| **Conversation ended** | same trigger, data action 04 | `ended.endedAtUtc` | No (ownership already settled; a transfer is only honoured while the conversation is live) |
+
+**What was verified.** TigerCS: all of the above, by tests (connect assigns before the end; offered never assigns; a late transcript assigns at receipt, never
+back-dated; the switch). TigerGroupWeb: only the repo copy of the forwarding patch (`docs/Genesys/TigerGroupWeb-Patch`) — it forwards `PATCH
+/api/genesys/tickets/{id}` bodies byte-for-byte via `GetRawText()`, so **the forwarder cannot be what delays acceptance**; the TigerGroupWeb repository
+itself was not reachable from this environment and the deployed build is unverified.
+
+**Why the 15:21 acceptance was only known at 15:34 (cause, not simulated).** For this WhatsApp conversation no `routing.agentId` update reached TigerCS
+when the person accepted; the first evidence was the end-of-conversation PATCH. Real-time assignment therefore needs these **upstream changes, in
+Genesys Cloud / Architect and TigerGroupWeb (none can be made from this repository)**:
+
+1. **A signal fired when an agent *connects* to a messaging interaction (WhatsApp / web messaging), not when it is offered.** The agent-script *Update
+   Routing* call is the documented one; confirm in Genesys flow-execution history that the script actually loads for a WhatsApp conversation transferred
+   from the bot (a script attached only to the voice flow's *Transfer to ACD* would explain it). If the script cannot fire for messaging, a Genesys
+   trigger on the conversation's connect event for the `message` media type must call data action 03. The exact topic name must be taken from your org's
+   trigger schema — it is not asserted here.
+2. **Send `routing.connectedAtUtc`** from that call (data action 03's request template does not carry it today). Without it TigerCS can only time the
+   acceptance by when the call arrives.
+3. **Optionally stream the transcript** (`transcript` PATCH) while the conversation runs, so First Response and the human sender are known live
+   instead of at the end.
+4. **TigerGroupWeb:** deploy the forwarding patch (it was *specified, not applied* per `TigerGroupWeb-Proxy-Change.md`) and confirm `PATCH
+   /api/genesys/tickets/{id}` is routed and its service-account token renews; nothing in the body may be dropped.
+
+Until (1) exists, a person who accepts is assigned when the first update naming them arrives, and that is stated honestly in the audit and timeline.
+
+## 6. The AI Agent as the actual owner
+
+PR #261 made the AI Agent history-only because "an ownerless AI ticket" is how ~45 files recognise AI handling (Round Robin, Take Ownership claim pool,
+reconciler, AI auto-close, inactivity closer, visibility, dashboard buckets, SLA, reporting). Putting the AI account into `CurrentOwnerEmployeeId` would
+silently change every one of them (an "owned" ticket is skipped by the reconciler, excluded from the claim pool, refused by the AI/inactivity closers and
+counted as assigned on the dashboard).
+
+**Implemented:** a persisted `Tickets.AiAgentOwnerEmployeeId` (migration `AddTicketAiAgentOwner`, additive nullable column, no backfill; script
+`AddTicketAiAgentOwner.sql`). It is the ticket's *actual assigned owner* while the AI handles the conversation and no person owns it:
+
+* Set at creation of an AI-first Genesys ticket on every channel (WhatsApp, chat, voice), audited `AssignToAiAgent`, with the existing history entry.
+* Cleared by every person-assignment (`Ticket.AssignTo`: acceptance, direct pickup, Round Robin, manual assign, take ownership) and by a move to a
+  department queue (`TransferToDepartment`). A person's ownership can never be taken back by the AI (`AssignToAiAgent` refuses).
+* Kept on closure, so an AI-handled and AI-closed ticket still names the AI Agent. Never changed on a Closed ticket.
+* `CurrentOwnerEmployeeId` stays "the human owner", so **routing, permissions, SLA, reconciler, auto-close, dashboards and reports behave exactly as before**
+  (regression suite unchanged and green). Screens read `AssignedOwnerEmployeeId` / `IsOwnedByAiAgent`; the ticket list/detail show "AI (virtual agent)"
+  from the persisted owner instead of inferring it from a 6/12-hour activity window. Tickets created before the column existed keep the evidence rule.
+* Historical tickets are **not** back-filled (that would be a production data change needing approval).

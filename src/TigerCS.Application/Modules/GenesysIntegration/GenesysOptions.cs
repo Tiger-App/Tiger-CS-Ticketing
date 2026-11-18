@@ -104,6 +104,16 @@ public sealed class GenesysOptions
     public bool ReassignOnTransfer { get; set; } = true;
 
     /// <summary>
+    /// <b>Late-evidence assignment</b> (<c>Genesys:AssignOnTranscriptEvidence</c>, default <b>true</b>). The only things that mean a person
+    /// ACCEPTED an interaction are <c>routing.agentId</c> (connected) and a phone pickup. A <c>HumanAgent</c> transcript line is not an
+    /// acceptance event; it is proof that somebody did accept, which can arrive long afterwards (often with the end of the conversation). With
+    /// this on, such a line still assigns the ticket to the mapped sender as a safety net - at the time TigerCS RECEIVED it, never back-dated, and
+    /// labelled <c>AcceptanceEvent=false</c> in the audit. Set it to <c>false</c> to assign only on a real acceptance event (the ticket then follows
+    /// the ordinary human-follow-up route until Genesys reports the connect).
+    /// </summary>
+    public bool AssignOnTranscriptEvidence { get; set; } = true;
+
+    /// <summary>
     /// <b>E-mail-form HumanAgent <c>senderId</c></b> (<c>Genesys:AllowEmailSenderIdFallback</c>, default <b>true</b>). The contract says a transcript
     /// <c>senderId</c> is the agent's Genesys User ID (GUID), and that is always tried first. Genesys has been observed to send the agent's
     /// e-mail there instead (ticket 225: <c>callcenter5@...</c>). With this on, an e-mail-form id resolves to a Ticketing user only when it

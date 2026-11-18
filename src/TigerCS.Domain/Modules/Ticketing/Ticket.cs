@@ -43,6 +43,22 @@ public class Ticket
     public Guid? CurrentOwnerEmployeeId { get; private set; }
 
     /// <summary>
+    /// <b>The AI Agent as the ticket's actual assigned owner</b> (the Genesys integration account that handled the conversation first). Persisted
+    /// on the ticket, so reports and screens read the owner instead of inferring it. Deliberately a SEPARATE field from
+    /// <see cref="CurrentOwnerEmployeeId"/>, which stays "the human who owns the ticket": Round Robin, Take Ownership, the reconciler, the AI
+    /// auto-close, the inactivity closer, visibility and every dashboard bucket keep seeing an AI-handled ticket as having no human owner, exactly as
+    /// before. Set only while no human owns the ticket; cleared the moment a person is assigned or the ticket is moved to a department's queue
+    /// (<see cref="AssignTo"/>, <see cref="TransferToDepartment"/>). Kept on closure, so a ticket the AI handled and closed still says so.
+    /// </summary>
+    public Guid? AiAgentOwnerEmployeeId { get; private set; }
+
+    /// <summary>The ticket's assigned owner whoever it is: the human owner, else the AI Agent, else nobody.</summary>
+    public Guid? AssignedOwnerEmployeeId => CurrentOwnerEmployeeId ?? AiAgentOwnerEmployeeId;
+
+    /// <summary>True while the AI Agent is the assigned owner and no human is.</summary>
+    public bool IsOwnedByAiAgent => CurrentOwnerEmployeeId is null && AiAgentOwnerEmployeeId is not null;
+
+    /// <summary>
     /// The employee who created the ticket (the account that called ticket creation — for a Genesys inquiry that is the integration
     /// account). Write-once and never moved by assignment or department transfer, which is what lets a creator keep following their ticket
     /// <b>read-only</b> after it has been handed to another department. Null on tickets that predate the column and have no creation audit.
@@ -882,6 +898,29 @@ public class Ticket
         }
 
         CurrentOwnerEmployeeId = employeeId;
+        AiAgentOwnerEmployeeId = null;   // a person now owns it: the AI Agent no longer does
+    }
+
+    /// <summary>
+    /// The AI Agent handled the conversation first and is the ticket's assigned owner until a person takes over. Refused (returns false, nothing
+    /// changes) when a person already owns the ticket or the AI already does; a Closed ticket throws like every other mutator.
+    /// </summary>
+    public bool AssignToAiAgent(Guid aiAgentEmployeeId)
+    {
+        EnsureNotClosed();
+
+        if (aiAgentEmployeeId == Guid.Empty)
+        {
+            throw new ArgumentException("AiAgentEmployeeId is required.", nameof(aiAgentEmployeeId));
+        }
+
+        if (CurrentOwnerEmployeeId is not null || AiAgentOwnerEmployeeId == aiAgentEmployeeId)
+        {
+            return false;
+        }
+
+        AiAgentOwnerEmployeeId = aiAgentEmployeeId;
+        return true;
     }
 
     /// <summary>
@@ -906,6 +945,7 @@ public class Ticket
         }
 
         CurrentDepartmentId = targetDepartmentId;
+        AiAgentOwnerEmployeeId = null;   // a department queue is human work; the AI Agent no longer owns it
 
         // preserveOwner keeps the carried-over owner on the row until the caller has run the destination's assignment (a department transfer
         // then supersedes / replaces it - see TicketAssignmentAppService.TransferAsync; classification routing still keeps the agent).

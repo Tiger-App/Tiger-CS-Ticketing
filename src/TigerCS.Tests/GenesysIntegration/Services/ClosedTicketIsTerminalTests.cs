@@ -139,6 +139,20 @@ public class ClosedTicketIsTerminalTests
     }
 
     [Fact]
+    public async Task AHandoffRequestForAClosedTicketsConversation_IsRefused_AndLeavesOnlyAuditEvidence()
+    {
+        var c = await ClosedTicketAsync(Closer.Ai);
+        var before = Capture(c.F, c.Ticket);
+
+        var result = await c.F.TicketUpdate.UpdateAsync(ServiceAccount, c.Ticket.TicketId,
+            new GenesysTicketUpdateDto(c.ConversationId, Handoff: new GenesysHandoffUpdateDto(Required: true, Reason: "late")));
+
+        Assert.Equal(GenesysTicketUpdateOutcome.TicketClosed, result.Outcome);
+        Assert.Equal(before, Capture(c.F, c.Ticket));
+        Assert.Contains(c.F.Audit.Entries, e => e.Action == GenesysAuditActions.EventIgnoredOnClosedTicket);
+    }
+
+    [Fact]
     public async Task ReplayedCreate_ForAClosedTicketsConversation_ReturnsTheSameTicket_AndCreatesNothing()
     {
         var c = await ClosedTicketAsync(Closer.Person);
@@ -210,6 +224,53 @@ public class ClosedTicketIsTerminalTests
             .ToList();
 
         Assert.Equal(["TicketLifecycleAppService.cs"], callers);
+    }
+
+    /// <summary>
+    /// Nothing may write a ticket's status behind the domain's back: the setter is private (only <c>Ticket</c> itself assigns it, and every such method
+    /// refuses a Closed ticket except the explicit Reopen), and no set-based update, raw SQL or repository operation in production code touches it.
+    /// </summary>
+    [Fact]
+    public void NoProductionCode_WritesTicketStatus_ExceptTheTicketAggregateItself()
+    {
+        var setter = typeof(Ticket).GetProperty(nameof(Ticket.TicketStatus))!.SetMethod!;
+        Assert.True(setter.IsPrivate);
+
+        var root = FindSourceRoot();
+        var offenders = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
+            .Where(p => !p.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                        && !p.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}")
+                        && !p.Contains("TigerCS.Tests")
+                        && !p.Contains($"{Path.DirectorySeparatorChar}Migrations{Path.DirectorySeparatorChar}"))
+            .Where(p =>
+            {
+                var text = File.ReadAllText(p);
+                return text.Contains("SetProperty(t => t.TicketStatus", StringComparison.Ordinal)
+                    || text.Contains("SetProperty(x => x.TicketStatus", StringComparison.Ordinal)
+                    || System.Text.RegularExpressions.Regex.IsMatch(text, @"UPDATE\s+\[?(dbo\.)?\[?Tickets\]?\s+SET", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            })
+            .Select(Path.GetFileName)
+            .ToList();
+
+        Assert.Empty(offenders);
+    }
+
+    /// <summary>Every domain mutator that could move a Closed ticket refuses it; <c>Reopen</c> is the only way out, and it needs an explicit target department.</summary>
+    [Fact]
+    public async Task EveryTicketMutator_RefusesAClosedTicket_ExceptTheExplicitReopen()
+    {
+        var c = await ClosedTicketAsync(Closer.Ai);
+
+        Assert.Throws<TicketClosedException>(() => c.Ticket.AssignToAiAgent(Guid.NewGuid()));
+        Assert.Throws<TicketClosedException>(() => c.Ticket.ReturnToQueue());
+        Assert.Throws<TicketClosedException>(() => c.Ticket.CloseForCustomerInactivity());
+        Assert.Throws<TicketClosedException>(() => c.Ticket.CloseForAiCompletion());
+        Assert.Throws<TicketClosedException>(() => c.Ticket.RaiseEscalationLevel(EscalationLevel.Level2));
+        Assert.Equal(TicketStatus.Closed, c.Ticket.TicketStatus);
+
+        c.Ticket.Reopen(c.Ticket.OriginatingDepartmentId);                       // the one explicit way back
+        Assert.NotEqual(TicketStatus.Closed, c.Ticket.TicketStatus);
+        Assert.Equal(1, c.Ticket.ReopenCount);
     }
 
     private static string FindSourceRoot()

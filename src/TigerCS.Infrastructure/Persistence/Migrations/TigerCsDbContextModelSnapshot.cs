@@ -3126,6 +3126,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<DateTime?>("AcknowledgementSentAtUtc")
                         .HasColumnType("datetime2");
 
+                    b.Property<Guid?>("AiAgentOwnerEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<int?>("CategoryId")
                         .HasColumnType("int");
 

@@ -79,7 +79,24 @@ public class GenesysTimelineAndOwnershipTimingTests
             ]));
 
     [Fact]
-    public async Task WhatsAppAcceptedAt1521_IsAssignedAndTransferredAt1521_AndRecordedAt1534()
+    public async Task AConnectEventAt1521_AssignsTheTicketImmediately_BeforeTheConversationEnds()
+    {
+        var w = await AiConversationAsync();
+        w.F.Clock.Set(FirstHumanLine.AddSeconds(1));   // delivered one second after the agent connected - real time
+
+        var result = await w.F.TicketUpdate.UpdateAsync(ServiceAccount, w.Ticket.TicketId, new GenesysTicketUpdateDto(
+            "conv-wa", Routing: new GenesysRoutingUpdateDto(AgentId: w.AgentGenesysId, AgentName: "Moaz", ConnectedAtUtc: FirstHumanLine)));
+
+        Assert.Equal(GenesysTicketUpdateOutcome.Applied, result.Outcome);
+        Assert.False(result.ConversationEnded);                       // the conversation is still running
+        Assert.Equal(w.AgentId, w.Ticket.CurrentOwnerEmployeeId);     // ... and the ticket already belongs to the person who accepted
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket.CurrentDepartmentId);
+        Assert.Equal(FirstHumanLine, Assert.Single(w.F.WorkflowEvents.All, e => e.EventType == WorkflowEventType.TicketTransferred).OccurredAtUtc);
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && !e.AfterValue!.Contains("AcceptanceEvent=false", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AHumanReplyThatArrivesWithTheEnd_IsLateEvidence_AssignedWhenReceived_NeverBackdated()
     {
         var w = await AiConversationAsync();
         w.F.Clock.Set(EndProcessed);   // the first the integration hears of the person is the end of the conversation
@@ -88,25 +105,34 @@ public class GenesysTimelineAndOwnershipTimingTests
 
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, result.Outcome);
         Assert.Equal(w.AgentId, w.Ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket.CurrentDepartmentId);
 
-        // The ownership change carries when it happened ...
-        var transfer = Assert.Single(w.F.WorkflowEvents.All, e => e.TicketId == w.Ticket.TicketId && e.EventType == WorkflowEventType.TicketTransferred);
-        Assert.Equal(FirstHumanLine, transfer.OccurredAtUtc);
-        Assert.Equal(FirstHumanLine, Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == w.Ticket.TicketId && a.AssignedEmployeeId == w.AgentId).AssignedAtUtc);
+        // Recorded at the time TigerCS received the evidence - the assignment is NOT pretended to have happened at 15:21.
+        Assert.Equal(EndProcessed, Assert.Single(w.F.WorkflowEvents.All, e => e.EventType == WorkflowEventType.TicketTransferred).OccurredAtUtc);
+        Assert.Equal(EndProcessed, Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == w.Ticket.TicketId && a.AssignedEmployeeId == w.AgentId).AssignedAtUtc);
 
-        // ... the history keeps both clocks apart: the event's own time and when TigerCS processed it ...
-        var history = Assert.Single(w.F.AssignmentHistory.Entries, h => h.Source == TicketAssignmentSource.GenesysCallTransfer);
-        Assert.Equal(FirstHumanLine, history.SourceEventAtUtc);
-        Assert.Equal(EndProcessed, history.ChangedAtUtc);
-
-        // ... and the audit row says so explicitly.
+        // The audit says plainly that this was not an acceptance event, and keeps the reply's own time beside it.
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer"
-            && e.AfterValue!.Contains($"OccurredAtUtc={FirstHumanLine:O}", StringComparison.Ordinal)
+            && e.AfterValue!.Contains("AcceptanceEvent=false", StringComparison.Ordinal)
+            && e.AfterValue.Contains($"FirstHumanReplyAtUtc={FirstHumanLine:O}", StringComparison.Ordinal)
             && e.AfterValue.Contains($"RecordedAtUtc={EndProcessed:O}", StringComparison.Ordinal));
 
-        // First Response is the actual first human reply, not the end of the conversation.
+        // First Response SLA is the actual first human reply, independent of when the person was assigned.
         Assert.Equal(FirstHumanLine, w.Ticket.FirstHumanResponseAtUtc);
+        var history = Assert.Single(w.F.AssignmentHistory.Entries, h => h.Source == TicketAssignmentSource.GenesysCallTransfer);
+        Assert.Equal(EndProcessed, history.ChangedAtUtc);
+    }
+
+    [Fact]
+    public async Task WithLateEvidenceAssignmentSwitchedOff_ATranscriptLineAloneNeverAssignsTheAgent()
+    {
+        var w = await AiConversationAsync();
+        w.F.Options.AssignOnTranscriptEvidence = false;
+        w.F.Clock.Set(EndProcessed);
+
+        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, w.Ticket.TicketId, EndWithHumanLine(w.AgentGenesysId));
+
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer");
+        Assert.Equal(FirstHumanLine, w.Ticket.FirstHumanResponseAtUtc);   // the SLA still uses the real reply
     }
 
     [Fact]

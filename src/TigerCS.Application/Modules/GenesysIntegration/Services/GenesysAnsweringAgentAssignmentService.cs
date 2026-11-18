@@ -71,7 +71,7 @@ public sealed class GenesysAnsweringAgentAssignmentService(
     public async Task<AnswerAssignmentResult> ApplyConnectedAgentAsync(
         Guid callerEmployeeId, Ticket ticket, TicketInteraction interaction, string genesysAgentId, string source,
         CancellationToken cancellationToken = default, bool firstResponseIsFromTheAnsweringAgent = false,
-        bool identityIsTranscriptSenderId = false, DateTime? connectedAtUtc = null, bool allowOwnerTransfer = false)
+        bool identityIsTranscriptSenderId = false, DateTime? connectedAtUtc = null, bool allowOwnerTransfer = false, DateTime? evidenceAtUtc = null)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         ArgumentNullException.ThrowIfNull(interaction);
@@ -104,7 +104,7 @@ public sealed class GenesysAnsweringAgentAssignmentService(
             ticket, agent, source, timeProvider.GetUtcNow().UtcDateTime, Guid.NewGuid(), callerEmployeeId,
             routeToCallCenterIfAgentUnavailable: humanManaged, cancellationToken,
             firstResponseIsFromTheAnsweringAgent: firstResponseIsFromTheAnsweringAgent,
-            genesysEvent: new GenesysAnswerEvent(connectedAtUtc, interaction.GenesysConversationId, allowOwnerTransfer, interaction.ChannelId));
+            genesysEvent: new GenesysAnswerEvent(connectedAtUtc, interaction.GenesysConversationId, allowOwnerTransfer, interaction.ChannelId, evidenceAtUtc));
 
         if (!result.Wrote)
         {

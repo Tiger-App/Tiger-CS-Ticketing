@@ -1106,6 +1106,7 @@ public sealed class TicketAutoAssignmentService(
                 beforeValue: previousOwner?.ToString() ?? "DepartmentQueue",
                 afterValue: $"AssignedEmployeeId={agentId};DepartmentId={callCenter.DepartmentId};Mode=DirectToAnsweringAgent;"
                     + $"Trigger=GenesysAnswered;Source={source};GenesysUserId={agent.GenesysUserId};OccurredAtUtc={occurredAtUtc:O};RecordedAtUtc={nowUtc:O}"
+                    + (genesysEvent?.EvidenceAtUtc is { } evidenceAt ? $";AcceptanceEvent=false;FirstHumanReplyAtUtc={evidenceAt:O}" : string.Empty)
                     + (reportedByEmployeeId is { } by ? $";ReportedBy={by}" : string.Empty)
                     + (previousOwner is not null && ticket.CurrentDepartmentId == callCenter.DepartmentId && !wrote ? $";ReplacedAutomaticPreAssignment={previousOwner}" : string.Empty),
                 correlationId, cancellationToken);
@@ -1245,6 +1246,17 @@ public sealed class TicketAutoAssignmentService(
                 ticket.TicketId, ticket.CurrentDepartmentId, previousEmployeeId: null, aiAgentEmployeeId, TicketAssignmentSource.GenesysAiAgent,
                 changedByEmployeeId: null, nowUtc, eventAtUtc, genesysConversationId, "AI Agent handled the conversation"),
             cancellationToken);
+
+        // The AI Agent is the ticket's ACTUAL owner while no person owns it (a ticket Round Robin already gave to a person keeps that person).
+        if (ticket.AssignToAiAgent(aiAgentEmployeeId))
+        {
+            await auditWriter.WriteAsync(
+                aiAgentEmployeeId, "AssignToAiAgent", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: "Unassigned",
+                afterValue: $"AiAgentOwnerEmployeeId={aiAgentEmployeeId};DepartmentId={ticket.CurrentDepartmentId};ConversationId={genesysConversationId ?? "(none)"};Source=GenesysAiAgent",
+                Guid.NewGuid(), cancellationToken);
+        }
+
         return true;
     }
 
