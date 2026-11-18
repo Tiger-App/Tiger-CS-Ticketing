@@ -167,7 +167,42 @@ public sealed class AdminUserAppService(
             return AdminResult<AdminUserDto>.Invalid("Display name is required.");
         }
 
-        var before = $"DisplayName={employee.DisplayName};IsGeynessStaff={employee.IsGeynessStaff}";
+        var account = await accountManager.GetAccountAsync(employeeId, cancellationToken);
+        var oldUserName = account?.UserName ?? string.Empty;
+
+        // The login name: null = not supplied (unchanged). Validated BEFORE anything is mutated so a rejected name leaves the
+        // profile exactly as it was.
+        string? newUserName = null;
+        if (request.UserName is not null)
+        {
+            var trimmed = request.UserName.Trim();
+            if (trimmed.Length == 0)
+            {
+                return AdminResult<AdminUserDto>.Invalid("User name is required.");
+            }
+
+            if (account is null)
+            {
+                return AdminResult<AdminUserDto>.NotFound();
+            }
+
+            // Ordinal: a case-only edit ("bob" -> "Bob") is a real change; uniqueness itself is case-insensitive (Identity).
+            if (!string.Equals(trimmed, oldUserName, StringComparison.Ordinal))
+            {
+                newUserName = trimmed;
+            }
+        }
+
+        if (newUserName is not null)
+        {
+            var renamed = await accountManager.SetUserNameAsync(employeeId, newUserName, cancellationToken);
+            if (!renamed.Succeeded)
+            {
+                return AdminResult<AdminUserDto>.Invalid(renamed.Errors);
+            }
+        }
+
+        var before = $"UserName={oldUserName};DisplayName={employee.DisplayName};IsGeynessStaff={employee.IsGeynessStaff}";
         employee.UpdateProfile(request.DisplayName, request.IsGeynessStaff);
 
         var emailResult = await accountManager.UpdateEmailAsync(employeeId, request.Email, cancellationToken);
@@ -178,8 +213,17 @@ public sealed class AdminUserAppService(
 
         await auditWriter.WriteAsync(
             actorEmployeeId, "AdminUpdateUserProfile", "Employee", employeeId.ToString(),
-            before, $"DisplayName={employee.DisplayName};IsGeynessStaff={employee.IsGeynessStaff};Email={request.Email}",
+            before, $"UserName={newUserName ?? oldUserName};DisplayName={employee.DisplayName};IsGeynessStaff={employee.IsGeynessStaff};Email={request.Email}",
             Guid.NewGuid(), cancellationToken);
+        if (newUserName is not null)
+        {
+            // Dedicated entry so a login-name change is easy to find; the security stamp was rotated by Identity.
+            await auditWriter.WriteAsync(
+                actorEmployeeId, "AdminChangeUserName", "User", employeeId.ToString(),
+                beforeValue: $"UserName={oldUserName}", afterValue: $"UserName={newUserName};SessionsInvalidated=true",
+                Guid.NewGuid(), cancellationToken);
+        }
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         return AdminResult<AdminUserDto>.Success((await GetAsync(employeeId, cancellationToken))!);

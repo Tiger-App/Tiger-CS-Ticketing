@@ -89,6 +89,23 @@ public sealed class FakeUserAccountManager : IUserAccountManager, IUserRoleReade
         return Task.FromResult(UserAccountResult.Success(employeeId));
     }
 
+    public Task<UserAccountResult> SetUserNameAsync(Guid employeeId, string userName, CancellationToken cancellationToken = default)
+    {
+        if (!_accounts.TryGetValue(employeeId, out var account))
+        {
+            return Task.FromResult(UserAccountResult.Failure(["The user account was not found."]));
+        }
+
+        if (_accounts.Values.Any(a => a.Id != employeeId && a.UserName.Equals(userName, StringComparison.OrdinalIgnoreCase)))
+        {
+            return Task.FromResult(UserAccountResult.Failure([$"The user name '{userName}' is already taken."]));
+        }
+
+        account.UserName = userName;
+        account.SecurityStamp = Guid.NewGuid().ToString("N");
+        return Task.FromResult(UserAccountResult.Success(employeeId));
+    }
+
     public Task<UserAccountResult> SetRolesAsync(Guid employeeId, IReadOnlyCollection<string> roleNames, CancellationToken cancellationToken = default)
     {
         if (!_accounts.TryGetValue(employeeId, out var account))
