@@ -17,7 +17,7 @@ SLA and reporting consistent with it.
 
 | Event | What TigerCS does |
 |---|---|
-| `TicketCreated` | Creates a classified, **unassigned**, `Open` ticket on the existing **Walk in / Kiosk** channel in the department mapped from `CompanyId`, with the request type mapped from `TicketTypeId` (see 1.1). Source = `QueueingSystem`; the queue ticket id and queue number are kept on the ticket. The SLA starts at `OccurredAtUtc`. No Call Center routing, no assignment rule, no Round Robin, no creator self-assignment. The customer's mobile number is looked up through the existing CRM / PACT / Tasleeh lookup (enrichment only - a match is never auto-verified). |
+| `TicketCreated` | Creates a classified, **unassigned**, `Open` ticket on the existing **Walk in / Kiosk** channel in the department and with the request type resolved from `CompanyId` + `TicketTypeId` (see 1.1). Source = `QueueingSystem`; the queue ticket id and queue number are kept on the ticket. The SLA starts at `OccurredAtUtc`. No Call Center routing, no assignment rule, no Round Robin, no creator self-assignment. The customer's mobile number is looked up through the existing CRM / PACT / Tasleeh lookup (enrichment only - a match is never auto-verified). |
 | `TicketAssigned` | The employee mapped from `AssignedUserId` becomes the owner (existing assignment rules and history). An `Open` ticket moves to `InProgress` through the existing transition, performed as that employee. Assignment is **not** a first response. |
 | `TicketReassigned` | Same, to the new employee. The previous assignment row is superseded (history kept). |
 | `TicketReturned` | The owner is released and the ticket returns to **`Open`**, in the same department. This transition exists **only for queue-managed tickets** (`Ticket.ReturnToQueue`); the generic status table is untouched (`InProgress -> Open` is still not a TigerCS transition for anyone else). The assignment row is superseded and a system status-history row (`InProgress -> Open`, with the reason) is written. A later `TicketAssigned` takes the ticket `Open -> InProgress` again, exactly as for a first assignment. |
@@ -28,10 +28,14 @@ SLA and reporting consistent with it.
 
 ### 1.1 Department and request-type resolution
 
-- **Department** comes **only** from the company mapping (`QueueingCompanyMappings`). A company with no active mapping is **never guessed**: the event is held (`COMPANY_NOT_MAPPED`, HTTP 202) and retried.
-- **Request type** comes from the (company, ticket type) mapping (`QueueingTicketTypeMappings`), validated by the existing request-type rules: it must be active, published, belong to the company's department, and pair with exactly one category.
-- **If the company is mapped but the ticket type has no active request-type mapping**, the ticket takes **that department's own configured General request type** (the existing default-classification rule), and the gap is **logged** (a warning with the company, ticket type and department ids) and **audited** on the ticket (`RequestTypeMapping=Missing(company=..;ticketType=..);Applied=General(RequestTypeId=..)`). If the department has no usable General (or the rule excludes the department), the event is held (`TICKET_TYPE_NOT_MAPPED`) - no request type is ever invented.
-- A mapping that **exists but is unusable** (wrong department, inactive request type, no paired category) is a configuration error, not a gap: the event is held (`REQUEST_TYPE_UNUSABLE`).
+Routing is decided in this order:
+
+1. **Explicit (company, ticket type) mapping** (`QueueingTicketTypeMappings`, active row). It determines the **request type**, and the **department is that request type's responsible department**. One `CompanyId` can therefore carry ticket types that belong to several TigerCS departments. The company mapping is not consulted and need not exist.
+2. **Company default.** Only when the (company, ticket type) pair has **no active explicit mapping**, the department comes from the company mapping (`QueueingCompanyMappings`) and the ticket takes **that department's own configured General request type** (the existing default-classification rule). The gap is **logged** (a warning with the company, ticket type and department ids) and **audited** on the ticket (`RequestTypeMapping=Missing(company=..;ticketType=..);Applied=General(RequestTypeId=..)`). If the department has no usable General (or the rule excludes the department) the event is held (`TICKET_TYPE_NOT_MAPPED`) - no request type is ever invented.
+3. **Neither exists** (no explicit mapping and no active company mapping): the event is held (`COMPANY_NOT_MAPPED`, HTTP 202) and retried. A department is **never guessed**.
+
+An explicit mapping must point at a request type that is **active**, belongs to an **active department**, has a **Published workflow version**, and pairs with **exactly one active same-named category** in its department. A mapping that **exists but is unusable** never falls back to the company default (that would silently misroute the ticket): the event is held with `REQUEST_TYPE_UNUSABLE` and retried once the configuration is fixed. A mapping row with `IsActive = 0` is treated as absent. The request/response payload and the API-key authentication are unchanged.
+
 
 ## 2. Authentication
 
@@ -884,12 +888,13 @@ Set secrets through environment variables (`QueueingIntegration__ServiceAccountE
 3. Add the mappings (look the ids up; the unique indexes reject duplicates):
 
 ```sql
--- Company -> department (a company routes to exactly one department; never guessed)
+-- Company -> DEFAULT department, used only for ticket types with no explicit mapping below (never guessed)
 INSERT INTO QueueingCompanyMappings (CompanyId, DepartmentId, IsActive, CreatedAtUtc)
 VALUES (N'company-a', (SELECT DepartmentId FROM Departments WHERE Code = N'CS'), 1, SYSUTCDATETIME());
 
--- (Company, ticket type) -> request type. The request type must belong to the company's department
--- and have exactly one active same-named category. Without a row, the department's General request type is used (and the gap is logged).
+-- (Company, ticket type) -> request type. The request type's department IS the ticket's department, so one company can span several departments.
+-- The request type must be active, have a Published workflow and exactly one active same-named category. Without a row, the company's default
+-- department and its General request type are used (and the gap is logged).
 INSERT INTO QueueingTicketTypeMappings (CompanyId, TicketTypeId, RequestTypeId, IsActive, CreatedAtUtc)
 VALUES (N'company-a', N'type-complaint',
         (SELECT RequestTypeId FROM RequestTypes WHERE Name = N'Complaint' AND DepartmentId = (SELECT DepartmentId FROM Departments WHERE Code = N'CS')),
@@ -900,7 +905,20 @@ INSERT INTO QueueingUserMappings (ExternalUserId, EmployeeId, IsActive, CreatedA
 VALUES (N'queue-user-a', (SELECT Id FROM AspNetUsers WHERE UserName = N'jane.doe'), 1, SYSUTCDATETIME());
 ```
 
-4. Verify with folder 2 of the Postman collection.
+4. Tiger Properties (`CompanyId = 4`) ticket types 53-60: run `ApplyQueueingTigerPropertiesMappings.sql` (idempotent data script, preview by default, validates every request type / department / published workflow before writing). It is **not** a migration - `AddQueueingIntegration.sql` is unchanged and no schema change is needed, because the department is derived from the request type.
+
+   | TicketTypeId | RequestTypeId | DepartmentId |
+   |---|---|---|
+   | 53 | 1 | 1 |
+   | 54 | 3 | 1 |
+   | 55 | 2 | 1 |
+   | 56 | 21 | 2 |
+   | 57 | 17 | 1 |
+   | 58 | 14 | 1 |
+   | 59 | 20 | 3 |
+   | 60 | 40 | 1 |
+
+5. Verify with folder 2 of the Postman collection.
 
 ## 12. Verification
 
