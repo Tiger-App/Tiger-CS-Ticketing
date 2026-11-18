@@ -76,18 +76,18 @@ public sealed class TicketsWorkspaceRenderTests : IDisposable
     }
 
     [Fact]
-    public async Task PrimaryNav_RendersExactlyDashboardCustomersTicketsCollections_ForANonAdministrator()
+    public async Task PrimaryNav_RendersExactlyDashboardCustomersTickets_ForANonAdministratorWithoutCollectionsAccess()
     {
         var html = await Ok(await Client().GetAsync("/Tickets"));
 
         var navStart = html.IndexOf("<nav class=\"app-nav\"", StringComparison.Ordinal);
         var nav = html[navStart..html.IndexOf("</nav>", navStart, StringComparison.Ordinal)];
-        Assert.Equal(4, Count(nav, "class=\"app-nav__link"));
+        Assert.Equal(3, Count(nav, "class=\"app-nav__link"));
         Assert.Contains(">Dashboard</a>", nav, StringComparison.Ordinal);
         Assert.Contains(">Customers</a>", nav, StringComparison.Ordinal);
         Assert.Contains("href=\"/Tickets\" aria-current=\"page\">Tickets</a>", nav, StringComparison.Ordinal);
-        Assert.Contains("href=\"/Collections/CampaignList\">Collections</a>", nav, StringComparison.Ordinal);
-        foreach (var gone in new[] { ">Queue<", "Pending Interactions", "My Tickets", ">Closed<", "Administration" })
+        // Collections is a gated module: not shown without module access (granted or a System Administrator / CS Manager role).
+        foreach (var gone in new[] { ">Queue<", "Pending Interactions", "My Tickets", ">Closed<", "Administration", ">Collections<" })
         {
             Assert.DoesNotContain(gone, nav, StringComparison.Ordinal);
         }
