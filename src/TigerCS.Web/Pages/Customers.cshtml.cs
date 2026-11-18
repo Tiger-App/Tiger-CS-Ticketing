@@ -45,6 +45,9 @@ public sealed class CustomersModel(
     /// <summary>The Dashboard's Customers by Location filter ("within-uae", "outside-uae", "unknown"), when the list was opened from that card.</summary>
     public CustomerLocation? Location { get; private set; }
 
+    /// <summary>Why the Unknown customers are Unknown (only for the Unknown list, and only when that read succeeded).</summary>
+    public CustomerLocationBreakdownDto? UnknownBreakdown { get; private set; }
+
     /// <summary>The Dashboard's own filters, carried from the card so the list shows exactly the customers the card counted. Null when the list was not opened from the Dashboard.</summary>
     public CustomerDirectoryListRequestDto? DashboardScope { get; private set; }
 
@@ -134,6 +137,17 @@ public sealed class CustomersModel(
         {
             Rows = result.Value.Items;
             TotalCount = result.Value.TotalCount;
+            if (Location == CustomerLocation.Unknown)
+            {
+                // Why these customers are Unknown, counted over the whole list (not just this page). A failed read just omits the panel.
+                var breakdown = await customersApiClient.GetUnknownBreakdownAsync(
+                    new CustomerDirectoryListRequestDto(
+                        Search, VerificationSource, DepartmentId, OpenOnly, 1, DefaultPageSize, CustomerLocationKeys.ToKey(Location),
+                        DashboardScope?.DateFrom, DashboardScope?.DateTo, DashboardScope?.OwnerEmployeeId, DashboardScope?.ChannelId,
+                        DashboardScope?.RequestTypeId, DashboardScope?.TicketStatus, DashboardScope?.PriorityId),
+                    cancellationToken);
+                UnknownBreakdown = breakdown.IsSuccess ? breakdown.Value : null;
+            }
         }
     }
 

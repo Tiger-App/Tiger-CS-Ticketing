@@ -450,6 +450,40 @@ public class CustomerProfileEditEndpointTests
         Assert.Equal(start, cleared);
     }
 
+    private static async Task<CustomerLocationBreakdownDto> BreakdownAsync(HttpClient client)
+    {
+        var response = await client.GetAsync("/api/customers/unknown-breakdown");
+        response.EnsureSuccessStatusCode();
+        return (await response.Content.ReadFromJsonAsync<CustomerLocationBreakdownDto>())!;
+    }
+
+    [Fact]
+    public async Task Edit_KeepsTheUnknownList_ItsExplanations_AndTheBreakdown_InStepWithTheDashboardCard()
+    {
+        using var factory = new TigerCsApiFactory();
+        await SeedStandardCustomersAsync(factory);
+        var (manager, _) = await SignInAsync(factory, Roles.CsManager);
+
+        // Both customers have no phone on any ticket: both Unknown, each explained, and the breakdown adds up to the card.
+        var start = await CountsAsync(factory);
+        Assert.Equal(2, start.Unknown);
+        Assert.Equal(start.Unknown, (await BreakdownAsync(manager)).Total);
+        var unknownBefore = await ListAsync(manager, "&location=unknown");
+        Assert.Equal(start.Unknown, unknownBefore.TotalCount);
+        Assert.All(unknownBefore.Items, r => Assert.NotNull(r.LocationReason));
+
+        await EditOkAsync(manager, "+971501234567", null, null);
+
+        // The edited customer is placed by their new number, so they leave the Unknown list and its explanations, and every figure still agrees.
+        var counts = await CountsAsync(factory);
+        Assert.Equal(1, counts.Unknown);
+        Assert.Equal(counts.Unknown, (await BreakdownAsync(manager)).Total);
+        var unknownAfter = await ListAsync(manager, "&location=unknown");
+        Assert.Equal(counts.Unknown, unknownAfter.TotalCount);
+        Assert.DoesNotContain(unknownAfter.Items, r => r.CustomerKey == Key);
+        Assert.All(unknownAfter.Items, r => Assert.NotNull(r.LocationReason));
+    }
+
     [Fact]
     public async Task EditingProjectAndUnitOnly_DoesNotMoveTheCustomerBetweenLocations()
     {

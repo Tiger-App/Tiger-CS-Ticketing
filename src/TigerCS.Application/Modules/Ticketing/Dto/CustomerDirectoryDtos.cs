@@ -192,6 +192,21 @@ public static class CustomerLocationKeys
         _ => null,
     };
 
+    /// <summary>What an employee reads for why a phone/customer is Unknown.</summary>
+    public static string ReasonText(CustomerPhoneLocationReason reason) => reason switch
+    {
+        CustomerPhoneLocationReason.Missing => "No phone number recorded",
+        CustomerPhoneLocationReason.InvalidCharacters => "Phone contains letters or symbols",
+        CustomerPhoneLocationReason.InternationalWrongLength => "International number (+ or 00) with an invalid length",
+        CustomerPhoneLocationReason.InternationalLeadingZero => "International number whose country code starts with 0",
+        CustomerPhoneLocationReason.UaeWrongLength => "Starts with 971 but is not 971 followed by 9 digits",
+        CustomerPhoneLocationReason.UaeLocalFormat => "UAE-style local number (05… / landline) with no country code — not assumed",
+        CustomerPhoneLocationReason.NationalFormatNoCountryCode => "National format starting 0, no country code",
+        CustomerPhoneLocationReason.NoCountryCode => "Digits only, no +, 00 or 971 — country not stated",
+        CustomerPhoneLocationReason.ConflictingCountries => "Tickets carry both a UAE and a foreign number",
+        _ => "Located",
+    };
+
     public static string Label(CustomerLocation location) => location switch
     {
         CustomerLocation.WithinUae => "Within UAE",
@@ -216,6 +231,10 @@ public sealed record CustomerDirectoryRowDto(
     string LastTicketStatus,
     DateTime LastTicketCreatedAtUtc,
     DateTime? LastInteractionAtUtc,
+    string? LocationReason = null,
+    string? LocationReasonText = null,
+    string? LocationPhone = null,
+    string? LocationOtherPhone = null,
     IReadOnlyList<string>? EditedFields = null)
 {
     /// <summary>True when an authorised user corrected at least one of the phone, project or unit shown on this row.</summary>
@@ -223,6 +242,12 @@ public sealed record CustomerDirectoryRowDto(
 }
 
 public sealed record CustomerDirectoryListResultDto(IReadOnlyList<CustomerDirectoryRowDto> Items, int TotalCount, int Page, int PageSize);
+
+/// <summary>One reason customers are Unknown and how many are, for the Unknown breakdown.</summary>
+public sealed record CustomerLocationReasonCountDto(string Reason, string Text, int Count);
+
+/// <summary>Every Unknown customer of a list query counted by the reason they are Unknown (sums to <see cref="Total"/>, which equals the Dashboard card's Unknown). <see cref="Truncated"/> when more than the read cap exist.</summary>
+public sealed record CustomerLocationBreakdownDto(int Total, IReadOnlyList<CustomerLocationReasonCountDto> Reasons, bool Truncated);
 
 /// <summary>A unit/property this customer's tickets were raised for — CRM Buyer or manual snapshot, deduplicated by project + unit number.</summary>
 public sealed record CustomerDirectoryUnitDto(string? ProjectName, string? UnitNumber, string Source, int TicketCount, DateTime LastTicketAtUtc, int? CrmBuyerUnitId, string? ExternalUnitId);

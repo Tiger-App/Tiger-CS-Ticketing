@@ -35,6 +35,43 @@ public enum CustomerLocation
 /// <see cref="CustomerLocation.Unknown"/>: no country is ever guessed.</item>
 /// </list>
 /// </summary>
+/// <summary>Why a phone number (or a customer's phones) is not placed in a location.</summary>
+public enum CustomerPhoneLocationReason
+{
+    /// <summary>Placed: there is nothing to explain.</summary>
+    None = 0,
+
+    /// <summary>No phone number is recorded (or it is only separators).</summary>
+    Missing = 1,
+
+    /// <summary>The number contains letters or symbols other than the separators (" ", "-", "(", ")", ".", "/", "+").</summary>
+    InvalidCharacters = 2,
+
+    /// <summary>Written with "+" or "00" but not 8–15 digits.</summary>
+    InternationalWrongLength = 3,
+
+    /// <summary>Written with "+" or "00" and a country code starting with 0.</summary>
+    InternationalLeadingZero = 4,
+
+    /// <summary>Starts with 971 (+971 / 00971 / 971) but is not followed by exactly 9 digits.</summary>
+    UaeWrongLength = 5,
+
+    /// <summary>A UAE-style local number (05x mobile / 0[2346 79] landline) with no country code. Looks UAE, states no country: not assumed.</summary>
+    UaeLocalFormat = 6,
+
+    /// <summary>Starts with a single 0 (national format) and is not a UAE-style local number: the country is not stated.</summary>
+    NationalFormatNoCountryCode = 7,
+
+    /// <summary>Digits with no "+", "00" or 971 prefix: the country is not stated.</summary>
+    NoCountryCode = 8,
+
+    /// <summary>The customer's tickets carry both a UAE and a foreign number: ambiguous, so not placed.</summary>
+    ConflictingCountries = 9,
+}
+
+/// <summary>A phone's location and, when Unknown, the reason.</summary>
+public readonly record struct PhoneLocationDiagnosis(CustomerLocation Location, CustomerPhoneLocationReason Reason);
+
 public static class CustomerPhoneLocation
 {
     /// <summary>The UAE's calling code.</summary>
@@ -48,11 +85,19 @@ public static class CustomerPhoneLocation
 
     public const int MaxInternationalDigits = 15;
 
-    public static CustomerLocation Classify(string? phoneNumber)
+    public static CustomerLocation Classify(string? phoneNumber) => Diagnose(phoneNumber).Location;
+
+    /// <summary>
+    /// The one rule, with its reason: where <paramref name="phoneNumber"/> sits and — when it sits nowhere — exactly why. <see cref="Classify"/> is this
+    /// method's <see cref="PhoneLocationDiagnosis.Location"/>, so the Dashboard, the Customers directory and the Unknown explanations can never disagree.
+    /// Nothing is guessed and nothing is rewritten: a local number such as "0501234567" is reported as <see cref="CustomerPhoneLocationReason.UaeLocalFormat"/>
+    /// (it looks UAE but states no country) and stays Unknown.
+    /// </summary>
+    public static PhoneLocationDiagnosis Diagnose(string? phoneNumber)
     {
         if (string.IsNullOrWhiteSpace(phoneNumber))
         {
-            return CustomerLocation.Unknown;
+            return new(CustomerLocation.Unknown, CustomerPhoneLocationReason.Missing);
         }
 
         var raw = phoneNumber.Trim();
@@ -65,7 +110,7 @@ public static class CustomerPhoneLocation
             {
                 if (!char.IsAsciiDigit(character))
                 {
-                    return CustomerLocation.Unknown;
+                    return new(CustomerLocation.Unknown, CustomerPhoneLocationReason.InvalidCharacters);
                 }
 
                 stripped.Append(character);
@@ -73,27 +118,51 @@ public static class CustomerPhoneLocation
         }
 
         var digits = stripped.ToString();
+        if (digits.Length == 0)
+        {
+            return new(CustomerLocation.Unknown, CustomerPhoneLocationReason.Missing);
+        }
+
         var international = hasPlus || digits.StartsWith("00", StringComparison.Ordinal);
         var core = international && !hasPlus ? digits[2..] : digits;
 
         if (international)
         {
-            if (core.Length is < MinInternationalDigits or > MaxInternationalDigits || core[0] == '0')
+            if (core.Length is < MinInternationalDigits or > MaxInternationalDigits)
             {
-                return CustomerLocation.Unknown;
+                return new(CustomerLocation.Unknown, CustomerPhoneLocationReason.InternationalWrongLength);
+            }
+
+            if (core[0] == '0')
+            {
+                return new(CustomerLocation.Unknown, CustomerPhoneLocationReason.InternationalLeadingZero);
             }
 
             if (core.StartsWith(UaeCountryCode, StringComparison.Ordinal))
             {
-                return core.Length == UaeCountryCode.Length + UaeNationalNumberLength ? CustomerLocation.WithinUae : CustomerLocation.Unknown;
+                return core.Length == UaeCountryCode.Length + UaeNationalNumberLength
+                    ? new(CustomerLocation.WithinUae, CustomerPhoneLocationReason.None)
+                    : new(CustomerLocation.Unknown, CustomerPhoneLocationReason.UaeWrongLength);
             }
 
-            return CustomerLocation.OutsideUae;
+            return new(CustomerLocation.OutsideUae, CustomerPhoneLocationReason.None);
         }
 
-        return core.StartsWith(UaeCountryCode, StringComparison.Ordinal) && core.Length == UaeCountryCode.Length + UaeNationalNumberLength
-            ? CustomerLocation.WithinUae
-            : CustomerLocation.Unknown;
+        if (core.StartsWith(UaeCountryCode, StringComparison.Ordinal))
+        {
+            return core.Length == UaeCountryCode.Length + UaeNationalNumberLength
+                ? new(CustomerLocation.WithinUae, CustomerPhoneLocationReason.None)
+                : new(CustomerLocation.Unknown, CustomerPhoneLocationReason.UaeWrongLength);
+        }
+
+        if (core[0] == '0')
+        {
+            // 05x xxx xxxx (10 digits) is a UAE mobile; 0[2346 79] xxx xxxx (9 digits) a UAE landline — said out loud, still not placed.
+            var looksUae = (core.Length == 10 && core[1] == '5') || (core.Length == 9 && "234679".Contains(core[1]));
+            return new(CustomerLocation.Unknown, looksUae ? CustomerPhoneLocationReason.UaeLocalFormat : CustomerPhoneLocationReason.NationalFormatNoCountryCode);
+        }
+
+        return new(CustomerLocation.Unknown, CustomerPhoneLocationReason.NoCountryCode);
     }
 
     /// <summary>

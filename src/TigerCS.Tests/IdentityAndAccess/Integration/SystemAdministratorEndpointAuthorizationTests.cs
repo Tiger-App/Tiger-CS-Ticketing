@@ -1387,6 +1387,15 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
+    public async Task GetCustomersUnknownBreakdown_Returns200()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+
+        var response = await client.GetAsync("/api/customers/unknown-breakdown?location=unknown");
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
     public async Task GetDashboardOverview_Returns200()
     {
         var (client, _) = await CreateAdministratorAsync();

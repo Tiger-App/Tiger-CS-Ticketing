@@ -58,4 +58,43 @@ public sealed class CustomerPhoneLocationTests
         Assert.Equal(CustomerLocation.Unknown, CustomerPhoneLocation.Resolve([]));
         Assert.Equal(CustomerLocation.Unknown, CustomerPhoneLocation.Resolve([CustomerLocation.Unknown]));
     }
+
+    [Theory]
+    [InlineData(null, CustomerPhoneLocationReason.Missing)]
+    [InlineData("  ", CustomerPhoneLocationReason.Missing)]
+    [InlineData("+", CustomerPhoneLocationReason.Missing)]
+    [InlineData("call me", CustomerPhoneLocationReason.InvalidCharacters)]
+    [InlineData("+971501234567 ext 12", CustomerPhoneLocationReason.InvalidCharacters)]
+    [InlineData("+1234567", CustomerPhoneLocationReason.InternationalWrongLength)]
+    [InlineData("00", CustomerPhoneLocationReason.InternationalWrongLength)]
+    [InlineData("+1234567890123456", CustomerPhoneLocationReason.InternationalWrongLength)]
+    [InlineData("+0441234567", CustomerPhoneLocationReason.InternationalLeadingZero)]
+    [InlineData("+97141234567", CustomerPhoneLocationReason.UaeWrongLength)]
+    [InlineData("00971501234", CustomerPhoneLocationReason.UaeWrongLength)]
+    [InlineData("97150123", CustomerPhoneLocationReason.UaeWrongLength)]
+    [InlineData("0501234567", CustomerPhoneLocationReason.UaeLocalFormat)]      // UAE mobile, national form
+    [InlineData("04 123 4567", CustomerPhoneLocationReason.UaeLocalFormat)]     // UAE landline (Dubai), national form
+    [InlineData("0112345678", CustomerPhoneLocationReason.NationalFormatNoCountryCode)]
+    [InlineData("501234567", CustomerPhoneLocationReason.NoCountryCode)]
+    [InlineData("447911123456", CustomerPhoneLocationReason.NoCountryCode)]
+    public void Unknown_NamesExactlyWhy_AndNothingIsGuessed(string? phone, CustomerPhoneLocationReason reason)
+    {
+        var diagnosis = CustomerPhoneLocation.Diagnose(phone);
+        Assert.Equal(CustomerLocation.Unknown, diagnosis.Location);
+        Assert.Equal(reason, diagnosis.Reason);
+    }
+
+    [Theory]
+    [InlineData("+971501234567", CustomerLocation.WithinUae)]
+    [InlineData("971501234567", CustomerLocation.WithinUae)]
+    [InlineData("00971501234567", CustomerLocation.WithinUae)]
+    [InlineData("+447911123456", CustomerLocation.OutsideUae)]
+    [InlineData("0044 7911 123456", CustomerLocation.OutsideUae)]
+    public void APlacedNumber_HasNoReason_AndClassifyIsTheDiagnosedLocation(string phone, CustomerLocation location)
+    {
+        var diagnosis = CustomerPhoneLocation.Diagnose(phone);
+        Assert.Equal(location, diagnosis.Location);
+        Assert.Equal(CustomerPhoneLocationReason.None, diagnosis.Reason);
+        Assert.Equal(location, CustomerPhoneLocation.Classify(phone));
+    }
 }

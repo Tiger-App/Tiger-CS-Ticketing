@@ -139,6 +139,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "GET /api/dashboard",
         "GET /api/dashboard/overview",
         "GET /api/dashboard/customers-by-location",
+        "GET /api/customers/unknown-breakdown",
         "GET /api/reports/team-performance",
         "GET /api/reports/team-performance/records",
         "GET /api/reports/team-performance/sla-details",
