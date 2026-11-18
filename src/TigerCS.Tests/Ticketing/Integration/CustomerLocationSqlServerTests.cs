@@ -1,7 +1,10 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using TigerCS.Application.Modules.IdentityAndAccess.Dto;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
@@ -14,6 +17,7 @@ using TigerCS.Infrastructure.Modules.IdentityAndAccess.Repositories;
 using TigerCS.Infrastructure.Modules.Ticketing.Repositories;
 using TigerCS.Infrastructure.Persistence;
 using TigerCS.Tests.Ticketing.Dashboard;
+using TigerCS.Tests.IdentityAndAccess.Integration;
 using TigerCS.Tests.Ticketing.Fakes;
 
 namespace TigerCS.Tests.Ticketing.Integration;
@@ -298,6 +302,136 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
 
         Assert.Equal(new CustomerLocationCounts(perBucket, perBucket, perBucket), counts);
         Assert.True(watch.Elapsed < TimeSpan.FromSeconds(20), $"The count took {watch.Elapsed}.");
+    }
+
+    /// <summary>
+    /// A repeat caller: several tickets on one foreign (or UAE) number. The per-customer fold is a SUM; if it is typed <c>int</c> by SQL Server it
+    /// overflows (Msg 8115) once a customer has a handful of tickets — and, being evaluated for every customer, it would break the card and BOTH
+    /// drill-downs for everyone. SQLite's 64-bit integers can never show this, so only a real SQL Server can.
+    /// </summary>
+    [VisibilitySqlServerFact]
+    public async Task ARepeatCallerWithManyTickets_DoesNotOverflowTheLocationFold_ForTheCardOrEitherDrillDown()
+    {
+        CreateDatabase();
+        var inWindow = new DateTime(2026, 11, 1, 10, 0, 0, DateTimeKind.Utc);
+        using (var context = CreateContext())
+        {
+            for (var i = 0; i < 12; i++) CrmCustomer(context, 1, "+447911123456", inWindow.AddMinutes(i));    // one UK customer, 12 tickets
+            for (var i = 0; i < 12; i++) CrmCustomer(context, 2, "+971501234567", inWindow.AddMinutes(i));    // one UAE customer, 12 tickets
+            for (var i = 0; i < 4; i++) CrmCustomer(context, 3, i % 2 == 0 ? "+971501234568" : "+447911123457", inWindow.AddMinutes(i));   // ambiguous
+            CrmCustomer(context, 4, "+447911123458", inWindow);
+        }
+
+        var range = new CustomerDirectoryListRequestDto(DateFrom: new DateOnly(2026, 10, 19), DateTo: new DateOnly(2026, 11, 17));
+        var card = await CountsAsync(range);
+
+        Assert.Equal(new CustomerLocationCounts(1, 2, 1), card);
+        Assert.Equal(1, (await ListAsync(range with { Location = CustomerLocationKeys.WithinUae, PageSize = 25 })).TotalCount);
+        Assert.Equal(2, (await ListAsync(range with { Location = CustomerLocationKeys.OutsideUae, PageSize = 25 })).TotalCount);
+        Assert.Equal(1, (await ListAsync(range with { Location = CustomerLocationKeys.Unknown, PageSize = 25 })).TotalCount);
+        Assert.Equal(card.Total, (await ListAsync(range with { PageSize = 25 })).TotalCount);
+    }
+
+    /// <summary>
+    /// The drill-down the Dashboard card opens: <c>/Customers?location=…&amp;dateFrom=…&amp;dateTo=…</c> with the page's DEFAULT page size, over thousands of
+    /// customers on a real SQL Server — the request shape the earlier tests (page size 100, small data) never sent.
+    /// </summary>
+    [VisibilitySqlServerFact]
+    public async Task TheDrillDownList_ForWithinAndOutsideUae_WorksOnARealSqlServer_AndItsTotalIsTheCardsCount()
+    {
+        CreateDatabase();
+        const int perBucket = 2000;
+        using (var context = CreateContext())
+        {
+            var tickets = new List<(Ticket Ticket, string Phone)>();
+            for (var type = 0; type < 3; type++)
+            {
+                for (var k = 0; k < perBucket; k++)
+                {
+                    var phone = type switch { 0 => $"+97150{k:D7}", 1 => $"+4479{k:D8}", _ => $"050{k:D7}" };
+                    tickets.Add((Ticket.CreateUnclassified($"TG-LS-{++_seq:D6}", _departmentId, "bulk", Now.AddMinutes(-_seq)), phone));
+                }
+            }
+
+            context.Tickets.AddRange(tickets.Select(t => t.Ticket));
+            context.SaveChanges();
+            context.IntakeRecords.AddRange(tickets.Select(t => NewIntake(t.Ticket, t.Phone)));
+            context.SaveChanges();
+        }
+
+        var range = new CustomerDirectoryListRequestDto(DateFrom: new DateOnly(2026, 1, 1), DateTo: new DateOnly(2026, 12, 31));
+        var card = await CountsAsync(range);
+
+        foreach (var (location, expected) in new[] { (CustomerLocationKeys.WithinUae, card.WithinUae), (CustomerLocationKeys.OutsideUae, card.OutsideUae), (CustomerLocationKeys.Unknown, card.Unknown) })
+        {
+            var watch = Stopwatch.StartNew();
+            using var context = CreateContext();
+            // PageSize 25 is what /Customers sends (CustomerDirectoryAppService.DefaultPageSize); Page 1 and a later page both execute.
+            var first = await Service(context).ListAsync(Guid.NewGuid(), CrossDepartment, range with { Location = location, PageSize = 25 });
+            var third = await Service(context).ListAsync(Guid.NewGuid(), CrossDepartment, range with { Location = location, PageSize = 25, Page = 3 });
+            watch.Stop();
+
+            Assert.Equal(expected, first.TotalCount);
+            Assert.Equal(25, first.Items.Count);
+            Assert.Equal(25, third.Items.Count);
+            Assert.Empty(first.Items.Select(i => i.CustomerKey).Intersect(third.Items.Select(i => i.CustomerKey)));
+            Assert.True(watch.Elapsed < TimeSpan.FromSeconds(20), $"{location}: the list took {watch.Elapsed}.");
+        }
+
+        // The plain directory (no location, no dashboard filters) still works and counts everyone.
+        using (var context = CreateContext())
+        {
+            var plain = await Service(context).ListAsync(Guid.NewGuid(), CrossDepartment, new CustomerDirectoryListRequestDto());
+            Assert.Equal(card.Total, plain.TotalCount);
+            Assert.Equal(CustomerDirectoryAppService.DefaultPageSize, plain.Items.Count);
+        }
+    }
+
+    /// <summary>
+    /// The drill-down end to end through the REAL HTTP API (routing, model binding, authorization, controller, application service, EF, SQL Server):
+    /// the very URL the Dashboard card links to, as an authenticated supervisor. A failing response fails the test WITH its body, so the actual
+    /// server-side error is what the report shows.
+    /// </summary>
+    [VisibilitySqlServerFact]
+    public async Task TheCustomersApi_ServesTheDrillDownsAndThePlainList_AndTheirTotalsAreTheDashboardCardsCounts()
+    {
+        CreateDatabase();
+        var inWindow = new DateTime(2026, 11, 1, 10, 0, 0, DateTimeKind.Utc);
+        using (var context = CreateContext())
+        {
+            for (var i = 0; i < 3; i++) CrmCustomer(context, 100 + i, $"+97150123456{i}", inWindow);        // Within UAE
+            for (var i = 0; i < 2; i++) CrmCustomer(context, 200 + i, $"+4479111234{50 + i}", inWindow);     // Outside UAE
+            CrmCustomer(context, 300, "0501234567", inWindow);                                                // Unknown
+        }
+
+        using var factory = new TigerCsApiFactory { SqlServerConnectionString = ConnectionString };
+        var (username, password, _) = await factory.SeedEmployeeAsync(Roles.CsSupervisor);
+        using var client = factory.CreateClient();
+        var login = await client.PostAsJsonAsync("/api/auth/login", new LoginRequestDto(username, password));
+        login.EnsureSuccessStatusCode();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", (await login.Content.ReadFromJsonAsync<LoginResponseDto>())!.AccessToken);
+
+        async Task<T> GetAsync<T>(string url)
+        {
+            var response = await client.GetAsync(url);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.True(response.IsSuccessStatusCode, $"GET {url} -> {(int)response.StatusCode}: {body}");
+            return System.Text.Json.JsonSerializer.Deserialize<T>(body, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        }
+
+        const string period = "dateFrom=2026-10-19&dateTo=2026-11-17";
+        var card = await GetAsync<DashboardCustomerLocationDto>($"/api/dashboard/customers-by-location?{period}");
+        Assert.Equal((3, 2, 1, 6), (card.WithinUae, card.OutsideUae, card.Unknown, card.Total));
+
+        foreach (var (location, expected) in new[] { ("within-uae", card.WithinUae), ("outside-uae", card.OutsideUae), ("unknown", card.Unknown) })
+        {
+            var list = await GetAsync<CustomerDirectoryListResultDto>($"/api/customers?location={location}&{period}&page=1&pageSize=25");
+            Assert.Equal(expected, list.TotalCount);
+            Assert.Equal(expected, list.Items.Count);
+        }
+
+        var plain = await GetAsync<CustomerDirectoryListResultDto>("/api/customers?page=1&pageSize=25");
+        Assert.Equal(card.Total, plain.TotalCount);
     }
 
     private IntakeRecord NewIntake(Ticket ticket, string phone)

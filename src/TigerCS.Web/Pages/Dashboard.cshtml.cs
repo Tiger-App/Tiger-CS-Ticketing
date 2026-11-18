@@ -151,6 +151,9 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
     /// <summary>The Customers by Location figures from their own Api read; null when that read failed or returned nothing — the card is then simply absent and the rest of the dashboard is unaffected.</summary>
     public DashboardCustomerLocationDto? CustomerLocationData { get; private set; }
 
+    /// <summary>True when the card's own Api read failed: the card then says so, rather than vanishing or showing zeros as if nobody were there.</summary>
+    public bool CustomerLocationFailed { get; private set; }
+
     /// <summary>True when the user narrowed anything beyond the defaults — the filter bar then offers "Clear".</summary>
     public bool HasFilters =>
         DateFrom is not null || DateTo is not null || DepartmentId is not null || OwnerEmployeeId is not null
@@ -200,6 +203,7 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
         var location = await dashboardApiClient.GetCustomersByLocationAsync(
             new DashboardOverviewRequestDto(DateFrom, DateTo, DepartmentId, OwnerEmployeeId, ChannelId, RequestTypeId, TicketStatus, PriorityId), cancellationToken);
         CustomerLocationData = location.IsSuccess ? location.Value : null;
+        CustomerLocationFailed = !location.IsSuccess;
     }
 
     /// <summary>

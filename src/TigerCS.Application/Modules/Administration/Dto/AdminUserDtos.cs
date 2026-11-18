@@ -34,7 +34,12 @@ public sealed record CreateUserRequestDto(
     IReadOnlyList<string> Roles,
     int? PrimaryDepartmentId);
 
-public sealed record UpdateUserProfileRequestDto(string DisplayName, string? Email, bool IsGeynessStaff);
+/// <summary>
+/// PUT api/admin/users/{employeeId}/profile. <paramref name="UserName"/> is the login name: null leaves it unchanged (older
+/// callers), otherwise it is required, must be unique case-insensitively and is changed through Identity's
+/// <c>UserManager.SetUserNameAsync</c> (the employee id, roles, departments and history are untouched; sessions are invalidated).
+/// </summary>
+public sealed record UpdateUserProfileRequestDto(string DisplayName, string? Email, bool IsGeynessStaff, string? UserName = null);
 
 public sealed record SetUserRolesRequestDto(IReadOnlyList<string> Roles);
 

@@ -68,7 +68,8 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
             await LoadPasswordPolicyAsync(cancellationToken);
             Profile = new ProfileInput
             {
-                DisplayName = UserRecord!.DisplayName,
+                UserName = UserRecord!.UserName,
+                DisplayName = UserRecord.DisplayName,
                 Email = UserRecord.Email,
                 IsGeynessStaff = UserRecord.IsGeynessStaff
             };
@@ -115,8 +116,8 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
     }
 
     public Task<IActionResult> OnPostProfileAsync(Guid id, CancellationToken cancellationToken) =>
-        ApplyAsync(id, adminApi.UpdateUserProfileAsync(id, new UpdateUserProfileRequestDto(Profile.DisplayName, Profile.Email, Profile.IsGeynessStaff), cancellationToken),
-            "Profile saved.", "The profile could not be saved.");
+        ApplyAsync(id, adminApi.UpdateUserProfileAsync(id, new UpdateUserProfileRequestDto(Profile.DisplayName, Profile.Email, Profile.IsGeynessStaff, Profile.UserName), cancellationToken),
+            "Profile saved. If the username was changed, the user's existing sessions have been signed out.", "The profile could not be saved.");
 
     public Task<IActionResult> OnPostRolesAsync(Guid id, CancellationToken cancellationToken) =>
         ApplyAsync(id, adminApi.SetUserRolesAsync(id, new SetUserRolesRequestDto(RolesForm.Roles ?? []), cancellationToken),
@@ -236,6 +237,7 @@ public sealed class UserEditModel(AdminApiClient adminApi, DepartmentsApiClient 
 
     public sealed class ProfileInput
     {
+        [Required] public string UserName { get; set; } = string.Empty;
         [Required] public string DisplayName { get; set; } = string.Empty;
         public string? Email { get; set; }
         public bool IsGeynessStaff { get; set; }

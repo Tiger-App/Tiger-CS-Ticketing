@@ -20,7 +20,7 @@ public sealed class DashboardCustomerLocationRenderTests
 {
     private static readonly Guid ViewerId = Guid.NewGuid();
 
-    internal sealed class FakeApi(DashboardCustomerLocationDto? location, bool canOpenCustomers = true) : HttpMessageHandler
+    internal sealed class FakeApi(DashboardCustomerLocationDto? location, bool canOpenCustomers = true, bool customersFail = false) : HttpMessageHandler
     {
         public List<string> Requests { get; } = [];
 
@@ -28,6 +28,15 @@ public sealed class DashboardCustomerLocationRenderTests
         {
             Requests.Add(request.RequestUri!.PathAndQuery);
             var path = request.RequestUri.AbsolutePath;
+            // A failing Api read is a real server error (500), never an empty success: the pages must say so rather than show zero.
+            if ((customersFail && path == "/api/customers") || (location is null && path == "/api/dashboard/customers-by-location"))
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                {
+                    Content = JsonContent.Create(new { title = "An error occurred while processing your request.", status = 500 }),
+                });
+            }
+
             object? body = path switch
             {
                 // A viewer denied the Customers module has an explicit permission override: the nav and the card then hide the way in.
@@ -101,12 +110,25 @@ public sealed class DashboardCustomerLocationRenderTests
     }
 
     [Fact]
-    public async Task NoCard_WhenTheApiReturnsNone_AndTheRestOfTheDashboardIsUntouched()
+    public async Task WhenTheCardsOwnReadFails_TheCardSaysSo_NeverZeros_AndTheRestOfTheDashboardIsUntouched()
     {
         var html = await GetAsync(new FakeApi(null), "/Dashboard");
 
-        Assert.DoesNotContain("customers-by-location", html);
+        Assert.Contains("data-state=\"unavailable\"", html);
+        Assert.Contains("Customers by Location could not be loaded", html);
+        Assert.DoesNotContain("data-loc=\"total\"", html);   // no figures at all: zeros would claim there are no customers
+        Assert.DoesNotContain("loc-stat", html);
         Assert.Contains("Operational counters", html);
+    }
+
+    [Fact]
+    public async Task TheCustomersList_WhenTheApiFails_ShowsTheFailure_NotAnEmptyOrZeroList()
+    {
+        var html = await GetAsync(new FakeApi(null, customersFail: true), "/Customers?location=within-uae&dateFrom=2026-10-19&dateTo=2026-11-17");
+
+        Assert.Contains("could not load the customer directory", html);
+        Assert.DoesNotContain("No customers match these filters", html);
+        Assert.DoesNotContain("0 customers match", html);
     }
 
     [Fact]
