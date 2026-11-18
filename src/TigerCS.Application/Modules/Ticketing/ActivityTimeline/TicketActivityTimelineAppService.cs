@@ -139,6 +139,7 @@ public sealed class TicketActivityTimelineAppService(
             TicketNumber = ticket.TicketNumber,
             CreatedAtUtc = ticket.CreatedAtUtc,
             CreatedByEmployeeId = ticket.CreatedByEmployeeId,
+            IntegrationSource = ticket.IntegrationSource,
             Interactions = interactions,
             MessagesByInteraction = messages,
             ChannelNames = channelNames,

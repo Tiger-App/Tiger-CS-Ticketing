@@ -30,11 +30,11 @@ public sealed record TicketSlaView(string Headline, string HeadlineCss, SlaClock
         var (headline, css) = finished && sla.SlaState == "Breached" ? ("Breached", "breached") : TicketDisplay.SlaBadgeText(sla, nowUtc);
 
         return new TicketSlaView(
-            headline, css, FirstResponseClock(sla, started), ResolutionClock(sla, started, finished),
+            headline, css, FirstResponseClock(sla, started, finished), ResolutionClock(sla, started, finished),
             started ? null : sla.Explanation?.NotStartedReason);
     }
 
-    private static SlaClockView FirstResponseClock(TicketSlaSummaryResponseDto sla, bool started)
+    private static SlaClockView FirstResponseClock(TicketSlaSummaryResponseDto sla, bool started, bool finished = false)
     {
         const string name = "First response";
         if (!started)
@@ -54,6 +54,13 @@ public sealed record TicketSlaView(string Headline, string HeadlineCss, SlaClock
             return new SlaClockView(
                 name,
                 sla.FirstResponseDueAtUtc is { } missed ? $"Overdue since {TicketDisplay.UaeShort(missed)}" : "Overdue — no person has replied", "breached");
+        }
+
+        if (finished)
+        {
+            // A finished ticket is not "awaiting" anybody: no person's reply was recorded before it ended (for example a queue-managed ticket,
+            // whose service start the Queueing System does not report). Nothing is invented and no response is credited.
+            return new SlaClockView(name, "No person reply recorded", "na");
         }
 
         return new SlaClockView(

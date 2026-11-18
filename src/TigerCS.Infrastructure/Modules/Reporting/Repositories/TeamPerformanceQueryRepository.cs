@@ -352,7 +352,7 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                     .FirstOrDefault()
             });
 
-    /// <summary>Resolution recorded on time in the window: inside the SLA period in force, on or before that period's due time, with no breach flagged on that period. Holder at the moment of the resolution. A period can appear more than once if it has several resolution rows; the caller keeps the earliest.</summary>
+    /// <summary>Resolution recorded on time in the window: inside the SLA period in force, on or before that period's due time, with no breach flagged on that period. Holder at the moment of the resolution (an assignment ended AT the resolution - a closure releases the owner in the same instant - still holds it). A period can appear more than once if it has several resolution rows; the caller keeps the earliest.</summary>
     private IQueryable<SlaMoment> ResolutionMetMoments(DateTime start, DateTime end) =>
         dbContext.TicketResolutions.AsNoTracking()
             .Where(r => r.ResolvedAtUtc >= start && r.ResolvedAtUtc < end)
@@ -371,7 +371,7 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 HolderEmployeeId = dbContext.TicketAssignments
                     .Where(a => a.TicketId == x.Resolution.TicketId && a.AssignedAtUtc <= x.Resolution.ResolvedAtUtc)
                     .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => a.IsCurrent || a.SupersededAtUtc == null || a.SupersededAtUtc > x.Resolution.ResolvedAtUtc ? (Guid?)a.AssignedEmployeeId : null)
+                    .Select(a => a.IsCurrent || a.SupersededAtUtc == null || a.SupersededAtUtc >= x.Resolution.ResolvedAtUtc ? (Guid?)a.AssignedEmployeeId : null)
                     .FirstOrDefault(),
                 HolderDepartmentId = dbContext.TicketAssignments
                     .Where(a => a.TicketId == x.Resolution.TicketId && a.AssignedAtUtc <= x.Resolution.ResolvedAtUtc)

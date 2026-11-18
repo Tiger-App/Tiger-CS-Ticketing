@@ -57,7 +57,10 @@ public static class TicketClosureAuditActions
     /// <summary>AI-only time-limit closure (no human ever involved, open longer than the configured hours) — a system closure, never attributed to the AI's own completion.</summary>
     public const string ClosedForAiOnlyTimeout = "AutoCloseAiOnlyTimeout";
 
+    /// <summary>The Queueing System closed or cancelled the ticket it owns. Attributed to the employee it names (<c>ClosedByEmployeeId=</c> in the audit value) when it identified one.</summary>
+    public const string ClosedByQueueingSystem = "AutoCloseQueueingSystem";
+
     /// <summary>Every action that closes a ticket, so "the latest closure" considers all of them.</summary>
     public static readonly IReadOnlyList<string> AllClosures =
-        [ClosedByAgent, ClosedByAi, ClosedForCustomerInactivity, ClosedForDocumentDelivery, ClosedForAiOnlyTimeout];
+        [ClosedByAgent, ClosedByAi, ClosedForCustomerInactivity, ClosedForDocumentDelivery, ClosedForAiOnlyTimeout, ClosedByQueueingSystem];
 }

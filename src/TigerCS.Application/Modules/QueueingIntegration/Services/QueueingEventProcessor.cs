@@ -62,6 +62,7 @@ public sealed class QueueingEventProcessor(
     IEmployeeRepository employeeRepository,
     IUserRoleReader roleReader,
     IAuditEntryWriter auditWriter,
+    ITicketInteractionRepository interactionRepository,
     ILogger<QueueingEventProcessor> logger)
 {
     private const string SourceLabel = "Queueing System";
@@ -642,19 +643,44 @@ public sealed class QueueingEventProcessor(
         var reason = message.Reason ?? message.Comment
             ?? (outcome == ResolutionOutcome.Cancelled ? "Cancelled in the Queueing System" : "Served and closed in the Queueing System");
 
+        var endReason = outcome == ResolutionOutcome.Cancelled ? "QueueTicketCancelled" : "QueueTicketClosed";
+
         if (ticket.TicketStatus == TicketStatus.Closed)
         {
             // Already closed in TigerCS (for example by an allowed manual change): the queue's state still has to be mirrored, and nothing is written twice.
+            foreach (var interaction in (await interactionRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Where(i => !i.IsEnded))
+            {
+                interaction.End(EventNow(), endReason);
+            }
+
             StageApplied(link, row, message, finalState, QueueingOutcomeCodes.AlreadyInState, "The ticket was already closed.");
             await unitOfWork.SaveChangesAsync(cancellationToken);
             return Respond(row, ticket, QueueingResultStatus.Processed);
         }
 
+        // Who closed it in the queue: PerformedByUserId through the same user mapping as assignment. Resolved and active -> that employee is the closure actor.
+        // Not identifiable -> the closure stays a Queueing System action; it is NEVER attributed to the integration account and never guessed.
+        var closedBy = message.PerformedByUserId is { } performer
+            ? (await ResolveEmployeeAsync(performer, serviceAccount, cancellationToken)).EmployeeId
+            : null;
+
+        var liveInteractions = (await interactionRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Where(i => !i.IsEnded).ToList();
+
         var detail = $"{EventFacts(message)};PerformedByUserId={message.PerformedByUserId ?? "(none)"};CounterId={message.CounterId ?? "(none)"}";
         var closed = await lifecycleAppService.CloseForQueueingAsync(
             serviceAccount, ticket.TicketId, outcome, $"{SourceLabel}: {reason}", detail,
-            _ => StageApplied(link, row, message, finalState, QueueingOutcomeCodes.Applied, reason),
-            cancellationToken);
+            _ =>
+            {
+                // Staged on the closure's own unit of work: the interaction ends in the very transaction that closes the ticket.
+                foreach (var interaction in liveInteractions)
+                {
+                    interaction.End(EventNow(), endReason);
+                }
+
+                StageApplied(link, row, message, finalState, QueueingOutcomeCodes.Applied, reason);
+            },
+            cancellationToken,
+            closedBy);
         if (closed.Outcome != TicketMutationOutcome.Success)
         {
             store.DiscardPendingChanges();

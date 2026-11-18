@@ -37,6 +37,23 @@ Routing is decided in this order:
 An explicit mapping must point at a request type that is **active**, belongs to an **active department**, has a **Published workflow version**, and pairs with **exactly one active same-named category** in its department. A mapping that **exists but is unusable** never falls back to the company default (that would silently misroute the ticket): the event is held with `REQUEST_TYPE_UNUSABLE` and retried once the configuration is fixed. A mapping row with `IsActive = 0` is treated as absent. The request/response payload and the API-key authentication are unchanged.
 
 
+### 1.2 How a queue ticket is shown, timed and credited
+
+Confirmed against the local UAT of ticket 1686 (Created, Assigned, CommentAdded, Recalled, Returned, Reassigned, Closed).
+
+| Topic | Behaviour |
+|---|---|
+| **Source** | The timeline reads **Source: Queueing System** (actor *Queueing System*), never "TigerCS (entered by an employee)". Queue interactions carry no Genesys wording. |
+| **Interaction** | The Walk in / Kiosk interaction is **ended at the event's original `OccurredAtUtc`** (clamped to now) on `TicketClosed` (reason `QueueTicketClosed`) and `TicketCancelled` (`QueueTicketCancelled`), in the same transaction as the closure. Ending it never changes the ticket status. |
+| **Closed by** | `PerformedByUserId` is resolved through `QueueingUserMappings` (the same lookup as assignment). A mapped, active employee is the **closure actor** (status history, resolution row, audit) and the closure reads *Human Agent* (or *Supervisor*). An unmapped / missing user leaves the closure a **Queueing System** action (*System Automation - Queueing System*); it is **never** attributed to the integration account and no employee is guessed. |
+| **Comment author** | The mapped employee when `PerformedByUserId` resolves (the note list now carries `authorName`); otherwise the integration account with a `[Queueing System - queue user X]` prefix. |
+| **Assignment history** | `TicketReturned` ends the current assignment **at the Return's time**; the following `TicketReassigned` starts a new row at its own time. The span between them is *unassigned*. Closure ends the last assignment at the closure time. Inside a queue event the assignment end is stamped with the event's time, so durations are measured on the queue's timeline, not on when TigerCS received the event. |
+| **Closed ticket owner** | A closed ticket has no owner and no current assignment. Ticket Details shows the **last responsible employee** (the holder of the last assignment) as *name (last responsible)* - display only. |
+| **Performance** | Credit follows the **last assignment**, not the closing actor: the employee closed-ticket counts and the *Human Agent* closure card count the final holder (a queue closure counts as Human Agent only when it named a mapped employee); Team Performance / SLA reports credit a Resolution met to whoever held the ticket at the closure instant (an assignment ended exactly at the resolution still holds it). Review eligibility needs no change (every system closure produces the single Closed email, which carries the review link; customer emails for queue tickets are skipped, see 7). |
+| **Notifications** | Customer emails are recorded as *Skipped* (`ManagedByExternalSystem`); staff assignment emails are delivered. TigerCS has no SMS channel for tickets, so no customer SMS can be sent. |
+
+**First Response SLA.** No queue event is treated as a first human response: `TicketAssigned`, `TicketCommentAdded`, `TicketRecalled` and `TicketClosed` say what happened in the *queue*, not that an employee replied to / served the customer, and a recall can mean "no answer". A closed queue ticket therefore has no recorded first response, and Ticket Details shows *No person reply recorded* instead of *Awaiting a person's reply*. **A separate `TicketServiceStarted` event is recommended** (the queue knows when the customer reached the counter and service began): it would record the first human response at its own `OccurredAtUtc` for the employee named in `PerformedByUserId`, make First Response SLA meaningful for queue tickets, and let reports distinguish waiting time from service time. It is not implemented here because it adds an event type to the integration contract.
+
 ## 2. Authentication
 
 | | |

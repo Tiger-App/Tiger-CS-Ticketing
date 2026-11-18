@@ -13,6 +13,7 @@ public static class TimelineAuditActions
     public const string AutoCloseByAi = "AutoCloseByAi";
     public const string AutoCloseDocumentDelivery = "AutoCloseDocumentDelivery";
     public const string AutoCloseAiOnlyTimeout = "AutoCloseAiOnlyTimeout";
+    public const string AutoCloseQueueingSystem = "AutoCloseQueueingSystem";
 
     /// <summary>Written (forward-compatible, from this release on) when a human reply reaches TigerCS for a ticket that is already Closed. Its audit time is the moment TigerCS received it.</summary>
     public const string HumanActivityAfterClosure = "TicketHumanActivityAfterClosure";
@@ -30,7 +31,7 @@ public static class TimelineAuditActions
     /// <summary>Every audit action the timeline reads.</summary>
     public static readonly IReadOnlyCollection<string> All =
     [
-        AutoCloseCustomerInactivity, AutoCloseByAi, AutoCloseDocumentDelivery, AutoCloseAiOnlyTimeout, HumanActivityAfterClosure,
+        AutoCloseCustomerInactivity, AutoCloseByAi, AutoCloseDocumentDelivery, AutoCloseAiOnlyTimeout, AutoCloseQueueingSystem, HumanActivityAfterClosure,
         "GenesysRoutingChanged", "GenesysTranscriptAppended", "GenesysHumanFollowUpRequired",
         "GenesysHandoffAutoRaisedOnConversationEnd", "GenesysConversationEnded",
         // The Queueing System integration: the history entries no other table carries (a queue ticket's creation facts, a return to the waiting queue, a recall).
@@ -46,6 +47,12 @@ public sealed class TicketTimelineSources
     public required string TicketNumber { get; init; }
     public required DateTime CreatedAtUtc { get; init; }
     public Guid? CreatedByEmployeeId { get; init; }
+
+    /// <summary>The external system that owns the ticket's lifecycle (<c>TicketIntegrationSources</c>), or null for an ordinary TigerCS ticket.</summary>
+    public string? IntegrationSource { get; init; }
+
+    /// <summary>True for a ticket created and managed by the Queueing System: its interactions are the queue's walk-in contact, never a Genesys conversation.</summary>
+    public bool IsQueueing => string.Equals(IntegrationSource, TicketIntegrationSources.QueueingSystem, StringComparison.Ordinal);
 
     public IReadOnlyList<TicketInteraction> Interactions { get; init; } = [];
 
@@ -223,9 +230,16 @@ public static class TicketActivityTimelineBuilder
         }
         else
         {
-            source = origin.Source == InteractionContextSource.Genesys ? "Genesys" : "TigerCS (entered by an employee)";
+            source = s.IsQueueing ? "Queueing System"
+                : origin.Source == InteractionContextSource.Genesys ? "Genesys" : "TigerCS (entered by an employee)";
             channel = ctx.Channel(origin.ChannelId);
-            if (origin.Source == InteractionContextSource.Genesys)
+            if (s.IsQueueing)
+            {
+                // Created by the integration on the queue's behalf - not typed in by an employee.
+                actorType = TimelineActorTypes.System;
+                actorName = "Queueing System";
+            }
+            else if (origin.Source == InteractionContextSource.Genesys)
             {
                 actorType = TimelineActorTypes.System;
                 actorName = s.CreatedByEmployeeId is null
@@ -264,7 +278,7 @@ public static class TicketActivityTimelineBuilder
 
             // Conversation start. Genesys' own start time where supplied, otherwise the moment TigerCS recorded the interaction.
             var startedAt = interaction.InteractionStartedAtUtc ?? interaction.CreatedAtUtc;
-            var startNote = interaction.InteractionStartedAtUtc is null
+            var startNote = isGenesys && interaction.InteractionStartedAtUtc is null
                 ? "Genesys did not supply a start time; showing when TigerCS recorded the interaction."
                 : null;
             var started = aiMessages.Count > 0;
@@ -275,7 +289,7 @@ public static class TicketActivityTimelineBuilder
                 "Conversation",
                 started ? TimelineActorTypes.Ai : TimelineActorTypes.Customer,
                 started ? "AI virtual agent" : (CustomerNameResolver.FirstValid(interaction.CustomerName) ?? "Customer"),
-                $"{(isGenesys ? "Genesys" : "Entered in TigerCS")}: {label}{(interaction.Direction is { } d ? $", {d}" : string.Empty)}"
+                $"{(isGenesys ? "Genesys" : s.IsQueueing ? "Queueing System" : "Entered in TigerCS")}: {label}{(interaction.Direction is { } d ? $", {d}" : string.Empty)}"
                 + (interaction.GenesysQueueName is { } q ? $", queue {q}" : string.Empty) + ".",
                 SourceInteraction, rank: 1, timeNote: startNote, interactionId: id));
 
@@ -925,6 +939,20 @@ public static class TicketActivityTimelineBuilder
 
         var note = string.IsNullOrWhiteSpace(closing.Note) ? null : closing.Note;
 
+        var queueAudit = s.AuditEntries.FirstOrDefault(a => a.CorrelationId == closing.CorrelationId && a.Action == TimelineAuditActions.AutoCloseQueueingSystem);
+        if (queueAudit is not null)
+        {
+            var queueReason = Pick(ParseKv(queueAudit.AfterValue), "Reason", note ?? TimelineWording.NotRecorded);
+            if (closing.ActorEmployeeId is { } employee && !closing.ActorIsSystem)
+            {
+                // The queue named the employee who closed it (PerformedByUserId, mapped through QueueingUserMappings): that person is the closure actor.
+                return (s.SupervisorIds.Contains(employee) ? ClosedByTypes.Supervisor : ClosedByTypes.HumanAgent, ctx.Name(employee), queueReason, "QueueClosedByEmployee", "Queueing System event (mapped employee)");
+            }
+
+            gaps.Add("The Queueing System did not identify (or TigerCS could not map) the employee who closed this ticket; the closure is shown as a Queueing System action.");
+            return (ClosedByTypes.SystemAutomation, "Queueing System", queueReason, "QueueingSystem", "Queueing System event");
+        }
+
         if (audit is not null)
         {
             var reason = Pick(ParseKv(audit.AfterValue), "Reason", note ?? TimelineWording.NotRecorded);
@@ -972,7 +1000,7 @@ public static class TicketActivityTimelineBuilder
 
     private static (string Ended, string Detail) InteractionEndedAt(TicketTimelineSources s, Context ctx, DateTime closedAt)
     {
-        var genesys = s.Interactions.Where(i => i.Source == InteractionContextSource.Genesys && (i.InteractionStartedAtUtc ?? i.CreatedAtUtc) <= closedAt).ToList();
+        var genesys = s.Interactions.Where(i => (i.Source == InteractionContextSource.Genesys || s.IsQueueing) && (i.InteractionStartedAtUtc ?? i.CreatedAtUtc) <= closedAt).ToList();
         if (genesys.Count == 0)
         {
             return ("Unknown", "No customer conversation is recorded for this ticket at closure time.");

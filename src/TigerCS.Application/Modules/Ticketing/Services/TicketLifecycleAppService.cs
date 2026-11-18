@@ -1073,10 +1073,11 @@ public sealed class TicketLifecycleAppService(
         string reason,
         string detail,
         Action<DateTime>? beforeCommit = null,
-        CancellationToken cancellationToken = default) =>
+        CancellationToken cancellationToken = default,
+        Guid? closedByEmployeeId = null) =>
         CloseBySystemAsync(
             integrationEmployeeId, ticketId, outcome, reason, detail, "AutoCloseQueueingSystem", ClosureKinds.QueueingSystem,
-            ticket => ticket.CloseByExternalSystem(outcome), beforeCommit, cancellationToken);
+            ticket => ticket.CloseByExternalSystem(outcome), beforeCommit, cancellationToken, closedByEmployeeId);
 
     /// <summary>
     /// Closed tickets have no owner. The domain already cleared <see cref="Ticket.CurrentOwnerEmployeeId"/>; this ends the active
@@ -1088,7 +1089,7 @@ public sealed class TicketLifecycleAppService(
     {
         if (ticketAssignmentRepository is not null)
         {
-            (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken))?.MarkSuperseded();
+            (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken))?.MarkSuperseded(timeProvider.GetUtcNow().UtcDateTime);
         }
 
         if (previousOwnerEmployeeId is { } previousOwner)
@@ -1126,7 +1127,8 @@ public sealed class TicketLifecycleAppService(
         string closureKind,
         Func<Ticket, TicketStatus> close,
         Action<DateTime>? beforeCommit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Guid? closedByEmployeeId = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
 
@@ -1169,32 +1171,34 @@ public sealed class TicketLifecycleAppService(
         }
 
         await ticketResolutionRepository.AddAsync(
-            new TicketResolution(ticketId, outcome, reason, reasonCode: null, duplicateOfTicketId: null, integrationEmployeeId, now),
+            new TicketResolution(ticketId, outcome, reason, reasonCode: null, duplicateOfTicketId: null, closedByEmployeeId ?? integrationEmployeeId, now),
             cancellationToken);
 
         var correlationId = Guid.NewGuid();
 
+        // A closure the external system attributes to an identifiable employee keeps that employee as the actor (never the integration account);
+        // without one it stays a system action.
         await SyncSlaPauseAsync(ticket, now, actorEmployeeId: null, correlationId, cancellationToken);
         await statusHistoryRepository.AddAsync(
             new TicketStatusHistory(
                 ticketId, TicketStatusDimension.TicketStatus, (byte)oldStatus, (byte)TicketStatus.Resolved,
-                actorEmployeeId: null, actorIsSystem: true, note, correlationId, now),
+                actorEmployeeId: closedByEmployeeId, actorIsSystem: closedByEmployeeId is null, note, correlationId, now),
             cancellationToken);
         await statusHistoryRepository.AddAsync(
             new TicketStatusHistory(
                 ticketId, TicketStatusDimension.ResolutionOutcome, oldValue: null, (byte)outcome,
-                actorEmployeeId: null, actorIsSystem: true, note, correlationId, now),
+                actorEmployeeId: closedByEmployeeId, actorIsSystem: closedByEmployeeId is null, note, correlationId, now),
             cancellationToken);
         await statusHistoryRepository.AddAsync(
             new TicketStatusHistory(
                 ticketId, TicketStatusDimension.TicketStatus, (byte)TicketStatus.Resolved, (byte)TicketStatus.Closed,
-                actorEmployeeId: null, actorIsSystem: true, note, correlationId, now),
+                actorEmployeeId: closedByEmployeeId, actorIsSystem: closedByEmployeeId is null, note, correlationId, now),
             cancellationToken);
 
         await auditWriter.WriteAsync(
-            integrationEmployeeId, auditAction, "Ticket", ticketId.ToString(),
+            closedByEmployeeId ?? integrationEmployeeId, auditAction, "Ticket", ticketId.ToString(),
             beforeValue: oldStatus.ToString(),
-            afterValue: $"{TicketStatus.Closed};ResolutionOutcome={outcome};Reason={reason};{detail};AtUtc={now:O}",
+            afterValue: $"{TicketStatus.Closed};ResolutionOutcome={outcome};Reason={reason};{detail};ClosedByEmployeeId={closedByEmployeeId?.ToString() ?? "(none)"};AtUtc={now:O}",
             correlationId, cancellationToken);
         await ReleaseAssignmentOnClosureAsync(ticket, ownerBeforeClosure, integrationEmployeeId, correlationId, cancellationToken);
 
