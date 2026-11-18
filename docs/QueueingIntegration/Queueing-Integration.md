@@ -918,6 +918,8 @@ VALUES (N'queue-user-a', (SELECT Id FROM AspNetUsers WHERE UserName = N'jane.doe
    | 59 | 20 | 3 |
    | 60 | 40 | 1 |
 
+   The same script sets the company default: **CompanyId `4` -> DepartmentId `1` (Customer Service, `CS`)**, used for ticket types outside 53-60 (the department's General request type). Before writing, it confirms department 1 is active and has exactly one active `General` category and one active `General` request type with a Published workflow, and aborts without changes otherwise.
+
 5. Verify with folder 2 of the Postman collection.
 
 ## 12. Verification
