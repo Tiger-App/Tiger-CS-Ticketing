@@ -86,6 +86,8 @@ public static class ConversationHistoryView
     public static string? HandledBy(TicketInteractionDto interaction) => interaction.HandlingState switch
     {
         "Ai" => "AI (virtual agent)",
+        "AiEnded" => "AI conversation ended",
+        "HumanFollowUp" => "Human follow-up required · not yet accepted",
         "WaitingForHuman" => "AI · human requested, not yet taken",
         "Human" => string.IsNullOrWhiteSpace(interaction.AgentName) ? "Human agent" : $"Human agent · {interaction.AgentName.Trim()}",
         _ => null
@@ -95,7 +97,7 @@ public static class ConversationHistoryView
     public static string HandledByCss(TicketInteractionDto interaction) => interaction.HandlingState switch
     {
         "Human" => "human",
-        "WaitingForHuman" => "waiting",
+        "WaitingForHuman" or "HumanFollowUp" => "waiting",
         _ => "ai"
     };
 

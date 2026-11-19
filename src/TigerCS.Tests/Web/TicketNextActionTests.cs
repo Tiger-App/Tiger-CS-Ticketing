@@ -39,7 +39,9 @@ public sealed class TicketNextActionTests
         bool canDecideDowngrade = false,
         IReadOnlyList<PendingApprovalFact>? pending = null,
         IReadOnlyList<RequiredApprovalFact>? required = null,
-        bool reopenApproved = false) =>
+        bool reopenApproved = false,
+        bool humanAccepted = false,
+        bool humanResponded = false) =>
         new(
             TicketStatus: status,
             IsClassified: classified,
@@ -73,7 +75,69 @@ public sealed class TicketNextActionTests
             PendingApprovals: pending ?? [],
             RequiredApprovals: required ?? [],
             ReopenApproved: reopenApproved,
-            NowUtc: Now);
+            NowUtc: Now,
+            HumanAccepted: humanAccepted,
+            HumanResponded: humanResponded);
+
+    // ---- Ticket TG-REG-20261119-0027: AI conversation ended, an employee was assigned, nobody accepted or replied ----
+
+    [Theory]
+    [InlineData("HumanFollowUp")]
+    [InlineData("AiEnded")]
+    public void AnEndedAiConversation_WithAnAssignedEmployee_IsNeverShownAsAiHandling_OrAsTheEmployeeHandlingIt(string handling)
+    {
+        var g = TicketNextAction.Build(Facts(status: "Open", hasOwner: true, handling: handling, firstResponsePending: true));
+
+        Assert.DoesNotContain("AI is handling", g.Headline);
+        Assert.DoesNotContain("is handling this ticket", g.Headline);
+        Assert.Equal("Ahmed is assigned for human follow-up", g.Headline);
+        Assert.Contains("not yet accepted", g.Reason);
+        Assert.Contains("replied", g.Reason);
+    }
+
+    [Fact]
+    public void TheAssignedEmployee_IsToldTheyMustFollowUp_NotThatTheyAreHandlingIt()
+    {
+        var g = TicketNextAction.Build(Facts(status: "Open", hasOwner: true, viewerIsOwner: true, handling: "HumanFollowUp", firstResponsePending: true));
+
+        Assert.Equal("This ticket is assigned to you for human follow-up", g.Headline);
+        Assert.Equal("conversation", g.Primary!.Key);
+    }
+
+    [Fact]
+    public void HumanFollowUpWithNobodyAssigned_IsUrgent_AndOffersAssignOnlyToThoseWhoCanAssign()
+    {
+        var withRight = TicketNextAction.Build(Facts(status: "Open", hasOwner: false, handling: "HumanFollowUp", canAssign: true));
+        var without = TicketNextAction.Build(Facts(status: "Open", hasOwner: false, handling: "HumanFollowUp"));
+
+        Assert.Equal(AttentionLevel.Urgent, withRight.Level);
+        Assert.Equal("Human follow-up required", withRight.Headline);
+        Assert.Equal("assign", withRight.Primary!.Key);
+        Assert.Null(without.Primary);
+    }
+
+    [Fact]
+    public void AnEndedAiConversation_WithNoHumanNeed_SaysSo_NotAssignThisTicket()
+    {
+        var g = TicketNextAction.Build(Facts(status: "Open", hasOwner: false, handling: "AiEnded", canAssign: true));
+
+        Assert.Equal("The AI conversation has ended", g.Headline);
+        Assert.Equal(AttentionLevel.Info, g.Level);
+    }
+
+    [Fact]
+    public void OnceAPersonAcceptedOrReplied_TheOrdinaryOwnerGuidanceApplies_AndALiveAiConversationStillSaysAiIsHandling()
+    {
+        var accepted = TicketNextAction.Build(Facts(status: "InProgress", hasOwner: true, handling: "Human", humanAccepted: true));
+        Assert.Equal("Ahmed is handling this ticket", accepted.Headline);
+
+        // Accepted/replied flags win even if a stale follow-up state were passed alongside them.
+        var replied = TicketNextAction.Build(Facts(status: "InProgress", hasOwner: true, handling: "HumanFollowUp", humanResponded: true));
+        Assert.Equal("Ahmed is handling this ticket", replied.Headline);
+
+        var live = TicketNextAction.Build(Facts(status: "Open", hasOwner: false, handling: "Ai", canAssign: true));
+        Assert.Equal("AI is handling this customer", live.Headline);
+    }
 
     // ---- The seven scenarios ----
 

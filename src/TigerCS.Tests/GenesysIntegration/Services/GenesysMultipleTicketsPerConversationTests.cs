@@ -688,7 +688,7 @@ public class GenesysMultipleTicketsPerConversationTests
         var leasingView = await w.F.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], leasing.TicketId);
 
         Assert.Equal("Human", Assert.Single(documentsView.Response!.Interactions).HandlingState);
-        Assert.Equal("Ai", Assert.Single(leasingView.Response!.Interactions).HandlingState);
+        Assert.Equal("HumanFollowUp", Assert.Single(leasingView.Response!.Interactions).HandlingState);   // leasing needs a person; no person has accepted or replied here
         // ...yet the conversation's words are still all readable on the leasing ticket.
         Assert.Equal(["I can help"], Assert.Single(leasingView.Response.Interactions).Messages.Select(m => m.Body));
     }

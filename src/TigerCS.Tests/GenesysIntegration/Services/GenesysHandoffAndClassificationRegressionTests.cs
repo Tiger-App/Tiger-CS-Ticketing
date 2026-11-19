@@ -94,7 +94,7 @@ public class GenesysHandoffAndClassificationRegressionTests
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
         Assert.Null(update.HandoffStatus);
         AssertNoHumanWasRequested(w);
-        Assert.Equal("Ai", await HandlingStateAsync(w, ticket));
+        Assert.Equal("AiEnded", await HandlingStateAsync(w, ticket));   // the conversation is over: no longer "AI is handling", and no human was requested
         Assert.Null(ticket.FirstHumanResponseAtUtc);
         Assert.Equal(TicketStatus.Open, ticket.TicketStatus);
     }

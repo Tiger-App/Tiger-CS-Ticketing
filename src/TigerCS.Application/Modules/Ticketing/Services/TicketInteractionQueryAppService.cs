@@ -195,7 +195,15 @@ public sealed class TicketInteractionQueryAppService(
                 handoff.Trigger?.ToString()),
         // Who is handling THIS ticket's interaction is judged on its own messages only: a person answering the conversation under a
         // sibling ticket does not make this ticket human-handled.
-        DescribeHandlingState(interaction, ownMessages, handoff));
+        DescribeHandlingState(interaction, ownMessages, handoff),
+        HumanAccepted: HumanAccepted(interaction, handoff),
+        HumanResponded: ownMessages.Any(m => m.Sender == InteractionMessageSender.HumanAgent));
+
+    /// <summary>A person actually took the interaction (not merely was assigned the ticket): a handoff taken, a recorded handler, or the answering agent of a call.</summary>
+    private static bool HumanAccepted(TicketInteraction interaction, TicketAgentHandoff? handoff) =>
+        handoff is { Status: AgentHandoffStatus.Assigned or AgentHandoffStatus.InProgress or AgentHandoffStatus.Completed }
+        || interaction.HandledByUserId is not null
+        || (interaction.ChannelId == WellKnownChannels.Phone && !string.IsNullOrWhiteSpace(interaction.GenesysAgentId));
 
     /// <summary>
     /// Who is handling the interaction, from facts only: a person took the
@@ -223,6 +231,18 @@ public sealed class TicketInteractionQueryAppService(
             return "Human";
         }
 
-        return handoff is { Status: AgentHandoffStatus.WaitingForAgent } ? "WaitingForHuman" : "Ai";
+        if (handoff is { Status: AgentHandoffStatus.WaitingForAgent })
+        {
+            return "WaitingForHuman";
+        }
+
+        // A person is needed (explicit follow-up) but nobody has accepted or replied: not "AI handling", whether or not an employee was assigned.
+        if (interaction.RequiresHumanFollowUp)
+        {
+            return "HumanFollowUp";
+        }
+
+        // The AI conversation is over and nobody asked for a person: it is no longer "being handled".
+        return interaction.IsEnded ? "AiEnded" : "Ai";
     }
 }

@@ -75,7 +75,8 @@ public sealed class GenesysAgentHandoffAppService(
         Guid callerEmployeeId, GenesysHandoffRequestDto request, string? connectedAgentId, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        request = GenesysTimestamps.Normalize(request);
+        var timestamps = new GenesysTimestampContext(timeProvider.GetUtcNow().UtcDateTime, options.FutureTimestampTolerance);
+        request = GenesysTimestamps.Normalize(request, timestamps);
 
         if (!options.Enabled)
         {
@@ -86,6 +87,8 @@ public sealed class GenesysAgentHandoffAppService(
         {
             return GenesysHandoffResult.Failure(GenesysHandoffOutcome.ConversationIdRequired);
         }
+
+        await AuditTimestampAnomalyAsync(callerEmployeeId, request.ConversationId.Trim(), timestamps, cancellationToken);
 
         // Normalized into TigerCS' own vocabulary, or refused. Absent is
         // fine — an unstated mode is recorded as unstated, never guessed
@@ -353,7 +356,8 @@ public sealed class GenesysAgentHandoffAppService(
         Guid callerEmployeeId, GenesysHandoffAssignmentDto request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        request = GenesysTimestamps.Normalize(request);
+        var timestamps = new GenesysTimestampContext(timeProvider.GetUtcNow().UtcDateTime, options.FutureTimestampTolerance);
+        request = GenesysTimestamps.Normalize(request, timestamps);
 
         if (!options.Enabled)
         {
@@ -364,6 +368,8 @@ public sealed class GenesysAgentHandoffAppService(
         {
             return GenesysHandoffResult.Failure(GenesysHandoffOutcome.ConversationIdRequired);
         }
+
+        await AuditTimestampAnomalyAsync(callerEmployeeId, request.ConversationId.Trim(), timestamps, cancellationToken);
 
         var agentId = NullIfBlank(request.AgentId);
         if (agentId is null)
@@ -536,6 +542,17 @@ public sealed class GenesysAgentHandoffAppService(
     private static GenesysHandoffResult Existing(TicketAgentHandoff handoff, Ticket ticket) =>
         new(GenesysHandoffOutcome.AlreadyRequested, handoff.TicketAgentHandoffId,
             ticket.TicketId, ticket.TicketNumber, handoff.Status.ToString());
+
+    private async Task AuditTimestampAnomalyAsync(
+        Guid callerEmployeeId, string conversationId, GenesysTimestampContext timestamps, CancellationToken cancellationToken)
+    {
+        if (timestamps.Describe() is { } anomaly)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.TimestampAnomaly, GenesysAuditActions.ConversationEntityType, conversationId,
+                beforeValue: null, afterValue: $"ConversationId={conversationId};{anomaly}", Guid.NewGuid(), cancellationToken);
+        }
+    }
 
     private static string? NullIfBlank(string? value) =>
         string.IsNullOrWhiteSpace(value) ? null : value.Trim();

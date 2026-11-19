@@ -78,7 +78,9 @@ public sealed class GenesysConversationEndAppService(
         Guid callerEmployeeId, GenesysConversationEndDto request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        request = GenesysTimestamps.Normalize(request);   // end time and every transcript line are UTC from here on
+        // End time and every transcript line are UTC from here on; an end time in the future of its own receipt is limited to the receipt.
+        var timestamps = new GenesysTimestampContext(timeProvider.GetUtcNow().UtcDateTime, options.FutureTimestampTolerance);
+        request = GenesysTimestamps.Normalize(request, timestamps);
 
         if (!options.Enabled)
         {
@@ -102,6 +104,14 @@ public sealed class GenesysConversationEndAppService(
         }
 
         var ticket = await ticketRepository.GetByIdAsync(interaction.TicketId, cancellationToken);
+
+        if (timestamps.Describe() is { } timestampAnomaly)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.TimestampAnomaly, "Ticket", interaction.TicketId.ToString(),
+                beforeValue: null, afterValue: $"TicketId={interaction.TicketId};ConversationId={conversationId};{timestampAnomaly}",
+                Guid.NewGuid(), cancellationToken);
+        }
 
         // Validate the whole transcript before writing any of it.
         if (!TryNormalizeTranscript(request.Transcript, out var messages, out var transcriptError))

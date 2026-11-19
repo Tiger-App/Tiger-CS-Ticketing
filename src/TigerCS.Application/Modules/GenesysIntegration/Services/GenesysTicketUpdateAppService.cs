@@ -85,7 +85,9 @@ public sealed class GenesysTicketUpdateAppService(
         ArgumentNullException.ThrowIfNull(request);
 
         // Every instant Genesys sent is UTC from here on (see GenesysTimestamps): an offset-bearing or zoneless value is never stored as local wall-clock time.
-        request = GenesysTimestamps.Normalize(request);
+        // An event cannot be later than the moment it was received: an impossible start time is dropped, a connect / end time is limited to receipt.
+        var timestamps = new GenesysTimestampContext(timeProvider.GetUtcNow().UtcDateTime, options.FutureTimestampTolerance);
+        request = GenesysTimestamps.Normalize(request, timestamps);
 
         if (!options.Enabled)
         {
@@ -122,6 +124,15 @@ public sealed class GenesysTicketUpdateAppService(
             return GenesysTicketUpdateResult.Failure(
                 GenesysTicketUpdateOutcome.ConversationNotFound,
                 "This conversation never produced a ticket, so there is nothing to update.");
+        }
+
+        if (timestamps.Describe() is { } timestampAnomaly)
+        {
+            // Evidence for the audit trail (saved with the next write of this update): what was sent, in which wire form, and what was done with it.
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.TimestampAnomaly, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null, afterValue: $"TicketId={ticket.TicketId};ConversationId={conversationId};{timestampAnomaly}",
+                Guid.NewGuid(), cancellationToken);
         }
 
         // Checked before anything is written, like the transcript: a
@@ -513,21 +524,16 @@ public sealed class GenesysTicketUpdateAppService(
             && (await agentResolution.ResolveByGenesysUserIdAsync(routingAgentId, cancellationToken)).IsResolved;
         var humanSignal = GenesysHumanHandlingEvidence.ForUpdate(request, routingAgentIsHuman);
 
-        // The AI conversation ended and nobody finished the ticket: it is NOT left sitting unassigned in its department - it is routed for human
-        // handling (Call Center first, shared round robin as the provisional owner until an agent actually accepts). Never when the AI closes it in this
-        // same update, when the customer confirmed, while the AI is still waiting for the customer's reply (the inactivity close handles that), or when
-        // a person already owns / handled it. Redelivery heals a ticket whose routing never ran; routing itself is idempotent.
-        if (humanSignal == GenesysHumanSignal.None
-            && request.Ended is not null
-            && request.ClosedByAi != true
-            && request.CustomerConfirmation is null
-            && request.AwaitingCustomerReply != true
-            && interaction.AwaitingCustomerReplySinceUtc is null
-            && interaction.HandledByUserId is null
-            && ticket.CurrentOwnerEmployeeId is null
-            && ticket.TicketStatus is TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer)
+        // <b>An AI conversation ending is NOT evidence of a human handoff.</b> It used to be: an end event with no human signal, no owner and no
+        // handler was promoted to "AiEndedUnresolved", which marked the ticket as human work, moved it to the Call Center and dealt it to an agent
+        // by Round Robin one second after the conversation ended (ticket TG-REG-20261119-0027) - without any transcript evidence, so it also bypassed
+        // Genesys:AssignOnTranscriptEvidence. The ticket now stays exactly where it is (the AI's, with its own auto-close / inactivity rules). A person
+        // gets it only on real evidence: an explicit humanFollowUpRequired / handoff, a mapped agent CONNECTED, an agent taking pending work, or a
+        // HumanAgent transcript line while the transcript-evidence fallback is enabled.
+        if (humanSignal == GenesysHumanSignal.HumanTranscriptLine && !options.AssignOnTranscriptEvidence)
         {
-            humanSignal = GenesysHumanSignal.AiEndedUnresolved;
+            // The fallback is switched off: a transcript line alone neither moves nor assigns the ticket (the Genesys connect event does).
+            humanSignal = GenesysHumanSignal.None;
         }
 
         if (ticketIsClosed)

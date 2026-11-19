@@ -632,8 +632,47 @@ public sealed class TicketAutoAssignmentService(
                 + $"{(ruleId is { } r ? $"RuleId={r};" : string.Empty)}{(poolDepartmentId is not null ? $"Pool=SharedCsAgents;PoolDepartmentId={poolDepartment};" : string.Empty)}Trigger={trigger}",
             correlationId, cancellationToken);
         await NotifyAssignedAsync(ticket, previousOwnerEmployeeId, next, actorEmployeeId: null, correlationId, nowUtc, cancellationToken);
+        await RecordGenesysFollowUpHistoryAsync(ticket, previousOwnerEmployeeId, next, ruleText, trigger, nowUtc, cancellationToken);
 
         return new AutoAssignmentResult(AutoAssignmentOutcome.AssignedRoundRobin, next);
+    }
+
+    /// <summary>
+    /// <b>Assignment History must show every ownership change of a Genesys-handled ticket</b>, not only the ones Genesys itself reported. A ticket the AI Agent
+    /// handled has a Genesys history entry from creation (<see cref="RecordAiAgentAssignmentAsync"/>); when the AI conversation ends unresolved the system gives it to a
+    /// person by Round Robin - an ownership change that wrote the assignment row, the audit entry and the timeline event but, until now, no history entry, so the
+    /// history stopped at "Genesys Integration" while the ticket belonged to someone else. Written in the same transaction as the assignment. Tickets with no
+    /// Genesys history entry (ordinary tickets) are untouched. The entry states that the assignment is provisional - it never claims the person accepted or replied.
+    /// </summary>
+    private async Task RecordGenesysFollowUpHistoryAsync(
+        Ticket ticket, Guid? previousOwnerEmployeeId, Guid newOwnerEmployeeId, string ruleText, AutoAssignmentTrigger trigger, DateTime nowUtc,
+        CancellationToken cancellationToken)
+    {
+        if (assignmentHistoryRepository is null || ticket.TicketStatus == TicketStatus.Closed)
+        {
+            return;
+        }
+
+        var genesysHistory = (await assignmentHistoryRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Where(h => h.Source is not null).ToList();
+        if (genesysHistory.Count == 0)
+        {
+            return;
+        }
+
+        var last = genesysHistory[^1];
+        // The AI Agent (or the last Genesys-recorded assignee) is who the ticket was with before this system assignment.
+        var previous = previousOwnerEmployeeId ?? last.NewEmployeeId;
+        if (previous == newOwnerEmployeeId)
+        {
+            return;
+        }
+
+        await assignmentHistoryRepository.AddAsync(
+            TicketAssignmentHistoryEntry.ForGenesys(
+                ticket.TicketId, ticket.CurrentDepartmentId, previous, newOwnerEmployeeId, TicketAssignmentSource.GenesysHumanFollowUp,
+                changedByEmployeeId: null, nowUtc, sourceEventAtUtc: null, genesysConversationId: last.GenesysConversationId,
+                reason: $"Human follow-up: assigned by {ruleText} ({trigger}). Provisional - the agent has not yet accepted or replied to the customer."),
+            cancellationToken);
     }
 
     /// <summary>

@@ -19,7 +19,17 @@ public enum TicketAssignmentSource : byte
     GenesysDirectCall = 2,
 
     /// <summary>Genesys connected a different human agent: a call transfer (AI to human, or human to human).</summary>
-    GenesysCallTransfer = 3
+    GenesysCallTransfer = 3,
+
+    /// <summary>
+    /// The system - not Genesys, not a person - gave a ticket that had been handled by the AI Agent to a person for human follow-up (the AI conversation ended
+    /// unresolved, human follow-up was flagged, or the request type was classified onto a department rotation). A <b>provisional</b> assignment: it says nothing
+    /// about the person having accepted or answered anything.
+    /// </summary>
+    GenesysHumanFollowUp = 4,
+
+    /// <summary>A person (a supervisor, the department, the owner themselves) assigned or reassigned a ticket the Genesys integration had been handling.</summary>
+    GenesysManualAssignment = 5
 }
 
 /// <summary>
@@ -58,10 +68,11 @@ public class TicketAssignmentHistoryEntry
     /// <summary>A Genesys-driven entry. <paramref name="previousEmployeeId"/> is the AI Agent account for an AI-to-human transfer.</summary>
     public static TicketAssignmentHistoryEntry ForGenesys(
         long ticketId, int departmentId, Guid? previousEmployeeId, Guid newEmployeeId, TicketAssignmentSource source, Guid? changedByEmployeeId,
-        DateTime changedAtUtc, DateTime? sourceEventAtUtc, string? genesysConversationId, string? reason)
+        DateTime changedAtUtc, DateTime? sourceEventAtUtc, string? genesysConversationId, string? reason,
+        TicketAssignmentKind kind = TicketAssignmentKind.Automatic)
     {
         var entry = new TicketAssignmentHistoryEntry(
-            ticketId, departmentId, previousEmployeeId, newEmployeeId, TicketAssignmentKind.Automatic, changedByEmployeeId, changedAtUtc, reason)
+            ticketId, departmentId, previousEmployeeId, newEmployeeId, kind, changedByEmployeeId, changedAtUtc, reason)
         {
             Source = source,
             SourceEventAtUtc = sourceEventAtUtc,

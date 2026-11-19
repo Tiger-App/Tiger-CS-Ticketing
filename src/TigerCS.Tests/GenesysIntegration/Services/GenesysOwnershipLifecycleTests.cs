@@ -154,25 +154,159 @@ public class GenesysOwnershipLifecycleTests
     }
 
     [Fact]
-    public async Task AiEndsWithoutResolvingOrClosing_TheTicketIsRoutedForHumanHandling_NotLeftUnassignedInItsDepartment()
+    public async Task AiEndsWithoutResolvingOrClosing_NothingIsRoutedOrAssigned_EndingIsNotEvidenceOfAHandoff()
     {
+        // Regression, ticket TG-REG-20261119-0027: the AI conversation ended and one second later the ticket was marked human work (AiEndedUnresolved),
+        // moved to the Call Center and dealt to an agent - with no human acceptance, no transcript evidence and no explicit follow-up request.
         var w = NewWorld();
         var chat = await ChatAsync(w, "c-ai-ended");
+        var rotationBefore = w.F.Rotation.Rows.Values.Select(r => r.LastAssignedEmployeeId).ToList();
 
         var ended = await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow, "CustomerDisconnect")));
 
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, ended.Outcome);
         var ticket = w.Ticket(chat.TicketId);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);                        // Call Center first
-        Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);
-        Assert.NotNull(ticket.CurrentOwnerEmployeeId);                                                 // provisional shared round robin owner
-        Assert.Single(Current(w, chat.TicketId));
+        Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);                                   // not moved
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                                    // nobody assigned
+        Assert.Empty(Current(w, chat.TicketId));
+        Assert.Equal(rotationBefore, w.F.Rotation.Rows.Values.Select(r => r.LastAssignedEmployeeId).ToList());   // no round robin turn consumed
+        Assert.DoesNotContain(w.F.WorkflowEvents.All, e => e.TicketId == chat.TicketId && e.EventType == WorkflowEventType.TicketTransferred);
+        Assert.All(w.F.Interactions.All.Where(i => i.TicketId == chat.TicketId), i => Assert.False(i.RequiresHumanFollowUp));   // not marked as human work
+        Assert.DoesNotContain(w.F.Audit.Entries, a => a.Action == GenesysAuditActions.HumanFollowUpRequired);
 
-        // Redelivery of the same end changes nothing (no second assignment, no second turn of the rotation).
-        var rotationBefore = w.F.Rotation.Rows.Values.Select(r => r.LastAssignedEmployeeId).ToList();
+        // Redelivery changes nothing either.
         await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow, "CustomerDisconnect")));
-        Assert.Single(Current(w, chat.TicketId));
+        Assert.Null(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
         Assert.Equal(rotationBefore, w.F.Rotation.Rows.Values.Select(r => r.LastAssignedEmployeeId).ToList());
+    }
+
+    [Fact]
+    public async Task ExplicitHumanFollowUp_IsRoutedAsProvisionalWork_RecordsHistory_AndNeverFakesAcceptanceOrAResponse()
+    {
+        var w = NewWorld();
+        var chat = await ChatAsync(w, "c-follow-up");
+        Assert.Equal(TicketAssignmentSource.GenesysAiAgent, Assert.Single(w.F.AssignmentHistory.Entries, h => h.TicketId == chat.TicketId).Source);
+
+        // The explicit business signal (humanFollowUpRequired), not the end of the conversation, is what asks for a person.
+        await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, HumanFollowUpRequired: true));
+        await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow, "CustomerDisconnect")));
+
+        var ticket = w.Ticket(chat.TicketId);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        var owner = Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+
+        // Assignment History continues the story: AI Agent -> the provisional agent, labelled as such, in the Call Center.
+        var history = w.F.AssignmentHistory.Entries.Where(h => h.TicketId == chat.TicketId).OrderBy(h => h.ChangedAtUtc).ThenBy(h => h.TicketAssignmentHistoryEntryId).ToList();
+        Assert.Equal(2, history.Count);
+        Assert.Equal(TicketAssignmentSource.GenesysHumanFollowUp, history[1].Source);
+        Assert.Equal(history[0].NewEmployeeId, history[1].PreviousEmployeeId);          // previous owner is the AI Agent
+        Assert.Equal(owner, history[1].NewEmployeeId);
+        Assert.Equal(w.F.CallCenter.DepartmentId, history[1].DepartmentId);
+        Assert.Contains("not yet accepted", history[1].Reason, StringComparison.OrdinalIgnoreCase);
+
+        // Being assigned is not accepting and not replying: no handler, no first human response, no "agent connected" fact.
+        Assert.All(w.F.Interactions.All.Where(i => i.TicketId == chat.TicketId), i => Assert.Null(i.HandledByUserId));
+        Assert.Null(ticket.FirstHumanResponseAtUtc);
+        Assert.DoesNotContain(w.F.WorkflowEvents.All, e => e.TicketId == chat.TicketId && e.EventType == WorkflowEventType.GenesysAgentConnected);
+
+        // Redelivery writes no second history row.
+        await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, HumanFollowUpRequired: true));
+        Assert.Equal(2, w.F.AssignmentHistory.Entries.Count(h => h.TicketId == chat.TicketId));
+    }
+
+    [Fact]
+    public async Task ATranscriptLineAlone_MovesNothing_WhenTheTranscriptEvidenceFallbackIsOff_AndAssignsWhenItIsOn()
+    {
+        foreach (var fallback in new[] { false, true })
+        {
+            var w = NewWorld();
+            w.F.Options.AssignOnTranscriptEvidence = fallback;
+            var chat = await ChatAsync(w, $"c-line-{fallback}");
+
+            await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow, "AgentDisconnect",
+                [new GenesysTranscriptMessageDto("HumanAgent", DateTime.UtcNow.AddMinutes(-2), "Hello, I can help", SenderName: "Agent 1", SenderId: w.Agents[0].GenesysId)])));
+
+            var ticket = w.Ticket(chat.TicketId);
+            if (fallback)
+            {
+                AssertOwner(w, chat.TicketId, w.Agents[0].Id);               // valid human evidence + fallback enabled -> the person who wrote owns it
+            }
+            else
+            {
+                Assert.Null(ticket.CurrentOwnerEmployeeId);                  // fallback disabled: a transcript line alone neither moves nor assigns
+                Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task AnEndEventForAClosedTicket_NeverReopensTransfersOrAssigns_WhoeverClosedIt()
+    {
+        var w = NewWorld();
+        var chat = await ChatAsync(w, "c-closed-then-end");
+        var closed = await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, ClosedByAi: true));
+        Assert.True(closed.ClosedByAi);
+        Assert.Equal(TicketStatus.Closed, w.Ticket(chat.TicketId).TicketStatus);
+
+        // Late end, late explicit follow-up, late connect: all evidence only.
+        await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow, "CustomerDisconnect")));
+        await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, HumanFollowUpRequired: true));
+        await ConnectAsync(w, chat, w.Agents[1].GenesysId);
+
+        var ticket = w.Ticket(chat.TicketId);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Empty(Current(w, chat.TicketId));
+        Assert.Single(w.F.AssignmentHistory.Entries, h => h.TicketId == chat.TicketId);
+    }
+
+    [Fact]
+    public async Task AFutureStartTime_IsNeverStored_ForANewTicket_AndTheRawValueAndWireFormAreAudited()
+    {
+        // Ticket TG-REG-20261119-0027: the conversation "started" 4 hours AFTER the ticket was created.
+        var w = NewWorld();
+        var future = DateTime.UtcNow.AddHours(4);
+        var r = await w.F.Ingestion.IngestAsync(
+            ServiceAccount,
+            new GenesysInquiryDto("c-future-start", GenesysChannel.WebsiteChat, CustomerPhone: "+971500000001", DepartmentId: w.Cs.DepartmentId,
+                StartedAtUtc: DateTime.SpecifyKind(future, DateTimeKind.Unspecified)));   // zoneless wall-clock, read as UTC, impossible
+
+        Assert.Equal(GenesysIngestionOutcome.TicketCreated, r.Outcome);
+        var interaction = Assert.Single(w.F.Interactions.All, i => i.TicketId == r.Ticket!.TicketId);
+        Assert.Null(interaction.InteractionStartedAtUtc);                                  // not stored: the UI falls back to when TigerCS recorded it
+        var audit = Assert.Single(w.F.Audit.Entries, a => a.Action == GenesysAuditActions.TimestampAnomaly);
+        Assert.Contains("RejectedFuture", audit.AfterValue);
+        Assert.Contains("Zoneless", audit.AfterValue);
+        Assert.Contains("inquiry.startedAtUtc", audit.AfterValue);
+
+        // A sound start time (a minute before the ticket) is stored exactly, whatever zone text it came from.
+        foreach (var kind in new[] { DateTimeKind.Utc, DateTimeKind.Unspecified })
+        {
+            var sound = DateTime.SpecifyKind(DateTime.UtcNow.AddMinutes(-1), kind);
+            var ok = await w.F.Ingestion.IngestAsync(
+                ServiceAccount,
+                new GenesysInquiryDto($"c-sound-{kind}", GenesysChannel.WebsiteChat, CustomerPhone: "+971500000002", DepartmentId: w.Cs.DepartmentId, StartedAtUtc: sound));
+            Assert.Equal(DateTimeKind.Utc, Assert.Single(w.F.Interactions.All, i => i.TicketId == ok.Ticket!.TicketId).InteractionStartedAtUtc!.Value.Kind);
+            Assert.Equal(sound, w.F.Interactions.All.Single(i => i.TicketId == ok.Ticket!.TicketId).InteractionStartedAtUtc!.Value, TimeSpan.FromMilliseconds(1));
+        }
+    }
+
+    [Fact]
+    public async Task AFutureStartTime_OnALaterUpdate_IsRejected_AndAFutureConnectOrEndTimeIsLimitedToReceipt()
+    {
+        var w = NewWorld();
+        var chat = await ChatAsync(w, "c-future-update");
+        var before = DateTime.UtcNow;
+
+        await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, StartedAtUtc: DateTime.UtcNow.AddHours(4),
+            Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow.AddHours(4), "CustomerDisconnect")));
+
+        var interaction = w.F.Interactions.All.Single(i => i.TicketId == chat.TicketId);
+        Assert.Null(interaction.InteractionStartedAtUtc);
+        Assert.True(interaction.EndedAtUtc!.Value <= w.F.Clock.GetUtcNow().UtcDateTime.AddSeconds(5));   // never later than it was received (was +4h)
+        Assert.True(interaction.EndedAtUtc.Value < before.AddHours(1));
+        Assert.Contains(w.F.Audit.Entries, a => a.Action == GenesysAuditActions.TimestampAnomaly && a.AfterValue!.Contains("RejectedFuture") && a.AfterValue.Contains("ClampedToReceipt"));
     }
 
     [Fact]

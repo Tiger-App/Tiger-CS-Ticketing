@@ -112,13 +112,16 @@ public sealed class GenesysInquiryIngestionAppService(
     GenesysRequestTypeClassificationAppService classificationAppService,
     GenesysAgentHandlingHistory handlingHistory,
     GenesysInteractionHandlerRecorder? handlerRecorder = null,
-    DefaultClassificationService? defaultClassification = null)
+    DefaultClassificationService? defaultClassification = null,
+    TimeProvider? timeProvider = null)
 {
     public async Task<GenesysIngestionResult> IngestAsync(
         Guid callerEmployeeId, GenesysInquiryDto inquiry, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(inquiry);
-        inquiry = GenesysTimestamps.Normalize(inquiry);   // StartedAtUtc is UTC from here on, whatever zone the text carried
+        // StartedAtUtc is UTC from here on, whatever zone the text carried - and never later than the moment this request arrived.
+        var timestamps = new GenesysTimestampContext((timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime, options.FutureTimestampTolerance);
+        inquiry = GenesysTimestamps.Normalize(inquiry, timestamps);
 
         if (!options.Enabled)
         {
@@ -448,6 +451,15 @@ public sealed class GenesysInquiryIngestionAppService(
                 + $"RequestTypeRejected={requestTypeRejected ?? "(none)"}",
             correlationId: Guid.NewGuid(),
             cancellationToken);
+
+        if (timestamps.Describe() is { } timestampAnomaly)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.TimestampAnomaly, "Ticket", creation.Response.TicketId.ToString(),
+                beforeValue: null, afterValue: $"TicketId={creation.Response.TicketId};ConversationId={conversationId};{timestampAnomaly}",
+                correlationId: Guid.NewGuid(), cancellationToken);
+        }
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         if (configurationError is not null)
@@ -790,6 +802,12 @@ public static class GenesysAuditActions
     /// flow: the event is recorded here as evidence and the ticket (status, owner, department, SLA, closure date and reason) is not touched.
     /// </summary>
     public const string EventIgnoredOnClosedTicket = "GenesysEventIgnoredOnClosedTicket";
+
+    /// <summary>
+    /// An instant Genesys sent lay in the future of the moment TigerCS received it - impossible, almost always a local wall-clock sent as UTC. It was rejected
+    /// (start time), limited to the receipt time (connect / end / handoff time) or only reported (transcript line); the value as sent and its wire form are recorded.
+    /// </summary>
+    public const string TimestampAnomaly = "GenesysTimestampAnomaly";
 
     /// <summary>A Genesys agent was resolved to a Ticketing user and recorded as the handler of an interaction.</summary>
     public const string InteractionHandlerRecorded = "GenesysInteractionHandlerRecorded";

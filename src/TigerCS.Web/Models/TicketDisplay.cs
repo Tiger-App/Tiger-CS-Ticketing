@@ -165,6 +165,8 @@ public static class TicketDisplay
     public static string HandlingStateLabel(string? state, string? humanAgentName = null) => state switch
     {
         "Ai" => "AI (virtual agent) — no human involved",
+        "AiEnded" => "AI conversation ended — no human involved",
+        "HumanFollowUp" => "Human follow-up required — no agent has accepted or replied yet",
         "WaitingForHuman" => "AI — a human was requested and has not yet taken it",
         "Human" => string.IsNullOrWhiteSpace(humanAgentName) ? "Human agent" : $"Human agent — {humanAgentName}",
         null or "" => "—",
