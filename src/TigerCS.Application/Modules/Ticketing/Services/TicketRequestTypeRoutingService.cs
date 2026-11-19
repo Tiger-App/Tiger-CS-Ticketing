@@ -225,6 +225,7 @@ public sealed class TicketRequestTypeRoutingService(
         var previousDepartmentId = ticket.CurrentDepartmentId;
         var previousOwner = ticket.CurrentOwnerEmployeeId;
         var previousRequestTypeId = ticket.RequestTypeId;
+        var aiHandled = source.StartsWith("Genesys", StringComparison.OrdinalIgnoreCase) && ticket.AiAgentOwnerEmployeeId is not null && ticket.CurrentOwnerEmployeeId is null;
 
         if (reclassify)
         {
@@ -252,7 +253,8 @@ public sealed class TicketRequestTypeRoutingService(
         var transferred = !inCallCenter && requestType.DepartmentId != ticket.CurrentDepartmentId;
         if (transferred)
         {
-            ticket.TransferToDepartment(requestType.DepartmentId, preserveOwner: true);
+            // The AI classifying its own conversation routes the ticket's department (and SLA) - it does not hand the ticket to a person.
+            ticket.TransferToDepartment(requestType.DepartmentId, preserveOwner: true, keepAiAgentOwner: aiHandled);
 
             await auditWriter.WriteAsync(
                 actorEmployeeId, "Transfer", "Ticket", ticket.TicketId.ToString(),
@@ -274,6 +276,12 @@ public sealed class TicketRequestTypeRoutingService(
         {
             assignmentOutcome = "CollectionsTower";
             assignedEmployeeId = ticket.CurrentOwnerEmployeeId;
+        }
+        else if (aiHandled)
+        {
+            // AI-handled: routed and SLA-applied above, but NOT assigned. The AI Agent stays the owner while it handles the customer; a person is
+            // assigned only on a real acceptance / answer, or by an authorised person.
+            assignmentOutcome = "AiHandledNotAssigned";
         }
         else if (ticket.CurrentOwnerEmployeeId is null)
         {

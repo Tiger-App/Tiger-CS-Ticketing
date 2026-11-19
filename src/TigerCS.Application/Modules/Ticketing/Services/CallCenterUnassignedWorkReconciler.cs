@@ -197,6 +197,16 @@ public sealed class CallCenterUnassignedWorkReconciler(
             Guid? assigned = null;
             var outcome = ReconcileOutcome.NoEligibleAgent;
 
+            if (classification.Action == UnassignedTicketAction.RouteToCallCenterQueue && evidence.AnsweringEmployeeId is null)
+            {
+                // Genesys-handled and needs a person: into the Call Center queue (an explicit workflow department is kept), owner unchanged, nobody chosen.
+                await autoAssignment.RouteExistingTicketToCallCenterAsync(
+                    ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to the Call Center queue", cancellationToken);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new ReconcileResult(ticketId, classification.Class, ReconcileOutcome.FlaggedForManualAssignment);
+            }
+
             // BUSINESS RULE: the human who actually received the interaction owns the ticket. When that person is known they get it; when they cannot
             // take it the ticket is flagged in the Call Center queue - never silently dealt to somebody else.
             AnsweringAgent? actual = null;

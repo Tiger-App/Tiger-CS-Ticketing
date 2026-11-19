@@ -67,6 +67,12 @@ public enum UnassignedTicketAction
     /// <summary>Move to the Call Center if needed and deal to the next eligible agent by Round Robin.</summary>
     RoundRobinCallCenter,
 
+    /// <summary>
+    /// A Genesys-handled ticket that needs a person: move it into the Call Center queue (unless an explicit workflow department is kept) and leave it there with its
+    /// owner - the AI Agent - unchanged. <b>No Round Robin, nobody is chosen</b>: a person gets it only on a real acceptance, or from an authorised assignment.
+    /// </summary>
+    RouteToCallCenterQueue,
+
     /// <summary>Deal to the next eligible employee of the ticket's CURRENT department by that department's Round Robin (a transfer that found nobody).</summary>
     RoundRobinDepartment,
 }
@@ -144,14 +150,16 @@ public static class UnassignedTicketClassifier
 
         if (evidence.PhonePickupByUnmappedAgent)
         {
-            return Of(UnassignedTicketClass.HumanAnsweredAgentNotMapped, UnassignedTicketAction.RoundRobinCallCenter);
+            return Of(UnassignedTicketClass.HumanAnsweredAgentNotMapped, UnassignedTicketAction.RouteToCallCenterQueue);
         }
 
         if (evidence.RequiresHumanFollowUp || evidence.OpenHandoff || evidence.HumanEvidence)
         {
+            // Genesys-handled: queue only, never a chosen person. (A ticket with no Genesys interaction at all is handled below.)
+            var genesysAction = evidence.HasGenesysInteraction ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter;
             return inCallCenter
-                ? Of(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, UnassignedTicketAction.RoundRobinCallCenter)
-                : Of(UnassignedTicketClass.HumanRequiredNotRouted, UnassignedTicketAction.RoundRobinCallCenter);
+                ? Of(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, inCallCenter && evidence.HasGenesysInteraction ? UnassignedTicketAction.None : genesysAction)
+                : Of(UnassignedTicketClass.HumanRequiredNotRouted, genesysAction);
         }
 
         if (!evidence.HasGenesysInteraction)
@@ -169,8 +177,9 @@ public static class UnassignedTicketClassifier
         var stale = staleAiAfter is { } threshold && nowUtc - evidence.LastActivityUtc > threshold;
         if (!stale) return Of(UnassignedTicketClass.ActiveAiConversation);
 
-        return actOnStaleAi
-            ? Of(UnassignedTicketClass.StaleAiNoEndEvent, UnassignedTicketAction.RoundRobinCallCenter)
-            : Of(UnassignedTicketClass.StaleAiNoEndEvent);
+        // AssignStaleAi can no longer hand an AI ticket to a person: a stale AI conversation is REPORTED (class StaleAiNoEndEvent) and the AI Agent keeps it.
+        // Ownership of an AI ticket changes only on a real acceptance / answer or an authorised assignment.
+        _ = actOnStaleAi;
+        return Of(UnassignedTicketClass.StaleAiNoEndEvent);
     }
 }

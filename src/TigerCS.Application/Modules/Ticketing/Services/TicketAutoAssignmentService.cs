@@ -316,6 +316,13 @@ public sealed class TicketAutoAssignmentService(
             return false;
         }
 
+        // A ticket whose department was chosen by an explicit workflow (a request type that routes to Legal, Collections tower routing, a person's
+        // transfer) keeps it: the follow-up is flagged where it already is, and nothing is pulled into the Call Center queue.
+        if (await HasExplicitWorkflowRoutingAsync(ticket, callCenter.DepartmentId, cancellationToken))
+        {
+            return false;
+        }
+
         var fromDepartmentId = ticket.CurrentDepartmentId;
         var releasedOwner = ticket.CurrentOwnerEmployeeId;
         if (await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken) is { } current)
@@ -323,7 +330,10 @@ public sealed class TicketAutoAssignmentService(
             current.MarkSuperseded();
         }
 
-        ticket.TransferToDepartment(callCenter.DepartmentId);   // clears the owner; OriginatingDepartmentId is write-once
+        // Queue routing, NOT assignment: the AI Agent stays the recorded owner of an AI-handled ticket until a person actually accepts / is assigned.
+        var keepAiOwner = ticket.AiAgentOwnerEmployeeId is not null;
+        var aiOwner = ticket.AiAgentOwnerEmployeeId;
+        ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: keepAiOwner);   // clears a human owner; OriginatingDepartmentId is write-once
 
         await auditWriter.WriteAsync(
             actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
@@ -342,8 +352,44 @@ public sealed class TicketAutoAssignmentService(
                 cancellationToken);
         }
 
-        await AssignCallCenterIntakeAsync(ticket, nowUtc, correlationId, cancellationToken, requiredRole);
+        // No Round Robin: the ticket waits in the Call Center queue (claimable through Take Ownership) with its owner unchanged. A person gets it only
+        // when they actually accept the interaction, answer it, or are assigned by someone authorised.
+        if (aiOwner is { } ai)
+        {
+            await RecordQueueRoutingHistoryAsync(ticket, fromDepartmentId, ai, nowUtc, reason, cancellationToken);
+        }
+
         return true;
+    }
+
+    /// <summary>
+    /// True when the ticket's department was decided by an explicit workflow rather than by default intake: Collections, a department it was moved
+    /// to by request-type classification or by a person (current differs from originating), or a classification that is not the department's default.
+    /// </summary>
+    public Task<bool> HasExplicitWorkflowRoutingPublicAsync(Ticket ticket, int callCenterDepartmentId, CancellationToken cancellationToken = default) =>
+        HasExplicitWorkflowRoutingAsync(ticket, callCenterDepartmentId, cancellationToken);
+
+    private async Task<bool> HasExplicitWorkflowRoutingAsync(Ticket ticket, int callCenterDepartmentId, CancellationToken cancellationToken) =>
+        await IsCollectionsDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken)
+        || (ticket.CurrentDepartmentId != ticket.OriginatingDepartmentId && ticket.CurrentDepartmentId != callCenterDepartmentId);
+
+    /// <summary>History row for a system move into the Call Center queue of a ticket the AI Agent keeps: previous and new owner are the AI Agent, the department changes.</summary>
+    private async Task RecordQueueRoutingHistoryAsync(
+        Ticket ticket, int fromDepartmentId, Guid aiOwner, DateTime nowUtc, string reason, CancellationToken cancellationToken)
+    {
+        if (assignmentHistoryRepository is null)
+        {
+            return;
+        }
+
+        var genesys = (await assignmentHistoryRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Where(h => h.Source is not null).ToList();
+        await assignmentHistoryRepository.AddAsync(
+            TicketAssignmentHistoryEntry.ForGenesys(
+                ticket.TicketId, ticket.CurrentDepartmentId, aiOwner, aiOwner, TicketAssignmentSource.GenesysQueueRouting, changedByEmployeeId: null,
+                nowUtc, sourceEventAtUtc: null, genesys.LastOrDefault()?.GenesysConversationId,
+                $"Moved to the Call Center queue for human follow-up ({reason}). Ownership unchanged: no person has accepted or been assigned.",
+                previousDepartmentId: fromDepartmentId),
+            cancellationToken);
     }
 
     /// <summary>True when <paramref name="departmentId"/> is the configured Collections department (tower routing owns its assignments).</summary>
@@ -648,7 +694,8 @@ public sealed class TicketAutoAssignmentService(
         Ticket ticket, Guid? previousOwnerEmployeeId, Guid newOwnerEmployeeId, string ruleText, AutoAssignmentTrigger trigger, DateTime nowUtc,
         CancellationToken cancellationToken)
     {
-        if (assignmentHistoryRepository is null || ticket.TicketStatus == TicketStatus.Closed)
+        // A department transfer writes its own entry (with the previous department); recording the destination's Round Robin here too would duplicate it.
+        if (assignmentHistoryRepository is null || ticket.TicketStatus == TicketStatus.Closed || trigger == AutoAssignmentTrigger.DepartmentTransfer)
         {
             return;
         }
@@ -1104,7 +1151,7 @@ public sealed class TicketAutoAssignmentService(
         if (ticket.CurrentDepartmentId != callCenter.DepartmentId)
         {
             var fromDepartmentId = ticket.CurrentDepartmentId;
-            ticket.TransferToDepartment(callCenter.DepartmentId);
+            ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: true);   // AssignTo below clears it when the answering agent actually takes the ticket
             currentAssignment?.MarkSuperseded();
             currentAssignment = null;
             wrote = true;
@@ -1299,17 +1346,13 @@ public sealed class TicketAutoAssignmentService(
         return true;
     }
 
-    /// <summary>Shared-rotation fallback for a ticket still without an owner; returns the agent, or null when none could be assigned (the failure is then recorded by the engine).</summary>
-    private async Task<Guid?> EnsureFallbackAgentAsync(Ticket ticket, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken)
-    {
-        if (ticket.CurrentOwnerEmployeeId is not null)
-        {
-            return null;
-        }
-
-        var result = await EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.CallCenterIntake, nowUtc, correlationId, cancellationToken);
-        return result.Outcome is AutoAssignmentOutcome.AssignedRoundRobin or AutoAssignmentOutcome.PreservedCsAgent ? result.AssignedEmployeeId : null;
-    }
+    /// <summary>
+    /// <b>No longer deals the ticket to a random agent.</b> When the person who actually answered cannot take the ticket (unmapped, not a CS Agent, not in the
+    /// Call Center) it waits in the Call Center queue flagged for manual assignment, with its owner unchanged - the Round Robin fallback that used to hand it to
+    /// whoever was next in the rotation is removed. Always null (nobody assigned); the caller records the flag.
+    /// </summary>
+    private static Task<Guid?> EnsureFallbackAgentAsync(Ticket ticket, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken) =>
+        Task.FromResult<Guid?>(null);
 
     /// <summary>
     /// Backfill priority 2: the CS Agent Genesys confirmed as having HANDLED the interaction owns the ticket - assigned in place (no department

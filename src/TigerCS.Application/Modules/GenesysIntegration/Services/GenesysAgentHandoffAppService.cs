@@ -170,7 +170,8 @@ public sealed class GenesysAgentHandoffAppService(
         var routedFromOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;   // non-null only for an automatic pre-assignment (see ResolveCallCenterRoutingAsync)
         if (callCenter is not null)
         {
-            ticket.TransferToDepartment(callCenter.DepartmentId);
+            // Queue routing of an AI-handled ticket: the AI Agent stays the recorded owner until a person actually accepts (see below).
+            ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: ticket.AiAgentOwnerEmployeeId is not null);
         }
 
         // The ticket's CURRENT department, not its originating one: work
@@ -231,10 +232,8 @@ public sealed class GenesysAgentHandoffAppService(
                         ticket, answered, "HandoffRequest", now, requestCorrelationId, callerEmployeeId,
                         routeToCallCenterIfAgentUnavailable: true, cancellationToken);
                 }
-                else
-                {
-                    await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, requestCorrelationId, cancellationToken);
-                }
+                // Nobody has accepted yet: NO Round Robin. The ticket waits in the Call Center queue ("Waiting for Human") with the AI Agent as owner
+                // until a real connect / acceptance event names the person who answers.
             }
         }
         else if (autoAssignmentService is not null
@@ -252,8 +251,6 @@ public sealed class GenesysAgentHandoffAppService(
                     routeToCallCenterIfAgentUnavailable: true, cancellationToken);
             }
 
-            await autoAssignmentService.EnsureCsAgentAsync(
-                ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.CallCenterIntake, now, requestCorrelationId, cancellationToken);
         }
 
         await workflowEventRepository.AddAsync(
@@ -344,7 +341,15 @@ public sealed class GenesysAgentHandoffAppService(
 
         var callCenter = (await departmentRepository.ListAsync(activeOnly: true, cancellationToken)).FirstOrDefault(d =>
             string.Equals(d.Code, Reporting.Services.TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase));
-        return callCenter is null || callCenter.DepartmentId == ticket.CurrentDepartmentId ? null : callCenter;
+        if (callCenter is null || callCenter.DepartmentId == ticket.CurrentDepartmentId)
+        {
+            return null;
+        }
+
+        // A department chosen by an explicit workflow (Legal, Collections, a person's transfer) is preserved: the request is flagged where it is.
+        return autoAssignmentService is not null && await autoAssignmentService.HasExplicitWorkflowRoutingPublicAsync(ticket, callCenter.DepartmentId, cancellationToken)
+            ? null
+            : callCenter;
     }
 
     /// <summary>

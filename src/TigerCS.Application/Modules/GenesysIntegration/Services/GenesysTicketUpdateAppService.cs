@@ -530,6 +530,22 @@ public sealed class GenesysTicketUpdateAppService(
         // Genesys:AssignOnTranscriptEvidence. The ticket now stays exactly where it is (the AI's, with its own auto-close / inactivity rules). A person
         // gets it only on real evidence: an explicit humanFollowUpRequired / handoff, a mapped agent CONNECTED, an agent taking pending work, or a
         // HumanAgent transcript line while the transcript-evidence fallback is enabled.
+        // The AI conversation ENDED without resolving or closing the ticket: it is marked as unresolved, requiring follow-up, so it is visible in the
+        // follow-up queue and no inactivity / AI close can make it disappear. This is NOT a handoff and NOT an assignment: no person is chosen, no
+        // Round Robin runs, the AI Agent stays the owner (AiEndedUnresolved is a follow-up flag, never an assignment trigger).
+        if (humanSignal == GenesysHumanSignal.None
+            && request.Ended is not null
+            && request.ClosedByAi != true
+            && request.CustomerConfirmation is null
+            && request.AwaitingCustomerReply != true
+            && interaction.AwaitingCustomerReplySinceUtc is null
+            && interaction.HandledByUserId is null
+            && ticket.CurrentOwnerEmployeeId is null
+            && ticket.TicketStatus is TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer)
+        {
+            humanSignal = GenesysHumanSignal.AiEndedUnresolved;
+        }
+
         if (humanSignal == GenesysHumanSignal.HumanTranscriptLine && !options.AssignOnTranscriptEvidence)
         {
             // The fallback is switched off: a transcript line alone neither moves nor assigns the ticket (the Genesys connect event does).
@@ -935,17 +951,9 @@ public sealed class GenesysTicketUpdateAppService(
                 ticket, timeProvider.GetUtcNow().UtcDateTime, correlationId,
                 "Human follow-up required — routed to Call Center first", cancellationToken);
 
-        // Routing declined (already in / passed through the Call Center, or an automatic owner that is kept) but the person who is needed still
-        // has no CS Agent: the shared rotation gives one. No-op for an owned / closed ticket; a failure is recorded once, never silent.
-        var ensured = autoAssignmentService is not null
-            && !routed
-            && ticket.CurrentOwnerEmployeeId is null
-            && (await autoAssignmentService.EnsureCsAgentAsync(
-                    ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.CallCenterIntake,
-                    timeProvider.GetUtcNow().UtcDateTime, correlationId, cancellationToken))
-                .Outcome is not (AutoAssignmentOutcome.AlreadyAssigned or AutoAssignmentOutcome.NotApplicable);
-
-        if (!changed && !routed && !ensured)
+        // NO Round Robin and no assignment: the follow-up is flagged and the ticket waits in the queue (or stays in its workflow department) with the
+        // AI Agent as owner until a person actually accepts / answers it, or an authorised person assigns it.
+        if (!changed && !routed)
         {
             return;
         }

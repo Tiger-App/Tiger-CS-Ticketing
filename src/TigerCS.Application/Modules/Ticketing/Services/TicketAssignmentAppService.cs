@@ -678,11 +678,7 @@ public sealed class TicketAssignmentAppService(
                 await RecordCollectionsAssignmentAsync(
                     ticket, previousOwnerEmployeeId, explicitAssignee, TicketAssignmentKind.Manual, callerEmployeeId, now, request.Reason, cancellationToken);
             }
-            else if (previousOwnerEmployeeId != explicitAssignee)
-            {
-                await RecordGenesysManualAssignmentAsync(
-                    ticket, previousOwnerEmployeeId, explicitAssignee, callerEmployeeId, now, request.Reason, cancellationToken);
-            }
+
         }
         else if (collectionsRouting is not null
             && (await collectionsRouting.RouteAsync(
@@ -740,6 +736,15 @@ public sealed class TicketAssignmentAppService(
             }
         }
 
+        // Assignment History for a Genesys-handled ticket: one entry for the department transfer, carrying the previous department and the owner before and
+        // after (a Collections ticket records its own richer entry above; a ticket Genesys never handled writes nothing new).
+        var isCollectionsTarget = collectionsTeam is not null && await collectionsTeam.IsCollectionsDepartmentAsync(request.TargetDepartmentId, cancellationToken);
+        if (!isCollectionsTarget)
+        {
+            await RecordGenesysDepartmentTransferAsync(
+                ticket, previousOwnerEmployeeId, previousDepartmentId, callerEmployeeId, now, request.Reason, cancellationToken);
+        }
+
         // Ticket transfer tracking: one typed event per transfer — who moved it, to which department and (when one took
         // it, explicitly or by the target department's rule) which employee, why, and when. Same transaction and
         // correlation id as the Transfer/Assign audit entries above.
@@ -767,6 +772,31 @@ public sealed class TicketAssignmentAppService(
 
         await transaction.CommitAsync(cancellationToken);
         return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
+    }
+
+    /// <summary>A person's department transfer of a ticket the Genesys integration had been handling: previous / new department, owner before and after, who and why.</summary>
+    private async Task RecordGenesysDepartmentTransferAsync(
+        Ticket ticket, Guid? previousOwnerEmployeeId, int previousDepartmentId, Guid changedBy, DateTime nowUtc, string? reason, CancellationToken cancellationToken)
+    {
+        if (assignmentHistory is null)
+        {
+            return;
+        }
+
+        var genesys = (await assignmentHistory.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Where(h => h.Source is not null).ToList();
+        if (genesys.Count == 0)
+        {
+            return;
+        }
+
+        var before = previousOwnerEmployeeId ?? ticket.AiAgentOwnerEmployeeId ?? genesys[^1].NewEmployeeId;
+        var after = ticket.CurrentOwnerEmployeeId ?? before;
+        await assignmentHistory.AddAsync(
+            TicketAssignmentHistoryEntry.ForGenesys(
+                ticket.TicketId, ticket.CurrentDepartmentId, before, after, TicketAssignmentSource.GenesysDepartmentTransfer, changedBy, nowUtc,
+                sourceEventAtUtc: null, genesys[^1].GenesysConversationId,
+                string.IsNullOrWhiteSpace(reason) ? "Department transfer" : $"Department transfer: {reason}", TicketAssignmentKind.Manual, previousDepartmentId),
+            cancellationToken);
     }
 
     /// <summary>

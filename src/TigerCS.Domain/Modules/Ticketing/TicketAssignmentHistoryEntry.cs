@@ -29,7 +29,13 @@ public enum TicketAssignmentSource : byte
     GenesysHumanFollowUp = 4,
 
     /// <summary>A person (a supervisor, the department, the owner themselves) assigned or reassigned a ticket the Genesys integration had been handling.</summary>
-    GenesysManualAssignment = 5
+    GenesysManualAssignment = 5,
+
+    /// <summary>The system moved an AI-handled ticket into the Call Center queue for human follow-up. Ownership is unchanged (the AI Agent keeps it): only the department moved.</summary>
+    GenesysQueueRouting = 6,
+
+    /// <summary>A department transfer of a Genesys-handled ticket (by a person, or a workflow), with or without a new assignee.</summary>
+    GenesysDepartmentTransfer = 7
 }
 
 /// <summary>
@@ -42,6 +48,9 @@ public class TicketAssignmentHistoryEntry
     public long TicketAssignmentHistoryEntryId { get; private set; }
     public long TicketId { get; private set; }
     public int DepartmentId { get; private set; }
+
+    /// <summary>The department the ticket was in before this entry, when the entry is (or includes) a department change; null otherwise and on rows written before the column existed.</summary>
+    public int? PreviousDepartmentId { get; private set; }
     public Guid? PreviousEmployeeId { get; private set; }
     public Guid NewEmployeeId { get; private set; }
     public TicketAssignmentKind Kind { get; private set; }
@@ -69,12 +78,13 @@ public class TicketAssignmentHistoryEntry
     public static TicketAssignmentHistoryEntry ForGenesys(
         long ticketId, int departmentId, Guid? previousEmployeeId, Guid newEmployeeId, TicketAssignmentSource source, Guid? changedByEmployeeId,
         DateTime changedAtUtc, DateTime? sourceEventAtUtc, string? genesysConversationId, string? reason,
-        TicketAssignmentKind kind = TicketAssignmentKind.Automatic)
+        TicketAssignmentKind kind = TicketAssignmentKind.Automatic, int? previousDepartmentId = null)
     {
         var entry = new TicketAssignmentHistoryEntry(
             ticketId, departmentId, previousEmployeeId, newEmployeeId, kind, changedByEmployeeId, changedAtUtc, reason)
         {
             Source = source,
+            PreviousDepartmentId = previousDepartmentId,
             SourceEventAtUtc = sourceEventAtUtc,
             GenesysConversationId = string.IsNullOrWhiteSpace(genesysConversationId) ? null : genesysConversationId.Trim()
         };

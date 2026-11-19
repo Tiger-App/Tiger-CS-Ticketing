@@ -43,7 +43,8 @@ public sealed class TicketAssignmentHistoryAppService(
                 e.DepartmentId, await Department(e.DepartmentId),
                 e.TowerCode, e.TowerName, e.UnitNumber,
                 e.ChangedByEmployeeId, e.ChangedByEmployeeId is { } c ? await Name(c) : "System", e.Reason,
-                e.Source?.ToString(), e.SourceEventAtUtc, e.GenesysConversationId));
+                e.Source?.ToString(), e.SourceEventAtUtc, e.GenesysConversationId,
+                e.PreviousDepartmentId, e.PreviousDepartmentId is { } pd ? await Department(pd) : null));
         }
 
         return TicketQueryResultDto<IReadOnlyList<TicketAssignmentHistoryItemDto>>.Success(items);

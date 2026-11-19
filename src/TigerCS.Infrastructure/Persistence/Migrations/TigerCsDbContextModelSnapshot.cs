@@ -3730,6 +3730,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("NewEmployeeId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int?>("PreviousDepartmentId")
+                        .HasColumnType("int");
+
                     b.Property<Guid?>("PreviousEmployeeId")
                         .HasColumnType("uniqueidentifier");
 
