@@ -300,7 +300,87 @@ public sealed record CustomerDirectoryProfileDto(
     IReadOnlyList<CustomerDirectoryUnitDto> Units,
     IReadOnlyList<CustomerDirectoryTicketDto> Tickets,
     IReadOnlyList<CustomerDirectoryInteractionDto> Interactions,
-    CustomerProfileEditStateDto? Edit = null);
+    CustomerProfileEditStateDto? Edit = null,
+    Guid? CustomerProfileId = null,
+    CustomerProfileDetailsDto? Details = null,
+    IReadOnlyList<CustomerPropertyDto>? ManualProperties = null);
+
+/// <summary>
+/// The profile details as the customer is shown (an entered value, else what the tickets captured) and which of them a person entered.
+/// <see cref="FullName"/> and <see cref="Email"/> are the resolved name / e-mail every surface shows.
+/// </summary>
+public sealed record CustomerProfileDetailsDto(
+    string? FullName,
+    string? Email,
+    string? LandlineNumber,
+    IReadOnlyList<string> AdditionalPhones,
+    string? Nationality,
+    string? Country,
+    string? Emirate,
+    string? Location,
+    string? PreferredLanguage,
+    IReadOnlyList<string> EditedFields,
+    DateTime? EditedAtUtc,
+    string? DerivedFullName = null,
+    string? DerivedEmail = null);
+
+/// <summary>A property / unit manually added to a customer. Never verified ownership: <see cref="IsVerified"/> is always false here.</summary>
+public sealed record CustomerPropertyDto(
+    long AssociationId, string ProjectName, string UnitNumber, string Relationship, bool IsVerified, DateTime UpdatedAtUtc);
+
+/// <summary>POST / PUT api/customers/profile/{customerKey}/properties. The relationship is Owner, Tenant or Representative.</summary>
+public sealed record CustomerPropertyRequestDto(
+    string? ProjectName, string? UnitNumber, string? Relationship, string? Reason = null, long? RelatedTicketId = null, Guid? CorrelationId = null, string? Source = null);
+
+public enum CustomerPropertyOutcome
+{
+    Success,
+    Forbidden,
+    InvalidKey,
+    NotFound,
+    Invalid,
+    Duplicate,
+    Conflict,
+}
+
+public sealed record CustomerPropertyResult(
+    CustomerPropertyOutcome Outcome, IReadOnlyList<CustomerPropertyDto>? Properties = null, bool Changed = false, IReadOnlyDictionary<string, string[]>? Errors = null)
+{
+    public static CustomerPropertyResult Failure(CustomerPropertyOutcome outcome) => new(outcome);
+    public static CustomerPropertyResult Invalid(Dictionary<string, string[]> errors) => new(CustomerPropertyOutcome.Invalid, null, false, errors);
+    public static CustomerPropertyResult Success(IReadOnlyList<CustomerPropertyDto> properties, bool changed) => new(CustomerPropertyOutcome.Success, properties, changed);
+}
+
+/// <summary>One row of a customer's change history.</summary>
+public sealed record CustomerChangeDto(
+    long ChangeId,
+    string Field,
+    string FieldLabel,
+    string? OldValue,
+    string? NewValue,
+    Guid ModifiedByEmployeeId,
+    string ModifiedByName,
+    DateTime ModifiedAtUtc,
+    string Source,
+    string? Reason,
+    long? RelatedTicketId,
+    Guid CorrelationId);
+
+public sealed record CustomerChangeHistoryDto(IReadOnlyList<CustomerChangeDto> Items, int TotalCount, int Page, int PageSize);
+
+public enum CustomerChangeHistoryOutcome
+{
+    Success,
+    Forbidden,
+    InvalidKey,
+    NotFound,
+}
+
+public sealed record CustomerChangeHistoryResult(CustomerChangeHistoryOutcome Outcome, CustomerChangeHistoryDto? Response = null)
+{
+    public static CustomerChangeHistoryResult Failure(CustomerChangeHistoryOutcome outcome) => new(outcome);
+    public static CustomerChangeHistoryResult Success(CustomerChangeHistoryDto response) => new(CustomerChangeHistoryOutcome.Success, response);
+}
 
 /// <summary>
 /// What the Edit form needs and what the audit trail must record: the phone / project / unit the customer's tickets say (<c>Derived*</c>,
@@ -334,8 +414,32 @@ public sealed record CustomerProfileEditStateDto(
 /// <summary>
 /// PUT api/customers/profile/{customerKey}. Each value is the one the customer should show: blank clears that edit (the customer shows what
 /// their tickets say again). Project and unit are entered together. The phone is normalized to its international form.
+///
+/// <para>
+/// The profile details after them are optional and <b>null means "leave as it is"</b> (so a client that only knows the three original
+/// fields can never clear a name or e-mail by omission); an empty string clears that edit. <see cref="AdditionalPhones"/> is replaced as a
+/// whole when present (an empty list clears it). <see cref="Reason"/>, <see cref="RelatedTicketId"/>, <see cref="CorrelationId"/> and
+/// <see cref="Source"/> describe the operation for the audit trail; sending the same <see cref="CorrelationId"/> again is a retry and is
+/// recorded once.
+/// </para>
 /// </summary>
-public sealed record UpdateCustomerProfileRequestDto(string? PhoneNumber, string? ProjectName, string? UnitNumber);
+public sealed record UpdateCustomerProfileRequestDto(
+    string? PhoneNumber,
+    string? ProjectName,
+    string? UnitNumber,
+    string? FullName = null,
+    string? Email = null,
+    string? LandlineNumber = null,
+    IReadOnlyList<string>? AdditionalPhones = null,
+    string? Nationality = null,
+    string? Country = null,
+    string? Emirate = null,
+    string? Location = null,
+    string? PreferredLanguage = null,
+    string? Reason = null,
+    long? RelatedTicketId = null,
+    Guid? CorrelationId = null,
+    string? Source = null);
 
 /// <summary>The customer after an edit: the values the directory now shows, and which of them are edited.</summary>
 public sealed record CustomerProfileEditedDto(
@@ -348,6 +452,9 @@ public enum CustomerProfileEditOutcome
     InvalidKey,
     NotFound,
     Invalid,
+
+    /// <summary>Someone else saved this customer first; reload and try again.</summary>
+    Conflict,
 }
 
 public sealed record CustomerProfileEditResult(

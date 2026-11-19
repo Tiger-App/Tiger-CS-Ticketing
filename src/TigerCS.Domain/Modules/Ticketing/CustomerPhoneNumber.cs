@@ -117,11 +117,45 @@ public static class CustomerPhoneNumber
         return hasDigit;
     }
 
-    /// <summary>True when both numbers name the same customer once written the same way; false when either has no digits.</summary>
+    /// <summary>
+    /// The UAE-aware matching form: <see cref="Normalize"/>'s digits, except that a UAE mobile or landline written locally
+    /// (<c>0501234567</c>, <c>041234567</c>), internationally (<c>+97141234567</c>) or with the 00 prefix (<c>0097141234567</c>) always
+    /// becomes <c>971</c> + its national number. So all three spellings of one UAE number match.
+    ///
+    /// <para>
+    /// This is a matching rule, not a storage rule: stored keys (<c>CustomerKey</c>, <c>CustomerContactDetails.PhoneKey</c>) keep
+    /// <see cref="Normalize"/>'s form so no existing row changes meaning. A lookup by a stored key therefore tries both
+    /// (<see cref="LookupKeys"/>). Only a number that is unmistakably UAE is rewritten: a foreign number, a malformed one or a bare
+    /// "501234567" (country not stated) is returned unchanged, so two different customers can never be merged by a guess.
+    /// </para>
+    /// </summary>
+    public static string MatchKey(string? phoneNumber)
+    {
+        var digits = Normalize(phoneNumber);
+        return UaePhoneNumbers.ToInternationalDigits(digits) ?? digits;
+    }
+
+    /// <summary>
+    /// Every stored-key spelling a lookup of <paramref name="phoneNumber"/> must try: the stored form (<see cref="Normalize"/>) and the
+    /// UAE-aware form (<see cref="MatchKey"/>), de-duplicated. Empty when the number has no digits.
+    /// </summary>
+    public static IReadOnlyList<string> LookupKeys(string? phoneNumber)
+    {
+        var stored = Normalize(phoneNumber);
+        if (stored.Length == 0)
+        {
+            return [];
+        }
+
+        var match = MatchKey(phoneNumber);
+        return match == stored ? [stored] : [stored, match];
+    }
+
+    /// <summary>True when both numbers name the same number once written the same way (UAE spellings included); false when either has no digits.</summary>
     public static bool AreSameNumber(string? left, string? right)
     {
-        var canonicalLeft = Normalize(left);
-        return canonicalLeft.Length > 0 && string.Equals(canonicalLeft, Normalize(right), StringComparison.Ordinal);
+        var canonicalLeft = MatchKey(left);
+        return canonicalLeft.Length > 0 && string.Equals(canonicalLeft, MatchKey(right), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -176,6 +210,14 @@ public static class CustomerPhoneNumber
         if (digits.StartsWith("00", StringComparison.Ordinal))
         {
             return digits.Length > 2 ? "+" + digits[2..] : null;
+        }
+
+        // A UAE mobile or landline in national form (0501234567, 041234567) is unmistakably UAE - the trunk 0 plus a 9-digit 5xx or an
+        // 8-digit area-coded number exists nowhere else with that shape - so it is written internationally. Any other national number
+        // (a foreign or malformed one) still states no country and none is guessed.
+        if (UaePhoneNumbers.NationalSignificantFromLocal(digits) is { } uaeNational)
+        {
+            return "+" + UaePhoneNumbers.CountryCode + uaeNational;
         }
 
         return digits.StartsWith('0') ? digits : "+" + digits;

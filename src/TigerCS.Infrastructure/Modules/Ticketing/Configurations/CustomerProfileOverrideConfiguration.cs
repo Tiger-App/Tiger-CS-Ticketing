@@ -26,6 +26,20 @@ public class CustomerProfileOverrideConfiguration : IEntityTypeConfiguration<Cus
         builder.Property(o => o.ProjectName).HasMaxLength(CustomerProfileOverride.ProjectNameMaxLength);
         builder.Property(o => o.UnitNumber).HasMaxLength(CustomerProfileOverride.UnitNumberMaxLength);
 
+        // The stable customer identifier: required, unique, never changed (the entity mints it once).
+        builder.Property(o => o.CustomerProfileId).IsRequired();
+        builder.HasIndex(o => o.CustomerProfileId).IsUnique();
+
+        builder.Property(o => o.FullName).HasMaxLength(CustomerProfileOverride.FullNameMaxLength);
+        builder.Property(o => o.Email).HasMaxLength(CustomerProfileOverride.EmailMaxLength);
+        builder.Property(o => o.LandlineNumber).HasMaxLength(CustomerProfileOverride.PhoneNumberMaxLength);
+        builder.Property(o => o.AdditionalPhones).HasMaxLength(CustomerProfileOverride.AdditionalPhonesMaxLength);
+        builder.Property(o => o.Nationality).HasMaxLength(CustomerProfileOverride.ProfileTextMaxLength);
+        builder.Property(o => o.Country).HasMaxLength(CustomerProfileOverride.ProfileTextMaxLength);
+        builder.Property(o => o.Emirate).HasMaxLength(CustomerProfileOverride.ProfileTextMaxLength);
+        builder.Property(o => o.Location).HasMaxLength(CustomerProfileOverride.LocationMaxLength);
+        builder.Property(o => o.PreferredLanguage).HasMaxLength(CustomerProfileOverride.ProfileTextMaxLength);
+
         builder.Property(o => o.CreatedAtUtc).IsRequired();
         builder.Property(o => o.UpdatedAtUtc).IsRequired();
         builder.Property(o => o.UpdatedByEmployeeId).IsRequired();

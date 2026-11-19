@@ -1,3 +1,6 @@
+-- SUPERSEDED: use Verify_TigerCS_PROD_AllMigrations_ReadOnly.sql. This older script lists only 43 migrations, so it reports every newer one
+-- as "Unknown to this release" and cannot see a missing table. The newer script lists all migrations (a test keeps it complete) and also
+-- checks that the tables and columns the newest migrations create really exist.
 /*
 ================================================================================
  Verify_TigerCS_PROD_PendingMigrations_ReadOnly.sql          (READ-ONLY - SELECT only, nothing is written)

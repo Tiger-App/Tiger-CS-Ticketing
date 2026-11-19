@@ -1063,9 +1063,11 @@ else
                             <p class="badge badge-verification-unverified">Unverified Customer History</p>
                         }
                         <p class="text-secondary">
-                            @if (!string.IsNullOrEmpty(history.CustomerDisplayName))
+                            @* The same name the page header and the Customer Profile show (one resolution rule), not a separate guess. *@
+                            @{ var relatedName = Model.CustomerDisplayName ?? history.CustomerDisplayName; }
+                            @if (!string.IsNullOrEmpty(relatedName))
                             {
-                                <span>Customer: <strong>@history.CustomerDisplayName</strong> · </span>
+                                <span>Customer: <strong data-related-customer-name>@relatedName</strong> · </span>
                             }
                             Total: @history.TotalTickets · Open: @history.OpenTickets · Closed: @history.ClosedTickets
                         </p>
@@ -1510,7 +1512,12 @@ else
         {
             @* The customer is a linked record, never static text. *@
             var factsCrmName = TigerCS.Application.Modules.Notifications.Services.CustomerNameValidator.Sanitize(t.CrmBuyerCustomerName);
-                            <div class="facts-row"><dt>Customer</dt><dd>@if (Model.CustomerProfileHref is { } factsProfileHref && factsCrmName is not null) { <a class="ticket-id-link" href="@factsProfileHref">@factsCrmName</a> } else { @(factsCrmName ?? "—") }</dd></div>
+            // The name shown is the one the Customer Profile shows now; the name the CRM record carried when this ticket was raised is kept
+            // (never rewritten) and stays one hover away when a person has since corrected it.
+            var factsName = Model.CustomerDisplayName ?? factsCrmName;
+            var factsSnapshotHint = factsCrmName is not null && factsName is not null && !string.Equals(factsName, factsCrmName, StringComparison.Ordinal)
+                ? $"Name on the CRM record when this ticket was raised: {factsCrmName}" : null;
+                            <div class="facts-row"><dt>Customer</dt><dd data-facts-customer-name title="@factsSnapshotHint">@if (Model.CustomerProfileHref is { } factsProfileHref && factsName is not null) { <a class="ticket-id-link" href="@factsProfileHref">@factsName</a> } else { @(factsName ?? "—") }</dd></div>
             <div class="facts-row"><dt>Project</dt><dd>@(t.CrmBuyerProjectName ?? "—")</dd></div>
             <div class="facts-row"><dt>Unit Number</dt><dd>@(t.CrmBuyerUnitNumber ?? "—")</dd></div>
             <div class="facts-row"><dt>CRM Unit ID</dt><dd class="id-fallback">#@t.CrmBuyerUnitId</dd></div>

@@ -46,7 +46,8 @@ public sealed class CustomerHistoryAppService(
     ReopenPolicy reopenPolicy,
     TimeProvider timeProvider,
     ICustomerContactDetailRepository? contactDetailRepository = null,
-    TigerCS.Application.Modules.Notifications.Services.CustomerContactResolver? contactResolver = null)
+    TigerCS.Application.Modules.Notifications.Services.CustomerContactResolver? contactResolver = null,
+    ICustomerDirectoryRepository? directoryRepository = null)
 {
     /// <summary>The New Ticket preview's default page size — a "reasonable latest-ticket limit", never the customer's unbounded history.</summary>
     public const int DefaultLimit = 5;
@@ -156,6 +157,33 @@ public sealed class CustomerHistoryAppService(
                 && (await contactDetailRepository.ListByPhoneKeysAsync([phoneKey], cancellationToken)).GetValueOrDefault(phoneKey) is { } manual)
             {
                 history = history with { ManualCustomerName = manual.Name, ManualCustomerEmail = manual.Email };
+            }
+        }
+
+        // The name / e-mail / phone the Customer Profile shows for this customer: ONE rule (CustomerContactResolution, applied by the
+        // directory), so Ticket Details can never say "Unnamed caller" for a customer whose profile has a name. Read-only: the ticket's own
+        // snapshot is untouched and still what the ticket was raised with. Within the caller's own visibility, exactly like the profile.
+        if (directoryRepository is not null && CustomerIdentity.TryParse(history.CustomerKey, out var identity))
+        {
+            var visibleDepartmentIds = await ticketQueryAppService.ResolveVisibleDepartmentIdsAsync(callerEmployeeId, callerRoles, cancellationToken);
+            var profile = await directoryRepository.GetProfileAsync(
+                identity, visibleDepartmentIds, cancellationToken, ticketQueryAppService.ResolveAgentScope(callerEmployeeId, callerRoles), callerEmployeeId);
+            if (profile is not null)
+            {
+                // A verified customer keeps the verified source's own name unless a person corrected it; an unverified (phone-only)
+                // caller has nothing better than the profile's resolved name, so it is always used.
+                var nameIsEdited = profile.Details?.EditedFields.Contains(CustomerProfileFields.FullName) == true;
+                if ((identity.Kind == CustomerIdentityKind.Phone || nameIsEdited) && CustomerNameResolver.FirstValid(profile.DisplayName) is { } profileName)
+                {
+                    history = history with { ManualCustomerName = profileName };
+                }
+
+                var profileEmail = profile.Details?.Email ?? profile.Emails.FirstOrDefault();
+                history = history with
+                {
+                    ManualCustomerEmail = profileEmail ?? history.ManualCustomerEmail,
+                    ResolvedCustomerPhone = profile.PhoneNumbers.FirstOrDefault(),
+                };
             }
         }
 

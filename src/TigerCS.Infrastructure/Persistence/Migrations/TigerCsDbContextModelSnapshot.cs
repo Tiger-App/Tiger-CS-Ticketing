@@ -2946,6 +2946,81 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("CustomerContactDetails", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.CustomerProfileChange", b =>
+                {
+                    b.Property<long>("CustomerProfileChangeId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("CustomerProfileChangeId"));
+
+                    b.Property<string>("ChangeKey")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nchar(64)")
+                        .IsFixedLength();
+
+                    b.Property<string>("ChangeReason")
+                        .HasMaxLength(500)
+                        .HasColumnType("nvarchar(500)");
+
+                    b.Property<Guid>("CorrelationId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CustomerKey")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<Guid>("CustomerProfileId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("FieldName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("ModifiedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("ModifiedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ModifiedByName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("NewValue")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<string>("OldValue")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<long?>("RelatedTicketId")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("nvarchar(50)");
+
+                    b.HasKey("CustomerProfileChangeId");
+
+                    b.HasIndex("ChangeKey")
+                        .IsUnique();
+
+                    b.HasIndex("CorrelationId");
+
+                    b.HasIndex("CustomerKey");
+
+                    b.HasIndex("CustomerProfileId", "ModifiedAtUtc");
+
+                    b.ToTable("CustomerProfileChanges", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride", b =>
                 {
                     b.Property<long>("CustomerProfileOverrideId")
@@ -2953,6 +3028,14 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasColumnType("bigint");
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("CustomerProfileOverrideId"));
+
+                    b.Property<string>("AdditionalPhones")
+                        .HasMaxLength(400)
+                        .HasColumnType("nvarchar(400)");
+
+                    b.Property<string>("Country")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");
@@ -2965,11 +3048,26 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(300)
                         .HasColumnType("nvarchar(300)");
 
+                    b.Property<Guid>("CustomerProfileId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Email")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Emirate")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<string>("ExternalCustomerId")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
                     b.Property<string>("ExternalSource")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("FullName")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
@@ -2980,12 +3078,28 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("nvarchar(32)");
 
+                    b.Property<string>("LandlineNumber")
+                        .HasMaxLength(32)
+                        .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("Location")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("Nationality")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
                     b.Property<byte?>("PhoneLocation")
                         .HasColumnType("tinyint");
 
                     b.Property<string>("PhoneNumber")
                         .HasMaxLength(32)
                         .HasColumnType("nvarchar(32)");
+
+                    b.Property<string>("PreferredLanguage")
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
 
                     b.Property<string>("ProjectName")
                         .HasMaxLength(200)
@@ -3012,7 +3126,67 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.HasIndex("CustomerKey")
                         .IsUnique();
 
+                    b.HasIndex("CustomerProfileId")
+                        .IsUnique();
+
                     b.ToTable("CustomerProfileOverrides", (string)null);
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.CustomerPropertyAssociation", b =>
+                {
+                    b.Property<long>("CustomerPropertyAssociationId")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("CustomerPropertyAssociationId"));
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("CreatedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CustomerKey")
+                        .IsRequired()
+                        .HasMaxLength(300)
+                        .HasColumnType("nvarchar(300)");
+
+                    b.Property<Guid>("CustomerProfileId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("ProjectName")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<byte>("Relationship")
+                        .HasColumnType("tinyint");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .IsRequired()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<string>("UnitNumber")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("UpdatedByEmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("CustomerPropertyAssociationId");
+
+                    b.HasIndex("CustomerKey");
+
+                    b.HasIndex("CustomerProfileId", "ProjectName", "UnitNumber")
+                        .IsUnique();
+
+                    b.ToTable("CustomerPropertyAssociations", (string)null);
                 });
 
             modelBuilder.Entity("TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation", b =>

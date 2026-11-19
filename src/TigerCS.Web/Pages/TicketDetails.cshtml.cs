@@ -1312,7 +1312,7 @@ public sealed class TicketDetailsModel(
         CustomerHistory = customerHistoryTask.Result.IsSuccess ? customerHistoryTask.Result.Value : null;
 
         var originating = Interactions.FirstOrDefault(i => i.IsOriginatingInteraction) ?? Interactions.FirstOrDefault();
-        CustomerPhone = FirstNonEmpty(CustomerHistory?.PhoneNumberSnapshot, originating?.CustomerPhone);
+        CustomerPhone = FirstNonEmpty(CustomerHistory?.ResolvedCustomerPhone, CustomerHistory?.PhoneNumberSnapshot, originating?.CustomerPhone);
         // One rule for the name (shared with the Customers directory and profile): CRM snapshot, then the verified external snapshot,
         // then any name that was merely submitted (the chat form / call, then the history's name). A placeholder ("NOT_REGISTERED",
         // "UNKNOWN", "N/A"), a blank or an unsuccessful lookup is skipped, so it never replaces or hides a valid name; with nothing

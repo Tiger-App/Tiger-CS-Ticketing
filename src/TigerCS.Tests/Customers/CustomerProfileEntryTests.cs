@@ -12,6 +12,18 @@ public class CustomerProfileEntryTests
     [InlineData("00971501234567", "+971501234567")]
     [InlineData("00 971 (50) 123.4567", "+971501234567")]
     [InlineData("971501234567", "+971501234567")]           // a UAE number written without the plus is still a UAE number
+    // A UAE mobile or landline written locally is unmistakably UAE and is saved internationally.
+    [InlineData("0501234567", "+971501234567")]
+    [InlineData("050 123 4567", "+971501234567")]
+    [InlineData("041234567", "+97141234567")]
+    [InlineData("+97141234567", "+97141234567")]
+    [InlineData("0097141234567", "+97141234567")]
+    [InlineData("97141234567", "+97141234567")]
+    [InlineData("02 123 4567", "+97121234567")]
+    [InlineData("03 123 4567", "+97131234567")]
+    [InlineData("06 123 4567", "+97161234567")]
+    [InlineData("07 123 4567", "+97171234567")]
+    [InlineData("09 123 4567", "+97191234567")]
     [InlineData("+44 20 7946 0958", "+442079460958")]
     [InlineData("0044 20 7946 0958", "+442079460958")]
     [InlineData("+1 (202) 555-0143", "+12025550143")]
@@ -37,9 +49,13 @@ public class CustomerProfileEntryTests
     }
 
     [Theory]
-    [InlineData("0501234567")]            // national form: no country is ever guessed
-    [InlineData("501234567")]
-    [InlineData("+971 12345")]            // a UAE number is +971 and nine digits
+    [InlineData("501234567")]             // no leading 0 and no country code: no country is ever guessed
+    [InlineData("41234567")]
+    [InlineData("0112345678")]            // a national number that is not a UAE mobile or landline
+    [InlineData("081234567")]             // 08 is not a UAE area code
+    [InlineData("0412345678")]            // a UAE landline has 8 digits after the 0, not 9
+    [InlineData("+971 12345")]            // a UAE number is +971 and a 9-digit mobile or 8-digit landline
+    [InlineData("+971412345678")]         // 9 digits starting 4 is neither
     [InlineData("+9715012345678")]
     [InlineData("971501234")]
     [InlineData("+0 1234567890")]         // a country code never starts with 0
@@ -61,7 +77,7 @@ public class CustomerProfileEntryTests
     [Fact]
     public void A_national_number_is_told_how_to_write_it()
     {
-        Assert.False(CustomerProfileEntry.TryNormalizePhone("0501234567", out _, out var error));
+        Assert.False(CustomerProfileEntry.TryNormalizePhone("0112345678", out _, out var error));
         Assert.Contains("country code", error, StringComparison.OrdinalIgnoreCase);
     }
 
