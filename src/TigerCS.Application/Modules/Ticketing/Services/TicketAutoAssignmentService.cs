@@ -1201,7 +1201,7 @@ public sealed class TicketAutoAssignmentService(
             if (genesysEvent is not null && assignmentHistoryRepository is not null)
             {
                 // The previous assignee is the owner being replaced, else the AI Agent when it was the last recorded assignee.
-                var previousAssignee = previousOwner ?? (genesysHistory.LastOrDefault() is { Source: TicketAssignmentSource.GenesysAiAgent } ai ? ai.NewEmployeeId : null);
+                var previousAssignee = previousOwner ?? genesysHistory.LastOrDefault(h => h.Source is TicketAssignmentSource.GenesysAiAgent or TicketAssignmentSource.GenesysQueueRouting)?.NewEmployeeId;
                 await assignmentHistoryRepository.AddAsync(
                     TicketAssignmentHistoryEntry.ForGenesys(
                         ticket.TicketId, callCenter.DepartmentId, previousAssignee, agentId,

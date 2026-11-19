@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
@@ -23,10 +23,11 @@ namespace TigerCS.Tests.GenesysIntegration.Persistence;
 ///
 /// <list type="number">
 /// <item>The conversation "started" 4 hours in the future (a wall-clock written without a zone): never stored, audited with its wire form.</item>
-/// <item>The AI conversation ENDS: nothing is marked as human work, moved or assigned - ending is not evidence of a handoff.</item>
-/// <item>The AI conversation is shown as ended (not "AI is handling"), no human accepted, no human responded.</item>
-/// <item>An explicit human follow-up request routes to the Call Center and a provisional agent, and Assignment History shows that agent.</item>
-/// <item>That assignment is not acceptance and not a response (no handler, no first human response).</item>
+/// <item>The AI creates the ticket and OWNS it (no human assigned).</item>
+/// <item>The AI conversation ENDS unresolved: flagged for follow-up and queued in the Call Center - nobody assigned, no Round Robin, AI Agent stays owner.</item>
+/// <item>A handoff request shows Waiting for Human; an unmapped connected agent assigns nobody.</item>
+/// <item>The employee who actually answers (mapped) is assigned the existing ticket directly; History records AI -> employee, department changes and the previous department.</item>
+/// <item>A direct human call is owned by the answering employee, never the AI Agent; explicit workflow routing keeps its department.</item>
 /// <item>A Closed ticket never changes again - owner, department, status, history - whatever late event arrives.</item>
 /// </list>
 /// </summary>
@@ -54,7 +55,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         command.ExecuteNonQuery();
     }
 
-    private sealed record World(HttpClient Genesys, HttpClient Viewer, int CustomerService, int CallCenter, Guid[] CallCenterAgents);
+    private sealed record World(HttpClient Genesys, HttpClient Viewer, int CustomerService, int CallCenter, Guid[] CallCenterAgents, string[] GenesysIds);
 
     private async Task<World> StartAsync()
     {
@@ -84,7 +85,13 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
             agents.Add(id);
         }
 
-        return new World(await ClientAsync(Roles.CsAgent), await ClientAsync(Roles.SystemAdministrator), cs, cc, [.. agents]);
+        var genesysIds = new[] { $"genesys-{Guid.NewGuid():N}"[..20], $"genesys-{Guid.NewGuid():N}"[..20] };
+        for (var i = 0; i < agents.Count; i++)
+        {
+            await _factory.MapGenesysAgentAsync(agents[i], genesysIds[i]);   // the existing Genesys-to-TigerCS user mapping
+        }
+
+        return new World(await ClientAsync(Roles.CsAgent), await ClientAsync(Roles.SystemAdministrator), cs, cc, [.. agents], genesysIds);
     }
 
     private async Task<HttpClient> ClientAsync(string role)
@@ -104,15 +111,14 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
     private TigerCsDbContext Db() => new(new DbContextOptionsBuilder<TigerCsDbContext>().UseSqlServer(ConnectionString).Options);
 
     [VisibilitySqlServerFact]
-    public async Task Ticket1878_AiConversationEnds_NothingIsAssigned_FollowUpIsExplicit_HistoryShowsIt_ClosedStaysClosed()
+    public async Task Ticket1878_FullGenesysLifecycle_AiOwnsFirst_QueueNotAssignment_OnlyTheAnsweringAgentOwnsIt_HistoryAndClosedProtection()
     {
         var w = await StartAsync();
         var conversation = $"conv-{Guid.NewGuid():N}"[..20];
-        var receivedAround = DateTime.UtcNow;
         // The 1878 shape: a UAE wall-clock start written WITHOUT a zone, i.e. four hours later than the real instant when read as UTC.
-        var zonelessFuture = receivedAround.AddHours(4).ToString("yyyy-MM-ddTHH:mm:ss");
+        var zonelessFuture = DateTime.UtcNow.AddHours(4).ToString("yyyy-MM-ddTHH:mm:ss");
 
-        // 1. The AI creates the ticket.
+        // 1. The AI creates the ticket: owned by the AI Agent, in its department, nobody assigned.
         var create = await w.Genesys.PostAsync("/api/genesys/tickets", Json(new
         {
             conversationId = conversation, channel = "LiveChat", customerPhone = "+971500000011", departmentId = w.CustomerService,
@@ -121,6 +127,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
         var ticketId = (await create.Content.ReadFromJsonAsync<GenesysAcceptedDto>())!.TicketId;
 
+        Guid aiAgent;
         using (var db = Db())
         {
             var interaction = await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId);
@@ -128,11 +135,18 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
             var anomaly = await db.AuditEntries.AsNoTracking().SingleAsync(a => a.Action == GenesysAuditActions.TimestampAnomaly && a.EntityId == ticketId.ToString());
             Assert.Contains("RejectedFuture", anomaly.AfterValue);
             Assert.Contains("Zoneless", anomaly.AfterValue);
-            var history = await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).ToListAsync();
-            Assert.Equal(TicketAssignmentSource.GenesysAiAgent, Assert.Single(history).Source);        // "Genesys Integration" only, so far
+
+            var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId);
+            aiAgent = Assert.NotNull(ticket.AiAgentOwnerEmployeeId);
+            Assert.Null(ticket.CurrentOwnerEmployeeId);
+            Assert.Equal(w.CustomerService, ticket.CurrentDepartmentId);
+            Assert.Equal(TicketAssignmentSource.GenesysAiAgent, Assert.Single(await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).ToListAsync()).Source);
         }
 
-        // 2. The AI conversation ends (no human line, no follow-up flag). Exactly the 14:13:31 event of the real ticket.
+        Assert.Equal("Ai", (await InteractionAsync(w, ticketId)).HandlingState);
+
+        // 2. The AI conversation ENDS unresolved: marked as requiring follow-up and queued in the Call Center - but nobody is assigned, nothing round-robins,
+        //    and the AI Agent stays the owner. (Ticket 1878: this exact event dealt the ticket to an agent one second later.)
         var end = await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(new
         {
             conversationId = conversation,
@@ -151,79 +165,109 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         using (var db = Db())
         {
             var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId);
-            Assert.Equal(w.CustomerService, ticket.CurrentDepartmentId);                               // NOT transferred to the Call Center
+            Assert.Equal(w.CallCenter, ticket.CurrentDepartmentId);                                    // queue routing
+            Assert.Equal(w.CustomerService, ticket.OriginatingDepartmentId);
             Assert.Null(ticket.CurrentOwnerEmployeeId);                                                // NOT given to an employee
+            Assert.Equal(aiAgent, ticket.AiAgentOwnerEmployeeId);                                      // the AI Agent keeps it
             Assert.Empty(await db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId).ToListAsync());
-            Assert.False((await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).RequiresHumanFollowUp);
-            Assert.DoesNotContain(await db.AuditEntries.AsNoTracking().Select(a => a.Action).ToListAsync(), a => a is "Transfer" or "AutoAssign" or GenesysAuditActions.HumanFollowUpRequired);
-            Assert.Single(await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).ToListAsync());
+            Assert.True((await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).RequiresHumanFollowUp);
+            Assert.DoesNotContain(await db.AuditEntries.AsNoTracking().Select(a => a.Action).ToListAsync(), a => a == "AutoAssign");
+            Assert.Null(ticket.FirstHumanResponseAtUtc);                                               // queue routing is not a human response
+
+            var history = await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).OrderBy(h => h.TicketAssignmentHistoryEntryId).ToListAsync();
+            Assert.Equal(2, history.Count);
+            Assert.Equal(TicketAssignmentSource.GenesysQueueRouting, history[1].Source);
+            Assert.Equal(w.CustomerService, history[1].PreviousDepartmentId);                          // previous / new department recorded
+            Assert.Equal(w.CallCenter, history[1].DepartmentId);
+            Assert.Equal((aiAgent, aiAgent), (history[1].PreviousEmployeeId!.Value, history[1].NewEmployeeId));   // ownership unchanged
         }
 
         var afterEnd = await InteractionAsync(w, ticketId);
-        Assert.Equal("AiEnded", afterEnd.HandlingState);                                               // not "AI is handling this customer"
+        Assert.Equal("HumanFollowUp", afterEnd.HandlingState);                                         // not "AI is handling this customer"
         Assert.False(afterEnd.HumanAccepted);
         Assert.False(afterEnd.HumanResponded);
 
-        // 3. Redelivery of the same end changes nothing.
+        // 3. Redelivery changes nothing.
         Assert.Equal(HttpStatusCode.OK, (await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(new
         {
             conversationId = conversation, ended = new { endedAtUtc = Z(DateTime.UtcNow), endReason = "CustomerDisconnect" }
         }))).StatusCode);
         using (var db = Db())
         {
+            Assert.Equal(2, await db.TicketAssignmentHistory.AsNoTracking().CountAsync(h => h.TicketId == ticketId));
             Assert.Null((await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId)).CurrentOwnerEmployeeId);
         }
 
-        // 4. An EXPLICIT follow-up request (a business decision, not the end of the conversation): Call Center first, provisional agent by Round Robin.
-        Assert.Equal(HttpStatusCode.OK, (await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(
-            new { conversationId = conversation, humanFollowUpRequired = true }))).StatusCode);
-
-        Guid owner;
+        // 4. The AI asks for a human (handoff): Waiting for Human, still the AI Agent's, still nobody assigned, no Round Robin.
+        Assert.Equal(HttpStatusCode.OK, (await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(new
+        {
+            conversationId = conversation,
+            handoff = new { required = true, mode = "HumanTakeover", trigger = "AiEscalated", reason = "The AI could not resolve the request." }
+        }))).StatusCode);
         using (var db = Db())
         {
             var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId);
-            Assert.Equal(w.CallCenter, ticket.CurrentDepartmentId);
-            owner = Assert.NotNull(ticket.CurrentOwnerEmployeeId);
-            Assert.Contains(owner, w.CallCenterAgents);
-            Assert.True((await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).RequiresHumanFollowUp);
-
-            // Assignment History now carries the Call Center assignment (it used to stop at "Genesys Integration").
-            var history = await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).OrderBy(h => h.ChangedAtUtc).ThenBy(h => h.TicketAssignmentHistoryEntryId).ToListAsync();
-            Assert.Equal(2, history.Count);
-            Assert.Equal(TicketAssignmentSource.GenesysHumanFollowUp, history[1].Source);
-            Assert.Equal(history[0].NewEmployeeId, history[1].PreviousEmployeeId);
-            Assert.Equal(owner, history[1].NewEmployeeId);
-            Assert.Equal(w.CallCenter, history[1].DepartmentId);
-
-            // Assignment is NOT acceptance and NOT a response.
-            Assert.Null((await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).HandledByUserId);
-            Assert.False(await db.TicketInteractionHandlers.AsNoTracking().AnyAsync(h => h.TicketInteractionId == (db.TicketInteractions.Where(i => i.TicketId == ticketId).Select(i => i.TicketInteractionId).First())));
-            Assert.Null(ticket.FirstHumanResponseAtUtc);
+            Assert.Null(ticket.CurrentOwnerEmployeeId);
+            Assert.Equal(aiAgent, ticket.AiAgentOwnerEmployeeId);
+            Assert.Empty(await db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId).ToListAsync());
         }
 
-        var followUp = await InteractionAsync(w, ticketId);
-        Assert.Equal("HumanFollowUp", followUp.HandlingState);
-        Assert.False(followUp.HumanAccepted);
-        Assert.False(followUp.HumanResponded);
+        var waiting = await InteractionAsync(w, ticketId);
+        Assert.Equal("WaitingForHuman", waiting.HandlingState);
+        Assert.False(waiting.HumanAccepted);
 
-        var apiHistory = await w.Viewer.GetFromJsonAsync<List<TicketAssignmentHistoryItemDto>>($"/api/tickets/{ticketId}/assignment-history");
-        Assert.Equal(2, apiHistory!.Count);
-        Assert.Equal(owner, apiHistory[1].NewEmployeeId);
-
-        // The read-only diagnostic for ticket 1878 runs against this very schema and tells the same story (Assignment History: AI Agent -> provisional agent).
-        var sets = await RunDiagnosticAsync(ticketId);
-        Assert.Contains(sets, set => set.Columns.Contains("Source") && set.Columns.Contains("NewEmployee") && set.Rows == 2);      // section 4: Assignment History
-        Assert.Contains(sets, set => set.Columns.Contains("StartMinusServerRecorded_Min") && set.Rows == 1);                      // section 2: the interaction
-
-        // Redelivery of the follow-up request writes no further history, assignment or transfer.
-        await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(new { conversationId = conversation, humanFollowUpRequired = true }));
+        // 5. A connected agent the integration cannot map is NOT assigned, and nobody else is picked in their place.
+        await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(new
+        {
+            conversationId = conversation, routing = new { agentId = "unmapped-genesys-user", agentName = "Ghost", connectedAtUtc = Z(DateTime.UtcNow) }
+        }));
         using (var db = Db())
         {
-            Assert.Equal(2, await db.TicketAssignmentHistory.AsNoTracking().CountAsync(h => h.TicketId == ticketId));
-            Assert.Single(await db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId && a.IsCurrent).ToListAsync());
+            var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId);
+            Assert.Null(ticket.CurrentOwnerEmployeeId);
+            Assert.Equal(aiAgent, ticket.AiAgentOwnerEmployeeId);
+            Assert.Empty(await db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId).ToListAsync());
         }
 
-        // 5. Closed is terminal: whoever closed it, late events change nothing.
+        // 6. The employee who ACTUALLY answers (mapped Genesys user #2 - not the one a rotation would pick first) is assigned the EXISTING ticket directly.
+        var answering = w.CallCenterAgents[1];
+        Assert.Equal(HttpStatusCode.OK, (await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(new
+        {
+            conversationId = conversation, routing = new { agentId = w.GenesysIds[1], agentName = "Agent Two", connectedAtUtc = Z(DateTime.UtcNow) }
+        }))).StatusCode);
+
+        using (var db = Db())
+        {
+            var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId);
+            Assert.Equal(answering, ticket.CurrentOwnerEmployeeId);
+            Assert.Null(ticket.AiAgentOwnerEmployeeId);                                                // a person now owns it
+            Assert.Equal(1, await db.TicketInteractions.AsNoTracking().CountAsync(i => i.GenesysConversationId == conversation));   // no duplicate ticket
+            Assert.Equal(1, await db.Tickets.AsNoTracking().CountAsync(t => t.TicketId == ticketId));
+            Assert.Single(await db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId && a.IsCurrent).ToListAsync());
+            Assert.Null(ticket.FirstHumanResponseAtUtc);                                               // accepting is not responding
+            Assert.Equal(answering, (await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).HandledByUserId);
+
+            var history = await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).OrderBy(h => h.TicketAssignmentHistoryEntryId).ToListAsync();
+            var transfer = history[^1];
+            Assert.Equal(TicketAssignmentSource.GenesysCallTransfer, transfer.Source);                 // AI -> human
+            Assert.Equal((aiAgent, answering), (transfer.PreviousEmployeeId!.Value, transfer.NewEmployeeId));
+        }
+
+        var accepted = await InteractionAsync(w, ticketId);
+        Assert.Equal("Human", accepted.HandlingState);
+        Assert.True(accepted.HumanAccepted);
+        Assert.False(accepted.HumanResponded);
+
+        // The read-only diagnostic for ticket 1878 runs against this very schema and tells the same story.
+        var sets = await RunDiagnosticAsync(ticketId);
+        Assert.Contains(sets, set => set.Columns.Contains("Source") && set.Columns.Contains("NewEmployee") && set.Rows >= 3);   // section 4: Assignment History
+        Assert.Contains(sets, set => set.Columns.Contains("StartMinusServerRecorded_Min") && set.Rows == 1);                      // section 2: the interaction
+
+        var apiHistory = await w.Viewer.GetFromJsonAsync<List<TicketAssignmentHistoryItemDto>>($"/api/tickets/{ticketId}/assignment-history");
+        Assert.Equal(answering, apiHistory![^1].NewEmployeeId);
+        Assert.Contains(apiHistory, h => h.Source == nameof(TicketAssignmentSource.GenesysQueueRouting) && h.PreviousDepartmentId == w.CustomerService);
+
+        // 7. Closed is terminal: whoever closed it, late events change nothing.
         Snapshot before;
         using (var db = Db())
         {
@@ -239,7 +283,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         {
             new { conversationId = conversation, ended = new { endedAtUtc = Z(DateTime.UtcNow), endReason = "Timeout" } },
             new { conversationId = conversation, humanFollowUpRequired = true },
-            new { conversationId = conversation, routing = new { agentId = "someone-else", connectedAtUtc = Z(DateTime.UtcNow) } }
+            new { conversationId = conversation, routing = new { agentId = w.GenesysIds[0], connectedAtUtc = Z(DateTime.UtcNow) } }
         })
         {
             await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(late));
@@ -260,6 +304,56 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         using (var db = Db())
         {
             Assert.Equal(before, await SnapshotAsync(db, ticketId));
+        }
+    }
+
+    [VisibilitySqlServerFact]
+    public async Task ADirectHumanCall_IsAssignedToTheAnsweringEmployee_NeverToTheAiAgent_AndATicketWithExplicitWorkflowRoutingKeepsItsDepartment()
+    {
+        var w = await StartAsync();
+
+        // Direct human call: the answering mapped agent owns the ticket from creation; the AI Agent is never its owner.
+        var direct = await w.Genesys.PostAsync("/api/genesys/tickets", Json(new
+        {
+            conversationId = $"direct-{Guid.NewGuid():N}"[..20], channel = "Phone", customerPhone = "+971500000012", departmentId = w.CustomerService,
+            agentId = w.GenesysIds[0], agentName = "Agent One", direction = "Inbound"
+        }));
+        Assert.Equal(HttpStatusCode.Created, direct.StatusCode);
+        var directId = (await direct.Content.ReadFromJsonAsync<GenesysAcceptedDto>())!.TicketId;
+        using (var db = Db())
+        {
+            var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == directId);
+            Assert.Equal(w.CallCenterAgents[0], ticket.CurrentOwnerEmployeeId);
+            Assert.Null(ticket.AiAgentOwnerEmployeeId);
+            Assert.DoesNotContain(await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == directId).ToListAsync(), h => h.Source == TicketAssignmentSource.GenesysAiAgent);
+        }
+
+        // Explicit workflow routing (the department differs from the originating one): a human follow-up is FLAGGED where the ticket already is.
+        var other = await _factory!.CreateDepartmentAsync("Legal", "LEG");
+        var conversation = $"legal-{Guid.NewGuid():N}"[..20];
+        var created = await w.Genesys.PostAsync("/api/genesys/tickets", Json(new
+        {
+            conversationId = conversation, channel = "LiveChat", customerPhone = "+971500000013", departmentId = w.CustomerService
+        }));
+        var legalTicket = (await created.Content.ReadFromJsonAsync<GenesysAcceptedDto>())!.TicketId;
+        using (var db = Db())
+        {
+            var ticket = await db.Tickets.SingleAsync(t => t.TicketId == legalTicket);
+            ticket.TransferToDepartment(other, keepAiAgentOwner: true);          // what an explicit request-type / person routing does
+            await db.SaveChangesAsync();
+        }
+
+        Assert.Equal(HttpStatusCode.OK, (await w.Genesys.PatchAsync($"/api/genesys/tickets/{legalTicket}", Json(new
+        {
+            conversationId = conversation, humanFollowUpRequired = true
+        }))).StatusCode);
+        using (var db = Db())
+        {
+            var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == legalTicket);
+            Assert.Equal(other, ticket.CurrentDepartmentId);                      // preserved: not pulled into the Call Center
+            Assert.Null(ticket.CurrentOwnerEmployeeId);
+            Assert.NotNull(ticket.AiAgentOwnerEmployeeId);
+            Assert.True((await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == legalTicket)).RequiresHumanFollowUp);
         }
     }
 

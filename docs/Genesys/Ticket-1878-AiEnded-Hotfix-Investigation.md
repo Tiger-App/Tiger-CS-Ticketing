@@ -104,3 +104,31 @@ banner wording itself is pinned by `TicketNextActionTests` rather than by these 
 Previously an ended, unresolved AI conversation was *always* routed to a person. Now it is not (per the stated requirement). Such a ticket stays with the AI
 (auto-close / inactivity rules apply) until a real signal arrives. If the business also wants a safety net for AI tickets that never get closed, that is the
 existing, opt-in reconciler setting (`AssignStaleAi`) — unchanged.
+
+## 7. Update — approved ownership rules (supersedes §1.1's "explicit follow-up routes to Round Robin", §6)
+
+Decisions given on PR #292 after the first review: **no automatic human assignment anywhere for AI tickets; unresolved / waiting tickets sit in the Call Center
+queue with the AI Agent staying the recorded owner; an explicit workflow department is preserved; queue routing is never a human response.**
+
+| Situation | Behaviour now |
+|---|---|
+| AI receives the call | Ticket created and owned by the **AI Agent** (`Tickets.AiAgentOwnerEmployeeId`); never auto-assigned while the AI handles it. AI classification routes the department and applies SLA but **assigns nobody** (request-type rules and the default rotation no longer run for an AI-handled ticket). |
+| AI resolves | `closedByAi` closes it under the AI Agent (unchanged). |
+| AI asks for a human (handoff) / `humanFollowUpRequired` | Handling state **Waiting for Human** / **Human follow-up required**. The ticket moves to the **Call Center queue** (`OriginatingDepartmentId` untouched), **owner stays the AI Agent**, no `TicketAssignments` row, **no Round Robin**, rotation cursor untouched. A ticket whose department came from an **explicit workflow** (Collections, or any department different from its originating one — e.g. a request type routed it to Legal/Leasing) **keeps its department**; it is only flagged. |
+| AI conversation ends unresolved | Interaction marked **requires follow-up** (`AiEndedUnresolved` is now a *flag + queue* signal, never an assignment trigger). Visible in the Call Center queue (claimable through Take Ownership); AI inactivity/auto-close can no longer make it vanish. |
+| A person accepts | A mapped, eligible agent reported **connected** (`routing.agentId`, `handoff.assignedAgentId`, phone pickup at creation) is assigned the **existing** ticket directly; the AI owner is cleared; history `AI Agent → employee` (`GenesysCallTransfer`) or `GenesysDirectCall` when no AI was involved. Ringing / offered / queued / missed events are never sent and never assign. If several agents are offered, only the one reported connected is assigned. |
+| The answering agent cannot take it | Unmapped / not a CS Agent / not in the Call Center → the ticket waits in the Call Center queue **flagged** (`ManualAssignmentRequired`), owner unchanged. The "next agent in the rotation" fallback is **removed**. |
+| `AssignStaleAi` | Now **report-only**: a stale AI conversation is classified `StaleAiNoEndEvent` and left with the AI Agent. The reconciler's only action for Genesys tickets is *route to the Call Center queue* (`RouteToCallCenterQueue`); `RoundRobinCallCenter` remains for tickets with **no** Genesys interaction. |
+| Direct human call (inbound/outbound) | The answering mapped employee owns it from creation; the AI Agent is never recorded as owner. |
+| Closed ticket | Terminal; late/duplicate events are audit evidence only (unchanged, re-verified). |
+
+**Assignment History** (`TicketAssignmentHistory`, new nullable `PreviousDepartmentId`, migration `AddAssignmentHistoryPreviousDepartment`, additive, no backfill; scripts
+`AddAssignmentHistoryPreviousDepartment.sql` + `Deploy_TigerCS_PROD_AddAssignmentHistoryPreviousDepartment.sql`): initial AI Agent (1); direct human call (2);
+AI→human / human→human connect (3); system Round Robin on a Genesys ticket outside transfers (4); manual assignment/reassignment (5); **queue routing** with previous
+department, ownership unchanged (6); **department transfer** by a person with previous/new department and owner before/after (7). Every row carries previous/new
+employee, department, reason, source, performed-by (null = system), timestamp, source-event time and the Genesys conversation id. Redelivery writes no duplicate.
+
+**SLA and performance.** Queue routing and AI events never record a human first response: `FirstHumanResponseAtUtc` is set only by a real `HumanAgent` line or an
+authorised human action; accepting (a connect event) is recorded separately as the interaction handler (`HumanAccepted`), a reply separately (`HumanResponded`). Moving
+a ticket between departments does not restart SLA clocks. An AI-owned ticket has no human owner, so it is attributed to no employee in performance reports until a person
+actually takes it. (Asserted in `AiEndedHumanFollowUpSqlServerTests` and the SLA/first-response unit tests.)
