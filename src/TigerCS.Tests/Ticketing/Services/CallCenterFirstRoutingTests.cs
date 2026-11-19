@@ -193,16 +193,22 @@ public class CallCenterFirstRoutingTests
     }
 
     [Fact]
-    public async Task GenesysTicketNeedingAPerson_EntersCallCenter()
+    public async Task GenesysTicketNeedingAPerson_EntersTheCallCenterQueue_WithNobodyChosen()
     {
         var env = new Env();
-        var agent = env.AddMember(env.CallCenter!);
+        env.AddMember(env.CallCenter!);
+        env.AddMember(env.CallCenter!);
 
         var result = await env.CreateManualAsync(env.Cs, new GenesysInteractionContextDto("conv-1", RequiresHumanFollowUp: true));
 
+        // Queue only: the department moves, the origin is kept, and NO Round Robin deals it to a Call Center member.
         var ticket = Stored(env, result);
         Assert.Equal(env.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(env.Cs.DepartmentId, ticket.OriginatingDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(env.Assignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.Empty(env.Rotation.Rows);   // the rotation cursor did not move
+        Assert.DoesNotContain(env.Audit.Entries, w => w.Action == "AutoAssign");
     }
 
     [Fact]

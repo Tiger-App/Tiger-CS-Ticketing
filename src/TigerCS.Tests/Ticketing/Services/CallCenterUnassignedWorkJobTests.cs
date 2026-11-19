@@ -36,6 +36,20 @@ public class CallCenterUnassignedWorkJobTests
         return (new CallCenterUnassignedWorkJob(services.GetRequiredService<IServiceScopeFactory>(), new Monitor(options), runLock, log), log, runLock);
     }
 
+    /// <summary>
+    /// Mirrors what the real evidence query reports between two runs: the ticket's current department and owner. A ticket with no Genesys interaction is
+    /// first moved into the Call Center queue and dealt by Round Robin on the NEXT run.
+    /// </summary>
+    private static void SyncEvidence(Env env, IEnumerable<Ticket> tickets)
+    {
+        foreach (var t in tickets)
+        {
+            env.Evidence.Rows[t.TicketId] = env.Evidence.Rows[t.TicketId] with { OwnerEmployeeId = t.CurrentOwnerEmployeeId, CurrentDepartmentId = t.CurrentDepartmentId };
+        }
+    }
+
+    private static readonly Guid AiAgent = Guid.Parse("a1a1a1a1-0000-0000-0000-000000000001");
+
     private static string ThisFile([System.Runtime.CompilerServices.CallerFilePath] string here = "") => here;
 
     [Fact]
@@ -93,12 +107,37 @@ public class CallCenterUnassignedWorkJobTests
         var ai = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, LastActivityUtc = new DateTime(2026, 11, 3, 8, 59, 0, DateTimeKind.Utc) });
         var (job, log, _) = Build(env, new CallCenterReconciliationOptions { Enabled = true, DryRun = false });
 
-        await job.RunAsync(CancellationToken.None);
+        await job.RunAsync(CancellationToken.None);   // run 1: the manual ticket is moved into the Call Center queue
+        SyncEvidence(env, [human, ai]);
+        await job.RunAsync(CancellationToken.None);   // run 2: it is dealt by Round Robin
 
         Assert.Equal(agents[0], human.CurrentOwnerEmployeeId);
         Assert.Null(ai.CurrentOwnerEmployeeId);   // active AI preserved
+        Assert.Equal(env.Leasing.DepartmentId, ai.CurrentDepartmentId);
         Assert.Contains(log.Lines, l => l.Message.Contains("ASSIGNED ticket") && l.Message.Contains(human.TicketNumber));
         Assert.Contains(log.Lines, l => l.Message.Contains("assigned 1") && l.Message.Contains("ActiveAiConversation=1"));
+    }
+
+    [Fact]
+    public async Task GenesysHumanTicket_IsQueuedByTheJob_NeverAssigned_AndNothingIsLoggedAsAssigned()
+    {
+        var env = new Env();
+        env.AddCallCenterAgents(3);
+        var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, RequiresHumanFollowUp = true });
+        ticket.AssignToAiAgent(AiAgent);
+        var (job, log, _) = Build(env, new CallCenterReconciliationOptions { Enabled = true, DryRun = false });
+
+        await job.RunAsync(CancellationToken.None);
+        SyncEvidence(env, [ticket]);
+        await job.RunAsync(CancellationToken.None);   // already queued: left for a person to accept
+
+        Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(AiAgent, ticket.AiAgentOwnerEmployeeId);
+        Assert.Empty(env.Assignments.Added);
+        Assert.Empty(env.Rotation.Rows);
+        Assert.DoesNotContain(log.Lines, l => l.Message.Contains("ASSIGNED ticket"));
+        Assert.Contains(log.Lines, l => l.Message.Contains("assigned 0") && l.Message.Contains("HumanRequiredInCallCenterUnassigned=1"));
     }
 
     [Fact]
@@ -110,15 +149,26 @@ public class CallCenterUnassignedWorkJobTests
         for (var i = 0; i < 5; i++) tickets.Add(await env.AddQueuedTicketAsync());
         var (job, log, _) = Build(env, new CallCenterReconciliationOptions { Enabled = true, DryRun = false, MaxAssignmentsPerRun = 2 });
 
+        // Manual tickets are first moved into the Call Center queue (each move counts against the per-run limit), then dealt on a later run.
         await job.RunAsync(CancellationToken.None);
-
-        Assert.Equal(2, tickets.Count(t => t.CurrentOwnerEmployeeId is not null));
+        Assert.Equal(2, tickets.Count(t => t.CurrentDepartmentId == env.CallCenter.DepartmentId));
         Assert.Contains(log.Lines, l => l.Message.Contains("MaxAssignmentsPerRun reached True"));
 
-        // The real evidence query lists only unowned tickets; mirror that for the stub.
-        foreach (var t in tickets) env.Evidence.Rows[t.TicketId] = env.Evidence.Rows[t.TicketId] with { OwnerEmployeeId = t.CurrentOwnerEmployeeId };
+        // The real evidence query lists only unowned tickets and their current department; mirror that for the stub.
+        SyncEvidence(env, tickets);
         await job.RunAsync(CancellationToken.None);
-        Assert.Equal(4, tickets.Count(t => t.CurrentOwnerEmployeeId is not null));   // owned ones are never re-dealt; two more are
+        Assert.Equal(2, tickets.Count(t => t.CurrentOwnerEmployeeId is not null));   // at most MaxAssignmentsPerRun written per run
+
+        for (var run = 0; run < 6; run++)
+        {
+            var owned = tickets.Count(t => t.CurrentOwnerEmployeeId is not null);
+            SyncEvidence(env, tickets);
+            await job.RunAsync(CancellationToken.None);
+            Assert.True(tickets.Count(t => t.CurrentOwnerEmployeeId is not null) - owned <= 2);   // never more than MaxAssignmentsPerRun per run
+        }
+
+        Assert.Equal(5, tickets.Count(t => t.CurrentOwnerEmployeeId is not null));   // the rest waited for later runs; owned ones are never re-dealt
+        Assert.Equal(5, env.Assignments.Added.Count(a => a.IsCurrent));
     }
 
     [Fact]
@@ -138,7 +188,9 @@ public class CallCenterUnassignedWorkJobTests
             Assert.Contains(log.Lines, l => l.Level == LogLevel.Warning && l.Message.Contains("another run is in progress"));
         }
 
-        await job.RunAsync(CancellationToken.None);   // lock released: the next run proceeds
+        await job.RunAsync(CancellationToken.None);   // lock released: the next run proceeds (moves it into the queue) ...
+        SyncEvidence(env, [ticket]);
+        await job.RunAsync(CancellationToken.None);   // ... and the one after deals it
         Assert.NotNull(ticket.CurrentOwnerEmployeeId);
     }
 
@@ -151,6 +203,8 @@ public class CallCenterUnassignedWorkJobTests
         for (var i = 0; i < 6; i++) tickets.Add(await env.AddQueuedTicketAsync());
         var (job, _, _) = Build(env, new CallCenterReconciliationOptions { Enabled = true, DryRun = false });
 
+        await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => job.RunAsync(CancellationToken.None))));
+        SyncEvidence(env, tickets);
         await Task.WhenAll(Enumerable.Range(0, 4).Select(_ => Task.Run(() => job.RunAsync(CancellationToken.None))));
 
         Assert.All(tickets, t => Assert.NotNull(t.CurrentOwnerEmployeeId));
