@@ -122,7 +122,9 @@
             <div class="alert @(Model.EditNoticeIsError ? "alert-error" : "alert-success")" role="@(Model.EditNoticeIsError ? "alert" : "status")" data-edit-notice><span>@editNotice</span></div>
         }
 
-        @if (Model.CanEditCustomer)
+        @* The form is only rendered when asked for (the Edit Customer button opens ?edit=1): a closed copy would be a second, redundant
+           button. Without JavaScript the link is the whole mechanism. *@
+        @if (Model.CanEditCustomer && Model.EditingCustomer)
         {
             var details = profile.Details;
             var edit = profile.Edit;
