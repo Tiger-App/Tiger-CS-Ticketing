@@ -8,8 +8,8 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// <summary>
 /// Regression for TG-ACC-20261102-0021: a Genesys PHONE ticket created at pickup, with no <c>humanFollowUpRequired</c>, stayed Open and
 /// unassigned in Accounting. A call a person accepted is now recognised from the actual interaction events (a mapped agent at pickup, an
-/// agent CONNECTED, an agent taking pending work, a HumanAgent line) and routed to the Call Center with one Round Robin agent — at creation
-/// and on any later update — while an AI-handled conversation, with no such evidence, is never moved.
+/// agent CONNECTED, an agent taking pending work, a HumanAgent line) and routed to the Call Center — assigned directly to the connected/answering
+/// person when there is one, otherwise waiting in the queue (never dealt by Round Robin) — at creation and on any later update — while an AI-handled conversation, with no such evidence, is never moved.
 /// </summary>
 public class GenesysHumanAcceptedCallRoutingTests
 {
@@ -61,6 +61,17 @@ public class GenesysHumanAcceptedCallRoutingTests
         Assert.Single(s.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId && a.IsCurrent);
     }
 
+    /// <summary>The ticket waits in the Call Center queue: department moved, originating untouched, the AI Agent still the owner, no person, no assignment row, no Round Robin turn.</summary>
+    private static void AssertQueuedInCallCenterWithNoOwner(Scenario s, Ticket ticket, bool aiOwned = true)
+    {
+        Assert.Equal(s.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(s.Accounting.DepartmentId, ticket.OriginatingDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(aiOwned ? ServiceAccount : null, ticket.AiAgentOwnerEmployeeId);   // a call a person picked up was never AI-handled: no AI owner
+        Assert.DoesNotContain(s.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.All(s.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
+    }
+
     // ---- creation ------------------------------------------------------------------------------------------------------------
 
     [Fact]
@@ -89,18 +100,17 @@ public class GenesysHumanAcceptedCallRoutingTests
     }
 
     [Fact]
-    public async Task PhoneCallNamingAnUnmappedAgent_IsFlagged_AndGetsACsAgentFromTheSharedRotation()
+    public async Task PhoneCallNamingAnUnmappedAgent_IsFlagged_AndWaitsInTheCallCenterQueue_WithNoRoundRobin()
     {
         var s = Build();
 
-        // A voice call picked up by an agent TigerCS cannot map: the person who answered cannot be given the ticket. It is flagged for staff
-        // AND (final rule) dealt to the next CS Agent of the shared rotation - never left unassigned.
+        // A voice call picked up by an agent TigerCS cannot map: the person who answered cannot be given the ticket. It sits in the Call Center
+        // queue FLAGGED for staff (ManualAssignmentRequired) with NO owner change and NO Round Robin fallback.
         var ticket = await IngestAsync(s, "ph-unmapped", GenesysChannel.Phone, agentId: "some-unmapped-id");
 
-        Assert.Equal(s.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(s.Accounting.DepartmentId, ticket.OriginatingDepartmentId);
-        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        AssertQueuedInCallCenterWithNoOwner(s, ticket, aiOwned: false);
         Assert.Contains(s.F.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
+        Assert.Contains(s.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped");
     }
 
     [Theory]
@@ -150,6 +160,7 @@ public class GenesysHumanAcceptedCallRoutingTests
         var s = Build();
         var bot = await IngestAsync(s, "tx-bot", GenesysChannel.WebsiteChat);
         var person = await IngestAsync(s, "tx-human", GenesysChannel.WebsiteChat);
+        var named = await IngestAsync(s, "tx-named", GenesysChannel.WebsiteChat);
         var at = DateTime.UtcNow;
 
         await UpdateAsync(s, bot, new GenesysTicketUpdateDto(
@@ -157,9 +168,21 @@ public class GenesysHumanAcceptedCallRoutingTests
         await UpdateAsync(s, person, new GenesysTicketUpdateDto(
             "tx-human", Transcript: [new GenesysTranscriptMessageDto("HumanAgent", at, "Hello, this is Sara.", ExternalMessageId: "m2")]));
 
+        await UpdateAsync(s, named, new GenesysTicketUpdateDto(
+            "tx-named", Transcript: [new GenesysTranscriptMessageDto("HumanAgent", at, "Hello, this is Sara.", "Agent", HumanGenesysId, "m3")]));
+
         Assert.Equal(s.Accounting.DepartmentId, bot.CurrentDepartmentId);
         Assert.Null(bot.CurrentOwnerEmployeeId);
-        AssertRoutedToCallCenterWithOneAgent(s, person);
+        Assert.Equal(ServiceAccount, bot.AiAgentOwnerEmployeeId);
+
+        // A human line proves a person is working it, so it enters the Call Center queue; with no identifiable sender nobody is dealt it.
+        AssertQueuedInCallCenterWithNoOwner(s, person);
+
+        // A human line from a mapped, eligible sender is assigned to THAT person directly (the transcript-evidence fallback), not by rotation.
+        Assert.Equal(s.F.CallCenter!.DepartmentId, named.CurrentDepartmentId);
+        Assert.Equal(s.CallCenterAgents[^1], named.CurrentOwnerEmployeeId);
+        Assert.Null(named.AiAgentOwnerEmployeeId);
+        Assert.All(s.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
     }
 
     [Fact]
@@ -204,17 +227,18 @@ public class GenesysHumanAcceptedCallRoutingTests
 
         // The Call Center agent transfers it onward to Accounting (what the Transfer action does), then Genesys reports the call ending
         // with the agent still connected.
-        ticket.TransferToDepartment(s.Accounting.DepartmentId);
         var owner = ticket.CurrentOwnerEmployeeId;
+        ticket.TransferToDepartment(s.Accounting.DepartmentId);
 
         await UpdateAsync(s, ticket, new GenesysTicketUpdateDto(
             "no-pullback", Routing: new GenesysRoutingUpdateDto(AgentId: HumanGenesysId),
             Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow, "customer disconnected")));
 
-        // The person's transfer stands (department unchanged, not pulled back to the Call Center). This test clears the owner as it transfers, so
-        // under the final rule the still-unowned human ticket is given a CS Agent from the shared rotation - in place, never moved.
+        // The person's transfer stands (department unchanged, not pulled back to the Call Center). The transfer cleared the owner, and nobody is
+        // dealt it by Round Robin any more: it waits unassigned in the destination department's queue.
         Assert.Equal(s.Accounting.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
-        _ = owner;
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.All(s.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
+        Assert.DoesNotContain(s.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId && a.IsCurrent && a.AssignedEmployeeId != owner);
     }
 }

@@ -10,7 +10,7 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// "Whoever accepts owns it" holds on EVERY Genesys channel, not just Phone: Website Chat, WhatsApp, Instagram, Facebook and generic Social DM (Genesys normalizes Instagram
 /// and Facebook have their own channels; <see cref="GenesysChannel.SocialMedia"/> remains the generic fallback for other platforms). A mapped CS Agent reported as CONNECTED (routing.agentId) gets the ticket
 /// directly - no Round Robin turn is spent. An accepting agent who is not a CS Agent (or otherwise cannot take it) leaves the ticket in the Call
-/// Center queue, flagged. Nobody accepted but a person is required: Round Robin among CS Agents. AI-only chats and existing owners are untouched.
+/// Center queue, flagged, with no owner change. Nobody accepted but a person is required: the ticket waits in the Call Center queue with the AI Agent as owner (no Round Robin). AI-only chats and existing owners are untouched.
 /// </summary>
 public class DigitalChannelAgentAcceptanceTests
 {
@@ -75,6 +75,17 @@ public class DigitalChannelAgentAcceptanceTests
         }
     }
 
+    /// <summary>The ticket waits in the Call Center queue flagged-or-not, but with no person: the AI Agent is still the owner and no Round Robin turn was spent.</summary>
+    private static void AssertQueuedWithAiOwner(World w, long ticketId)
+    {
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
+        Assert.Equal(w.Cs.DepartmentId, w.Ticket(ticketId).OriginatingDepartmentId);
+        AssertSingleOwner(w, ticketId, null);
+        Assert.Equal(ServiceAccount, w.Ticket(ticketId).AiAgentOwnerEmployeeId);
+        Assert.True(CursorUntouched(w));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticketId.ToString());
+    }
+
     private static int FlagCount(World w, long ticketId) =>
         w.F.WorkflowEvents.All.Count(e => e.TicketId == ticketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
 
@@ -106,14 +117,19 @@ public class DigitalChannelAgentAcceptanceTests
         var conversation = $"conv-{channel}-created";
 
         // A top-level agentId on a digital inquiry is who is offered/assigned/queued - never proof of acceptance. The ticket needs a person, so it
-        // enters the Call Center and Round Robin picks a CS Agent (an automatic pre-assignment)...
+        // enters the Call Center QUEUE with the AI Agent still its owner: no person is dealt it and Round Robin is not used...
         var ticketId = await IngestAsync(w, channel, conversation, w.Accepting.GenesysId, humanFollowUp: true);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        AssertSingleOwner(w, ticketId, w.RoundRobinNext.Id);
+        AssertQueuedWithAiOwner(w, ticketId);
+        Assert.Equal(0, FlagCount(w, ticketId));                                     // named but not connected: nothing to flag yet
 
-        // ...and the agent owns it only once Genesys reports them CONNECTED; that replaces the automatic pick, leaving one owner, one row.
+        // ...and the agent owns it only once Genesys reports them CONNECTED; they are assigned directly, the AI Agent stops being the owner, and
+        // the history shows the AI Agent as the previous owner.
         await AcceptAsync(w, ticketId, conversation, w.Accepting.GenesysId);
         AssertSingleOwner(w, ticketId, w.Accepting.Id);
+        Assert.Null(w.Ticket(ticketId).AiAgentOwnerEmployeeId);
+        Assert.True(CursorUntouched(w));
+        var accepted = Assert.Single(w.F.AssignmentHistory.Entries, h => h.TicketId == ticketId && h.NewEmployeeId == w.Accepting.Id);
+        Assert.Equal(ServiceAccount, accepted.PreviousEmployeeId);
     }
 
     [Theory]
@@ -133,7 +149,7 @@ public class DigitalChannelAgentAcceptanceTests
 
     [Theory]
     [MemberData(nameof(DigitalChannels))]
-    public async Task AcceptingAgentWhoIsNotACsAgent_IsFlagged_AndTheSharedRotationGivesTheTicketACsAgent(GenesysChannel channel)
+    public async Task AcceptingAgentWhoIsNotACsAgent_IsFlagged_AndTheTicketWaitsInTheCallCenterQueue_WithNoOwnerChange(GenesysChannel channel)
     {
         var w = NewWorld();
         // A Call Center member with an operational role - but not CS Agent. Call Center tickets belong to CS Agents only.
@@ -142,42 +158,45 @@ public class DigitalChannelAgentAcceptanceTests
 
         await AcceptAsync(w, ticketId, $"conv-{channel}-ineligible", "g-dept-employee");
 
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        var owner = w.Ticket(ticketId).CurrentOwnerEmployeeId;
-        Assert.NotEqual(employee, owner);
-        Assert.Contains(owner, w.Agents.Select(a => (Guid?)a.Id));                           // an eligible CS Agent, never unassigned
-        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
+        // Flagged, queued in the Call Center, the AI Agent still owns it; neither the non-CS-Agent nor a Round Robin fallback agent got it.
+        AssertQueuedWithAiOwner(w, ticketId);
+        Assert.NotEqual(employee, w.Ticket(ticketId).CurrentOwnerEmployeeId);
         Assert.Equal(1, FlagCount(w, ticketId));
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.AfterValue!.Contains("Issue=NotCsAgent"));
     }
 
     [Fact]
-    public async Task PhoneCallAnsweredByANonCsAgent_IsFlagged_AndAnEligibleCsAgentOwnsIt()
+    public async Task PhoneCallAnsweredByANonCsAgent_IsFlagged_AndNobodyOwnsIt_NoRoundRobin()
     {
         var w = NewWorld();
         w.F.AddAgent("g-dept-head", "Dept Head", roles: [Roles.DepartmentHead]);
 
         var ticketId = await IngestAsync(w, GenesysChannel.Phone, "conv-phone-head", "g-dept-head");
 
-        Assert.Contains(w.Ticket(ticketId).CurrentOwnerEmployeeId, w.Agents.Select(a => (Guid?)a.Id));
+        // The call was picked up by a person who cannot take it: it sits flagged in the Call Center queue, no owner, no Round Robin fallback.
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
+        AssertSingleOwner(w, ticketId, null);
+        Assert.True(CursorUntouched(w));
         Assert.Equal(1, FlagCount(w, ticketId));
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.EntityId == ticketId.ToString());
     }
 
     [Theory]
     [MemberData(nameof(DigitalChannels))]
-    public async Task HumanRequiredButNobodyAccepted_UsesRoundRobin_AmongCsAgentsOnly(GenesysChannel channel)
+    public async Task HumanRequiredButNobodyAccepted_QueuesInTheCallCenter_WithTheAiOwner_AndNoRoundRobin(GenesysChannel channel)
     {
         var w = NewWorld();
-        w.F.AddAgent("g-cc-dept-employee", "CC Dept Employee", roles: [Roles.DepartmentEmployee]);   // in the Call Center, never dealt a ticket
+        var employee = w.F.AddAgent("g-cc-dept-employee", "CC Dept Employee", roles: [Roles.DepartmentEmployee]);   // in the Call Center, never dealt a ticket
         var ticketId = await IngestAsync(w, channel, $"conv-{channel}-rr");
 
         var handoff = await w.F.AgentHandoff.RequestAsync(
             ServiceAccount, new GenesysHandoffRequestDto($"conv-{channel}-rr", AgentAvailable: false, Mode: "HumanTakeover"));
 
         Assert.Equal(GenesysHandoffOutcome.HandoffRecorded, handoff.Outcome);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        AssertSingleOwner(w, ticketId, w.RoundRobinNext.Id);
-        Assert.Contains(w.Agents, a => a.Id == w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        AssertQueuedWithAiOwner(w, ticketId);
+        Assert.DoesNotContain(w.Agents, a => a.Id == w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        Assert.NotEqual(employee, w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        Assert.Empty(w.F.TicketAssignments.Added);
     }
 
     [Theory]
