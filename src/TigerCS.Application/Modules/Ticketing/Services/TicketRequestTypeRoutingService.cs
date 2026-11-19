@@ -250,7 +250,9 @@ public sealed class TicketRequestTypeRoutingService(
         // Call Center first: a ticket sitting in the Call Center is waiting for a person. Classifying it records the request type (the
         // Call Center agent then transfers it to that department); the system never moves it past the Call Center on its own.
         var inCallCenter = await autoAssignmentService.IsCallCenterDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken);
-        var transferred = !inCallCenter && requestType.DepartmentId != ticket.CurrentDepartmentId;
+        // An AI-handled ticket (the AI Agent owns it, nobody else) that a creation-time human follow-up parked in the Call Center queue still follows an
+        // EXPLICIT workflow department (Legal, Collections, ...): the request type decides the department, the AI keeps ownership.
+        var transferred = (!inCallCenter || aiHandled) && requestType.DepartmentId != ticket.CurrentDepartmentId;
         if (transferred)
         {
             // The AI classifying its own conversation routes the ticket's department (and SLA) - it does not hand the ticket to a person.

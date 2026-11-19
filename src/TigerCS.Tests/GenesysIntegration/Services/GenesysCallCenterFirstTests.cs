@@ -96,7 +96,7 @@ public class GenesysCallCenterFirstTests
     }
 
     [Fact]
-    public async Task HumanFollowUpInquiryWithARequestType_EntersCallCenterQueue_IsNotMovedPastItByRequestTypeRouting_AndAssignsNobody()
+    public async Task HumanFollowUpInquiryWithAnExplicitWorkflowRequestType_KeepsItsWorkflowDepartment_AiKeepsOwnership_AndAssignsNobody()
     {
         var f = new GenesysServiceFixture(callCenterFirst: true);
         var (bot, _) = f.SeedGenesysDepartment("Customer Service", "CS");
@@ -118,8 +118,9 @@ public class GenesysCallCenterFirstTests
         Assert.Equal(GenesysIngestionOutcome.TicketCreated, result.Outcome);
         var ticket = f.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
 
-        // The Call Center queue is the first stop: request-type routing does not move the ticket past it, and the system never picks the person.
-        Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        // The request type is an EXPLICIT workflow routing (Leasing): the ticket keeps that department instead of waiting in the Call Center queue,
+        // and the system never picks the person.
+        Assert.Equal(leasing.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(bot.DepartmentId, ticket.OriginatingDepartmentId);
         Assert.Equal(type.RequestTypeId, ticket.RequestTypeId);                 // still classified
 
@@ -130,26 +131,11 @@ public class GenesysCallCenterFirstTests
         Assert.All(f.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
         Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign");
 
-        // A person who takes it from the queue (Take Ownership) can only transfer it to the request type's department.
-        var assignment = new TicketAssignmentAppService(
-            f.Tickets, f.TicketAssignments, f.DepartmentAssignments, f.Departments, f.UnitOfWork, f.Audit, TimeProvider.System,
-            f.DepartmentSettings,
-            new TicketAutoAssignmentService(f.AssignmentRules, f.DepartmentSettings, f.DepartmentAssignments, f.TicketAssignments, f.Audit, f.Rotation, f.Departments),
-            f.WorkflowEvents, requestTypeRepository: f.RequestTypes);
-        ticket.AssignTo(agent);                                                 // the person takes it: the AI Agent stops being the owner
+        // A person who takes it (Take Ownership / a real acceptance) becomes the owner; the AI Agent stops being the owner and the department is unchanged.
+        ticket.AssignTo(agent);
         Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
         Assert.Null(ticket.AiAgentOwnerEmployeeId);
-
-        var wrong = await assignment.TransferAsync(
-            agent, [Roles.CsAgent], ticket.TicketId, new TransferTicketRequestDto(bot.DepartmentId, "x", []));
-        Assert.Equal(TicketMutationOutcome.TransferTargetMustMatchRequestType, wrong.Outcome);
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
-
-        var right = await assignment.TransferAsync(
-            agent, [Roles.CsAgent], ticket.TicketId, new TransferTicketRequestDto(leasing.DepartmentId, "x", []));
-        Assert.Equal(TicketMutationOutcome.Success, right.Outcome);
         Assert.Equal(leasing.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(leasingEmployee, ticket.CurrentOwnerEmployeeId);           // the destination department's rule assigns its configured employee
     }
 
     [Fact]

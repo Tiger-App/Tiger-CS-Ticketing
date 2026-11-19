@@ -1077,7 +1077,7 @@ public sealed class TicketAutoAssignmentService(
 
         // A person moved it on (Transfer / escalation), or it already passed through the Call Center and left it: that move and the new owner
         // stand. A late Genesys event must never undo them. (Routing INTO the Call Center by the system does not count as a person's transfer.)
-        if (await HasLeftOrBeenTransferredByPersonAsync(ticket, callCenter.DepartmentId, cancellationToken))
+        if (await HasLeftOrBeenTransferredByPersonAsync(ticket, callCenter.DepartmentId, personTransfersOnly: ticket.AiAgentOwnerEmployeeId is not null, cancellationToken))
         {
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "A person transferred the ticket; it is left as they placed it.");
         }
@@ -1154,8 +1154,14 @@ public sealed class TicketAutoAssignmentService(
         var occurredAtUtc = ResolveOccurredAt(eventAtUtc, ticket.CreatedAtUtc, currentAssignment?.AssignedAtUtc, nowUtc);
         var channelId = genesysEvent?.ChannelId;
 
+        // An AI-handled ticket that follows an EXPLICIT workflow department (Legal, Collections, ...) is not pulled back into the Call Center when a person
+        // answers it: the answering agent is assigned in place and the department is preserved.
+        var keepWorkflowDepartment = ticket.AiAgentOwnerEmployeeId is not null && ticket.CurrentDepartmentId != callCenter.DepartmentId
+            && await HasExplicitWorkflowRoutingAsync(ticket, callCenter.DepartmentId, cancellationToken);
+        var assignmentDepartmentId = keepWorkflowDepartment ? ticket.CurrentDepartmentId : callCenter.DepartmentId;
+
         // Call Center first. TransferToDepartment clears the owner, so a stale automatic pre-assignment in the old department is released.
-        if (ticket.CurrentDepartmentId != callCenter.DepartmentId)
+        if (ticket.CurrentDepartmentId != callCenter.DepartmentId && !keepWorkflowDepartment)
         {
             var fromDepartmentId = ticket.CurrentDepartmentId;
             ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: true);   // AssignTo below clears it when the answering agent actually takes the ticket
@@ -1191,17 +1197,17 @@ public sealed class TicketAutoAssignmentService(
 
             // The answering agent is the assigning actor: a human act, like a self-assignment, so this is NOT an automatic pre-assignment.
             await ticketAssignmentRepository.AddAsync(
-                new TicketAssignment(ticket.TicketId, agentId, callCenter.DepartmentId, occurredAtUtc, assigningActorEmployeeId: agentId),
+                new TicketAssignment(ticket.TicketId, agentId, assignmentDepartmentId, occurredAtUtc, assigningActorEmployeeId: agentId),
                 cancellationToken);
 
             await auditWriter.WriteAsync(
                 agentId, "AssignOnAnswer", "Ticket", ticket.TicketId.ToString(),
                 beforeValue: previousOwner?.ToString() ?? "DepartmentQueue",
-                afterValue: $"AssignedEmployeeId={agentId};DepartmentId={callCenter.DepartmentId};Mode=DirectToAnsweringAgent;"
+                afterValue: $"AssignedEmployeeId={agentId};DepartmentId={assignmentDepartmentId};Mode=DirectToAnsweringAgent;"
                     + $"Trigger=GenesysAnswered;Source={source};GenesysUserId={agent.GenesysUserId};OccurredAtUtc={occurredAtUtc:O};RecordedAtUtc={nowUtc:O}"
                     + (genesysEvent?.EvidenceAtUtc is { } evidenceAt ? $";AcceptanceEvent=false;FirstHumanReplyAtUtc={evidenceAt:O}" : string.Empty)
                     + (reportedByEmployeeId is { } by ? $";ReportedBy={by}" : string.Empty)
-                    + (previousOwner is not null && ticket.CurrentDepartmentId == callCenter.DepartmentId && !wrote ? $";ReplacedAutomaticPreAssignment={previousOwner}" : string.Empty),
+                    + (previousOwner is not null && ticket.CurrentDepartmentId == assignmentDepartmentId && !wrote ? $";ReplacedAutomaticPreAssignment={previousOwner}" : string.Empty),
                 correlationId, cancellationToken);
             await NotifyAssignedAsync(ticket, previousOwner, agentId, actorEmployeeId: agentId, correlationId, nowUtc, cancellationToken);
 
@@ -1211,7 +1217,7 @@ public sealed class TicketAutoAssignmentService(
                 var previousAssignee = previousOwner ?? genesysHistory.LastOrDefault(h => h.Source is TicketAssignmentSource.GenesysAiAgent or TicketAssignmentSource.GenesysQueueRouting)?.NewEmployeeId;
                 await assignmentHistoryRepository.AddAsync(
                     TicketAssignmentHistoryEntry.ForGenesys(
-                        ticket.TicketId, callCenter.DepartmentId, previousAssignee, agentId,
+                        ticket.TicketId, assignmentDepartmentId, previousAssignee, agentId,
                         previousAssignee is null ? TicketAssignmentSource.GenesysDirectCall : TicketAssignmentSource.GenesysCallTransfer,
                         changedByEmployeeId: null, nowUtc, eventAtUtc, genesysEvent.ConversationId,
                         previousAssignee is null ? AnswerWording.DirectHandlerReason(channelId) : AnswerWording.TransferHandlerReason(channelId)),
@@ -1412,7 +1418,14 @@ public sealed class TicketAutoAssignmentService(
     /// True when a PERSON has transferred the ticket (any transfer event that is not system routing, escalations included), or the ticket
     /// has already been in the Call Center and is no longer there. Either way a later "agent connected" must not move it again.
     /// </summary>
-    private async Task<bool> HasLeftOrBeenTransferredByPersonAsync(Ticket ticket, int callCenterDepartmentId, CancellationToken cancellationToken)
+    /// <param name="ticket">The ticket.</param>
+    /// <param name="callCenterDepartmentId">The active Call Center.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <param name="personTransfersOnly">
+    /// An AI-handled ticket the SYSTEM routed through the Call Center queue and on to its explicit workflow department has not been moved by a person:
+    /// the agent who actually answers it must still be assigned, so only a person's transfer counts.
+    /// </param>
+    private async Task<bool> HasLeftOrBeenTransferredByPersonAsync(Ticket ticket, int callCenterDepartmentId, bool personTransfersOnly, CancellationToken cancellationToken)
     {
         if (workflowEventRepository is null)
         {
@@ -1421,7 +1434,7 @@ public sealed class TicketAutoAssignmentService(
 
         var events = await workflowEventRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken);
         return events.Any(e => e.EventType == WorkflowEventType.TicketTransferred && e.TransferReasonCode != (byte)TicketTransferReason.SystemRouting)
-            || (ticket.CurrentDepartmentId != callCenterDepartmentId
+            || (!personTransfersOnly && ticket.CurrentDepartmentId != callCenterDepartmentId
                 && events.Any(e => e.EventType == WorkflowEventType.TicketTransferred && e.ToDepartmentId == callCenterDepartmentId));
     }
 

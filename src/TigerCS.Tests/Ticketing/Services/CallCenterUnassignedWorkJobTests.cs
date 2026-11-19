@@ -149,15 +149,16 @@ public class CallCenterUnassignedWorkJobTests
         for (var i = 0; i < 5; i++) tickets.Add(await env.AddQueuedTicketAsync());
         var (job, log, _) = Build(env, new CallCenterReconciliationOptions { Enabled = true, DryRun = false, MaxAssignmentsPerRun = 2 });
 
-        // Manual tickets are first moved into the Call Center queue (each move counts against the per-run limit), then dealt on a later run.
+        // A manual (non-Genesys) ticket is moved into the Call Center and dealt in the SAME run; only MaxAssignmentsPerRun are handled per run.
         await job.RunAsync(CancellationToken.None);
+        Assert.Equal(2, tickets.Count(t => t.CurrentOwnerEmployeeId is not null));   // at most MaxAssignmentsPerRun written per run
         Assert.Equal(2, tickets.Count(t => t.CurrentDepartmentId == env.CallCenter.DepartmentId));
         Assert.Contains(log.Lines, l => l.Message.Contains("MaxAssignmentsPerRun reached True"));
 
         // The real evidence query lists only unowned tickets and their current department; mirror that for the stub.
         SyncEvidence(env, tickets);
         await job.RunAsync(CancellationToken.None);
-        Assert.Equal(2, tickets.Count(t => t.CurrentOwnerEmployeeId is not null));   // at most MaxAssignmentsPerRun written per run
+        Assert.Equal(4, tickets.Count(t => t.CurrentOwnerEmployeeId is not null));   // the next two; the owned ones are never re-dealt
 
         for (var run = 0; run < 6; run++)
         {

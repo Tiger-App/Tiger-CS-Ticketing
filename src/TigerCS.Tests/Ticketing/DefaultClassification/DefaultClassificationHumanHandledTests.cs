@@ -149,7 +149,12 @@ public class DefaultClassificationHumanHandledTests
         Assert.Equal(w.HandoverCategory.CategoryId, t.CategoryId);
         Assert.Equal(w.HandoverType.RequestTypeId, t.RequestTypeId);
         Assert.Equal(w.Handover.DepartmentId, t.OriginatingDepartmentId);
-        AssertWaitingForAPerson(w, t);
+        // The known request type is an explicit workflow routing: the ticket stays in its department, the AI keeps it, nobody is assigned.
+        Assert.Equal(w.HandoverType.DepartmentId, t.CurrentDepartmentId);
+        Assert.Null(t.CurrentOwnerEmployeeId);
+        Assert.Equal(ServiceAccount, t.AiAgentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == t.TicketId);
+        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "ApplyDefaultClassification");
 
         // The same known classification when an agent picks the call up at creation: owned by that person at once, classification untouched.

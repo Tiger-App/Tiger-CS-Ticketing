@@ -417,11 +417,16 @@ public class DefaultClassificationTests
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
         Assert.Equal(w.FinanceCategory.CategoryId, ticket.CategoryId);
         Assert.Equal(w.FinanceType.RequestTypeId, ticket.RequestTypeId);
-        AssertWaitingInTheCallCenterQueue(w, ticket);                              // classification assigns nobody and the Call Center keeps routing
+        // The request type is an explicit workflow routing: the ticket follows its department, the AI keeps ownership, nobody is assigned.
+        Assert.Equal(w.FinanceType.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
 
         await AcceptAsync(w, ticket, "conv-refine", agent: 1);                     // the agent who answers - not the next in rotation - owns it
         Assert.Equal(w.FinanceType.RequestTypeId, ticket.RequestTypeId);           // and accepting does not undo the classification
-        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(w.Agents[1], ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
