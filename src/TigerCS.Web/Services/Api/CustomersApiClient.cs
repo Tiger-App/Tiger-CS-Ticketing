@@ -46,6 +46,20 @@ public sealed class CustomersApiClient(HttpClient httpClient, ILogger<CustomersA
     public Task<ApiResult<CustomerProfileEditedDto>> UpdateProfileAsync(string customerKey, UpdateCustomerProfileRequestDto request, CancellationToken cancellationToken) =>
         PutAsync<UpdateCustomerProfileRequestDto, CustomerProfileEditedDto>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}", request, cancellationToken);
 
+    /// <summary>Adds a manually associated property / unit (<c>POST api/customers/profile/{customerKey}/properties</c>). Never verified ownership; local to Tiger Ticketing.</summary>
+    public Task<ApiResult<CustomerPropertyResult>> AddPropertyAsync(string customerKey, CustomerPropertyRequestDto request, CancellationToken cancellationToken) =>
+        PostAsync<CustomerPropertyRequestDto, CustomerPropertyResult>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}/properties", request, cancellationToken);
+
+    public Task<ApiResult<CustomerPropertyResult>> UpdatePropertyAsync(string customerKey, long associationId, CustomerPropertyRequestDto request, CancellationToken cancellationToken) =>
+        PutAsync<CustomerPropertyRequestDto, CustomerPropertyResult>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}/properties/{associationId}", request, cancellationToken);
+
+    public Task<ApiResult<CustomerPropertyResult>> RemovePropertyAsync(string customerKey, long associationId, Guid correlationId, CancellationToken cancellationToken) =>
+        DeleteAsync<CustomerPropertyResult>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}/properties/{associationId}?correlationId={correlationId}", cancellationToken);
+
+    /// <summary>One page of the customer's change history (<c>GET api/customers/profile/{customerKey}/history</c>). Needs <c>Customers.ViewHistory</c>.</summary>
+    public Task<ApiResult<CustomerChangeHistoryDto>> GetHistoryAsync(string customerKey, int page, int pageSize, CancellationToken cancellationToken) =>
+        GetAsync<CustomerChangeHistoryDto>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}/history?page={page}&pageSize={pageSize}", cancellationToken);
+
     public Task<ApiResult<CustomerDirectoryProfileDto>> GetProfileAsync(string customerKey, CancellationToken cancellationToken) =>
         GetAsync<CustomerDirectoryProfileDto>($"api/customers/profile/{Uri.EscapeDataString(customerKey)}", cancellationToken);
 }

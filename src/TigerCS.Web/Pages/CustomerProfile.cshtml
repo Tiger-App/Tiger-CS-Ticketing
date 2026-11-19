@@ -103,12 +103,108 @@
                     <a class="btn btn-ghost" href="/Tickets/@fromTicketId">← Back to @(Model.FromTicketNumber ?? "ticket")</a>
                 }
                 <a class="btn" href="@Model.CustomersHref">All customers</a>
+                @if (Model.CanEditCustomer)
+                {
+                    <a class="btn" href="/Customers/@Uri.EscapeDataString(Model.CustomerKey)?edit=1@(Model.FromTicketId is { } editFrom ? $"&fromTicket={editFrom}" : "")#edit-customer" data-edit-customer-open>
+                        <svg viewBox="0 0 24 24" fill="none" aria-hidden="true" width="14" height="14"><path d="M4 20h4L19 9a2.1 2.1 0 0 0-3-3L5 17v3Zm9-13 3 3" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" /></svg>
+                        Edit Customer
+                    </a>
+                }
                 @if (Model.CanCreateTicket)
                 {
                     <a class="btn btn-gold" href="@Model.NewTicketHref">+ New Ticket</a>
                 }
             </div>
         </header>
+
+        @if (Model.EditNotice is { } editNotice)
+        {
+            <div class="alert @(Model.EditNoticeIsError ? "alert-error" : "alert-success")" role="@(Model.EditNoticeIsError ? "alert" : "status")" data-edit-notice><span>@editNotice</span></div>
+        }
+
+        @if (Model.CanEditCustomer)
+        {
+            var details = profile.Details;
+            var edit = profile.Edit;
+            <details class="panel edit-customer" id="edit-customer" open="@(Model.EditingCustomer ? "open" : null)" data-edit-customer>
+                <summary class="edit-customer__summary">Edit Customer</summary>
+                <form method="post" asp-page-handler="EditCustomer" asp-route-customerKey="@Model.CustomerKey" class="edit-customer__form" novalidate>
+                    <input type="hidden" name="operationId" value="@Model.NewOperationId" />
+                    <input type="hidden" name="relatedTicketId" value="@Model.RelatedTicketId" />
+                    <p class="field-hint">
+                        Saved in Tiger Ticketing only. Nothing is sent to Tiger CRM, PACT or Tasleeh@(profile.IdentityKind == "Phone" ? "" : ", whose record of this customer is unchanged"), and no ticket changes - tickets keep the details they were raised with.
+                        @(profile.IdentityKind == "Phone" ? "This customer is unverified (identified by phone only)." : $"This customer is verified via {CustomerProfileModel.SourceLabel(profile.VerificationSource)}; the verification is not affected.")
+                        Every change is recorded in the change history.
+                    </p>
+                    <div class="two-col">
+                        <div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-fullName">Full name</label>
+                                <input class="field-input" id="edit-fullName" name="fullName" value="@(details?.FullName ?? profile.DisplayName)" maxlength="200" autocomplete="off" data-edit-full-name />
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-phoneNumber">Mobile number</label>
+                                <input class="field-input" id="edit-phoneNumber" name="phoneNumber" type="tel" value="@(edit?.PhoneNumber ?? Model.PrimaryPhone)" autocomplete="off" placeholder="+971 50 123 4567" data-edit-mobile />
+                                <span class="field-hint">With its country code, e.g. +971 50 123 4567; a UAE number may be written locally (050 123 4567).</span>
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-landlineNumber">Landline number</label>
+                                <input class="field-input" id="edit-landlineNumber" name="landlineNumber" type="tel" value="@details?.LandlineNumber" autocomplete="off" placeholder="+971 4 123 4567" data-edit-landline />
+                                <span class="field-hint">UAE landlines start 02, 03, 04, 06, 07 or 09 (+971 2, 3, 4, 6, 7, 9).</span>
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-additionalPhones">Additional phone numbers</label>
+                                <textarea class="field-input" id="edit-additionalPhones" name="additionalPhones" rows="3" data-edit-additional>@string.Join("\n", details?.AdditionalPhones ?? [])</textarea>
+                                <span class="field-hint">One per line. Remove a line to remove that number.</span>
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-email">Email address</label>
+                                <input class="field-input" id="edit-email" name="email" type="email" value="@(details?.Email ?? Model.PrimaryEmail)" maxlength="256" autocomplete="off" data-edit-email />
+                            </div>
+                        </div>
+                        <div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-nationality">Nationality</label>
+                                <input class="field-input" id="edit-nationality" name="nationality" value="@details?.Nationality" maxlength="100" autocomplete="off" data-edit-nationality />
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-country">Country of residence</label>
+                                <input class="field-input" id="edit-country" name="country" value="@details?.Country" maxlength="100" autocomplete="off" data-edit-country />
+                                <span class="field-hint">Where the customer lives. This is separate from the country of their phone number.</span>
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-emirate">Emirate</label>
+                                <select class="field-input" id="edit-emirate" name="emirate" data-edit-emirate>
+                                    <option value="">Not stated</option>
+                                    @foreach (var emirate in TigerCS.Application.Modules.Ticketing.Services.CustomerProfileEditAppService.Emirates)
+                                    {
+                                        <option value="@emirate" selected="@(string.Equals(details?.Emirate, emirate, StringComparison.OrdinalIgnoreCase) ? "selected" : null)">@emirate</option>
+                                    }
+                                </select>
+                                <span class="field-hint">Only what the customer states - never worked out from a phone number.</span>
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-location">Location</label>
+                                <input class="field-input" id="edit-location" name="location" value="@details?.Location" maxlength="200" autocomplete="off" placeholder="Area, building or city" data-edit-location />
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-preferredLanguage">Preferred language</label>
+                                <input class="field-input" id="edit-preferredLanguage" name="preferredLanguage" value="@details?.PreferredLanguage" list="edit-languages" maxlength="100" autocomplete="off" data-edit-language />
+                                <datalist id="edit-languages"><option value="Arabic"></option><option value="English"></option><option value="Hindi"></option><option value="Urdu"></option><option value="Russian"></option><option value="Chinese"></option></datalist>
+                            </div>
+                            <div class="field-group">
+                                <label class="field-label" for="edit-reason">Reason for the change <span class="text-secondary">(optional)</span></label>
+                                <input class="field-input" id="edit-reason" name="reason" maxlength="500" autocomplete="off" data-edit-reason />
+                            </div>
+                        </div>
+                    </div>
+                    <div class="contact-edit__actions">
+                        <button type="submit" class="btn btn-gold btn-sm" data-edit-customer-save>Save changes</button>
+                        <a class="btn btn-sm" href="/Customers/@Uri.EscapeDataString(Model.CustomerKey)@(Model.FromTicketId is { } cancelFrom ? $"?fromTicket={cancelFrom}" : "")">Cancel</a>
+                    </div>
+                </form>
+            </details>
+        }
 
         <section class="kpi-grid" aria-label="Customer counters">
             <div class="kpi-card @(profile.OpenTickets > 0 ? "kpi-card--attention" : "")">
@@ -134,11 +230,11 @@
         </section>
 
         <div class="tabs-card tabs-card--page">
-            <input type="radio" name="customerProfileTab" id="tab-overview" class="tab-input" checked="@(!Model.PaymentTabActive && !Model.DocumentsTabActive)" />
+            <input type="radio" name="customerProfileTab" id="tab-overview" class="tab-input" checked="@(!Model.PaymentTabActive && !Model.DocumentsTabActive && !Model.UnitsTabActive && !Model.HistoryTabActive)" />
             <label class="tab-label" for="tab-overview">Overview</label>
             <input type="radio" name="customerProfileTab" id="tab-contact" class="tab-input" />
             <label class="tab-label" for="tab-contact">Contact Info</label>
-            <input type="radio" name="customerProfileTab" id="tab-units" class="tab-input" />
+            <input type="radio" name="customerProfileTab" id="tab-units" class="tab-input" checked="@Model.UnitsTabActive" />
             <label class="tab-label" for="tab-units">Units <span class="tab-count">@(liveUnits?.Count ?? profile.Units.Count)</span></label>
             <input type="radio" name="customerProfileTab" id="tab-history" class="tab-input" />
             <label class="tab-label" for="tab-history">Tickets <span class="tab-count">@profile.TotalTickets</span></label>
@@ -148,6 +244,11 @@
             <label class="tab-label" for="tab-payment">Payment</label>
             <input type="radio" name="customerProfileTab" id="tab-documents" class="tab-input" checked="@Model.DocumentsTabActive" />
             <label class="tab-label" for="tab-documents">Documents</label>
+            @if (Model.CanViewHistory)
+            {
+                <input type="radio" name="customerProfileTab" id="tab-changes" class="tab-input" checked="@Model.HistoryTabActive" />
+                <label class="tab-label" for="tab-changes">Change History @if (Model.History is not null) { <span class="tab-count">@Model.History.TotalCount</span> }</label>
+            }
 
             <div class="tabs-body">
                 @* ---- Overview ---- *@
@@ -247,6 +348,24 @@
                             <p class="field-hint">Phone numbers and emails are the ones captured on this customer's intakes and conversations@(crm is { Status: "Found" } ? ", with the CRM record first" : "").</p>
                         </div>
                     </div>
+                    @if (profile.Details is { } more)
+                    {
+                        <div class="facts-panel facts-panel--flat" data-profile-details>
+                            <div class="facts-section__title">Profile details <span class="badge badge-neutral">Saved in Tiger Ticketing</span></div>
+                            <dl>
+                                <div class="facts-row"><dt>Landline Number</dt><dd class="text-mono" data-detail="landline">@(more.LandlineNumber ?? "—")</dd></div>
+                                @foreach (var additional in more.AdditionalPhones)
+                                {
+                                    <div class="facts-row"><dt>Additional phone</dt><dd class="text-mono">@additional</dd></div>
+                                }
+                                <div class="facts-row"><dt>Nationality</dt><dd data-detail="nationality">@(more.Nationality ?? "—")</dd></div>
+                                <div class="facts-row"><dt>Country of residence</dt><dd data-detail="country">@(more.Country ?? "—")</dd></div>
+                                <div class="facts-row"><dt>Emirate</dt><dd data-detail="emirate">@(more.Emirate ?? "—")</dd></div>
+                                <div class="facts-row"><dt>Location</dt><dd data-detail="location">@(more.Location ?? "—")</dd></div>
+                                <div class="facts-row"><dt>Preferred language</dt><dd data-detail="language">@(more.PreferredLanguage ?? "—")</dd></div>
+                            </dl>
+                        </div>
+                    }
                 </div>
 
                 @* ---- Units ---- *@
@@ -324,6 +443,105 @@
                             </table>
                         </div>
                     }
+
+                    @* ---- Properties added by hand: never verified ownership ---- *@
+                    <section class="manual-properties" id="manual-properties" data-manual-properties>
+                        <div class="facts-section__title">Properties added manually <span class="badge badge-neutral">Manually added</span></div>
+                        <p class="field-hint">Added in Tiger Ticketing by an employee. These are <strong>not verified ownership</strong>: nothing is written to Tiger CRM, PACT or Tasleeh, and the verified units above are unaffected. @(profile.Units.Any(u => u.Source is not ("Manual" or "Edited")) ? "Units shown above as CRM or PACT / Tasleeh are verified." : "")</p>
+                        @{ var manual = profile.ManualProperties ?? []; }
+                        @if (manual.Count == 0)
+                        {
+                            <div class="empty-state empty-state--compact"><p>No properties have been added manually.</p></div>
+                        }
+                        else
+                        {
+                            <div class="table-scroll">
+                                <table class="data-table" data-manual-properties-table>
+                                    <thead>
+                                        <tr><th>Project</th><th>Unit</th><th>Relationship</th><th>Status</th>@if (Model.CanEditCustomer) { <th></th> }</tr>
+                                    </thead>
+                                    <tbody>
+                                        @foreach (var property in manual)
+                                        {
+                                            <tr data-property-id="@property.AssociationId">
+                                                <td>@property.ProjectName</td>
+                                                <td class="cell-primary">@property.UnitNumber</td>
+                                                <td>@property.Relationship</td>
+                                                <td><span class="badge badge-neutral" data-property-status="manual">Manually added</span></td>
+                                                @if (Model.CanEditCustomer)
+                                                {
+                                                    <td class="col-actions">
+                                                        <details class="inline-edit">
+                                                            <summary class="btn btn-sm">Edit</summary>
+                                                            <form method="post" asp-page-handler="UpdateProperty" asp-route-customerKey="@Model.CustomerKey">
+                                                                <input type="hidden" name="associationId" value="@property.AssociationId" />
+                                                                <input type="hidden" name="operationId" value="@Guid.NewGuid()" />
+                                                                <input type="hidden" name="relatedTicketId" value="@Model.RelatedTicketId" />
+                                                                <input class="field-input" name="projectName" value="@property.ProjectName" list="property-projects" aria-label="Project" required />
+                                                                <input class="field-input" name="unitNumber" value="@property.UnitNumber" aria-label="Unit" required />
+                                                                <select class="field-input" name="relationship" aria-label="Relationship">
+                                                                    @foreach (var relationship in new[] { "Owner", "Tenant", "Representative" })
+                                                                    {
+                                                                        <option value="@relationship" selected="@(property.Relationship == relationship ? "selected" : null)">@relationship</option>
+                                                                    }
+                                                                </select>
+                                                                <button type="submit" class="btn btn-gold btn-sm">Save</button>
+                                                            </form>
+                                                        </details>
+                                                        <details class="inline-edit">
+                                                            <summary class="btn btn-sm">Remove</summary>
+                                                            <form method="post" asp-page-handler="RemoveProperty" asp-route-customerKey="@Model.CustomerKey">
+                                                                <input type="hidden" name="associationId" value="@property.AssociationId" />
+                                                                <input type="hidden" name="operationId" value="@Guid.NewGuid()" />
+                                                                <input type="hidden" name="relatedTicketId" value="@Model.RelatedTicketId" />
+                                                                <span class="field-hint">Removes this manual association only.</span>
+                                                                <button type="submit" class="btn btn-sm">Confirm remove</button>
+                                                            </form>
+                                                        </details>
+                                                    </td>
+                                                }
+                                            </tr>
+                                        }
+                                    </tbody>
+                                </table>
+                            </div>
+                        }
+
+                        @if (Model.CanEditCustomer)
+                        {
+                            <form method="post" asp-page-handler="AddProperty" asp-route-customerKey="@Model.CustomerKey" class="property-add" data-add-property>
+                                <input type="hidden" name="operationId" value="@Model.NewOperationId" />
+                                <input type="hidden" name="relatedTicketId" value="@Model.RelatedTicketId" />
+                                <div class="facts-section__title">Add a property</div>
+                                <div class="field-group">
+                                    <label class="field-label" for="property-project">Project</label>
+                                    <input class="field-input" id="property-project" name="projectName" list="property-projects" autocomplete="off" required />
+                                    <datalist id="property-projects">
+                                        @foreach (var project in Model.ProjectOptions) { <option value="@project"></option> }
+                                    </datalist>
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label" for="property-unit">Unit</label>
+                                    <input class="field-input" id="property-unit" name="unitNumber" autocomplete="off" required />
+                                    <span class="field-hint">Type the unit number. A unit the project already knows is matched to it; a new one is accepted as entered.</span>
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label" for="property-relationship">Relationship</label>
+                                    <select class="field-input" id="property-relationship" name="relationship" required>
+                                        <option value="">Choose…</option>
+                                        <option value="Owner">Owner</option>
+                                        <option value="Tenant">Tenant</option>
+                                        <option value="Representative">Representative</option>
+                                    </select>
+                                </div>
+                                <div class="field-group">
+                                    <label class="field-label" for="property-reason">Reason <span class="text-secondary">(optional)</span></label>
+                                    <input class="field-input" id="property-reason" name="reason" maxlength="500" autocomplete="off" />
+                                </div>
+                                <button type="submit" class="btn btn-gold btn-sm">Add property</button>
+                            </form>
+                        }
+                    </section>
                 </div>
 
                 @* ---- Tickets ---- *@
@@ -430,6 +648,73 @@
                     <span id="documents" class="anchor-target"></span>
                     <partial name="_CustomerDocumentsTab" model="Model.DocumentsPanel" />
                 </div>
+
+                @* ---- Change History: who changed which detail, from what to what. Personal data: only for Customers.ViewHistory. ---- *@
+                @if (Model.CanViewHistory)
+                {
+                    <div class="tab-panel" id="panel-changes" data-change-history>
+                        <p class="panel-intro">Every change to this customer's details, newest first. <span class="timeline-zone">All times in @TicketDisplay.ActivityTimeZoneLabel</span></p>
+                        @if (Model.History is null)
+                        {
+                            <p class="field-hint" data-history-unavailable>The change history is unavailable right now. Reload the page to retry.</p>
+                        }
+                        else if (Model.History.Items.Count == 0)
+                        {
+                            <div class="empty-state"><p>No changes have been recorded for this customer.</p></div>
+                        }
+                        else
+                        {
+                            <ol class="timeline" data-change-timeline>
+                                @foreach (var operation in Model.History.Items.GroupBy(i => i.CorrelationId))
+                                {
+                                    var first = operation.First();
+                                    <li class="timeline-item" data-change-operation>
+                                        <span class="timeline-icon icon-info"><svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="4" fill="currentColor" /></svg></span>
+                                        <div class="timeline-row">
+                                            <span class="timeline-text">
+                                                <strong data-modified-by>@first.ModifiedByName</strong>
+                                                <small class="timeline-actor-type">(@first.Source)</small>
+                                                @if (first.RelatedTicketId is { } relatedTicket)
+                                                {
+                                                    <text> &mdash; from ticket <a class="ticket-id-link" href="/Tickets/@relatedTicket">#@relatedTicket</a></text>
+                                                }
+                                            </span>
+                                            <span class="timeline-time">@TicketDisplay.UaeDateTime(first.ModifiedAtUtc)</span>
+                                        </div>
+                                        @if (!string.IsNullOrWhiteSpace(first.Reason))
+                                        {
+                                            <div class="timeline-detail">Reason: @first.Reason</div>
+                                        }
+                                        <div class="table-scroll">
+                                            <table class="data-table data-table--compact">
+                                                <thead><tr><th>Changed field</th><th>Old value</th><th>New value</th></tr></thead>
+                                                <tbody>
+                                                    @foreach (var change in operation)
+                                                    {
+                                                        <tr data-change-field="@change.Field">
+                                                            <td class="cell-primary">@change.FieldLabel</td>
+                                                            <td data-old-value>@(change.OldValue ?? "—")</td>
+                                                            <td data-new-value>@(change.NewValue ?? "—")</td>
+                                                        </tr>
+                                                    }
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    </li>
+                                }
+                            </ol>
+                            @if (Model.History.TotalCount > Model.History.PageSize)
+                            {
+                                var pages = (int)Math.Ceiling(Model.History.TotalCount / (double)Model.History.PageSize);
+                                <nav class="pager" aria-label="Change history pages">
+                                    @if (Model.History.Page > 1) { <a class="btn btn-sm" href="/Customers/@Uri.EscapeDataString(Model.CustomerKey)?tab=history&historyPage=@(Model.History.Page - 1)">Newer</a> }
+                                    <span class="field-hint">Page @Model.History.Page of @pages</span>
+                                    @if (Model.History.Page < pages) { <a class="btn btn-sm" href="/Customers/@Uri.EscapeDataString(Model.CustomerKey)?tab=history&historyPage=@(Model.History.Page + 1)">Older</a> }
+                                </nav>
+                            }
+                        }
+                    </div>
+                }
             </div>
         </div>
     }

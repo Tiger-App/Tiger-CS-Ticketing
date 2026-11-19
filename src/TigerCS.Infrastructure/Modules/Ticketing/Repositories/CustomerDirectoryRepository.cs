@@ -656,6 +656,32 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             .ToDictionaryAsync(t => t.TicketId, cancellationToken);
         var snapshots = await LoadSnapshotsAsync(lastTicketIds, cancellationToken);
 
+        // The names captured on ANY of a row's conversations - not only its latest ticket's - so a name given once is not lost to a
+        // later ticket that carried none, and the row says what the profile says. Two batched reads for the whole page: the page
+        // customers' tickets, then their interactions' names.
+        var pageCrmIds = page.Where(g => g.Kind == CrmKind && g.CrmId != null).Select(g => g.CrmId!.Value).Distinct().ToList();
+        var pagePhones = page.Where(g => g.Kind == PhoneKind && g.Phone != null).Select(g => g.Phone!).Distinct().ToList();
+        var pageExternalIds = page.Where(g => g.Kind == ExternalKind && g.ExternalId != null).Select(g => g.ExternalId!).Distinct().ToList();
+        var ownTickets = await Identified(query.VisibleDepartmentIds, query.AgentScopeEmployeeId, query.OwnerVisibilityEmployeeId)
+            .Where(x => (x.Kind == CrmKind && x.CrmId != null && pageCrmIds.Contains(x.CrmId.Value))
+                || (x.Kind == PhoneKind && x.Phone != null && pagePhones.Contains(x.Phone))
+                || (x.Kind == ExternalKind && x.ExternalId != null && pageExternalIds.Contains(x.ExternalId)))
+            .Select(x => new { x.Kind, x.CrmId, x.Source, x.ExternalId, x.Phone, x.Ticket.TicketId })
+            .ToListAsync(cancellationToken);
+        var ticketIdsByCustomer = ownTickets
+            .GroupBy(t => ToIdentity(t.Kind, t.CrmId, t.Source, t.ExternalId, t.Phone).Key)
+            .ToDictionary(grp => grp.Key, grp => grp.Select(t => t.TicketId).ToList());
+        var allOwnTicketIds = ownTickets.Select(t => t.TicketId).Distinct().ToList();
+        var conversationNames = allOwnTicketIds.Count == 0
+            ? []
+            : await dbContext.TicketInteractions.AsNoTracking()
+                .Where(i => allOwnTicketIds.Contains(i.TicketId) && i.CustomerName != null && i.CustomerName != "")
+                .OrderByDescending(i => i.CreatedAtUtc)
+                .Take(2000)
+                .Select(i => new { i.TicketId, i.CustomerName })
+                .ToListAsync(cancellationToken);
+        var namesByTicket = conversationNames.GroupBy(n => n.TicketId).ToDictionary(grp => grp.Key, grp => grp.Select(n => n.CustomerName).ToList());
+
         // The phone / project / unit / name an authorised user corrected, one batched read for the page, matched on the directory key.
         var pageKeys = page.Select(g => ToIdentity(g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone).Key).ToList();
         var edits = await dbContext.CustomerProfileOverrides.AsNoTracking()
@@ -705,7 +731,9 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 ManualContactUpdatedAtUtc: manual?.UpdatedAtUtc,
                 CrmName: CustomerNameResolver.FirstValid(last.CrmBuyerCustomerName, namedTicket?.CrmBuyerCustomerName),
                 ExternalName: CustomerNameResolver.FirstValid(last.ExternalCustomerName, namedTicket?.ExternalCustomerName),
-                SubmittedNames: [snapshot.InteractionName, snapshot.SnapshotName])).Name;
+                SubmittedNames: new[] { snapshot.InteractionName, snapshot.SnapshotName }
+                    .Concat(ticketIdsByCustomer.GetValueOrDefault(identity.Key, []).SelectMany(id => namesByTicket.GetValueOrDefault(id, [])))
+                    .ToList())).Name;
 
             rows.Add(new CustomerDirectoryRowDto(
                 identity.Key,
