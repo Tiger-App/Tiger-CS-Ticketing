@@ -342,7 +342,7 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
                     {
                         0 => $"+97150{k:D7}",     // 12 digits: UAE
                         1 => $"+4479{k:D8}",      // UK
-                        _ => $"050{k:D7}",        // national form: unknown
+                        _ => $"011{k:D7}",        // a national number that is not a UAE mobile / landline: unknown
                     };
                     tickets.Add((Ticket.CreateUnclassified($"TG-LS-{++_seq:D6}", _departmentId, "bulk", Now.AddMinutes(-_seq)), phone));
                 }
@@ -406,7 +406,7 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
             {
                 for (var k = 0; k < perBucket; k++)
                 {
-                    var phone = type switch { 0 => $"+97150{k:D7}", 1 => $"+4479{k:D8}", _ => $"050{k:D7}" };
+                    var phone = type switch { 0 => $"+97150{k:D7}", 1 => $"+4479{k:D8}", _ => $"011{k:D7}" };   // national, not UAE-shaped: unknown
                     tickets.Add((Ticket.CreateUnclassified($"TG-LS-{++_seq:D6}", _departmentId, "bulk", Now.AddMinutes(-_seq)), phone));
                 }
             }
