@@ -39,6 +39,7 @@ public class DefaultClassificationTests
         public required RequestType FinanceType { get; init; }
         public required Department Leasing { get; init; }
         public Guid[] Agents { get; init; } = [];
+        public string[] AgentGenesysIds { get; init; } = [];
     }
 
     private static World Build(bool callCenterFirst = false, bool seedDefault = true, int agents = 0)
@@ -62,17 +63,14 @@ public class DefaultClassificationTests
             (_, general, generalType) = f.SeedDefaultClassification(cs);
         }
 
-        var agentIds = Enumerable.Range(0, agents).Select(_ => Guid.NewGuid()).OrderBy(id => id).ToArray();
-        foreach (var id in agentIds)
-        {
-            f.DepartmentAssignments.Assignments.Add(
-                new UserDepartmentAssignment(id, f.CallCenter!.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
-        }
+        // Mapped Call Center CS Agents: the one who ACCEPTS (connects to) the interaction is the only person an AI-created ticket is ever given to.
+        var pairs = Enumerable.Range(0, agents).Select(i => (Id: f.AddAgent($"g-dc-{i}", $"Agent {i}"), GenesysId: $"g-dc-{i}")).OrderBy(a => a.Id).ToArray();
+        var agentIds = pairs.Select(a => a.Id).ToArray();
 
         return new World
         {
             F = f, Cs = cs, General = general!, GeneralType = generalType!, Finance = finance, FinanceCategory = financeCategory,
-            FinanceType = financeType, Leasing = leasing, Agents = agentIds
+            FinanceType = financeType, Leasing = leasing, Agents = agentIds, AgentGenesysIds = pairs.Select(a => a.GenesysId).ToArray()
         };
     }
 
@@ -87,6 +85,26 @@ public class DefaultClassificationTests
                 RequestType: requestType, HumanFollowUpRequired: humanFollowUp));
         Assert.Equal(GenesysIngestionOutcome.TicketCreated, result.Outcome);
         return (w.F.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId), result);
+    }
+
+    /// <summary>A connected-agent event: the agent accepted the interaction, so the ticket is assigned directly to them.</summary>
+    private static async Task AcceptAsync(World w, Ticket ticket, string conversationId, int agent = 0)
+    {
+        var update = await w.F.TicketUpdate.UpdateAsync(
+            ServiceAccount, ticket.TicketId,
+            new GenesysTicketUpdateDto(conversationId, Routing: new GenesysRoutingUpdateDto(AgentId: w.AgentGenesysIds[agent], ConnectedAtUtc: DateTime.UtcNow)));
+        Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
+        Assert.Equal(w.Agents[agent], ticket.CurrentOwnerEmployeeId);
+    }
+
+    /// <summary>Human work nobody has accepted: Call Center queue, still the AI Agent's, no person dealt, no Round Robin turn.</summary>
+    private static void AssertWaitingInTheCallCenterQueue(World w, Ticket ticket)
+    {
+        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
     }
 
     private static void AssertIsDefault(World w, Ticket ticket)
@@ -386,13 +404,12 @@ public class DefaultClassificationTests
     private static GenesysTicketUpdateDto UpdateWithType(string conversationId, GenesysRequestTypeDto type) => new(conversationId, RequestType: type);
 
     [Fact]
-    public async Task GenesysUpdate_WithAValidRequestType_ReplacesTheGeneralFallback_AndKeepsTheCsAgent()
+    public async Task GenesysUpdate_WithAValidRequestType_ReplacesTheGeneralFallback_AssignsNobody_AndKeepsTheAcceptingCsAgent()
     {
         var w = Build(callCenterFirst: true, agents: 2);
         var (ticket, _) = await IngestAsync(w, "conv-refine", humanFollowUp: true);
         AssertIsDefault(w, ticket);
-        var owner = ticket.CurrentOwnerEmployeeId;
-        Assert.Equal(w.Agents[0], owner);
+        AssertWaitingInTheCallCenterQueue(w, ticket);                              // nobody accepted: queue + AI owner, no Round Robin
 
         var update = await w.F.TicketUpdate.UpdateAsync(
             ServiceAccount, ticket.TicketId, UpdateWithType("conv-refine", new GenesysRequestTypeDto(w.FinanceType.RequestTypeId)));
@@ -400,8 +417,11 @@ public class DefaultClassificationTests
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
         Assert.Equal(w.FinanceCategory.CategoryId, ticket.CategoryId);
         Assert.Equal(w.FinanceType.RequestTypeId, ticket.RequestTypeId);
-        Assert.Equal(owner, ticket.CurrentOwnerEmployeeId);                        // classification never clears the CS Agent
-        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);    // and the Call Center keeps routing
+        AssertWaitingInTheCallCenterQueue(w, ticket);                              // classification assigns nobody and the Call Center keeps routing
+
+        await AcceptAsync(w, ticket, "conv-refine", agent: 1);                     // the agent who answers - not the next in rotation - owns it
+        Assert.Equal(w.FinanceType.RequestTypeId, ticket.RequestTypeId);           // and accepting does not undo the classification
+        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
     }
 
     [Fact]
@@ -484,6 +504,8 @@ public class DefaultClassificationTests
     {
         var w = Build(callCenterFirst: true, agents: 1);
         var (ticket, _) = await IngestAsync(w, "conv-manual", humanFollowUp: true);
+        AssertWaitingInTheCallCenterQueue(w, ticket);
+        await AcceptAsync(w, ticket, "conv-manual");                               // the CS Agent accepts: now a person owns it and may reclassify
         var owner = ticket.CurrentOwnerEmployeeId;
         var priority = ticket.PriorityId;
         var period = Assert.Single(w.F.Sla.SlaInstances.All);
@@ -567,7 +589,7 @@ public class DefaultClassificationTests
     // ---- CS Agent ownership ----
 
     [Fact]
-    public async Task HumanNeededGeneralTickets_GetTheNextCsAgentInSequence_NotADepartmentEmployee()
+    public async Task HumanNeededGeneralTickets_WaitInTheCallCenterQueue_NobodyIsDealt_AndTheAgentWhoAcceptsOwnsThem()
     {
         var w = Build(callCenterFirst: true, agents: 3);
         // A Customer Services employee with an assignment rule configured for General must still not receive the ticket automatically.
@@ -575,17 +597,27 @@ public class DefaultClassificationTests
         w.F.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(csEmployee, w.Cs.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
         w.F.AssignmentRules.Add(RequestTypeAssignmentRule.ForSpecificEmployee(w.GeneralType.RequestTypeId, csEmployee));
 
-        var owners = new List<Guid?>();
+        var tickets = new List<(Ticket Ticket, string Conversation)>();
         foreach (var channel in new[] { GenesysChannel.Phone, GenesysChannel.WhatsApp, GenesysChannel.WebsiteChat, GenesysChannel.Phone })
         {
-            var (ticket, _) = await IngestAsync(w, $"conv-{owners.Count}", channel, humanFollowUp: true);
+            var conversation = $"conv-{tickets.Count}";
+            var (ticket, _) = await IngestAsync(w, conversation, channel, humanFollowUp: true);
             AssertIsDefault(w, ticket);
-            Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-            owners.Add(ticket.CurrentOwnerEmployeeId);
+            AssertWaitingInTheCallCenterQueue(w, ticket);                          // no Round Robin: the sequence of owners is gone, every ticket waits
+            tickets.Add((ticket, conversation));
         }
 
-        Assert.Equal([w.Agents[0], w.Agents[1], w.Agents[2], w.Agents[0]], owners);
-        Assert.DoesNotContain(csEmployee, owners.Cast<Guid>());
+        Assert.Empty(w.F.TicketAssignments.Added);                                  // nobody - least of all the CS employee with the rule - was assigned anything
+
+        // Whoever actually accepts each interaction owns it, whatever "would have been next": 2, 2, 0, 1.
+        var acceptors = new[] { 2, 2, 0, 1 };
+        for (var i = 0; i < tickets.Count; i++)
+        {
+            await AcceptAsync(w, tickets[i].Ticket, tickets[i].Conversation, acceptors[i]);
+        }
+
+        Assert.DoesNotContain(csEmployee, w.F.Tickets.All.Select(t => t.CurrentOwnerEmployeeId).Cast<Guid?>());
+        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));   // direct assignment never uses the rotation
     }
 
     [Fact]
@@ -603,23 +635,31 @@ public class DefaultClassificationTests
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         AssertIsDefault(w, ticket);                                              // closing keeps the classification it had
         Assert.DoesNotContain(w.F.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
-        Assert.Equal(w.Agents[0], (await IngestAsync(w, "conv-next", humanFollowUp: true)).Ticket.CurrentOwnerEmployeeId);  // the rotation did not advance
+
+        // The rotation did not advance, and the next human-needed ticket is queued rather than dealt to anyone.
+        var next = (await IngestAsync(w, "conv-next", humanFollowUp: true)).Ticket;
+        AssertWaitingInTheCallCenterQueue(w, next);
     }
 
     [Fact]
-    public async Task ConfirmedGenesysAgent_StillTakesAGeneralTicket_AndClassificationNeverClearsThem()
+    public async Task ConfirmedGenesysAgent_TakesAGeneralTicketDirectly_AndClassificationNeverClearsThem()
     {
         var w = Build(callCenterFirst: true, agents: 2);
         var (ticket, _) = await IngestAsync(w, "conv-confirmed", humanFollowUp: true);
-        var automaticOwner = ticket.CurrentOwnerEmployeeId;
-        Assert.Equal(w.Agents[0], automaticOwner);
+        AssertWaitingInTheCallCenterQueue(w, ticket);
+
+        // The confirmed agent (the SECOND one - not whoever Round Robin would have picked) accepts: assigned directly, the AI's ownership ends.
+        await AcceptAsync(w, ticket, "conv-confirmed", agent: 1);
+        var confirmedOwner = ticket.CurrentOwnerEmployeeId;
+        Assert.Null(ticket.AiAgentOwnerEmployeeId);
 
         // Reclassify by an authorized person: the owner is not cleared or replaced.
         await w.F.Classification.ClassifyAsync(
-            w.Agents[0], [Roles.CsAgent], ticket.TicketId,
+            w.Agents[1], [Roles.CsAgent], ticket.TicketId,
             Reclassify(w.FinanceCategory.CategoryId, ticket.PriorityId!.Value, w.FinanceType.RequestTypeId));
 
-        Assert.Equal(automaticOwner, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(confirmedOwner, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(w.FinanceType.RequestTypeId, ticket.RequestTypeId);
     }
 
     // ---- Department transfers keep the classification ----
