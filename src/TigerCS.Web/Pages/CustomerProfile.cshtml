@@ -398,7 +398,7 @@
                                                 || string.Equals(u.UnitNumber, unit.UnitNumber, StringComparison.OrdinalIgnoreCase))?.TicketCount ?? 0;
                                             <tr>
                                                 <td>@(unit.ProjectName ?? "—")</td>
-                                                <td class="cell-primary">@(unit.UnitNumber ?? "—")</td>
+                                                <td class="cell-primary">@(unit.UnitNumber ?? "—") <span class="badge badge-source-crm" data-unit-status="verified" title="On the customer's Tiger CRM record">Verified · CRM</span></td>
                                                 <td>@(unit.LeadStatusName ?? unit.LeadStatus.ToString())</td>
                                                 <td><span class="id-fallback">Type #@unit.UnitType</span></td>
                                                 <td>@(unit.FloorNumber?.ToString() ?? "—")</td>
@@ -433,7 +433,16 @@
                                     {
                                         <tr>
                                             <td>@(unit.ProjectName ?? "—")</td>
-                                            <td class="cell-primary">@(unit.UnitNumber ?? "—")</td>
+                                            <td class="cell-primary">@(unit.UnitNumber ?? "—")
+                                                @if (unit.Source is "Manual" or "Edited")
+                                                {
+                                                    <span class="badge badge-neutral" data-unit-status="manual" title="Entered by hand, not verified">@(unit.Source == "Edited" ? "Edited" : "Manual entry")</span>
+                                                }
+                                                else
+                                                {
+                                                    <span class="badge badge-source-@CustomerProfileModel.SourceCssKey(unit.Source)" data-unit-status="verified" title="Confirmed by @TicketDisplay.LookupSourceLabel(unit.Source)">Verified · @TicketDisplay.LookupSourceLabel(unit.Source)</span>
+                                                }
+                                            </td>
                                             <td>@(unit.Source == "Manual" ? "Manual entry" : $"{TicketDisplay.LookupSourceLabel(unit.Source)}{(unit.ExternalUnitId is null ? "" : $" · {unit.ExternalUnitId}")}")</td>
                                             <td class="col-num"><span class="count-pill">@unit.TicketCount</span></td>
                                             <td class="text-secondary text-mono">@unit.LastTicketAtUtc.ToLocalTime().ToString("MMM d, yyyy")</td>

@@ -110,6 +110,79 @@ public sealed class CustomerLocationSqliteTests : IDisposable
     }
 
     [Fact]
+    public async Task UaeLandlines_AreCountedWithinUae_InEveryWrittenForm_ForEveryAreaCode()
+    {
+        using (var context = _db.CreateContext())
+        {
+            // 02 Abu Dhabi, 03 Al Ain, 04 Dubai, 06 Sharjah/Ajman/UAQ, 07 Ras Al Khaimah, 09 Fujairah - each written locally, with +971 and with 00971.
+            var n = 0;
+            foreach (var number in new[]
+                     {
+                         "021234567", "+97121234567", "0097121234567", "031234567", "+97131234567", "0097131234567", "041234567", "+97141234567", "0097141234567",
+                         "061234567", "+97161234567", "0097161234567", "071234567", "+97171234567", "0097171234567", "091234567", "+97191234567", "0097191234567",
+                     })
+            {
+                CrmCustomer(context, 7000 + n++, number);
+            }
+
+            CrmCustomer(context, 7100, "+447911123456");   // outside
+            CrmCustomer(context, 7101, "081234567");       // 08 is not a UAE area code: not guessed
+            CrmCustomer(context, 7102, "+971412345678");   // 971 + 9 digits starting 4 is neither a mobile nor a landline
+        }
+
+        var counts = await CountsAsync();
+
+        Assert.Equal(new CustomerLocationCounts(18, 1, 2), counts);
+        var within = await ListAsync(new CustomerDirectoryListRequestDto(Location: CustomerLocationKeys.WithinUae));
+        Assert.Equal(18, within.TotalCount);                                       // the list a card opens agrees with the card
+        Assert.Equal(counts.Total, (await ListAsync(new CustomerDirectoryListRequestDto())).TotalCount);
+    }
+
+    [Fact]
+    public async Task ACustomersCountryOfResidence_NeverMovesThemBetweenLocationBuckets_OnlyTheirPhoneNumberDoes()
+    {
+        // Location is the country of the PHONE number. A customer with a UAE number who says they live in India is still a UAE number,
+        // and one with a UK number who lives in Dubai is still a UK number: residence is a separate fact, never inferred from or into a phone.
+        using (var context = _db.CreateContext())
+        {
+            CrmCustomer(context, 8001, "+97141234567");     // a Dubai landline
+            CrmCustomer(context, 8002, "+447911123456");    // a UK mobile
+            context.SaveChanges();
+        }
+
+        Assert.Equal(new CustomerLocationCounts(1, 1, 0), await CountsAsync());
+
+        using (var context = _db.CreateContext())
+        {
+            var admin = Guid.NewGuid();
+            foreach (var (key, crmId, country, emirate) in new[] { ("crm:8001", 8001, "India", (string?)null), ("crm:8002", 8002, "United Arab Emirates", "Dubai") })
+            {
+                var edit = new CustomerProfileOverride(key, 1, crmId, null, null, null, admin, Now);
+                edit.SetDetails(null, null, null, null, "Anything", country, emirate, "Somewhere", null, admin, Now);
+                context.CustomerProfileOverrides.Add(edit);
+            }
+
+            context.SaveChanges();
+        }
+
+        Assert.Equal(new CustomerLocationCounts(1, 1, 0), await CountsAsync());   // nothing moved
+        var profile = await new CustomerDirectoryAppServiceFactory(this).ProfileAsync("crm:8002");
+        Assert.Equal("Dubai", profile.Details!.Emirate);                           // what the customer said is kept as stated...
+        Assert.Equal("United Arab Emirates", profile.Details.Country);             // ...and the phone-derived bucket is unaffected
+    }
+
+    /// <summary>Opens a profile through the real service on the SQLite schema.</summary>
+    private sealed class CustomerDirectoryAppServiceFactory(CustomerLocationSqliteTests owner)
+    {
+        public async Task<CustomerDirectoryProfileDto> ProfileAsync(string key)
+        {
+            using var context = owner._db.CreateContext();
+            var result = await owner.Service(context).GetProfileAsync(Guid.NewGuid(), CrossDepartment, key);
+            return Assert.IsType<CustomerDirectoryProfileDto>(result.Response);
+        }
+    }
+
+    [Fact]
     public async Task ConflictingNumbers_MakeTheCustomerUnknown_NeverCountedTwice()
     {
         using (var context = _db.CreateContext())
