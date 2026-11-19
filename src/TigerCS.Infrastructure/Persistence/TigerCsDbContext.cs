@@ -97,6 +97,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
     public DbSet<TicketNote> TicketNotes => Set<TicketNote>();
     public DbSet<CustomerContactDetail> CustomerContactDetails => Set<CustomerContactDetail>();
     public DbSet<CustomerProfileOverride> CustomerProfileOverrides => Set<CustomerProfileOverride>();
+    public DbSet<CustomerProfileChange> CustomerProfileChanges => Set<CustomerProfileChange>();
+    public DbSet<CustomerPropertyAssociation> CustomerPropertyAssociations => Set<CustomerPropertyAssociation>();
 
     public DbSet<SlaPolicy> SlaPolicies => Set<SlaPolicy>();
 
@@ -262,6 +264,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new TicketNoteConfiguration());
         builder.ApplyConfiguration(new CustomerContactDetailConfiguration());
         builder.ApplyConfiguration(new CustomerProfileOverrideConfiguration());
+        builder.ApplyConfiguration(new CustomerProfileChangeConfiguration());
+        builder.ApplyConfiguration(new CustomerPropertyAssociationConfiguration());
 
         builder.ApplyConfiguration(new SlaPolicyConfiguration());
         builder.ApplyConfiguration(new BusinessCalendarConfiguration());

@@ -246,7 +246,13 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<ICustomerContactDetailRepository, CustomerContactDetailRepository>();
         services.AddScoped<CustomerContactAppService>();
         services.AddScoped<ICustomerProfileOverrideRepository, CustomerProfileOverrideRepository>();
+        services.AddScoped<ICustomerProfileChangeRepository, CustomerProfileChangeRepository>();
+        services.AddScoped<ICustomerPropertyAssociationRepository, CustomerPropertyAssociationRepository>();
         services.AddScoped<CustomerProfileEditAppService>();
+        services.AddScoped<ProjectUnitValidator>();
+        services.AddScoped<CustomerProfileAuditService>();
+        services.AddScoped<CustomerPropertyAppService>();
+        services.AddScoped<CustomerChangeHistoryAppService>();
         services.AddScoped<IProjectCatalogRepository, ProjectCatalogRepository>();
         services.AddScoped<ProjectCatalogAppService>();
 

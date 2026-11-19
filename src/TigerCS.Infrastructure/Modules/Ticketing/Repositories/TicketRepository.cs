@@ -121,6 +121,8 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
             // string.Replace to SQL REPLACE() but cannot call the helper.
             var searchIsPhoneShaped = CustomerPhoneNumber.LooksLikeNumber(search);
             var searchDigits = searchIsPhoneShaped ? CustomerPhoneNumber.Normalize(search) : string.Empty;
+            // A UAE number is found however it was written (local, +971, 00971): the term is also tried in its other spellings.
+            var (searchAlt1, searchAlt2) = UaePhoneNumbers.SearchVariants(searchDigits);
 
             filtered = filtered.Where(t =>
                 t.TicketNumber.Contains(search)
@@ -131,7 +133,22 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
                 || (t.ManualUnitNumber != null && t.ManualUnitNumber.Contains(search))
                 || dbContext.IntakeRecords.Any(i => i.LinkedTicketId == t.TicketId
                     && (i.PhoneNumber.Contains(search)
-                        || (searchIsPhoneShaped && i.PhoneNumber.Trim().Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "").Replace("/", "").Contains(searchDigits)))));
+                        || (searchIsPhoneShaped && (i.PhoneNumber.Trim().Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "").Replace("/", "").Contains(searchDigits)
+                            || i.PhoneNumber.Trim().Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "").Replace("/", "").Contains(searchAlt1)
+                            || i.PhoneNumber.Trim().Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "").Replace("/", "").Contains(searchAlt2)))
+                        // The name / e-mail an agent saved for this caller's number is what every other page shows for the customer, so
+                        // the ticket is found by it too (the Customers directory already searched it; the ticket queue and global search did not).
+                        || dbContext.CustomerContactDetails.Any(c =>
+                            c.PhoneKey == i.PhoneNumber.Trim().Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "").Replace("/", "")
+                            && (c.Name.Contains(search) || (c.Email != null && c.Email.Contains(search))))))
+                // A name or e-mail entered on the customer's profile: matched on the customer's CRM identity, or on the caller's number for
+                // a phone-only customer.
+                || (t.CrmBuyerCustomerId != null && dbContext.CustomerProfileOverrides.Any(o => o.CrmBuyerCustomerId == t.CrmBuyerCustomerId
+                    && ((o.FullName != null && o.FullName.Contains(search)) || (o.Email != null && o.Email.Contains(search)))))
+                || dbContext.IntakeRecords.Any(i => i.LinkedTicketId == t.TicketId
+                    && dbContext.CustomerProfileOverrides.Any(o => o.IdentityKind == 3
+                        && o.IdentityPhone == i.PhoneNumber.Trim().Replace("+", "").Replace(" ", "").Replace("-", "").Replace("(", "").Replace(")", "").Replace(".", "").Replace("/", "")
+                        && ((o.FullName != null && o.FullName.Contains(search)) || (o.Email != null && o.Email.Contains(search))))));
         }
 
         // Dashboard drill-down filters (Dashboard Phase 1) — the same shared

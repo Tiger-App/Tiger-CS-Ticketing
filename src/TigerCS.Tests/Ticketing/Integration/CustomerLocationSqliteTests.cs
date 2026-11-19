@@ -92,7 +92,7 @@ public sealed class CustomerLocationSqliteTests : IDisposable
             CrmCustomer(context, 1, "+971 50 123 4567");
             CrmCustomer(context, 2, "+447911123456");        // outside
             CrmCustomer(context, 3, "+14155552671");         // outside
-            CrmCustomer(context, 4, "0501234567");           // national form: unknown
+            CrmCustomer(context, 4, "0112345678");           // a national number that is not a UAE mobile / landline: unknown
             CrmCustomer(context, 5, null);                   // no phone: unknown
             PhoneCustomer(context, "+971521234567");         // phone-identified UAE customer
             PhoneCustomer(context, "971521234567");          // the SAME customer, written differently
@@ -110,6 +110,79 @@ public sealed class CustomerLocationSqliteTests : IDisposable
     }
 
     [Fact]
+    public async Task UaeLandlines_AreCountedWithinUae_InEveryWrittenForm_ForEveryAreaCode()
+    {
+        using (var context = _db.CreateContext())
+        {
+            // 02 Abu Dhabi, 03 Al Ain, 04 Dubai, 06 Sharjah/Ajman/UAQ, 07 Ras Al Khaimah, 09 Fujairah - each written locally, with +971 and with 00971.
+            var n = 0;
+            foreach (var number in new[]
+                     {
+                         "021234567", "+97121234567", "0097121234567", "031234567", "+97131234567", "0097131234567", "041234567", "+97141234567", "0097141234567",
+                         "061234567", "+97161234567", "0097161234567", "071234567", "+97171234567", "0097171234567", "091234567", "+97191234567", "0097191234567",
+                     })
+            {
+                CrmCustomer(context, 7000 + n++, number);
+            }
+
+            CrmCustomer(context, 7100, "+447911123456");   // outside
+            CrmCustomer(context, 7101, "081234567");       // 08 is not a UAE area code: not guessed
+            CrmCustomer(context, 7102, "+971412345678");   // 971 + 9 digits starting 4 is neither a mobile nor a landline
+        }
+
+        var counts = await CountsAsync();
+
+        Assert.Equal(new CustomerLocationCounts(18, 1, 2), counts);
+        var within = await ListAsync(new CustomerDirectoryListRequestDto(Location: CustomerLocationKeys.WithinUae));
+        Assert.Equal(18, within.TotalCount);                                       // the list a card opens agrees with the card
+        Assert.Equal(counts.Total, (await ListAsync(new CustomerDirectoryListRequestDto())).TotalCount);
+    }
+
+    [Fact]
+    public async Task ACustomersCountryOfResidence_NeverMovesThemBetweenLocationBuckets_OnlyTheirPhoneNumberDoes()
+    {
+        // Location is the country of the PHONE number. A customer with a UAE number who says they live in India is still a UAE number,
+        // and one with a UK number who lives in Dubai is still a UK number: residence is a separate fact, never inferred from or into a phone.
+        using (var context = _db.CreateContext())
+        {
+            CrmCustomer(context, 8001, "+97141234567");     // a Dubai landline
+            CrmCustomer(context, 8002, "+447911123456");    // a UK mobile
+            context.SaveChanges();
+        }
+
+        Assert.Equal(new CustomerLocationCounts(1, 1, 0), await CountsAsync());
+
+        using (var context = _db.CreateContext())
+        {
+            var admin = Guid.NewGuid();
+            foreach (var (key, crmId, country, emirate) in new[] { ("crm:8001", 8001, "India", (string?)null), ("crm:8002", 8002, "United Arab Emirates", "Dubai") })
+            {
+                var edit = new CustomerProfileOverride(key, 1, crmId, null, null, null, admin, Now);
+                edit.SetDetails(null, null, null, null, "Anything", country, emirate, "Somewhere", null, admin, Now);
+                context.CustomerProfileOverrides.Add(edit);
+            }
+
+            context.SaveChanges();
+        }
+
+        Assert.Equal(new CustomerLocationCounts(1, 1, 0), await CountsAsync());   // nothing moved
+        var profile = await new CustomerDirectoryAppServiceFactory(this).ProfileAsync("crm:8002");
+        Assert.Equal("Dubai", profile.Details!.Emirate);                           // what the customer said is kept as stated...
+        Assert.Equal("United Arab Emirates", profile.Details.Country);             // ...and the phone-derived bucket is unaffected
+    }
+
+    /// <summary>Opens a profile through the real service on the SQLite schema.</summary>
+    private sealed class CustomerDirectoryAppServiceFactory(CustomerLocationSqliteTests owner)
+    {
+        public async Task<CustomerDirectoryProfileDto> ProfileAsync(string key)
+        {
+            using var context = owner._db.CreateContext();
+            var result = await owner.Service(context).GetProfileAsync(Guid.NewGuid(), CrossDepartment, key);
+            return Assert.IsType<CustomerDirectoryProfileDto>(result.Response);
+        }
+    }
+
+    [Fact]
     public async Task ConflictingNumbers_MakeTheCustomerUnknown_NeverCountedTwice()
     {
         using (var context = _db.CreateContext())
@@ -117,7 +190,7 @@ public sealed class CustomerLocationSqliteTests : IDisposable
             CrmCustomer(context, 10, "+971501234567");
             CrmCustomer(context, 10, "+447911123456");   // same customer, a UAE and a UK number: ambiguous
             CrmCustomer(context, 11, "+971501234567");
-            CrmCustomer(context, 11, "0501234567");      // an unplaceable number adds no evidence
+            CrmCustomer(context, 11, "0112345678");      // an unplaceable number adds no evidence
         }
 
         var counts = await CountsAsync();
@@ -145,7 +218,7 @@ public sealed class CustomerLocationSqliteTests : IDisposable
         {
             for (var i = 0; i < 7; i++) CrmCustomer(context, 100 + i, $"+97150123456{i}");
             for (var i = 0; i < 4; i++) CrmCustomer(context, 200 + i, $"+4479111234{50 + i}");
-            for (var i = 0; i < 3; i++) CrmCustomer(context, 300 + i, $"05012345{60 + i}");
+            for (var i = 0; i < 3; i++) CrmCustomer(context, 300 + i, $"01123456{60 + i}");   // national, not UAE-shaped: Unknown
             CrmCustomer(context, 400, null);
         }
 
@@ -241,6 +314,8 @@ public sealed class CustomerLocationSqliteTests : IDisposable
         [
             "+971501234567", "971501234567", "+971 50 123 4567", "+971-50-123-4567", "(+971) 50.123.4567", "00971501234567", "00 971 50 123 4567",
             "  +971501234567  ", "+971412345678", "+97141234567", "+97150123456", "+9715012345678", "0501234567", "501234567", "447911123456",
+            "041234567", "04 123 4567", "0097141234567", "97141234567", "021234567", "031234567", "061234567", "071234567", "091234567",
+            "+971 2 123 4567", "081234567", "0112345678", "+97181234567", "+971112345678", "00 971 4 123 4567",
             "+447911123456", "0044 7911 123456", "+14155552671", "+1 (415) 555-2671", "+919876543210", "+966501234567", "+971501234567 ext 12", "call me",
             "+0441234567", "+1234567", "+1234567890123456", "00", "+", "+12345678", "+123456789012345",
         ];

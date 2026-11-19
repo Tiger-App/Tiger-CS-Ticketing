@@ -4,6 +4,7 @@ using Microsoft.AspNetCore.Mvc.RazorPages;
 using TigerCS.Application.Modules.Collections.Dto;
 using TigerCS.Application.Modules.CrmDocuments.Dto;
 using TigerCS.Application.Modules.Ticketing.Dto;
+using TigerCS.Domain.Modules.IdentityAndAccess.Permissions;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Web.Models;
 using TigerCS.Web.Services;
@@ -31,8 +32,42 @@ public sealed class CustomerProfileModel(
     CustomerPaymentPanelLoader paymentPanelLoader,
     CustomerDocumentsApiClient documentsApiClient,
     CustomerDocumentsPanelLoader documentsPanelLoader,
-    CustomerContactApiClient? customerContactClient = null) : PageModel
+    CustomerContactApiClient? customerContactClient = null,
+    ViewerAccessService? viewerAccess = null,
+    ProjectCatalogApiClient? projectCatalogApiClient = null) : PageModel
 {
+    public const string HistoryTab = "history";
+    public const string UnitsTab = "units";
+    public const int HistoryPageSize = 25;
+
+    /// <summary>True when the viewer holds <c>Customers.Edit</c>: the Edit Customer button, the edit form and the property forms are shown.</summary>
+    public bool CanEditCustomer { get; private set; }
+
+    /// <summary>True when the viewer holds <c>Customers.ViewHistory</c>: the Change History tab is shown. The history holds personal data, so nobody else sees it, not even as an empty tab.</summary>
+    public bool CanViewHistory { get; private set; }
+
+    /// <summary>True when the page was opened with <c>?edit=1</c> (or an Edit failed): the Edit Customer form is open.</summary>
+    public bool EditingCustomer { get; private set; }
+
+    public bool HistoryTabActive { get; private set; }
+    public bool UnitsTabActive { get; private set; }
+    public int HistoryPage { get; private set; } = 1;
+    public CustomerChangeHistoryDto? History { get; private set; }
+
+    /// <summary>The known project names, offered as suggestions (the Api still validates what is entered).</summary>
+    public IReadOnlyList<string> ProjectOptions { get; private set; } = [];
+
+    /// <summary>A fresh id for each rendered form: a double submit or a retry carries the same one, so the change is recorded once.</summary>
+    public Guid NewOperationId { get; } = Guid.NewGuid();
+
+    /// <summary>The ticket the agent came from, recorded as the change's related ticket.</summary>
+    public long? RelatedTicketId => FromTicketId;
+
+    [TempData]
+    public string? EditNotice { get; set; }
+
+    [TempData]
+    public bool EditNoticeIsError { get; set; }
     public const string PaymentTab = "payment";
 
     /// <summary>
@@ -136,7 +171,7 @@ public sealed class CustomerProfileModel(
     public string NewTicketHref =>
         PrimaryPhone is { } phone ? $"/NewTicket?phoneNumber={Uri.EscapeDataString(phone)}" : "/NewTicket";
 
-    public async Task<IActionResult> OnGetAsync(string customerKey, long? fromTicket, string? tab, string? account, int? unit, CancellationToken cancellationToken)
+    public async Task<IActionResult> OnGetAsync(string customerKey, long? fromTicket, string? tab, string? account, int? unit, int? historyPage, CancellationToken cancellationToken)
     {
         CustomerKey = customerKey;
         Viewer = CurrentUser.FromPrincipal(User);
@@ -164,6 +199,25 @@ public sealed class CustomerProfileModel(
             // endpoint verifies the CRM record is this ticket's own customer).
             var crm = await ticketsApiClient.GetCustomerProfileAsync(Profile.LastTicketId, cancellationToken);
             CrmProfile = crm.IsSuccess ? crm.Value : null;
+        }
+
+        var access = viewerAccess is null ? null : await viewerAccess.GetAsync(cancellationToken);
+        CanEditCustomer = access?.HoldsEffective(Permissions.CustomersEdit, Viewer?.Roles ?? []) == true;
+        CanViewHistory = access?.HoldsEffective(Permissions.CustomersViewHistory, Viewer?.Roles ?? []) == true;
+        EditingCustomer = CanEditCustomer && Request.Query.ContainsKey("edit");
+        HistoryTabActive = CanViewHistory && string.Equals(tab, HistoryTab, StringComparison.OrdinalIgnoreCase);
+        UnitsTabActive = string.Equals(tab, UnitsTab, StringComparison.OrdinalIgnoreCase);
+        HistoryPage = historyPage is > 0 ? historyPage.Value : 1;
+        if (CanEditCustomer && projectCatalogApiClient is not null)
+        {
+            var projects = await projectCatalogApiClient.ListProjectsAsync(cancellationToken);
+            ProjectOptions = projects.IsSuccess && projects.Value is not null ? projects.Value.Select(p => p.Name).ToList() : [];
+        }
+
+        if (CanViewHistory)
+        {
+            var history = await customersApiClient.GetHistoryAsync(customerKey, HistoryPage, HistoryPageSize, cancellationToken);
+            History = history.IsSuccess ? history.Value : null;
         }
 
         PaymentTabActive = string.Equals(tab, PaymentTab, StringComparison.OrdinalIgnoreCase);
@@ -221,7 +275,7 @@ public sealed class CustomerProfileModel(
             return Fail("This customer has no phone number on record to save the details against.", StatusCodes.Status422UnprocessableEntity);
         }
 
-        var saved = await customerContactClient.SaveAsync(new SaveCustomerContactRequestDto(phone, name, email), cancellationToken);
+        var saved = await customerContactClient.SaveAsync(new SaveCustomerContactRequestDto(phone, name, email, customerKey, Source: CustomerChangeSources.Ui), cancellationToken);
         if (!saved.IsSuccess || saved.Value is null)
         {
             var message = saved.Outcome switch
@@ -242,6 +296,80 @@ public sealed class CustomerProfileModel(
         ContactNoticeIsError = false;
         return RedirectToPage(null, null, new { customerKey });
     }
+
+    /// <summary>
+    /// Edit Customer: name, mobile and landline numbers, additional numbers, e-mail, nationality, country, emirate, location and preferred
+    /// language. Saved in Tiger Ticketing only - nothing is sent to Tiger CRM, PACT or Tasleeh, and no ticket changes. The Api decides who
+    /// may, validates every value and audits each changed field; this relays the form and reports what happened. The form's operation id
+    /// makes a double submit record once.
+    /// </summary>
+    public async Task<IActionResult> OnPostEditCustomerAsync(
+        string customerKey, string? fullName, string? phoneNumber, string? landlineNumber, string? additionalPhones, string? email,
+        string? nationality, string? country, string? emirate, string? location, string? preferredLanguage, string? reason,
+        Guid? operationId, long? relatedTicketId, CancellationToken cancellationToken)
+    {
+        var extra = (additionalPhones ?? string.Empty)
+            .Split(['\n', '\r', ',', ';'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+        var result = await customersApiClient.UpdateProfileAsync(customerKey, new UpdateCustomerProfileRequestDto(
+            phoneNumber ?? string.Empty, null, null, fullName ?? string.Empty, email ?? string.Empty, landlineNumber ?? string.Empty, extra,
+            nationality ?? string.Empty, country ?? string.Empty, emirate ?? string.Empty, location ?? string.Empty, preferredLanguage ?? string.Empty,
+            reason, relatedTicketId, operationId, CustomerChangeSources.Ui), cancellationToken);
+
+        if (result.IsSuccess)
+        {
+            EditNotice = result.Value?.Changed == true ? "Customer updated." : "Nothing to change: those are the details already shown.";
+            EditNoticeIsError = false;
+            return RedirectToPage(null, null, new { customerKey, fromTicket = relatedTicketId });
+        }
+
+        EditNotice = FailureMessage(result.Outcome, result.Detail, "Check the details and try again.");
+        EditNoticeIsError = true;
+        return RedirectToPage(null, null, new { customerKey, edit = 1, fromTicket = relatedTicketId });
+    }
+
+    /// <summary>Adds a property / unit by hand, with the customer's relationship to it. Manual: never presented as verified ownership.</summary>
+    public async Task<IActionResult> OnPostAddPropertyAsync(
+        string customerKey, string? projectName, string? unitNumber, string? relationship, string? reason, Guid? operationId, long? relatedTicketId,
+        CancellationToken cancellationToken)
+    {
+        var result = await customersApiClient.AddPropertyAsync(
+            customerKey, new CustomerPropertyRequestDto(projectName, unitNumber, relationship, reason, relatedTicketId, operationId, CustomerChangeSources.Ui), cancellationToken);
+        return PropertyOutcome(customerKey, result.IsSuccess, result.Value?.Changed == true ? "Property added." : "That property is already recorded.", result.Outcome, result.Detail, relatedTicketId);
+    }
+
+    public async Task<IActionResult> OnPostUpdatePropertyAsync(
+        string customerKey, long associationId, string? projectName, string? unitNumber, string? relationship, Guid? operationId, long? relatedTicketId,
+        CancellationToken cancellationToken)
+    {
+        var result = await customersApiClient.UpdatePropertyAsync(
+            customerKey, associationId, new CustomerPropertyRequestDto(projectName, unitNumber, relationship, null, relatedTicketId, operationId, CustomerChangeSources.Ui), cancellationToken);
+        return PropertyOutcome(customerKey, result.IsSuccess, result.Value?.Changed == true ? "Property updated." : "Nothing to change.", result.Outcome, result.Detail, relatedTicketId);
+    }
+
+    /// <summary>Removes a manually added property. A verified unit has no such action: it cannot be removed here.</summary>
+    public async Task<IActionResult> OnPostRemovePropertyAsync(string customerKey, long associationId, Guid? operationId, long? relatedTicketId, CancellationToken cancellationToken)
+    {
+        var result = await customersApiClient.RemovePropertyAsync(customerKey, associationId, operationId ?? Guid.NewGuid(), cancellationToken);
+        return PropertyOutcome(customerKey, result.IsSuccess, "Property removed.", result.Outcome, result.Detail, relatedTicketId);
+    }
+
+    private IActionResult PropertyOutcome(string customerKey, bool ok, string successMessage, ApiOutcome outcome, string? detail, long? relatedTicketId)
+    {
+        EditNotice = ok ? successMessage : FailureMessage(outcome, detail, "The property could not be saved. Check the project, unit and relationship.");
+        EditNoticeIsError = !ok;
+        return RedirectToPage(null, null, new { customerKey, tab = UnitsTab, fromTicket = relatedTicketId });
+    }
+
+    private static string FailureMessage(ApiOutcome outcome, string? detail, string fallback) => outcome switch
+    {
+        ApiOutcome.Forbidden or ApiOutcome.Unauthorized => "You don't have permission to change this customer.",
+        ApiOutcome.NotFound => "This customer or property could not be found.",
+        ApiOutcome.Conflict => string.IsNullOrWhiteSpace(detail) ? "That conflicts with what is already recorded, or someone else changed this customer. Reload and try again." : detail,
+        ApiOutcome.ValidationError => string.IsNullOrWhiteSpace(detail) ? fallback : detail,
+        ApiOutcome.Unreachable or ApiOutcome.BadGateway or ApiOutcome.ServiceUnavailable => "Tiger Ticketing System could not reach the ticketing service.",
+        _ => fallback,
+    };
 
     /// <summary>
     /// The Documents tab's content alone, fetched by site.js when the tab is opened and again when the unit changes.

@@ -54,6 +54,8 @@ public sealed class QueueingEventProcessor(
     TicketCreationAppService ticketCreationAppService,
     CustomerSearchAppService customerSearchAppService,
     ICustomerContactDetailRepository contactDetailRepository,
+    ICustomerProfileOverrideRepository profileOverrides,
+    CustomerProfileAuditService profileAudit,
     DefaultClassificationService? defaultClassification,
     ITicketRepository ticketRepository,
     TicketAssignmentAppService assignmentAppService,
@@ -901,7 +903,24 @@ public sealed class QueueingEventProcessor(
         }
 
         var safeEmail = string.IsNullOrWhiteSpace(email) || email.Trim().Length > CustomerContactDetail.EmailMaxLength ? null : email.Trim();
-        await contactDetailRepository.AddAsync(new CustomerContactDetail(key, name.Trim(), safeEmail, serviceAccount, Now()), cancellationToken);
+        var now = Now();
+        await contactDetailRepository.AddAsync(new CustomerContactDetail(key, name.Trim(), safeEmail, serviceAccount, now), cancellationToken);
+
+        // Customer information created by the Queueing integration is audited like any other change - source Integration, actor the
+        // service account - in the same unit of work as the contact record itself.
+        var identity = CustomerIdentity.Phone(key);
+        var anchor = await profileOverrides.GetByKeyAsync(identity.Key, cancellationToken);
+        if (anchor is null)
+        {
+            anchor = new CustomerProfileOverride((identity.Key), (int)identity.Kind, null, null, null, identity.PhoneNumber, serviceAccount, now);
+            await profileOverrides.AddAsync(anchor, cancellationToken);
+        }
+
+        await profileAudit.RecordAsync(
+            anchor.CustomerProfileId, identity.Key,
+            new CustomerChangeContext(serviceAccount, CustomerChangeSources.Integration, "Created from a Queueing System event", null, Guid.NewGuid()),
+            [new CustomerFieldChange(CustomerProfileFields.FullName, null, name.Trim()), new CustomerFieldChange(CustomerProfileFields.Email, null, safeEmail)],
+            cancellationToken);
     }
 
     private static string BuildSummary(QueueingEventMessage message, RequestType? requestType, string? customerName)

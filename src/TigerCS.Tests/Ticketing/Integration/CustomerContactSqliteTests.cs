@@ -28,7 +28,10 @@ public sealed class CustomerContactSqliteTests : IDisposable
     public void Dispose() => _db.Dispose();
 
     private CustomerContactAppService ContactService(TigerCsDbContext context) =>
-        new(new CustomerContactDetailRepository(context), new TicketingUnitOfWork(context), _audit, new DashboardSqliteFixture.FixedTimeProvider(Now));
+        new(new CustomerContactDetailRepository(context), new TicketingUnitOfWork(context), _audit, new DashboardSqliteFixture.FixedTimeProvider(Now),
+            DirectoryService(context), new CustomerProfileOverrideRepository(context),
+            new CustomerProfileAuditService(
+                new CustomerProfileChangeRepository(context), new EmployeeRepository(context), _audit, new DashboardSqliteFixture.FixedTimeProvider(Now)));
 
     private CustomerDirectoryAppService DirectoryService(TigerCsDbContext context)
     {
@@ -74,7 +77,17 @@ public sealed class CustomerContactSqliteTests : IDisposable
         Assert.Equal("971501234567", row.PhoneKey);
         Assert.Equal("Aisha M. Rahman", row.Name);
         Assert.Equal("aisha@example.com", row.Email);
-        Assert.Equal(["CreateCustomerContact", "UpdateCustomerContact"], _audit.Written.Select(w => w.Action));
+        // The general trail keeps its contact entry and gains one summary per operation; the personal values go to the change history.
+        Assert.Equal(["CreateCustomerContact", "UpdateCustomerProfile", "UpdateCustomerContact", "UpdateCustomerProfile"], _audit.Written.Select(w => w.Action));
+
+        // Every actual change is its own history row, under the one customer (the phone's own identity here): the first save changes the
+        // name only (no e-mail was given), the second changes both - and nothing is recorded for a value that did not change.
+        var changes = context.CustomerProfileChanges.OrderBy(c => c.CustomerProfileChangeId).ToList();
+        Assert.Equal(
+            [("FullName", (string?)null, (string?)"Aisha Rahman"), ("FullName", "Aisha Rahman", "Aisha M. Rahman"), ("Email", null, "aisha@example.com")],
+            changes.Select(c => (c.FieldName, c.OldValue, c.NewValue)));
+        Assert.Single(changes.Select(c => c.CustomerProfileId).Distinct());
+        Assert.All(changes, c => Assert.Equal("phone:971501234567", c.CustomerKey));
     }
 
     [Theory]
