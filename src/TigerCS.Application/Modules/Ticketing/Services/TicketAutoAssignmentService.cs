@@ -288,7 +288,8 @@ public sealed class TicketAutoAssignmentService(
     /// </para>
     /// </summary>
     public async Task<bool> RouteExistingTicketToCallCenterAsync(
-        Ticket ticket, DateTime nowUtc, Guid correlationId, string reason, CancellationToken cancellationToken = default, string? requiredRole = null)
+        Ticket ticket, DateTime nowUtc, Guid correlationId, string reason, CancellationToken cancellationToken = default, string? requiredRole = null,
+        bool dealToAgent = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
 
@@ -352,8 +353,14 @@ public sealed class TicketAutoAssignmentService(
                 cancellationToken);
         }
 
-        // No Round Robin: the ticket waits in the Call Center queue (claimable through Take Ownership) with its owner unchanged. A person gets it only
-        // when they actually accept the interaction, answer it, or are assigned by someone authorised.
+        // Genesys-handled tickets (dealToAgent = false): NO Round Robin - the ticket waits in the Call Center queue (claimable through Take Ownership) with its
+        // owner unchanged; a person gets it only when they actually accept the interaction, answer it, or are assigned by someone authorised.
+        // Tickets entered by hand / an integration (dealToAgent = true, the reconciler's non-Genesys action) keep the existing Call Center intake rotation.
+        if (dealToAgent)
+        {
+            await AssignCallCenterIntakeAsync(ticket, nowUtc, correlationId, cancellationToken, requiredRole);
+        }
+
         if (aiOwner is { } ai)
         {
             await RecordQueueRoutingHistoryAsync(ticket, fromDepartmentId, ai, nowUtc, reason, cancellationToken);

@@ -197,7 +197,7 @@ public sealed class CallCenterUnassignedWorkReconciler(
             Guid? assigned = null;
             var outcome = ReconcileOutcome.NoEligibleAgent;
 
-            if (classification.Action == UnassignedTicketAction.RouteToCallCenterQueue && evidence.AnsweringEmployeeId is null)
+            if (classification.Action == UnassignedTicketAction.RouteToCallCenterQueue && evidence.AnsweringEmployeeId is null && !evidence.PhonePickupByUnmappedAgent)
             {
                 // Genesys-handled and needs a person: into the Call Center queue (an explicit workflow department is kept), owner unchanged, nobody chosen.
                 await autoAssignment.RouteExistingTicketToCallCenterAsync(
@@ -251,7 +251,8 @@ public sealed class CallCenterUnassignedWorkReconciler(
                 if (ticket.CurrentDepartmentId != callCenter.DepartmentId)
                 {
                     await autoAssignment.RouteExistingTicketToCallCenterAsync(
-                        ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to Call Center", cancellationToken, requiredRole);
+                        ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to Call Center", cancellationToken, requiredRole,
+                        dealToAgent: classification.Action == UnassignedTicketAction.RoundRobinCallCenter);
                 }
                 else
                 {
