@@ -38,6 +38,7 @@ public sealed class DashboardSqliteFixture : IDisposable
             builder.Entity<Ticket>().Property(t => t.RowVersion).HasDefaultValueSql("X'0000000000000000'");
             builder.Entity<TicketAgentHandoff>().Property(h => h.RowVersion).HasDefaultValueSql("X'0000000000000000'");
             builder.Entity<CustomerContactDetail>().Property(c => c.RowVersion).HasDefaultValueSql("X'0000000000000000'");
+            builder.Entity<CustomerPropertyAssociation>().Property(c => c.RowVersion).HasDefaultValueSql("X'0000000000000000'");
             builder.Entity<TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink>().Property(l => l.RowVersion).HasDefaultValueSql("X'0000000000000000'");
         }
     }

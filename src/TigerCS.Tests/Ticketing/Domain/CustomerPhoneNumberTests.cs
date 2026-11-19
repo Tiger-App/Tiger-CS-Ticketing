@@ -216,12 +216,64 @@ public sealed class CustomerPhoneNumberTests
         Assert.True(CustomerPhoneNumber.AreSameNumber(expected, CustomerPhoneNumber.FromTelephonyAddress(address)));
     }
 
-    /// <summary>A national-format number keeps its digits — its country is not stated, so none is invented.</summary>
+    /// <summary>A national number that is not unmistakably UAE keeps its digits — its country is not stated, so none is invented.</summary>
     [Fact]
     public void FromTelephonyAddress_NationalFormat_IsNotGivenACountry()
     {
-        Assert.Equal("0501234567", CustomerPhoneNumber.FromTelephonyAddress("tel:0501234567"));
-        Assert.Equal("0501234567", CustomerPhoneNumber.FromTelephonyAddress("050 123 4567"));
+        Assert.Equal("0112345678", CustomerPhoneNumber.FromTelephonyAddress("tel:0112345678"));
+        Assert.Equal("081234567", CustomerPhoneNumber.FromTelephonyAddress("08 123 4567"));
+    }
+
+    /// <summary>A UAE mobile or landline in national form is unmistakably UAE and is written internationally, like every other caller.</summary>
+    [Theory]
+    [InlineData("tel:0501234567", "+971501234567")]
+    [InlineData("050 123 4567", "+971501234567")]
+    [InlineData("tel:041234567", "+97141234567")]
+    [InlineData("04 123 4567", "+97141234567")]
+    [InlineData("0097141234567", "+97141234567")]
+    [InlineData("sip:+97141234567@host;user=phone", "+97141234567")]
+    public void FromTelephonyAddress_AUaeNationalNumber_IsWrittenInternationally(string address, string expected) =>
+        Assert.Equal(expected, CustomerPhoneNumber.FromTelephonyAddress(address));
+
+    /// <summary>The three spellings of one UAE number are the same number: one match key, found by either stored key.</summary>
+    [Theory]
+    [InlineData("041234567", "+97141234567", "0097141234567", "97141234567")]
+    [InlineData("0501234567", "+971501234567", "00971501234567", "971 50 123 4567")]
+    [InlineData("021234567", "+97121234567", "0097121234567", "02-123-4567")]
+    public void MatchKey_GivesEveryWrittenFormOfAUaeNumberTheSameKey(params string[] spellings)
+    {
+        var key = CustomerPhoneNumber.MatchKey(spellings[0]);
+        Assert.StartsWith("971", key);
+        foreach (var spelling in spellings)
+        {
+            Assert.Equal(key, CustomerPhoneNumber.MatchKey(spelling));
+            Assert.True(CustomerPhoneNumber.AreSameNumber(spellings[0], spelling));
+            Assert.Contains(CustomerPhoneNumber.Normalize(spelling), CustomerPhoneNumber.LookupKeys(spelling));   // the stored key is always tried
+            Assert.Contains(key, CustomerPhoneNumber.LookupKeys(spelling));
+        }
+    }
+
+    /// <summary>No guessing: a foreign, malformed or country-less number is never rewritten, so different customers are never merged.</summary>
+    [Theory]
+    [InlineData("0112345678")]
+    [InlineData("081234567")]
+    [InlineData("501234567")]
+    [InlineData("41234567")]
+    [InlineData("+447911123456")]
+    [InlineData("+971412345678")]
+    [InlineData("0412345678")]
+    public void MatchKey_LeavesAnythingNotUnmistakablyUaeAsItsDigits(string phone)
+    {
+        Assert.Equal(CustomerPhoneNumber.Normalize(phone), CustomerPhoneNumber.MatchKey(phone));
+        Assert.Single(CustomerPhoneNumber.LookupKeys(phone));
+    }
+
+    [Fact]
+    public void MatchKey_DoesNotMergeAUaeLandlineWithADifferentUaeNumber()
+    {
+        Assert.False(CustomerPhoneNumber.AreSameNumber("041234567", "+97141234568"));
+        Assert.False(CustomerPhoneNumber.AreSameNumber("041234567", "+97131234567"));      // same digits, other emirate's area code
+        Assert.False(CustomerPhoneNumber.AreSameNumber("041234567", "+971541234567"));     // a mobile that merely contains the landline digits
     }
 
     /// <summary>A withheld caller id is no number at all — never an identity to look up.</summary>

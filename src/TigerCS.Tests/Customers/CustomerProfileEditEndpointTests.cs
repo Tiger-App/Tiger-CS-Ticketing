@@ -210,7 +210,9 @@ public class CustomerProfileEditEndpointTests
         var row = await RowAsync(manager);
         Assert.False(row.IsEdited);
         Assert.Equal("Tiger Bay Towers", row.ProjectName);
-        Assert.Empty(await InDbAsync(factory, db => db.CustomerProfileOverrides));   // the row is deleted, not left empty
+        // The row is kept, empty: it anchors the customer's stable identifier and therefore their change history.
+        var anchor = Assert.Single(await InDbAsync(factory, db => db.CustomerProfileOverrides));
+        Assert.True(anchor.IsEmpty);
     }
 
     [Fact]
@@ -245,7 +247,7 @@ public class CustomerProfileEditEndpointTests
     // ----------------------------------------------------------------------------------------------- phone validation
 
     [Theory]
-    [InlineData("0501234567")]
+    [InlineData("0112345678")]      // national, not a UAE mobile / landline: no country is guessed
     [InlineData("+971 12345")]
     [InlineData("not a number")]
     [InlineData("+0 1234567890")]
@@ -370,26 +372,35 @@ public class CustomerProfileEditEndpointTests
 
         await EditOkAsync(manager, "+971501234567", "Zebra Towers", "ZT-9");
 
+        // The general audit trail carries one summary row per operation - the customer, who, when and WHICH fields, never their values.
         var entry = Assert.Single(await InDbAsync(factory, db => db.AuditEntries.Where(a => a.Action == AuditAction)));
         Assert.Equal(Key, entry.EntityId);                       // the customer
         Assert.Equal("Customer", entry.EntityType);
         Assert.Equal(managerId, entry.ActorEmployeeId);          // changed by
         Assert.InRange(entry.OccurredAtUtc, started, DateTime.UtcNow.AddMinutes(1));   // changed at
+        Assert.Null(entry.BeforeValue);
+        Assert.Equal("MobileNumber,ProjectName,UnitNumber", entry.AfterValue);
+        Assert.DoesNotContain("+971501234567", entry.AfterValue);   // personal values live only in the permission-protected history
 
-        var before = JsonSerializer.Deserialize<JsonElement>(entry.BeforeValue!);                // old value: what the directory showed
-        Assert.Equal(JsonValueKind.Null, before.GetProperty("PhoneNumber").ValueKind);
-        Assert.Equal("Tiger Bay Towers", before.GetProperty("ProjectName").GetString());
-        Assert.Equal("1105", before.GetProperty("UnitNumber").GetString());
-        var after = JsonSerializer.Deserialize<JsonElement>(entry.AfterValue!);                  // new value
-        Assert.Equal("+971501234567", after.GetProperty("PhoneNumber").GetString());
-        Assert.Equal("Zebra Towers", after.GetProperty("ProjectName").GetString());
-        Assert.Equal("ZT-9", after.GetProperty("UnitNumber").GetString());
+        // The values themselves are in the customer's change history: one row per changed field, old and new, who and when.
+        var rows = await InDbAsync(factory, db => db.CustomerProfileChanges.OrderBy(c => c.FieldName));
+        Assert.Equal(["MobileNumber", "ProjectName", "UnitNumber"], rows.Select(r => r.FieldName));
+        var mobile = rows.Single(r => r.FieldName == "MobileNumber");
+        Assert.Null(mobile.OldValue);
+        Assert.Equal("+971501234567", mobile.NewValue);
+        Assert.Equal("Tiger Bay Towers", rows.Single(r => r.FieldName == "ProjectName").OldValue);
+        Assert.Equal("Zebra Towers", rows.Single(r => r.FieldName == "ProjectName").NewValue);
+        Assert.Equal("1105", rows.Single(r => r.FieldName == "UnitNumber").OldValue);
+        Assert.Equal("ZT-9", rows.Single(r => r.FieldName == "UnitNumber").NewValue);
+        Assert.All(rows, r => Assert.Equal(managerId, r.ModifiedByEmployeeId));
+        Assert.Single(rows.Select(r => r.CorrelationId).Distinct());   // one operation, one correlation id
+        Assert.Single(rows.Select(r => r.CustomerProfileId).Distinct());
 
         // A second change records the first change's result as its old value.
         await EditOkAsync(manager, "+442079460958", "Zebra Towers", "ZT-9");
-        var second = (await InDbAsync(factory, db => db.AuditEntries.Where(a => a.Action == AuditAction).OrderBy(a => a.AuditEntryId))).Last();
-        Assert.Equal("+971501234567", JsonSerializer.Deserialize<JsonElement>(second.BeforeValue!).GetProperty("PhoneNumber").GetString());
-        Assert.Equal("+442079460958", JsonSerializer.Deserialize<JsonElement>(second.AfterValue!).GetProperty("PhoneNumber").GetString());
+        var second = (await InDbAsync(factory, db => db.CustomerProfileChanges.Where(c => c.FieldName == "MobileNumber").OrderBy(c => c.CustomerProfileChangeId))).Last();
+        Assert.Equal("+971501234567", second.OldValue);
+        Assert.Equal("+442079460958", second.NewValue);
     }
 
     [Fact]

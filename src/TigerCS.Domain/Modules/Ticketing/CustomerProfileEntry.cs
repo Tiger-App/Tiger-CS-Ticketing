@@ -11,8 +11,8 @@ public static class CustomerProfileEntry
     /// <para>
     /// The separators <see cref="CustomerPhoneNumber.SeparatorCharacters"/> are dropped; anything else that is not a digit (a letter,
     /// "ext") is refused. The number must state its country: a leading "+" or "00" ("00971..." becomes "+971..."), or "971" followed
-    /// by the nine digits of a UAE number. No country is ever guessed, so a national form ("0501234567") is refused with a message that
-    /// says how to write it, exactly as <see cref="CustomerPhoneLocation"/> places such a number in Unknown. Validity itself is
+    /// by a UAE mobile or landline. A UAE mobile or landline written locally ("0501234567", "041234567") is unmistakably UAE and is
+    /// normalized to "+971…". Any other national form has no country and is refused with a message that says how to write it. Validity itself is
     /// delegated to <see cref="CustomerPhoneLocation.Classify"/> (8-15 digits, not starting 0, a UAE number is "971" + 9 digits), so what is
     /// accepted here is exactly what the directory can place.
     /// </para>
@@ -52,14 +52,18 @@ public static class CustomerProfileEntry
         {
             digits = stripped[2..];
         }
-        else if (stripped.StartsWith(CustomerPhoneLocation.UaeCountryCode, StringComparison.Ordinal)
-                 && stripped.Length == CustomerPhoneLocation.UaeCountryCode.Length + CustomerPhoneLocation.UaeNationalNumberLength)
+        else if (UaePhoneNumbers.IsInternationalUae(stripped))
         {
             digits = stripped;
         }
+        else if (UaePhoneNumbers.NationalSignificantFromLocal(stripped) is { } uaeNational)
+        {
+            // A UAE mobile (050 123 4567) or landline (04 123 4567) written locally is unmistakably UAE.
+            digits = UaePhoneNumbers.CountryCode + uaeNational;
+        }
         else
         {
-            error = "Write the number with its country code, for example +971 50 123 4567. A number without one is not guessed.";
+            error = "Write the number with its country code, for example +971 50 123 4567 or +971 4 123 4567. A UAE number may also be written locally (050 123 4567, 04 123 4567); any other number without a country code is not guessed.";
             return false;
         }
 
@@ -67,7 +71,7 @@ public static class CustomerProfileEntry
         if (CustomerPhoneLocation.Classify(candidate) == CustomerLocation.Unknown)
         {
             error = digits.StartsWith(CustomerPhoneLocation.UaeCountryCode, StringComparison.Ordinal)
-                ? "A UAE number is +971 followed by 9 digits."
+                ? "A UAE number is +971 followed by a 9-digit mobile (5…) or an 8-digit landline (area code 2, 3, 4, 6, 7 or 9)."
                 : $"A phone number has {CustomerPhoneLocation.MinInternationalDigits} to {CustomerPhoneLocation.MaxInternationalDigits} digits including its country code, and the country code does not start with 0.";
             return false;
         }

@@ -14,7 +14,22 @@ public sealed class CustomerPhoneLocationTests
     [InlineData("00971501234567")]
     [InlineData("00 971 50 123 4567")]
     [InlineData("  +971501234567  ")]
-    [InlineData("+971412345678")]       // a landline: 971 + 9 digits
+    // UAE landlines are 971 + 8 digits (area code 2 / 3 / 4 / 6 / 7 / 9 + 7 digits), written locally, internationally or with 00.
+    [InlineData("+97141234567")]
+    [InlineData("97141234567")]
+    [InlineData("0097141234567")]
+    [InlineData("04 123 4567")]
+    [InlineData("041234567")]
+    [InlineData("021234567")]
+    [InlineData("031234567")]
+    [InlineData("061234567")]
+    [InlineData("071234567")]
+    [InlineData("091234567")]
+    [InlineData("+971 2 123 4567")]
+    [InlineData("+971-9-123-4567")]
+    // UAE mobiles written locally are unmistakably UAE too.
+    [InlineData("0501234567")]
+    [InlineData("050 123 4567")]
     public void WithinUae_ForAValidUaeNumber_InAnyWrittenForm(string phone) =>
         Assert.Equal(CustomerLocation.WithinUae, CustomerPhoneLocation.Classify(phone));
 
@@ -34,10 +49,16 @@ public sealed class CustomerPhoneLocationTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("+")]
-    [InlineData("0501234567")]          // UAE national form: no country code stated, none is guessed
-    [InlineData("501234567")]
+    [InlineData("501234567")]           // no leading 0 and no country code: not guessed
+    [InlineData("41234567")]            // a bare 8-digit number could be anywhere
+    [InlineData("0112345678")]          // national form that is not a UAE mobile or landline
+    [InlineData("081234567")]           // 08 is not a UAE area code
+    [InlineData("051234567")]           // a UAE mobile needs 9 digits after the 0
+    [InlineData("0412345678")]          // a UAE landline needs 8 digits after the 0
+    [InlineData("+0971501234567")]
+    [InlineData("+971412345678")]       // 971 + 9 digits starting 4: neither a mobile (5…) nor a landline (8 digits)
+    [InlineData("+971112345678")]       // area digit 1 does not exist
     [InlineData("447911123456")]        // a foreign number with no '+'/'00' marker is indistinguishable from a national number
-    [InlineData("+97141234567")]        // 971 + 8 digits
     [InlineData("+97150123456")]        // 971 + 8 digits: an invalid UAE number, not "outside"
     [InlineData("+9715012345678")]      // 971 + 10 digits
     [InlineData("+971501234567 ext 12")] // letters: invalid
@@ -69,11 +90,11 @@ public sealed class CustomerPhoneLocationTests
     [InlineData("00", CustomerPhoneLocationReason.InternationalWrongLength)]
     [InlineData("+1234567890123456", CustomerPhoneLocationReason.InternationalWrongLength)]
     [InlineData("+0441234567", CustomerPhoneLocationReason.InternationalLeadingZero)]
-    [InlineData("+97141234567", CustomerPhoneLocationReason.UaeWrongLength)]
+    [InlineData("+971412345678", CustomerPhoneLocationReason.UaeWrongLength)]
+    [InlineData("+97181234567", CustomerPhoneLocationReason.UaeWrongLength)]
     [InlineData("00971501234", CustomerPhoneLocationReason.UaeWrongLength)]
     [InlineData("97150123", CustomerPhoneLocationReason.UaeWrongLength)]
-    [InlineData("0501234567", CustomerPhoneLocationReason.UaeLocalFormat)]      // UAE mobile, national form
-    [InlineData("04 123 4567", CustomerPhoneLocationReason.UaeLocalFormat)]     // UAE landline (Dubai), national form
+    [InlineData("081234567", CustomerPhoneLocationReason.NationalFormatNoCountryCode)]
     [InlineData("0112345678", CustomerPhoneLocationReason.NationalFormatNoCountryCode)]
     [InlineData("501234567", CustomerPhoneLocationReason.NoCountryCode)]
     [InlineData("447911123456", CustomerPhoneLocationReason.NoCountryCode)]

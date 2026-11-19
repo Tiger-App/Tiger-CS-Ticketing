@@ -101,23 +101,25 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         // AddTicketAssignmentSupersededAt (one nullable datetime2 column on TicketAssignments: when an assignment ended, so SLA reporting can tell who held a ticket at a past moment) is the newest and is deployed by its own script.
         // AddQueueingIntegration (the Queueing System receiving API: origin columns on Tickets plus the event inbox, per-ticket state and mapping tables) was added after that and is deployed by its own script.
         // AddCustomerProfileOverrides (one new table: the phone, project and unit an authorised user corrected for a Customers-directory customer) is the newest and is deployed by its own script.
-        // AddTicketAiAgentOwner (one nullable column on Tickets: the AI Agent as the ticket's actual assigned owner) is the newest and is deployed by its own script.
-        Assert.Equal("20261118124858_AddTicketAiAgentOwner", migrations[^1]);
-        Assert.Equal("20261118120000_AddCustomerProfileOverrides", migrations[^2]);
-        Assert.Equal("20261117101035_AddQueueingIntegration", migrations[^3]);
-        Assert.Equal("20261112071745_AddTicketAssignmentSupersededAt", migrations[^4]);
-        Assert.Equal("20261112065853_AddGenesysAssignmentHistorySource", migrations[^5]);
-        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^6]);
-        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^7]);
-        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^8]);
-        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^9]);
-        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^10]);
-        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^11]);
-        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^12]);
-        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^13]);
-        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^14]);
-        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^15]);
-        Assert.Equal(FourPendingMigrations, migrations.SkipLast(15).TakeLast(4));
+        // AddTicketAiAgentOwner (one nullable column on Tickets: the AI Agent as the ticket's actual assigned owner) was added after that and is deployed by its own script.
+        // AddCustomerProfileAuditAndProperties (the append-only CustomerProfileChanges history, manual CustomerPropertyAssociations and the profile detail columns on CustomerProfileOverrides) is the newest and is deployed by its own script.
+        Assert.Equal("20261119081103_AddCustomerProfileAuditAndProperties", migrations[^1]);
+        Assert.Equal("20261118124858_AddTicketAiAgentOwner", migrations[^2]);
+        Assert.Equal("20261118120000_AddCustomerProfileOverrides", migrations[^3]);
+        Assert.Equal("20261117101035_AddQueueingIntegration", migrations[^4]);
+        Assert.Equal("20261112071745_AddTicketAssignmentSupersededAt", migrations[^5]);
+        Assert.Equal("20261112065853_AddGenesysAssignmentHistorySource", migrations[^6]);
+        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^7]);
+        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^8]);
+        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^9]);
+        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^10]);
+        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^11]);
+        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^12]);
+        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^13]);
+        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^14]);
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^15]);
+        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^16]);
+        Assert.Equal(FourPendingMigrations, migrations.SkipLast(16).TakeLast(4));
     }
 
     [Fact]

@@ -156,7 +156,7 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
             CrmCustomer(context, 1, "971501234567", inRange.AddHours(1));
             CrmCustomer(context, 1, "+971 50 123 4567", inRange.AddHours(2));
             CrmCustomer(context, 2, "+447911123456", inRange);       // outside
-            CrmCustomer(context, 3, "0501234567", inRange);          // national form: unknown
+            CrmCustomer(context, 3, "0112345678", inRange);          // a national number that is not UAE-shaped: unknown
             CrmCustomer(context, 4, "+971501234568", inRange);       // UAE and UK number on one customer: ambiguous -> unknown
             CrmCustomer(context, 4, "+447911123457", inRange);
             PhoneCustomer(context, "+971521234567", inRange);        // phone-identified customer, two spellings: ONE customer
@@ -244,6 +244,9 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
             "+447911123456", "0044 7911 123456", "+14155552671", "+1 (415) 555-2671", "+919876543210", "+966501234567", "+971501234567 ext 12", "call me",
             "+0441234567", "+1234567", "+1234567890123456", "00", "+", "+12345678", "+123456789012345", "+00971501234567", "000971501234567",
             "+٩٧١٥٠١٢٣٤٥٦٧", "+971501234567x", "++971501234567", "+971/50/123/4567",
+            // UAE landlines (971 + 8 digits) and national UAE forms
+            "041234567", "04 123 4567", "0097141234567", "97141234567", "021234567", "031234567", "061234567", "071234567", "091234567",
+            "+971 2 123 4567", "081234567", "0112345678", "+97181234567", "+971112345678", "00 971 4 123 4567", "+0971501234567",
         ];
 
         using (var context = CreateContext())
@@ -273,7 +276,7 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
         CreateDatabase();
         string?[] unknownPhones =
         [
-            null, "0501234567", "05 0123 4567", "04 123 4567", "501234567", "447911123456", "+97141234567", "00971501234", "+1234567",
+            null, "0812345678", "08 1234 5678", "081234567", "501234567", "447911123456", "+971412345678", "00971501234", "+1234567",
             "+0441234567", "call me", "0112345678",
         ];
         using (var context = CreateContext())
@@ -294,7 +297,7 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
         Assert.Equal(breakdown.Total, breakdown.Reasons.Sum(r => r.Count));
         Assert.Contains(breakdown.Reasons, r => r.Reason == nameof(CustomerPhoneLocationReason.ConflictingCountries) && r.Count == 1);
         Assert.Contains(breakdown.Reasons, r => r.Reason == nameof(CustomerPhoneLocationReason.Missing) && r.Count == 1);
-        Assert.Contains(breakdown.Reasons, r => r.Reason == nameof(CustomerPhoneLocationReason.UaeLocalFormat) && r.Count == 3);
+        Assert.Contains(breakdown.Reasons, r => r.Reason == nameof(CustomerPhoneLocationReason.NationalFormatNoCountryCode) && r.Count == 4);
 
         var list = await ListAsync(new CustomerDirectoryListRequestDto(Location: "unknown"));
         Assert.Equal(counts.Unknown, list.TotalCount);
@@ -456,7 +459,7 @@ public sealed class CustomerLocationSqlServerTests : IDisposable
         {
             for (var i = 0; i < 3; i++) CrmCustomer(context, 100 + i, $"+97150123456{i}", inWindow);        // Within UAE
             for (var i = 0; i < 2; i++) CrmCustomer(context, 200 + i, $"+4479111234{50 + i}", inWindow);     // Outside UAE
-            CrmCustomer(context, 300, "0501234567", inWindow);                                                // Unknown
+            CrmCustomer(context, 300, "0112345678", inWindow);                                                // Unknown
         }
 
         using var factory = new TigerCsApiFactory { SqlServerConnectionString = ConnectionString };

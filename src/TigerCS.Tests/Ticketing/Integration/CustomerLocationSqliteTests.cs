@@ -92,7 +92,7 @@ public sealed class CustomerLocationSqliteTests : IDisposable
             CrmCustomer(context, 1, "+971 50 123 4567");
             CrmCustomer(context, 2, "+447911123456");        // outside
             CrmCustomer(context, 3, "+14155552671");         // outside
-            CrmCustomer(context, 4, "0501234567");           // national form: unknown
+            CrmCustomer(context, 4, "0112345678");           // a national number that is not a UAE mobile / landline: unknown
             CrmCustomer(context, 5, null);                   // no phone: unknown
             PhoneCustomer(context, "+971521234567");         // phone-identified UAE customer
             PhoneCustomer(context, "971521234567");          // the SAME customer, written differently
@@ -117,7 +117,7 @@ public sealed class CustomerLocationSqliteTests : IDisposable
             CrmCustomer(context, 10, "+971501234567");
             CrmCustomer(context, 10, "+447911123456");   // same customer, a UAE and a UK number: ambiguous
             CrmCustomer(context, 11, "+971501234567");
-            CrmCustomer(context, 11, "0501234567");      // an unplaceable number adds no evidence
+            CrmCustomer(context, 11, "0112345678");      // an unplaceable number adds no evidence
         }
 
         var counts = await CountsAsync();
@@ -145,7 +145,7 @@ public sealed class CustomerLocationSqliteTests : IDisposable
         {
             for (var i = 0; i < 7; i++) CrmCustomer(context, 100 + i, $"+97150123456{i}");
             for (var i = 0; i < 4; i++) CrmCustomer(context, 200 + i, $"+4479111234{50 + i}");
-            for (var i = 0; i < 3; i++) CrmCustomer(context, 300 + i, $"05012345{60 + i}");
+            for (var i = 0; i < 3; i++) CrmCustomer(context, 300 + i, $"01123456{60 + i}");   // national, not UAE-shaped: Unknown
             CrmCustomer(context, 400, null);
         }
 
@@ -241,6 +241,8 @@ public sealed class CustomerLocationSqliteTests : IDisposable
         [
             "+971501234567", "971501234567", "+971 50 123 4567", "+971-50-123-4567", "(+971) 50.123.4567", "00971501234567", "00 971 50 123 4567",
             "  +971501234567  ", "+971412345678", "+97141234567", "+97150123456", "+9715012345678", "0501234567", "501234567", "447911123456",
+            "041234567", "04 123 4567", "0097141234567", "97141234567", "021234567", "031234567", "061234567", "071234567", "091234567",
+            "+971 2 123 4567", "081234567", "0112345678", "+97181234567", "+971112345678", "00 971 4 123 4567",
             "+447911123456", "0044 7911 123456", "+14155552671", "+1 (415) 555-2671", "+919876543210", "+966501234567", "+971501234567 ext 12", "call me",
             "+0441234567", "+1234567", "+1234567890123456", "00", "+", "+12345678", "+123456789012345",
         ];
