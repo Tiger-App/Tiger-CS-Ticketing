@@ -2,7 +2,7 @@
 ================================================================================
  Verify_TigerCS_PROD_AllMigrations_ReadOnly.sql   (READ-ONLY - SELECT only)
  Database : TigerCS_Ticketing_Prod
- Lists which of the 55 EF migrations in this repository are NOT recorded in
+ Lists which of the 56 EF migrations in this repository are NOT recorded in
  dbo.__EFMigrationsHistory (result 1), history rows the repo does not know (2),
  and whether every table / column added by the recent migrations exists (3).
  Result 3 catches the case where history says "applied" but the object is missing.
@@ -33,6 +33,7 @@ INSERT @Repo (MigrationId) VALUES
     (N'20260909084839_AddChannels'),
     (N'20260910080219_AddGenesysIntegration'),
     (N'20260911105154_AddGenesysAgentMappingAndInteractionOwnership'),
+    (N'20260912110119_AddExternalCustomerSnapshotToTickets'),
     (N'20260921133507_AddAgentHandoffTriggerAndConcurrency'),
     (N'20260928132618_AddGenesysScreenPopLaunches'),
     (N'20261005072511_AddCollectionsReminders'),
