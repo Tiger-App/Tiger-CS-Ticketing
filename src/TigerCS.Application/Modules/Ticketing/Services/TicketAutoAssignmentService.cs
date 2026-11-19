@@ -374,7 +374,7 @@ public sealed class TicketAutoAssignmentService(
         || (ticket.CurrentDepartmentId != ticket.OriginatingDepartmentId && ticket.CurrentDepartmentId != callCenterDepartmentId);
 
     /// <summary>History row for a system move into the Call Center queue of a ticket the AI Agent keeps: previous and new owner are the AI Agent, the department changes.</summary>
-    private async Task RecordQueueRoutingHistoryAsync(
+    public async Task RecordQueueRoutingHistoryAsync(
         Ticket ticket, int fromDepartmentId, Guid aiOwner, DateTime nowUtc, string reason, CancellationToken cancellationToken)
     {
         if (assignmentHistoryRepository is null)

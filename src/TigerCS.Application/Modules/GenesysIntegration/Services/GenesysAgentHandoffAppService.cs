@@ -171,7 +171,15 @@ public sealed class GenesysAgentHandoffAppService(
         if (callCenter is not null)
         {
             // Queue routing of an AI-handled ticket: the AI Agent stays the recorded owner until a person actually accepts (see below).
-            ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: ticket.AiAgentOwnerEmployeeId is not null);
+            var aiOwnerBefore = ticket.AiAgentOwnerEmployeeId;
+            ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: aiOwnerBefore is not null);
+            if (aiOwnerBefore is { } aiOwner && autoAssignmentService is not null)
+            {
+                // Assignment History: the department changed, ownership did not (the AI Agent keeps the ticket until a person accepts).
+                await autoAssignmentService.RecordQueueRoutingHistoryAsync(
+                    ticket, routedFromDepartmentId, aiOwner, now,
+                    "a human agent was requested", cancellationToken);
+            }
         }
 
         // The ticket's CURRENT department, not its originating one: work
