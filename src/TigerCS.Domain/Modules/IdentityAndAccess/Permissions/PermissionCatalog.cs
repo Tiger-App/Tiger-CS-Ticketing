@@ -107,6 +107,9 @@ public static class Permissions
     /// <summary>Edit a customer's phone number, project and unit from the Customers directory. Enforced on its own terms: System Administrator and CS Manager, or an explicit grant.</summary>
     public const string CustomersEdit = "Customers.Edit";
 
+    /// <summary>View a customer's change history (who changed which personal detail, from what to what). Personal data, so enforced on its own terms: System Administrator and CS Manager, or an explicit grant.</summary>
+    public const string CustomersViewHistory = "Customers.ViewHistory";
+
     /// <summary>Module gate: may the employee use the Collections module (its pages and module-only endpoints) at all. Separate from the granular View / Edit / Send and Campaigns permissions, which still decide what they may do inside it.</summary>
     public const string CollectionsAccess = "Collections.Access";
     public const string CollectionsView = "Collections.View";
@@ -154,6 +157,9 @@ public static class PermissionCatalog
         new(Permissions.CustomersSend, PermissionModules.Customers, PermissionAction.Send, "Send customer documents", "Send customer documents by e-mail / SMS."),
         new(Permissions.CustomersEdit, PermissionModules.Customers, PermissionAction.Edit, "Edit customers",
             "Correct a customer's phone number, project and unit from the Customers directory. System Administrators and CS Managers have it; anyone else needs it granted. Local to Tiger Ticketing: nothing is sent to Tiger CRM, PACT or Tasleeh and no ticket is changed.",
+            EnforceEffective: true),
+        new(Permissions.CustomersViewHistory, PermissionModules.Customers, PermissionAction.View, "View customer change history",
+            "See who changed a customer's name, phone numbers, e-mail, details and properties, and what they were before. The history holds personal data, so System Administrators and CS Managers have it; anyone else needs it granted. Read-only: nobody can edit or delete a history entry.",
             EnforceEffective: true),
 
         new(Permissions.CollectionsAccess, PermissionModules.Collections, PermissionAction.View, "Access Collections module",

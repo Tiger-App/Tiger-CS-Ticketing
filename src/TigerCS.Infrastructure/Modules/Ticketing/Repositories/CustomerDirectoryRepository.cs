@@ -2,6 +2,7 @@
 using Microsoft.EntityFrameworkCore;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
+using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Infrastructure.Persistence;
 
@@ -229,7 +230,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
     /// <item>Anything else (the EF InMemory provider the API endpoint tests run on): <see cref="CustomerPhoneLocation.Classify"/> itself, which an
     /// in-memory provider can simply call. The chain makes that provider allocate gigabytes on a handful of rows.</item>
     /// </list>
-    /// The SQL branches are the same flat pattern tests on the separator-free digits ("+971" + 9 digits, "971" + 9, "00971" + 9 → Within UAE;
+    /// The SQL branches are the same flat pattern tests on the separator-free digits ("+971" / "971" / "00971" + a 9-digit 5… mobile or an 8-digit
+    /// 2/3/4/6/7/9 landline, or a UAE mobile / landline in national form "05…" / "0[234679]…" → Within UAE;
     /// "+" or "00" + 8–15 digits not starting 0/971 → Outside UAE); tests assert every branch agrees with the C# rule on a table of numbers.
     /// </summary>
     private IQueryable<PhoneRow> WithLocationWeight(IQueryable<PhoneRow> rows)
@@ -273,7 +275,7 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 CanonicalIntakePhone = x.CanonicalIntakePhone,
                 LocationWeight = x.Stripped == null || EF.Functions.Like(x.Stripped, "%[^0-9]%")
                     ? 0L
-                    : EF.Functions.Like(x.Stripped, "971_________") || (!x.Plus && EF.Functions.Like(x.Stripped, "00971_________"))
+                    : EF.Functions.Like(x.Stripped, "9715________") || EF.Functions.Like(x.Stripped, "971[234679]_______") || (!x.Plus && (EF.Functions.Like(x.Stripped, "009715________") || EF.Functions.Like(x.Stripped, "00971[234679]_______") || EF.Functions.Like(x.Stripped, "05________") || EF.Functions.Like(x.Stripped, "0[234679]_______")))
                         ? WithinWeight
                         : (x.Plus && x.Stripped.Length >= 8 && x.Stripped.Length <= 15 && !x.Stripped.StartsWith("0") && !x.Stripped.StartsWith("971"))
                           || (!x.Plus && x.Stripped.StartsWith("00") && x.Stripped.Length >= 10 && x.Stripped.Length <= 17 && !x.Stripped.StartsWith("000") && !x.Stripped.StartsWith("00971"))
@@ -287,7 +289,7 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 LocationWeight = x.Stripped == null
                        || x.Stripped.Replace("0", "").Replace("1", "").Replace("2", "").Replace("3", "").Replace("4", "").Replace("5", "").Replace("6", "").Replace("7", "").Replace("8", "").Replace("9", "") != ""
                     ? 0L
-                    : EF.Functions.Like(x.Stripped, "971_________") || (!x.Plus && EF.Functions.Like(x.Stripped, "00971_________"))
+                    : EF.Functions.Like(x.Stripped, "9715________") || EF.Functions.Like(x.Stripped, "9712_______") || EF.Functions.Like(x.Stripped, "9713_______") || EF.Functions.Like(x.Stripped, "9714_______") || EF.Functions.Like(x.Stripped, "9716_______") || EF.Functions.Like(x.Stripped, "9717_______") || EF.Functions.Like(x.Stripped, "9719_______") || (!x.Plus && (EF.Functions.Like(x.Stripped, "009715________") || EF.Functions.Like(x.Stripped, "009712_______") || EF.Functions.Like(x.Stripped, "009713_______") || EF.Functions.Like(x.Stripped, "009714_______") || EF.Functions.Like(x.Stripped, "009716_______") || EF.Functions.Like(x.Stripped, "009717_______") || EF.Functions.Like(x.Stripped, "009719_______") || EF.Functions.Like(x.Stripped, "05________") || EF.Functions.Like(x.Stripped, "02_______") || EF.Functions.Like(x.Stripped, "03_______") || EF.Functions.Like(x.Stripped, "04_______") || EF.Functions.Like(x.Stripped, "06_______") || EF.Functions.Like(x.Stripped, "07_______") || EF.Functions.Like(x.Stripped, "09_______")))
                         ? WithinWeight
                         : (x.Plus && x.Stripped.Length >= 8 && x.Stripped.Length <= 15 && !x.Stripped.StartsWith("0") && !x.Stripped.StartsWith("971"))
                           || (!x.Plus && x.Stripped.StartsWith("00") && x.Stripped.Length >= 10 && x.Stripped.Length <= 17 && !x.Stripped.StartsWith("000") && !x.Stripped.StartsWith("00971"))
@@ -339,6 +341,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             // as the text it is and not against every number containing 401.
             var searchIsPhoneShaped = CustomerPhoneNumber.LooksLikeNumber(search);
             var searchDigits = searchIsPhoneShaped ? CustomerPhoneNumber.Normalize(search) : string.Empty;
+            // A UAE number is found however it was written (local, +971, 00971): the term is also tried in its other spellings.
+            var (searchAlt1, searchAlt2) = UaePhoneNumbers.SearchVariants(searchDigits);
 
             var matching = identified.Where(m =>
                 m.Ticket.TicketNumber.Contains(search)
@@ -351,7 +355,8 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 || (m.Ticket.ManualProjectName != null && m.Ticket.ManualProjectName.Contains(search))
                 || (m.Ticket.ExternalCustomerId != null && m.Ticket.ExternalCustomerId.Contains(search))
                 || (m.IntakePhone != null && m.IntakePhone.Contains(search))
-                || (searchIsPhoneShaped && m.CanonicalIntakePhone != null && m.CanonicalIntakePhone.Contains(searchDigits))
+                || (searchIsPhoneShaped && m.CanonicalIntakePhone != null
+                    && (m.CanonicalIntakePhone.Contains(searchDigits) || m.CanonicalIntakePhone.Contains(searchAlt1) || m.CanonicalIntakePhone.Contains(searchAlt2)))
                 // A name or e-mail an agent typed in is searchable too (it is what the row will be shown under).
                 || (m.CanonicalIntakePhone != null && dbContext.CustomerContactDetails.Any(c =>
                     c.PhoneKey == m.CanonicalIntakePhone && (c.Name.Contains(search) || (c.Email != null && c.Email.Contains(search)))))
@@ -363,7 +368,26 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                     && ((o.ProjectName != null && o.ProjectName.Contains(search))
                         || (o.UnitNumber != null && o.UnitNumber.Contains(search))
                         || (o.PhoneNumber != null && o.PhoneNumber.Contains(search))
-                        || (searchIsPhoneShaped && o.PhoneNumber != null && o.PhoneNumber.Contains(searchDigits))))
+                        || (searchIsPhoneShaped && o.PhoneNumber != null
+                            && (o.PhoneNumber.Contains(searchDigits) || o.PhoneNumber.Contains(searchAlt1) || o.PhoneNumber.Contains(searchAlt2)))
+                        // The profile details a person entered are searchable too: they are what the customer is shown with.
+                        || (o.FullName != null && o.FullName.Contains(search))
+                        || (o.Email != null && o.Email.Contains(search))
+                        || (o.LandlineNumber != null && o.LandlineNumber.Contains(search))
+                        || (o.AdditionalPhones != null && o.AdditionalPhones.Contains(search))
+                        || (searchIsPhoneShaped && ((o.LandlineNumber != null && (o.LandlineNumber.Contains(searchAlt1) || o.LandlineNumber.Contains(searchAlt2)))
+                            || (o.AdditionalPhones != null && (o.AdditionalPhones.Contains(searchAlt1) || o.AdditionalPhones.Contains(searchAlt2)))))
+                        || (o.Nationality != null && o.Nationality.Contains(search))
+                        || (o.Country != null && o.Country.Contains(search))
+                        || (o.Emirate != null && o.Emirate.Contains(search))
+                        || (o.Location != null && o.Location.Contains(search))))
+                // Manually added properties are searchable by project and unit (EXISTS only: a TOP(1) here is the correlated shape that once
+                // timed /Customers out, and CustomerDirectoryQueryShapeTests guards against it).
+                || dbContext.CustomerPropertyAssociations.Any(a => (a.ProjectName.Contains(search) || a.UnitNumber.Contains(search))
+                    && dbContext.CustomerProfileOverrides.Any(o => o.CustomerProfileId == a.CustomerProfileId && o.IdentityKind == m.Kind
+                        && ((m.Kind == CrmKind && o.CrmBuyerCustomerId == m.CrmId)
+                            || (m.Kind == ExternalKind && o.ExternalSource == m.Source && o.ExternalCustomerId == m.ExternalId)
+                            || (m.Kind == PhoneKind && o.IdentityPhone == m.Phone))))
                 || dbContext.TicketInteractions.Any(i => i.TicketId == m.Ticket.TicketId
                     && ((i.CustomerName != null && i.CustomerName.Contains(search))
                         || i.CustomerPhone.Contains(search)
@@ -632,25 +656,52 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             .ToDictionaryAsync(t => t.TicketId, cancellationToken);
         var snapshots = await LoadSnapshotsAsync(lastTicketIds, cancellationToken);
 
-        // Names/e-mails an agent entered by hand, one batched read for the whole page, matched on canonical phone.
-        var rowPhoneKeys = page
-            .Select(g => snapshots.GetValueOrDefault(g.LastTicketId) is var snap
-                ? CustomerPhoneNumber.Normalize(snap.IntakePhone ?? snap.InteractionPhone ?? g.Phone)
-                : string.Empty)
-            .Where(k => k.Length > 0)
-            .Distinct()
-            .ToList();
-        var manualContacts = rowPhoneKeys.Count == 0
-            ? new Dictionary<string, CustomerContactDetail>()
-            : await dbContext.CustomerContactDetails.AsNoTracking()
-                .Where(c => rowPhoneKeys.Contains(c.PhoneKey))
-                .ToDictionaryAsync(c => c.PhoneKey, cancellationToken);
+        // The names captured on ANY of a row's conversations - not only its latest ticket's - so a name given once is not lost to a
+        // later ticket that carried none, and the row says what the profile says. Two batched reads for the whole page: the page
+        // customers' tickets, then their interactions' names.
+        var pageCrmIds = page.Where(g => g.Kind == CrmKind && g.CrmId != null).Select(g => g.CrmId!.Value).Distinct().ToList();
+        var pagePhones = page.Where(g => g.Kind == PhoneKind && g.Phone != null).Select(g => g.Phone!).Distinct().ToList();
+        var pageExternalIds = page.Where(g => g.Kind == ExternalKind && g.ExternalId != null).Select(g => g.ExternalId!).Distinct().ToList();
+        var ownTickets = await Identified(query.VisibleDepartmentIds, query.AgentScopeEmployeeId, query.OwnerVisibilityEmployeeId)
+            .Where(x => (x.Kind == CrmKind && x.CrmId != null && pageCrmIds.Contains(x.CrmId.Value))
+                || (x.Kind == PhoneKind && x.Phone != null && pagePhones.Contains(x.Phone))
+                || (x.Kind == ExternalKind && x.ExternalId != null && pageExternalIds.Contains(x.ExternalId)))
+            .Select(x => new { x.Kind, x.CrmId, x.Source, x.ExternalId, x.Phone, x.Ticket.TicketId })
+            .ToListAsync(cancellationToken);
+        var ticketIdsByCustomer = ownTickets
+            .GroupBy(t => ToIdentity(t.Kind, t.CrmId, t.Source, t.ExternalId, t.Phone).Key)
+            .ToDictionary(grp => grp.Key, grp => grp.Select(t => t.TicketId).ToList());
+        var allOwnTicketIds = ownTickets.Select(t => t.TicketId).Distinct().ToList();
+        var conversationNames = allOwnTicketIds.Count == 0
+            ? []
+            : await dbContext.TicketInteractions.AsNoTracking()
+                .Where(i => allOwnTicketIds.Contains(i.TicketId) && i.CustomerName != null && i.CustomerName != "")
+                .OrderByDescending(i => i.CreatedAtUtc)
+                .Take(2000)
+                .Select(i => new { i.TicketId, i.CustomerName })
+                .ToListAsync(cancellationToken);
+        var namesByTicket = conversationNames.GroupBy(n => n.TicketId).ToDictionary(grp => grp.Key, grp => grp.Select(n => n.CustomerName).ToList());
 
-        // The phone / project / unit an authorised user corrected, one batched read for the page, matched on the directory key.
+        // The phone / project / unit / name an authorised user corrected, one batched read for the page, matched on the directory key.
         var pageKeys = page.Select(g => ToIdentity(g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone).Key).ToList();
         var edits = await dbContext.CustomerProfileOverrides.AsNoTracking()
             .Where(o => pageKeys.Contains(o.CustomerKey))
             .ToDictionaryAsync(o => o.CustomerKey, cancellationToken);
+
+        // Names/e-mails an agent entered by hand, one batched read for the whole page, matched on every spelling of every number the row is
+        // known by (its latest ticket's, the identity's and an edited one) - the same keys the profile and Ticket Details use.
+        string?[] RowPhones(string? groupPhone, TicketSnapshot snap, CustomerProfileOverride? e) =>
+            [snap.IntakePhone, snap.InteractionPhone, groupPhone, e?.PhoneNumber, e?.LandlineNumber, .. e?.AdditionalPhoneList ?? []];
+        var rowKeys = page
+            .Select(g => RowPhones(g.Phone, snapshots.GetValueOrDefault(g.LastTicketId), edits.GetValueOrDefault(ToIdentity(g.Kind, g.CrmId, g.Source, g.ExternalId, g.Phone).Key)))
+            .SelectMany(CustomerContactResolution.ContactKeys)
+            .Distinct()
+            .ToList();
+        var manualContacts = rowKeys.Count == 0
+            ? new Dictionary<string, CustomerContactDetail>()
+            : await dbContext.CustomerContactDetails.AsNoTracking()
+                .Where(c => rowKeys.Contains(c.PhoneKey))
+                .ToDictionaryAsync(c => c.PhoneKey, cancellationToken);
 
         var rows = new List<CustomerDirectoryRowDto>(page.Count);
         foreach (var g in page)
@@ -668,10 +719,21 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
             var namedTicket = g.LastNamedTicketId is { } namedId ? lastTickets.GetValueOrDefault(namedId) : null;
             var derived = DerivedFacts(last, snapshot, identity.PhoneNumber);
             var edit = edits.GetValueOrDefault(identity.Key);
-            var manual = manualContacts.GetValueOrDefault(CustomerPhoneNumber.Normalize(snapshot.IntakePhone ?? snapshot.InteractionPhone ?? g.Phone));
-            var displayName = manual?.Name
-                ?? DisplayNameFor(last, snapshot)
-                ?? CustomerNameResolver.Resolve(namedTicket?.CrmBuyerCustomerName, namedTicket?.ExternalCustomerName).Name;
+            var manual = CustomerContactResolution.ContactKeys(RowPhones(g.Phone, snapshot, edit))
+                .Select(manualContacts.GetValueOrDefault)
+                .OfType<CustomerContactDetail>()
+                .OrderByDescending(c => c.UpdatedAtUtc)
+                .FirstOrDefault();
+            var displayName = CustomerContactResolution.Resolve(new CustomerContactInputs(
+                ProfileName: edit?.FullName,
+                ProfileUpdatedAtUtc: edit?.UpdatedAtUtc,
+                ManualContactName: manual?.Name,
+                ManualContactUpdatedAtUtc: manual?.UpdatedAtUtc,
+                CrmName: CustomerNameResolver.FirstValid(last.CrmBuyerCustomerName, namedTicket?.CrmBuyerCustomerName),
+                ExternalName: CustomerNameResolver.FirstValid(last.ExternalCustomerName, namedTicket?.ExternalCustomerName),
+                SubmittedNames: new[] { snapshot.InteractionName, snapshot.SnapshotName }
+                    .Concat(ticketIdsByCustomer.GetValueOrDefault(identity.Key, []).SelectMany(id => namesByTicket.GetValueOrDefault(id, [])))
+                    .ToList())).Name;
 
             rows.Add(new CustomerDirectoryRowDto(
                 identity.Key,
@@ -809,7 +871,12 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         // "f.noor@example.com" are one mailbox.
         // An agent-entered record wins for the name and leads the e-mails: it is the most deliberate, most recent statement about
         // who this is. Matched on the canonical form of every number the customer was seen on; the freshest record is used.
-        var phoneKeys = phones.Select(CustomerPhoneNumber.Normalize).Where(k => k.Length > 0).Distinct().ToList();
+        // What an authorised user entered over the tickets' own facts is loaded first: its numbers are part of the lookup below, so a name
+        // saved under ANY number the customer is known by is found - the same set every surface uses (CustomerContactResolution).
+        var edit = await dbContext.CustomerProfileOverrides.AsNoTracking()
+            .FirstOrDefaultAsync(o => o.CustomerKey == identity.Key, cancellationToken);
+        var phoneKeys = CustomerContactResolution.ContactKeys(
+            phones.Concat([edit?.PhoneNumber, edit?.LandlineNumber]).Concat(edit?.AdditionalPhoneList ?? []));
         var manualContact = phoneKeys.Count == 0
             ? null
             : (await dbContext.CustomerContactDetails.AsNoTracking()
@@ -818,9 +885,17 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 .OrderByDescending(c => c.UpdatedAtUtc)
                 .FirstOrDefault();
 
-        var emails = (manualContact?.Email is { } manualEmail ? new string?[] { manualEmail } : Array.Empty<string?>())
+        // The e-mails the sources hold (an agent's contact record, then the tickets and conversations), WITHOUT the profile's own edit:
+        // what would be shown if that edit were cleared. The shown list leads with the edit.
+        var derivedEmails = new string?[] { manualContact?.Email }
             .Concat(tickets.Select(x => x.Ticket.ExternalCustomerEmail))
             .Concat(interactions.Select(i => i.CustomerEmail))
+            .Where(e => !string.IsNullOrWhiteSpace(e))
+            .Select(e => e!.Trim())
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        var emails = new string?[] { edit?.Email }
+            .Concat(derivedEmails)
             .Where(e => !string.IsNullOrWhiteSpace(e))
             .Select(e => e!.Trim())
             .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -831,8 +906,6 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         // What an authorised user entered over the phone / project / unit the tickets say. The numbers lead with the edited one (one entry
         // per real number), the units lead with an "Edited" entry (the tickets' own units stay below it, as history), and the derived values
         // are returned next to the edit so the Edit form and the audit trail can say what was shown before.
-        var edit = await dbContext.CustomerProfileOverrides.AsNoTracking()
-            .FirstOrDefaultAsync(o => o.CustomerKey == identity.Key, cancellationToken);
         var derived = DerivedFacts(last, snapshots.GetValueOrDefault(last.TicketId), identity.PhoneNumber);
         var shownPhones = edit?.PhoneNumber is { } editedPhone
             ? new[] { editedPhone }.Concat(phones.Where(p => CustomerPhoneNumber.Normalize(p) != CustomerPhoneNumber.Normalize(editedPhone))).ToList()
@@ -843,14 +916,44 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         var editState = new CustomerProfileEditStateDto(
             derived.Phone, derived.Project, derived.Unit, edit?.PhoneNumber, edit?.ProjectName, edit?.UnitNumber, edit?.UpdatedAtUtc);
 
-        // The latest ticket first; then the same precedence widened across
-        // every ticket this customer has, so a name captured once is not lost
-        // because their most recent ticket happened not to carry one.
-        var displayName = manualContact?.Name
-            ?? DisplayNameFor(last, snapshots.GetValueOrDefault(last.TicketId))
-            ?? CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.CrmBuyerCustomerName).ToArray())
-            ?? CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.ExternalCustomerName).ToArray())
-            ?? CustomerNameResolver.FirstValid(interactions.Select(i => i.CustomerName).ToArray());
+        // The one rule for the name / e-mail every surface shows (CustomerContactResolution): an entered value first, then the evidence
+        // ranking across the latest ticket and, so a name captured once is not lost, every ticket and conversation this customer has.
+        var lastSnapshot = snapshots.GetValueOrDefault(last.TicketId);
+        var resolved = CustomerContactResolution.Resolve(new CustomerContactInputs(
+            ProfileName: edit?.FullName,
+            ProfileEmail: edit?.Email,
+            ProfileUpdatedAtUtc: edit?.UpdatedAtUtc,
+            ManualContactName: manualContact?.Name,
+            ManualContactEmail: manualContact?.Email,
+            ManualContactUpdatedAtUtc: manualContact?.UpdatedAtUtc,
+            CrmName: CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.CrmBuyerCustomerName).ToArray()),
+            ExternalName: CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.ExternalCustomerName).ToArray()),
+            SubmittedNames: new[] { lastSnapshot.InteractionName, lastSnapshot.SnapshotName }.Concat(interactions.Select(i => i.CustomerName)).ToList(),
+            DerivedEmails: emails));
+        var displayName = resolved.Name;
+
+        // What would be shown if the profile's own name / e-mail were cleared: the audit needs it to say what a clear changes the value to.
+        var withoutProfile = CustomerContactResolution.Resolve(new CustomerContactInputs(
+            ManualContactName: manualContact?.Name,
+            ManualContactEmail: manualContact?.Email,
+            ManualContactUpdatedAtUtc: manualContact?.UpdatedAtUtc,
+            CrmName: CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.CrmBuyerCustomerName).ToArray()),
+            ExternalName: CustomerNameResolver.FirstValid(tickets.Select(x => x.Ticket.ExternalCustomerName).ToArray()),
+            SubmittedNames: new[] { lastSnapshot.InteractionName, lastSnapshot.SnapshotName }.Concat(interactions.Select(i => i.CustomerName)).ToList(),
+            DerivedEmails: derivedEmails));
+
+        var details = new CustomerProfileDetailsDto(
+            resolved.Name, resolved.Email, edit?.LandlineNumber, edit?.AdditionalPhoneList ?? [], edit?.Nationality, edit?.Country,
+            edit?.Emirate, edit?.Location, edit?.PreferredLanguage, DetailFieldsEditedIn(edit), edit?.UpdatedAtUtc,
+            withoutProfile.Name, withoutProfile.Email);
+        var manualProperties = edit is null
+            ? []
+            : (await dbContext.CustomerPropertyAssociations.AsNoTracking()
+                .Where(a => a.CustomerProfileId == edit.CustomerProfileId)
+                .OrderBy(a => a.ProjectName).ThenBy(a => a.UnitNumber)
+                .ToListAsync(cancellationToken))
+                .Select(a => new CustomerPropertyDto(a.CustomerPropertyAssociationId, a.ProjectName, a.UnitNumber, a.Relationship.ToString(), false, a.UpdatedAtUtc))
+                .ToList();
 
         return new CustomerDirectoryProfileDto(
             identity.Key,
@@ -873,7 +976,10 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
                 i.TicketInteractionId, i.TicketId, ticketNumbers.GetValueOrDefault(i.TicketId, string.Empty), i.ChannelId,
                 channelNames.GetValueOrDefault(i.ChannelId), i.Direction, i.InteractionStartedAtUtc ?? i.CreatedAtUtc, i.EndedAtUtc,
                 i.EndedAtUtc is null ? "Active" : "Ended", i.GenesysAgentName, i.IsOriginatingInteraction)).ToList(),
-            editState);
+            editState,
+            edit?.CustomerProfileId,
+            details,
+            manualProperties);
     }
 
     // ---- helpers ----
@@ -898,6 +1004,23 @@ public sealed class CustomerDirectoryRepository(TigerCsDbContext dbContext, Tige
         }
 
         return null;
+    }
+
+    /// <summary>The profile details (beyond phone / project / unit) a person entered, by field name.</summary>
+    private static IReadOnlyList<string> DetailFieldsEditedIn(CustomerProfileOverride? edit)
+    {
+        var fields = new List<string>();
+        if (edit is null) return fields;
+        if (edit.FullName is not null) fields.Add(CustomerProfileFields.FullName);
+        if (edit.Email is not null) fields.Add(CustomerProfileFields.Email);
+        if (edit.LandlineNumber is not null) fields.Add(CustomerProfileFields.LandlineNumber);
+        if (edit.AdditionalPhones is not null) fields.Add(CustomerProfileFields.AdditionalPhone);
+        if (edit.Nationality is not null) fields.Add(CustomerProfileFields.Nationality);
+        if (edit.Country is not null) fields.Add(CustomerProfileFields.Country);
+        if (edit.Emirate is not null) fields.Add(CustomerProfileFields.Emirate);
+        if (edit.Location is not null) fields.Add(CustomerProfileFields.Location);
+        if (edit.PreferredLanguage is not null) fields.Add(CustomerProfileFields.PreferredLanguage);
+        return fields;
     }
 
     private static IReadOnlyList<string>? EditedFieldsOf(CustomerProfileOverride? edit)

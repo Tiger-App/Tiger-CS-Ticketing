@@ -24,7 +24,10 @@ public sealed class CustomerContactAppService(
     ICustomerContactDetailRepository repository,
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    CustomerDirectoryAppService directoryAppService,
+    ICustomerProfileOverrideRepository overrides,
+    CustomerProfileAuditService profileAudit)
 {
     public async Task<CustomerContactResult> SaveAsync(
         Guid callerEmployeeId,
@@ -47,6 +50,24 @@ public sealed class CustomerContactAppService(
         var existing = await repository.GetByPhoneKeyAsync(phoneKey, cancellationToken);
         var created = existing is null;
         var before = existing is null ? null : JsonSerializer.Serialize(new { existing.Name, existing.Email });
+        var oldName = existing?.Name;
+        var oldEmail = existing?.Email;
+
+        // The customer this belongs to, for the change history: the key the caller names when they can open that customer, else the
+        // identity of the phone number itself.
+        var identity = CustomerIdentity.Phone(phoneKey);
+        if (CustomerIdentity.TryParse(request.CustomerKey, out var named)
+            && (await directoryAppService.GetProfileAsync(callerEmployeeId, callerRoles, named.Key, cancellationToken)).Outcome == CustomerDirectoryProfileOutcome.Success)
+        {
+            identity = named;
+        }
+
+        var correlationId = request.CorrelationId is { } given && given != Guid.Empty ? given : Guid.NewGuid();
+        var anchor = await overrides.GetByKeyAsync(identity.Key, cancellationToken);
+        if (anchor is not null && request.CorrelationId is not null && await profileAudit.AlreadyRecordedAsync(anchor.CustomerProfileId, correlationId, cancellationToken))
+        {
+            return CustomerContactResult.Success(new CustomerContactDto(phoneKey, existing?.Name ?? name, existing?.Email ?? email, existing?.UpdatedAtUtc ?? now, false));   // a retry
+        }
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
@@ -65,6 +86,24 @@ public sealed class CustomerContactAppService(
         await auditWriter.WriteAsync(
             callerEmployeeId, created ? "CreateCustomerContact" : "UpdateCustomerContact", "CustomerContactDetail", phoneKey,
             before, JsonSerializer.Serialize(new { name, email }), Guid.NewGuid(), cancellationToken);
+
+        // The customer's change history: the name and e-mail as separate rows, only when they actually changed, in the same transaction.
+        if (!string.Equals(oldName, name, StringComparison.Ordinal) || !string.Equals(oldEmail, email, StringComparison.Ordinal))
+        {
+            if (anchor is null)
+            {
+                anchor = new CustomerProfileOverride(
+                    identity.Key, (int)identity.Kind, identity.CrmBuyerCustomerId, identity.ExternalSource, identity.ExternalCustomerId,
+                    identity.Kind == CustomerIdentityKind.Phone ? identity.PhoneNumber : null, callerEmployeeId, now);
+                await overrides.AddAsync(anchor, cancellationToken);
+            }
+
+            await profileAudit.RecordAsync(
+                anchor.CustomerProfileId, identity.Key,
+                new CustomerChangeContext(callerEmployeeId, request.Source ?? CustomerChangeSources.Api, request.Reason, request.RelatedTicketId, correlationId),
+                [new CustomerFieldChange(CustomerProfileFields.FullName, oldName, name), new CustomerFieldChange(CustomerProfileFields.Email, oldEmail, email)],
+                cancellationToken);
+        }
 
         await unitOfWork.SaveChangesAsync(cancellationToken);
         await transaction.CommitAsync(cancellationToken);

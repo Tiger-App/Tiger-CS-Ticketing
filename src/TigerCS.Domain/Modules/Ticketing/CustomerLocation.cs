@@ -28,11 +28,14 @@ public enum CustomerLocation
 /// </para>
 /// <list type="bullet">
 /// <item>Written internationally — a leading "+" or "00" — the rest is the E.164 number: 8–15 digits, not starting with 0.
-/// "971" followed by exactly 9 digits is UAE; any other "971…" is an invalid UAE number (<see cref="CustomerLocation.Unknown"/>);
+/// "971" followed by a valid UAE mobile (9 digits, 5…) or landline (8 digits, area digit 2/3/4/6/7/9) is UAE (see
+/// <see cref="UaePhoneNumbers"/>); any other "971…" is an invalid UAE number (<see cref="CustomerLocation.Unknown"/>);
 /// every other valid number is Outside UAE.</item>
-/// <item>Written without either marker, only "971" + 9 digits is placed (UAE) — the existing rule that "971501234567" and
-/// "+971501234567" are one customer. A national form ("0501234567") or a bare foreign number states no country, so it is
-/// <see cref="CustomerLocation.Unknown"/>: no country is ever guessed.</item>
+/// <item>Written without either marker, "971" + a valid UAE number is placed (UAE), and so is a UAE mobile or landline in national
+/// form ("0501234567", "041234567"): the trunk 0 plus that shape exists nowhere else. Any other national form or a bare foreign
+/// number states no country, so it is <see cref="CustomerLocation.Unknown"/>: no country is ever guessed.</item>
+/// <item>This is the country of the <i>phone number</i>. It says nothing about the customer's emirate (area codes are shared) or
+/// where they actually live.</item>
 /// </list>
 /// </summary>
 /// <summary>Why a phone number (or a customer's phones) is not placed in a location.</summary>
@@ -53,10 +56,10 @@ public enum CustomerPhoneLocationReason
     /// <summary>Written with "+" or "00" and a country code starting with 0.</summary>
     InternationalLeadingZero = 4,
 
-    /// <summary>Starts with 971 (+971 / 00971 / 971) but is not followed by exactly 9 digits.</summary>
+    /// <summary>Starts with 971 (+971 / 00971 / 971) but is not followed by a valid UAE mobile (9 digits, 5…) or landline (8 digits, area digit 2/3/4/6/7/9).</summary>
     UaeWrongLength = 5,
 
-    /// <summary>A UAE-style local number (05x mobile / 0[2346 79] landline) with no country code. Looks UAE, states no country: not assumed.</summary>
+    /// <summary>Retired: a UAE-style national number (05x mobile / 0[234679] landline) is now placed Within UAE. Kept only so stored values keep their meaning.</summary>
     UaeLocalFormat = 6,
 
     /// <summary>Starts with a single 0 (national format) and is not a UAE-style local number: the country is not stated.</summary>
@@ -77,7 +80,7 @@ public static class CustomerPhoneLocation
     /// <summary>The UAE's calling code.</summary>
     public const string UaeCountryCode = "971";
 
-    /// <summary>The digits after "971" in a UAE number (area/mobile prefix + subscriber number).</summary>
+    /// <summary>The digits after "971" in a UAE <i>mobile</i> number. A landline has 8 (<see cref="UaePhoneNumbers.LandlineNationalLength"/>).</summary>
     public const int UaeNationalNumberLength = 9;
 
     /// <summary>E.164 allows at most 15 digits and, in practice, no fewer than 8 including the country code.</summary>
@@ -140,7 +143,7 @@ public static class CustomerPhoneLocation
 
             if (core.StartsWith(UaeCountryCode, StringComparison.Ordinal))
             {
-                return core.Length == UaeCountryCode.Length + UaeNationalNumberLength
+                return UaePhoneNumbers.IsInternationalUae(core)
                     ? new(CustomerLocation.WithinUae, CustomerPhoneLocationReason.None)
                     : new(CustomerLocation.Unknown, CustomerPhoneLocationReason.UaeWrongLength);
             }
@@ -150,16 +153,18 @@ public static class CustomerPhoneLocation
 
         if (core.StartsWith(UaeCountryCode, StringComparison.Ordinal))
         {
-            return core.Length == UaeCountryCode.Length + UaeNationalNumberLength
+            return UaePhoneNumbers.IsInternationalUae(core)
                 ? new(CustomerLocation.WithinUae, CustomerPhoneLocationReason.None)
                 : new(CustomerLocation.Unknown, CustomerPhoneLocationReason.UaeWrongLength);
         }
 
         if (core[0] == '0')
         {
-            // 05x xxx xxxx (10 digits) is a UAE mobile; 0[2346 79] xxx xxxx (9 digits) a UAE landline — said out loud, still not placed.
-            var looksUae = (core.Length == 10 && core[1] == '5') || (core.Length == 9 && "234679".Contains(core[1]));
-            return new(CustomerLocation.Unknown, looksUae ? CustomerPhoneLocationReason.UaeLocalFormat : CustomerPhoneLocationReason.NationalFormatNoCountryCode);
+            // A UAE mobile (05x xxx xxxx) or landline (0[234679] xxx xxxx) in national form is unmistakably a UAE number: it is placed
+            // Within UAE, exactly as +971… would be. Any other national number states no country and stays Unknown.
+            return UaePhoneNumbers.NationalSignificantFromLocal(core) is not null
+                ? new(CustomerLocation.WithinUae, CustomerPhoneLocationReason.None)
+                : new(CustomerLocation.Unknown, CustomerPhoneLocationReason.NationalFormatNoCountryCode);
         }
 
         return new(CustomerLocation.Unknown, CustomerPhoneLocationReason.NoCountryCode);

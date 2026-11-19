@@ -242,11 +242,14 @@ public sealed class CustomerDirectoryCancellationTests(ITestOutputHelper output)
     /// them — however many rows the page holds. A page of 50 costs what a
     /// page of 5 does; there is no per-row query hiding behind the paging.
     /// </summary>
+    private static readonly Dictionary<int, int> Measured = [];
+
     [Theory]
     [InlineData(5)]
     [InlineData(50)]
     public async Task ListAsync_CostsTheSameFewQueries_WhateverThePageSize(int pageSize)
     {
+        var counts = Measured;
         SeedCustomers(crmCustomers: 120, ticketsEach: 3);
         var counter = new CountingCommandInterceptor();
         using var context = _db.CreateContext(counter);
@@ -257,10 +260,13 @@ public sealed class CustomerDirectoryCancellationTests(ITestOutputHelper output)
         Assert.Equal(120, page.TotalCount);
         Assert.Equal(pageSize, page.Items.Count);
         output.WriteLine($"pageSize={pageSize}: {counter.Commands.Count} database commands for {page.Items.Count} rows.");
-        // 6 today (count, page, last tickets, intakes, interactions,
-        // requester snapshots). The ceiling is what matters: it must not
-        // scale with the page.
-        Assert.InRange(counter.Commands.Count, 1, 8);
+        // 9 today: count, page, last tickets, intakes, interactions, requester snapshots, the edited details, the saved contact records,
+        // and the names from ALL of the page customers' conversations (two reads: their tickets, then their interactions' names - so a
+        // name captured on an older ticket shows on the list exactly as on the profile). The ceiling is what matters: it must not
+        // scale with the page, and the Theory's two page sizes must cost the same.
+        Assert.InRange(counter.Commands.Count, 1, 10);
+        counts[pageSize] = counter.Commands.Count;
+        if (counts.Count == 2) Assert.Equal(counts[5], counts[50]);
     }
 
     /// <summary>

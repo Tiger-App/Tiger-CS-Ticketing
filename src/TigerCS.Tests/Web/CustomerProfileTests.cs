@@ -98,7 +98,13 @@ public sealed class CustomerProfileTests
         var overviewEnd = html.IndexOf("/>", overviewStart, StringComparison.Ordinal);
         Assert.Contains("checked", html[overviewStart..overviewEnd]);
 
-        foreach (var otherTabId in new[] { "id=\"tab-contact\"", "id=\"tab-units\"", "id=\"tab-history\"", "id=\"tab-interactions\"" })
+        // The Units tab can be opened by ?tab=units (the return from adding a property), so it is checked only when asked for - like
+        // the Payment and Documents tabs; every other tab is never checked by default.
+        var unitsStart = html.IndexOf("id=\"tab-units\"", StringComparison.Ordinal);
+        var unitsEnd = html.IndexOf("/>", unitsStart, StringComparison.Ordinal);
+        Assert.Contains("checked=\"@Model.UnitsTabActive\"", html[unitsStart..unitsEnd]);
+
+        foreach (var otherTabId in new[] { "id=\"tab-contact\"", "id=\"tab-history\"", "id=\"tab-interactions\"" })
         {
             var start = html.IndexOf(otherTabId, StringComparison.Ordinal);
             var end = html.IndexOf("/>", start, StringComparison.Ordinal);
