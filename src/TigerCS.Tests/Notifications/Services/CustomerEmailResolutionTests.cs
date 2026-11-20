@@ -5,6 +5,7 @@ using TigerCS.Domain.Infrastructure;
 using TigerCS.Domain.Modules.Notifications;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.Notifications.Fakes;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.Notifications.Services;
 
@@ -214,7 +215,7 @@ public class CustomerEmailResolutionTests
             default:
                 f.ResolveAsync(ticket).GetAwaiter().GetResult();
                 ticket.Close();
-                ticket.Reopen(ticket.CurrentDepartmentId);
+                LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
                 return (f.CreateReopenedHandler(), f.EnqueueLifecycleEvent(eventType, ticket.TicketId, ticket.ReopenCount));
         }
     }

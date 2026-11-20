@@ -4,6 +4,7 @@ using TigerCS.Domain.Infrastructure;
 using TigerCS.Domain.Modules.Notifications;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.Notifications.Fakes;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.Notifications.Services;
 
@@ -104,7 +105,7 @@ public class TicketLifecycleNotificationHandlerTests
         // Reopen is Closed-only under the approved rule, so the ticket has to
         // be closed before there is anything to reopen.
         ticket.Close();
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
         var message = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketReopened, ticket.TicketId, reopenCount: ticket.ReopenCount);
 
         var result = await f.CreateReopenedHandler().HandleAsync(message);
@@ -162,7 +163,7 @@ public class TicketLifecycleNotificationHandlerTests
         var resolved = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketResolved, ticket.TicketId);
         ticket.Close();
         var closed = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketClosed, ticket.TicketId);
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
         var reopened = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketReopened, ticket.TicketId, ticket.ReopenCount);
 
         var results = new[]
