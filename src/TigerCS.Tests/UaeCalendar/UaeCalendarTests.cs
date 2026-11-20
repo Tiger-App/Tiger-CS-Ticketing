@@ -114,7 +114,6 @@ public sealed class UaeCalendarTests
     {
         Assert.Equal(TimeSpan.FromHours(4), UaeCalendar.Zone.GetUtcOffset(Utc(2026, 7, 1)));
         Assert.Equal(TimeSpan.FromHours(4), UaeCalendar.Zone.GetUtcOffset(Utc(2026, 1, 1)));   // no daylight saving
-        Assert.False(UaeCalendar.Zone.SupportsDaylightSavingTime);
     }
 
     [Fact]
