@@ -1,6 +1,8 @@
 # PR #292 — consolidated final report (review of both sessions' work)
 
-Nothing was merged, deployed or executed against Production. Final commit SHA, CI and test numbers: see the PR description and the reviewer message (they change with every push).
+Nothing was merged, deployed or executed against Production.
+
+**Requirement verification matrix:** `docs/releases/PR-292-Requirement-Verification-Matrix.md`. **Closed is terminal on every channel** (domain `Ticket.Reopen` always throws; application policy, approvals, API and Genesys events refuse); the ~90 deleted tests are restored as terminal-state rejection tests. **Test results on the integrated code** (docs-only commits follow): UTC host 9460 passed / 0 failed; `TZ=Asia/Dubai` 9460 / 0; real SQL Server 9569 / 0 failed (56 Collections RCV tests skipped: they need `TIGERCS_PERF_SQL`). Final commit SHA, CI and test numbers: see the PR description and the reviewer message (they change with every push).
 
 ## 1. Scope decision (approved): Voice and Digital are separate
 The agent-identification lifecycle differs: for a call the answering agent is reported at or just after the call; for WhatsApp / other digital channels the receiving agent id can arrive up to 72 hours later. Therefore:
