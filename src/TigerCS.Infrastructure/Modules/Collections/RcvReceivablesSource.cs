@@ -391,7 +391,7 @@ public sealed class RcvReceivablesSource(
             logger.LogWarning("Receivables snapshot status read failed (SQL error {SqlNumber}).", ex.Number);
             throw new PactReceivablesSourceException("The receivables snapshot status could not be read.");
         }
-        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime.AddHours(4));
+        var today = TigerCS.Domain.Common.UaeCalendar.Today(timeProvider);
         return WithSchedule(ReceivablesSnapshotComposer.BuildStatus(today, today, companies, [], timeProvider.GetUtcNow().UtcDateTime, options.MaxAgeMinutes, MaxRunMinutes));
     }
 

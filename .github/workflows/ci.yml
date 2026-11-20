@@ -51,6 +51,15 @@ jobs:
       - name: Test (Release, with SQL Server integration tests)
         run: dotnet test TigerCS.slnx --no-build --configuration Release --logger "trx;LogFileName=results.trx"
 
+      - name: Test UAE business-day boundaries on a UAE-hosted machine (TZ=Asia/Dubai)
+        # The UAE-day filters, reports and display must give the same answer on a UTC host (the full run above) and on a host whose own zone is
+        # Asia/Dubai: nothing may depend on the machine's local zone. Same tests, other zone, including the SQL Server ones.
+        env:
+          TZ: Asia/Dubai
+        run: >
+          dotnet test TigerCS.slnx --no-build --configuration Release
+          --filter "FullyQualifiedName~UaeCalendarTests|FullyQualifiedName~UaeBusinessDay|FullyQualifiedName~TeamPerformanceReportTests|FullyQualifiedName~DashboardOverviewTests|FullyQualifiedName~DashboardAppServiceTests|FullyQualifiedName~TeamPerformanceRenderTests"
+
       - name: Fail if the SQL Server integration tests were skipped
         run: |
           # The suite reports them SKIPPED (never "passed") without TIGERCS_TEST_SQL_SERVER. Make a mis-wired CI visible.

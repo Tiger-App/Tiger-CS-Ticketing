@@ -2,6 +2,7 @@ using TigerCS.Application.Authorization;
 using TigerCS.Application.Modules.Reporting.Abstractions;
 using TigerCS.Application.Modules.Reporting.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
+using TigerCS.Domain.Common;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 
@@ -23,7 +24,7 @@ namespace TigerCS.Application.Modules.Reporting.Services;
 /// </para>
 ///
 /// <para>
-/// <b>Period.</b> UTC calendar days, inclusive, defaulting to the last 30
+/// <b>Period.</b> UAE calendar days, inclusive, defaulting to the last 30
 /// days exactly as the Dashboard does
 /// (<see cref="DashboardAppService.ResolvePeriod"/>). Currently Assigned is
 /// the one current-state figure and ignores the period.
@@ -61,7 +62,7 @@ public sealed class TeamPerformanceAppService(
     public async Task<TeamPerformanceReportDto> GetReportAsync(
         TeamPerformanceRequestDto request, CancellationToken cancellationToken = default)
     {
-        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        var today = UaeCalendar.Today(timeProvider);
         var (dateFrom, dateTo) = DashboardAppService.ResolvePeriod(request.DateFrom, request.DateTo, today);
 
         var everyone = await LoadReportedEmployeesAsync(cancellationToken);
@@ -139,7 +140,7 @@ public sealed class TeamPerformanceAppService(
             return new TeamPerformanceRecordsResult(TeamPerformanceRecordsOutcome.EmployeeNotEligible);
         }
 
-        var today = DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime);
+        var today = UaeCalendar.Today(timeProvider);
         var (dateFrom, dateTo) = DashboardAppService.ResolvePeriod(request.DateFrom, request.DateTo, today);
 
         var rows = await repository.GetRecordsAsync(
@@ -178,7 +179,7 @@ public sealed class TeamPerformanceAppService(
         }
 
         var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
-        var today = DateOnly.FromDateTime(nowUtc);
+        var today = UaeCalendar.Today(nowUtc);
         var (dateFrom, dateTo) = DashboardAppService.ResolvePeriod(request.DateFrom, request.DateTo, today);
 
         var evaluations = (await repository.GetSlaEvaluationsAsync(
@@ -394,11 +395,11 @@ public sealed class TeamPerformanceAppService(
 
     private static string RolesText(IReadOnlyList<string> roles) => roles.Count == 0 ? "No role" : string.Join(", ", roles);
 
-    /// <summary>The inclusive start of the first period day, as a UTC instant.</summary>
-    public static DateTime RangeStartUtc(DateOnly dateFrom) => dateFrom.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+    /// <summary>The inclusive start of the first period day (00:00 UAE), as a UTC instant.</summary>
+    public static DateTime RangeStartUtc(DateOnly dateFrom) => UaeCalendar.DayStartUtc(dateFrom);
 
-    /// <summary>The exclusive end of the last period day: midnight of the day after, as a UTC instant.</summary>
-    public static DateTime RangeEndUtc(DateOnly dateTo) => dateTo.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc);
+    /// <summary>The exclusive end of the last period day: 00:00 UAE of the day after, as a UTC instant.</summary>
+    public static DateTime RangeEndUtc(DateOnly dateTo) => UaeCalendar.DayEndUtc(dateTo);
 
     private static readonly TeamPerformanceMetricsSnapshot EmptyMetrics = new(
         new Dictionary<Guid, int>(), new Dictionary<Guid, int>(), new Dictionary<Guid, int>());

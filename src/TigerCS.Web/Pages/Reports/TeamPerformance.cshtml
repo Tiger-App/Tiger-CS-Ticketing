@@ -245,14 +245,14 @@
                                         <td><span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(r.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(r.TicketStatus)</span></td>
                                         <td><span class="badge badge-priority-@TicketDisplay.PriorityCssKey(r.PriorityId)">@TicketDisplay.PriorityLabel(r.PriorityId)</span></td>
                                         <td>@(string.IsNullOrWhiteSpace(r.DepartmentName) ? "—" : r.DepartmentName)</td>
-                                        <td class="text-secondary text-mono">@r.CreatedAtUtc.ToLocalTime().ToString("MMM d, HH:mm")</td>
+                                        <td class="text-secondary text-mono">@r.CreatedAtUtc.ToUae().ToString("MMM d, HH:mm")</td>
                                         @if (showBreach)
                                         {
-                                            <td class="text-mono">@(r.BreachedAtUtc is DateTime breached ? breached.ToLocalTime().ToString("MMM d, HH:mm") : "—")</td>
+                                            <td class="text-mono">@(r.BreachedAtUtc is DateTime breached ? breached.ToUae().ToString("MMM d, HH:mm") : "—")</td>
                                         }
                                         @if (showCompleted)
                                         {
-                                            <td class="text-mono">@(r.CompletedAtUtc is DateTime completed ? completed.ToLocalTime().ToString("MMM d, HH:mm") : "—")</td>
+                                            <td class="text-mono">@(r.CompletedAtUtc is DateTime completed ? completed.ToUae().ToString("MMM d, HH:mm") : "—")</td>
                                         }
                                     </tr>
                                 }
@@ -274,7 +274,7 @@
                     <dt>Who is listed</dt>
                     <dd>Every active employee in every department — Customer Service, Call Center, Collections and any other department configured in the system. One row per employee, however many roles or departments they hold; the Department column and filter use the employee\'s Primary Department only ("Not Assigned" when none is configured); employees with no activity in the period are still listed. Integration service accounts are not people and are not listed.</dd>
                     <dt>Period</dt>
-                    <dd>UTC calendar days, inclusive. With no dates chosen, the last 30 days including today.</dd>
+                    <dd>UAE calendar days, inclusive. With no dates chosen, the last 30 days including today.</dd>
                     <dt>Currently Assigned</dt>
                     <dd>Tickets the agent holds right now (current owner) that are not Closed. Current state — the period does not apply.</dd>
                     <dt>Tickets Worked</dt>

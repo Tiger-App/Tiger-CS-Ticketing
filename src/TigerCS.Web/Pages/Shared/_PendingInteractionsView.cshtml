@@ -181,7 +181,7 @@
                             <span class="@(h.Mode is null ? "text-secondary" : null)">@TicketDisplay.HandoffModeLabel(h.Mode)</span>
                         </td>
                         <td>@TicketDisplay.AssignedDepartmentLabel(h.DepartmentId, row.DepartmentName)</td>
-                        <td class="text-mono" title="@h.RequestedAtUtc.ToLocalTime().ToString("MMM d, HH:mm")">
+                        <td class="text-mono" title="@h.RequestedAtUtc.ToUae().ToString("MMM d, HH:mm")">
                             @TicketDisplay.WaitingSinceLabel(h.RequestedAtUtc, nowUtc)
                             @if (h.InteractionEnded)
                             {

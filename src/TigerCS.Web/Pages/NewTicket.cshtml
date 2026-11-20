@@ -353,7 +353,7 @@
                                             <span>
                                                 @(row.ResolvedAtUtc is DateTime resolvedAt
                                                     ? $"Resolved {TicketDisplay.FormatDuration(nowUtc - resolvedAt)} ago"
-                                                    : $"Created {row.CreatedAtUtc.ToLocalTime():d MMM yyyy}")
+                                                    : $"Created {row.CreatedAtUtc.ToUae():d MMM yyyy}")
                                             </span>
                                         </div>
                                         <div class="related-ticket-row__actions">

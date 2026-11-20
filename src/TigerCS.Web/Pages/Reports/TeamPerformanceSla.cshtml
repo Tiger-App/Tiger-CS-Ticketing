@@ -17,7 +17,7 @@
             @if (d is not null)
             {
                 <p class="page-subtitle">
-                    Period @Model.PeriodLabel · all timestamps are UTC
+                    Period @Model.PeriodLabel · all timestamps are UAE time (Asia/Dubai, UTC+4)
                     · @(d.Roles.Count == 0 ? "No role" : string.Join(", ", d.Roles))
                     · @(d.Departments.Count == 0 ? "No department" : string.Join(", ", d.Departments.Select(x => x.Name)))
                 </p>
@@ -140,11 +140,11 @@
                                 <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Ticket)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Ticket)">Ticket</a></th>
                                 <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Department)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Department)">Department</a></th>
                                 <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.SlaType)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.SlaType)">SLA type</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Created)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Created)">Ticket created (UTC)</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Started)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Started)">SLA started (UTC)</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Created)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Created)">Ticket created (UAE)</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Started)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Started)">SLA started (UAE)</a></th>
                                 <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Target)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Target)">SLA target</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Due)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Due)">SLA due (UTC)</a></th>
-                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Actual)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Actual)">Actual response / resolution (UTC)</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Due)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Due)">SLA due (UAE)</a></th>
+                                <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Actual)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Actual)">Actual response / resolution (UAE)</a></th>
                                 <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Status)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Status)">SLA status</a></th>
                                 <th scope="col" aria-sort="@Model.AriaSort(TeamPerformanceSlaSortKeys.Breach)"><a class="sort-link" href="@Model.SortHref(TeamPerformanceSlaSortKeys.Breach)">Breach duration</a></th>
                                 <th scope="col">Assigned employee (at SLA deadline)</th>
@@ -219,8 +219,8 @@
                             <thead>
                                 <tr>
                                     <th scope="col">Ticket</th>
-                                    <th scope="col">Offered (UTC)</th>
-                                    <th scope="col">Answered (UTC)</th>
+                                    <th scope="col">Offered (UAE)</th>
+                                    <th scope="col">Answered (UAE)</th>
                                     <th scope="col">Response time</th>
                                     <th scope="col">Outcome</th>
                                     <th scope="col">Why</th>

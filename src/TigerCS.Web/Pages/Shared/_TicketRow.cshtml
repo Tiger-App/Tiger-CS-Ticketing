@@ -25,5 +25,5 @@
             @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, t.CurrentOwnerName ?? Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName)
         }
     </td>
-    <td class="text-secondary text-mono">@t.CreatedAtUtc.ToLocalTime().ToString("MMM d, HH:mm")</td>
+    <td class="text-secondary text-mono">@t.CreatedAtUtc.ToUae().ToString("MMM d, HH:mm")</td>
 </tr>

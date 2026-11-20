@@ -271,7 +271,7 @@
                                     <div class="facts-row"><dt>@CustomerProfileModel.SourceLabel(profile.VerificationSource) Customer ID</dt><dd class="id-fallback">@overviewExternalId</dd></div>
                                 }
                                 <div class="facts-row"><dt>Primary unit</dt><dd>@(primaryUnit is null ? "—" : $"{primaryUnit.UnitNumber ?? "—"}{(primaryUnit.ProjectName is null ? "" : $" · {primaryUnit.ProjectName}")}")</dd></div>
-                                <div class="facts-row"><dt>Customer since</dt><dd>@profile.FirstSeenAtUtc.ToLocalTime().ToString("MMM d, yyyy")</dd></div>
+                                <div class="facts-row"><dt>Customer since</dt><dd>@profile.FirstSeenAtUtc.ToUae().ToString("MMM d, yyyy")</dd></div>
                             </dl>
                         </div>
                         <div class="facts-panel facts-panel--flat">
@@ -447,7 +447,7 @@
                                             </td>
                                             <td>@(unit.Source == "Manual" ? "Manual entry" : $"{TicketDisplay.LookupSourceLabel(unit.Source)}{(unit.ExternalUnitId is null ? "" : $" · {unit.ExternalUnitId}")}")</td>
                                             <td class="col-num"><span class="count-pill">@unit.TicketCount</span></td>
-                                            <td class="text-secondary text-mono">@unit.LastTicketAtUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                            <td class="text-secondary text-mono">@unit.LastTicketAtUtc.ToUae().ToString("MMM d, yyyy")</td>
                                         </tr>
                                     }
                                 </tbody>
@@ -592,9 +592,9 @@
                                             <td><span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(row.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(row.TicketStatus)</span></td>
                                             <td><span class="badge badge-priority-@TicketDisplay.PriorityCssKey(row.PriorityId)">@TicketDisplay.PriorityLabel(row.PriorityId)</span></td>
                                             <td>@TicketDisplay.AssignedDepartmentLabel(row.CurrentDepartmentId, Model.NameResolver.TryGetDepartmentName(row.CurrentDepartmentId))</td>
-                                            <td class="text-secondary text-mono">@row.CreatedAtUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                            <td class="text-secondary text-mono">@row.CreatedAtUtc.ToUae().ToString("MMM d, yyyy")</td>
                                             <td>@(row.UnitNumber ?? "—")@(row.ProjectName is null ? "" : $" · {row.ProjectName}")</td>
-                                            <td class="text-secondary" title="@row.LastActivityAtUtc.ToLocalTime().ToString("MMM d, yyyy HH:mm")">@TicketDisplay.AgoLabel(row.LastActivityAtUtc, nowUtc)</td>
+                                            <td class="text-secondary" title="@row.LastActivityAtUtc.ToUae().ToString("MMM d, yyyy HH:mm")">@TicketDisplay.AgoLabel(row.LastActivityAtUtc, nowUtc)</td>
                                             <td class="col-actions"><a class="btn btn-sm" href="/Tickets/@row.TicketId">@(isFinished ? "View" : "Open")</a></td>
                                         </tr>
                                     }
@@ -628,7 +628,7 @@
                                     @foreach (var interaction in profile.Interactions)
                                     {
                                         <tr>
-                                            <td class="text-mono">@interaction.StartedAtUtc.ToLocalTime().ToString("MMM d, yyyy HH:mm")</td>
+                                            <td class="text-mono">@interaction.StartedAtUtc.ToUae().ToString("MMM d, yyyy HH:mm")</td>
                                             <td>@(interaction.ChannelName ?? "Unknown channel")@if (interaction.IsOriginatingInteraction) { <span class="badge badge-neutral">Originating</span> }</td>
                                             <td>@(interaction.Direction ?? "—")</td>
                                             <td><a class="ticket-id-link" href="/Tickets/@interaction.TicketId">@interaction.TicketNumber</a></td>

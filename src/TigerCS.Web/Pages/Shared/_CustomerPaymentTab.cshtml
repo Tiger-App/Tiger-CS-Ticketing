@@ -133,7 +133,7 @@
                 <div class="payment-toolbar__meta">
                     <span>Currency <strong>@acct.Currency</strong></span>
                     <span>Source <strong>@outstanding.Source</strong></span>
-                    <span title="@acct.AsOfUtc.ToString("O")">Last updated <strong>@acct.AsOfUtc.ToLocalTime().ToString("d MMM yyyy HH:mm")</strong></span>
+                    <span title="@acct.AsOfUtc.ToString("O")">Last updated <strong>@acct.AsOfUtc.ToUae().ToString("d MMM yyyy HH:mm")</strong></span>
                 </div>
             </div>
 
@@ -141,7 +141,7 @@
             {
                 <div class="alert alert-warning payment-alert-action" role="status" data-balance-stale>
                     <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="@warnIcon" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" /></svg>
-                    <span><strong>These figures may be out of date</strong> — last updated @acct.AsOfUtc.ToLocalTime().ToString("d MMM yyyy HH:mm"). Confirm before quoting. Reminders cannot be sent on stale figures.</span>
+                    <span><strong>These figures may be out of date</strong> — last updated @acct.AsOfUtc.ToUae().ToString("d MMM yyyy HH:mm"). Confirm before quoting. Reminders cannot be sent on stale figures.</span>
                     <a class="btn btn-sm" href="@links.AccountHref(acct.AccountId)" data-payment-retry>Refresh</a>
                 </div>
             }
@@ -224,7 +224,7 @@
                             <div class="payment-send__summary">
                                 <strong>@CustomerPaymentPanel.Money(candidate.ReminderAmount, candidate.Currency)</strong>
                                 <span>@CustomerPaymentPanel.Label(candidate.AmountBasis) · account @candidate.AccountId · instalments @string.Join(", ", candidate.InstalmentIds)</span>
-                                <span class="text-secondary">Offer valid until @candidate.ExpiresAtUtc.ToLocalTime().ToString("HH:mm")</span>
+                                <span class="text-secondary">Offer valid until @candidate.ExpiresAtUtc.ToUae().ToString("HH:mm")</span>
                             </div>
                             <fieldset class="payment-send__channels">
                                 <legend class="field-label">Channels</legend>
@@ -344,7 +344,7 @@
                         @foreach (var reminder in panel.Reminders.Items)
                         {
                             <tr>
-                                <td class="text-mono">@reminder.QueuedAtUtc.ToLocalTime().ToString("d MMM yyyy HH:mm")</td>
+                                <td class="text-mono">@reminder.QueuedAtUtc.ToUae().ToString("d MMM yyyy HH:mm")</td>
                                 <td>@CustomerPaymentPanel.Label(reminder.ReminderType)<div class="cell-sub">@reminder.ReminderId · @reminder.AccountId · @reminder.Trigger</div></td>
                                 <td class="col-num text-mono">@CustomerPaymentPanel.Money(reminder.ReminderAmount, reminder.Currency)</td>
                                 <td>

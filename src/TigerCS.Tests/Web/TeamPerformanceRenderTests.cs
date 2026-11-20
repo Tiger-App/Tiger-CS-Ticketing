@@ -230,14 +230,14 @@ public sealed class TeamPerformanceRenderTests : IDisposable
         Assert.Contains("SLA targets by priority, as configured", html, StringComparison.Ordinal);
         Assert.Contains("not to the current ticket owner", html, StringComparison.Ordinal);
 
-        // Table: ticket links, red / green highlighting, UTC stamps, breach duration, policy and the reason.
+        // Table: ticket links, red / green highlighting, UAE-time stamps (the stored 08:00Z shows as 12:00), breach duration, policy and the reason.
         Assert.Contains("href=\"/Tickets/5\">TG-CS-00005</a>", html, StringComparison.Ordinal);
         Assert.Contains("class=\"sla-row sla-row--breached\"", html, StringComparison.Ordinal);
         Assert.Contains("class=\"sla-row sla-row--met\"", html, StringComparison.Ordinal);
         Assert.Contains("badge badge-sla-breached\">Late</span>", html, StringComparison.Ordinal);
         Assert.Contains("badge badge-sla-met\">On Time</span>", html, StringComparison.Ordinal);
         Assert.Contains("Assigned employee (at SLA deadline)", html, StringComparison.Ordinal);
-        Assert.Contains("2026-09-01 08:00", html, StringComparison.Ordinal);
+        Assert.Contains("2026-09-01 12:00", html, StringComparison.Ordinal);
         Assert.Contains("2 d 1 h (ongoing)", html, StringComparison.Ordinal);
         Assert.Contains("Medium priority", html, StringComparison.Ordinal);
         Assert.Contains("priority SLA policy", html, StringComparison.Ordinal);

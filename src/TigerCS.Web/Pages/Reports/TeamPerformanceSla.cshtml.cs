@@ -114,9 +114,9 @@ public sealed class TeamPerformanceSlaModel(ReportsApiClient reportsApiClient) :
     public string? AriaSort(string key) =>
         Details?.SortBy != key ? null : (Details.SortDir == "asc" ? "ascending" : "descending");
 
-    /// <summary>"2026-09-10 14:05" — every timestamp on the page is UTC and formatted the same way.</summary>
+    /// <summary>"2026-09-10 14:05" — every timestamp on the page is UAE time (the stored UTC instant converted) and formatted the same way.</summary>
     public static string Stamp(DateTime? value) =>
-        value is DateTime v ? v.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) : "—";
+        value is DateTime v ? TigerCS.Domain.Common.UaeCalendar.ToUae(v).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) : "—";
 
     /// <summary>What a manager reads for a status: Late (breached), On Time (met) or Pending.</summary>
     public static string StatusLabel(string status) => status switch

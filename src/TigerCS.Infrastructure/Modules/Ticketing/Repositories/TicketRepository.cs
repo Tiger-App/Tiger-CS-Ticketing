@@ -199,7 +199,7 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
         var nowUtc = query.NowUtc ?? DateTime.UtcNow;
         if (query.DueToday)
         {
-            filtered = filtered.DueOnUtcDay(dbContext, nowUtc.Date);
+            filtered = filtered.DueOnUaeDay(dbContext, TigerCS.Domain.Common.UaeCalendar.TodayRangeUtc(nowUtc).StartUtc);
         }
 
         if (query.BacklogAge is { } bucket)

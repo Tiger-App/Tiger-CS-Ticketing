@@ -172,7 +172,7 @@
                                 @foreach (var c in p.RecentChanges)
                                 {
                                     <tr>
-                                        <td class="text-secondary">@c.OccurredAtUtc.ToLocalTime().ToString("MMM d, yyyy HH:mm")</td>
+                                        <td class="text-secondary">@c.OccurredAtUtc.ToUae().ToString("MMM d, yyyy HH:mm")</td>
                                         <td>@(c.ChangedBy ?? "System")</td>
                                         <td>@c.PermissionKey</td>
                                         <td class="cell-wrap"><code>@c.Before</code></td>
