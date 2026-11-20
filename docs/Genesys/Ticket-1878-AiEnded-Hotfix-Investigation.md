@@ -46,6 +46,8 @@ manual assign/reassign writes `Source=GenesysManualAssignment` (5, `Kind=Manual`
 tickets write nothing new.
 
 ### 1.4 The timestamp (AI conversation "started" 17:50:26 for a ticket created 13:51:04)
+> **Superseded by §8:** with Genesys' confirmation that it sends UTC, the exact layer was reproduced and fixed. The paragraph below is the earlier, partial analysis.
+
 **Mechanism proven:** stored `13:50:26` is the true start (09:50:26 UTC) **plus 4 h** — a wall-clock written as UTC. The UI converts UTC→UAE exactly once
 (`TicketDisplay`, `AddHours(4)`), so a stored value 4 h ahead shows 17:50.
 
@@ -132,3 +134,59 @@ employee, department, reason, source, performed-by (null = system), timestamp, s
 authorised human action; accepting (a connect event) is recorded separately as the interaction handler (`HumanAccepted`), a reply separately (`HumanResponded`). Moving
 a ticket between departments does not restart SLA clocks. An AI-owned ticket has no human owner, so it is attributed to no employee in performance reports until a person
 actually takes it. (Asserted in `AiEndedHumanFollowUpSqlServerTests` and the SLA/first-response unit tests.)
+
+## 8. Timezone — confirmed root cause, traced layer by layer (20 Nov 2026)
+
+**Input from the Genesys integration team (Eman): Genesys sends UTC.** That removes the "sender wrote local time" hypothesis and leaves the pipeline. The ticket's
+expected start is 09:50:26 UTC = **13:50:26 UAE**; the UI showed **17:50:26**, i.e. the database held **13:50:26** (the UAE wall-clock) in a column named `…Utc`.
+
+### Where the extra four hours come from
+Reproduced end to end with real processes (API + Web + SQL Server) **with the process zone set to `Asia/Dubai`, the production host's zone** (earlier local runs used a UTC
+sandbox, which hides exactly this class of bug). The same true-UTC instant was sent in three spellings:
+
+| Genesys payload for the instant 07:07:11 UTC | Pre-#288 build, UAE host: stored → shown on the page |
+|---|---|
+| `…T07:07:11Z` | 07:07:11 → 11:07:11 ✅ |
+| `…T07:07:11` (no zone) | 07:07:11 → 11:07:11 ✅ |
+| `…T07:07:11+00:00` (**explicit zero offset**) | **11:07:11 → 15:07:11 ❌** — start, end **and every transcript line** shifted +4 h |
+
+| Layer | What happens to `…+00:00` on the UAE host |
+|---|---|
+| Genesys → TigerGroupWeb | Forwarded **byte-for-byte**: the controllers bind `JsonElement` and forward `GetRawText()`; TigerGroupWeb parses and rewrites nothing. **Not the cause.** |
+| **TigerCS API, JSON deserialization into `DateTime`** | **`System.Text.Json` converts an offset-bearing string into the server's local zone** (`Kind=Local`, wall-clock 11:07:11 on a UTC+4 host). `Z` and zoneless strings are not converted. **This is where the four hours are introduced.** |
+| Normalization / EF write | Nothing recognised the value as local. EF Core persists a `datetime2` by its **raw ticks**: 11:07:11 was stored in `InteractionStartedAtUtc` (a `GETDATE()`-style default is not involved; no DB-side local-time default exists). |
+| EF materialization → Api JSON out | Read back as `Kind=Unspecified` (11:07:11); the Api writes it without a zone. Correct handling of what it was given. |
+| Web deserialization → display | `TicketDisplay` treats stored values as UTC and adds +4 **exactly once**. 11:07:11 → 15:07:11. **The single legitimate conversion, applied to an already-wrong stored value.** |
+
+The `AddHours(4)` in the UI is not duplicated anywhere; the second four hours were baked into the stored value. Ticket 1878 therefore ran on **a build without PR #288** (the
+repository's committed `publish/` folder is dated before #288 merged) **and** Genesys wrote UTC with an explicit offset. (Any explicit-offset spelling reproduces it.)
+The #288 build, run through the identical experiment, is correct — but only because `ToUtc` reverses the host-zone conversion after the fact, i.e. it still *depends on* the
+host zone being the same one the reader used.
+
+### What changed (nothing subtracts four hours; no warning is the fix)
+1. **JSON boundary** — `GenesysUtcDateTimeConverter` on every inbound Genesys timestamp (start, end, transcript `sentAtUtc`, `connectedAtUtc` (agent acceptance),
+   `confirmedAtUtc`): parsed with `DateTimeOffset`, an offset names the real instant, **no offset = UTC (the contract)**, always `Kind=Utc`, **never consulting
+   `TimeZoneInfo.Local`**. A reflection test fails if a new inbound `DateTime` is added without it. Invalid text is a 400, not a guess.
+2. **Persistence** — `TigerCsDbContext.SaveChanges` converts any `DateTimeKind.Local` value to its real UTC instant: **server-local time can no longer reach a column from any path**
+   (not only Genesys).
+3. **Presentation** — `TicketDisplay.ToUae` = `AsUtc` (a `Local` value is converted by its instant, **never relabelled UTC**) + a fixed +4 (Asia/Dubai has no DST), used by every
+   helper. **All 30 `.ToLocalTime()` calls in the Web project** (which gave UAE time on the UAE host and UTC anywhere else) now use it; a test fails if `.ToLocalTime()` returns.
+4. **Other Genesys path with the opposite trap** — `CollectionsReminderOutcomeAppService` used `DateTime.ToUniversalTime()`, which reads a *zoneless* value as host-local (four hours
+   early on the UAE host); it now uses the shared normalizer.
+5. **CI** — the timestamp tests run again with `TZ=Asia/Dubai`.
+
+SLA calculation reads these same columns: conversation start/end, agent acceptance (`connectedAtUtc`) and every transcript time (which sets First Response) were all shifted by the
+same defect, so they are corrected by the same change; the SLA calculator itself already requires UTC and rejects `Kind=Local`.
+
+### Evidence
+* Real-process runs under `TZ=Asia/Dubai`, three payload spellings, layer dumps (DB ticks → API JSON → page): see `docs/Genesys/screenshots-1878/tz-before-pre288-offset-payload-uae-host.png`
+  (start 15:07:11 for a true 11:07:11 UAE, later than the ticket's own creation) and `tz-after-fixed-offset-payload-uae-host.png` (11:05:18 for a true 11:05:18 UAE; start → messages → end → ticket order correct).
+* `GenesysWireTimestampTests` (46 tests incl. the matrix `Z`, `.000Z`, `+00:00`, `+04:00`, `-05:00`, zoneless, fractions; ticket 1878's exact `+00:00` value → "19 Nov 2026 13:50:26")
+  pass under `TZ=UTC`, `Asia/Dubai` and `America/Los_Angeles`; **mutation-checked** — removing the converter from one field fails four of them under `Asia/Dubai`.
+
+### Still needs Production confirmation / a decision
+* **Which spelling Genesys uses** is inferred by reproduction (an explicit offset is the only UTC form that reproduces the symptom); the audit no longer records the raw spelling because the
+  boundary now normalizes first. The read-only diagnostic (§8a, rows whose start is later than their own creation/first message) lists every affected conversation.
+* **Rows already stored wrong are not rewritten** (a Production data change needs approval). They are identifiable (`InteractionStartedAtUtc`/`EndedAtUtc`/message `SentAtUtc` exactly +4 h
+  from the true instant, usually later than `CreatedAtUtc`); a corrective script can be prepared for approval.
+* Deploy **this** build (not just #288): #288 is correct only while the API host's zone matches the one the JSON reader used.

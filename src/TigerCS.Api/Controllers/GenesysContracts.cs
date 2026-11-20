@@ -62,7 +62,7 @@ public sealed record GenesysInquiryRequest(
     string? QueueName = null,
     string? AgentId = null,
     string? AgentName = null,
-    DateTime? StartedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? StartedAtUtc = null,
     int? DepartmentId = null,
     string? DepartmentCode = null,
     string? TowerName = null,
@@ -157,7 +157,7 @@ public sealed class GenesysRequestTypePartConverter : JsonConverter<GenesysReque
 /// <param name="Transcript">The conversation's messages, in order. Absent/empty for a voice call.</param>
 public sealed record GenesysConversationEndRequest(
     string ConversationId,
-    DateTime? EndedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? EndedAtUtc = null,
     string? EndReason = null,
     string? AgentId = null,
     string? AgentName = null,
@@ -172,7 +172,7 @@ public sealed record GenesysConversationEndRequest(
 /// <param name="ExternalMessageId">Genesys' own message id, where available.</param>
 public sealed record GenesysTranscriptMessageRequest(
     string Sender,
-    DateTime SentAtUtc,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime SentAtUtc,
     string Body,
     string? SenderName = null,
     string? SenderId = null,
@@ -279,7 +279,7 @@ public sealed record GenesysTicketUpdateRequest(
     string? AgentName = null,
     GenesysConversationEndPart? Ended = null,
     GenesysHandoffPart? Handoff = null,
-    DateTime? StartedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? StartedAtUtc = null,
     GenesysRoutingPart? Routing = null,
     GenesysCustomerConfirmationPart? CustomerConfirmation = null,
     [property: JsonConverter(typeof(LenientNullableBoolConverter))] bool? AwaitingCustomerReply = null,
@@ -349,7 +349,7 @@ public sealed class LenientNullableBoolConverter : JsonConverter<bool?>
 /// <param name="Note">What the customer said, or the flow's note. Display only.</param>
 public sealed record GenesysCustomerConfirmationPart(
     bool? ConfirmedResolved = null,
-    DateTime? ConfirmedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? ConfirmedAtUtc = null,
     string? Note = null);
 
 /// <summary>
@@ -369,14 +369,14 @@ public sealed record GenesysRoutingPart(
     string? QueueName = null,
     string? AgentId = null,
     string? AgentName = null,
-    DateTime? ConnectedAtUtc = null);
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? ConnectedAtUtc = null);
 
 /// <summary>The conversation has finished — for any reason: the agent ended it, the customer closed the browser, the connection dropped, Genesys timed it out.</summary>
 /// <param name="EndedAtUtc">When it ended. Defaults to now.</param>
 /// <param name="EndReason">Why, as reported (e.g. "AgentDisconnect", "CustomerDisconnect", "Timeout"). Free text — no vocabulary is confirmed.</param>
 /// <param name="Transcript">The conversation in order, as far as available. Resending an already-stored transcript stores nothing twice.</param>
 public sealed record GenesysConversationEndPart(
-    DateTime? EndedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? EndedAtUtc = null,
     string? EndReason = null,
     IReadOnlyList<GenesysTranscriptMessageRequest>? Transcript = null);
 

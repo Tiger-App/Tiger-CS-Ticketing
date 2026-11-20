@@ -58,6 +58,13 @@ jobs:
           echo "SQL Server tests skipped: $skipped"
           test "$skipped" -eq 0
 
+      - name: Genesys timestamps on a UTC+4 host (ticket TG-REG-20261119-0027)
+        # The production application server runs in UAE time; a hosted runner runs in UTC, which HIDES any bug that depends on the host zone (an offset-bearing UTC
+        # string was read into the host's local zone and persisted four hours late). The same tests run again here with the process zone set to Asia/Dubai.
+        env:
+          TZ: Asia/Dubai
+        run: dotnet test TigerCS.slnx --no-build --configuration Release --filter "FullyQualifiedName~GenesysWireTimestampTests|FullyQualifiedName~GenesysTimelineAndOwnershipTimingTests"
+
   campaign-ui-scripts:
     runs-on: ubuntu-latest
     defaults:

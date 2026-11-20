@@ -119,10 +119,10 @@
                             <div class="version-card__meta">
                                 <span><strong>@v.StepCount</strong> @(v.StepCount == 1 ? "step" : "steps")</span>
                                 <span><strong>@v.TicketCount</strong> @(v.TicketCount == 1 ? "ticket" : "tickets") on this version</span>
-                                <span>Created @v.CreatedAtUtc.ToLocalTime().ToString("MMM d, yyyy") by @(v.CreatedByName ?? "System")</span>
+                                <span>Created @TigerCS.Web.Models.TicketDisplay.ToUae(v.CreatedAtUtc).ToString("MMM d, yyyy") by @(v.CreatedByName ?? "System")</span>
                                 @if (v.PublishedAtUtc is { } p)
                                 {
-                                    <span>Published @p.ToLocalTime().ToString("MMM d, yyyy") by @(v.PublishedByName ?? "System")</span>
+                                    <span>Published @TigerCS.Web.Models.TicketDisplay.ToUae(p).ToString("MMM d, yyyy") by @(v.PublishedByName ?? "System")</span>
                                 }
                             </div>
                         </div>
