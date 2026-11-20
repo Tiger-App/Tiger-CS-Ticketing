@@ -47,7 +47,7 @@ public class TicketOwnershipChangeEventTests
     }
 
     [Fact]
-    public async Task AutomaticRouting_ToTheRequestTypesDepartment_IsRecordedAsSystemRouting_WithNoActor_AndNoPersonIsChosen()
+    public async Task AutomaticRouting_ToTheRequestTypesDepartment_IsRecordedAsSystemRouting_WithNoActor()
     {
         var w = BuildRouting();
         var financeOfficer = Guid.NewGuid();
@@ -58,16 +58,13 @@ public class TicketOwnershipChangeEventTests
         var ticket = await IngestWithRequestTypeAsync(w, "conv-routed");
 
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
-        // The AI Agent handles first: the request type's configured assignee is NOT applied to an AI-handled ticket (the department routes, nobody is assigned).
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.True(ticket.IsOwnedByAiAgent);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.Equal(financeOfficer, ticket.CurrentOwnerEmployeeId);
         var routed = Assert.Single(w.F.WorkflowEvents.All, e => e.EventType == WorkflowEventType.TicketTransferred);
         Assert.Null(routed.ActorEmployeeId);                                        // the system, not an agent
         Assert.Equal((byte)TicketTransferReason.SystemRouting, routed.TransferReasonCode);
         Assert.Equal(w.Arrival.DepartmentId, routed.FromDepartmentId);
         Assert.Equal(w.Finance.DepartmentId, routed.ToDepartmentId);
-        Assert.Null(routed.ToEmployeeId);                                           // no receiving employee: the rule assignee is not applied while the AI handles it
+        Assert.Equal(financeOfficer, routed.ToEmployeeId);                          // where the configured rule landed it
         Assert.False(routed.IsEscalation);                                          // never an agent's judgement
     }
 

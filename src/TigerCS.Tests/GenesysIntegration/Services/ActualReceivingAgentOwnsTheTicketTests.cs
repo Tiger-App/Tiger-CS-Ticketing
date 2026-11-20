@@ -8,8 +8,7 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// <summary>
 /// THE HUMAN AGENT WHO ACTUALLY RECEIVES OR ACCEPTS THE INTERACTION OWNS THE TICKET - on every channel. Besides <c>routing.agentId</c> (connected),
 /// a <c>HumanAgent</c> transcript line carrying the agent's Genesys id proves who received the conversation; the ticket then goes to THAT
-/// employee. There is no Round Robin: an agent who cannot take it leaves the ticket in the Call Center queue FLAGGED, with the AI Agent still its owner, and
-/// nobody else is dealt in their place.
+/// employee (never the next Round Robin name). An agent who cannot take it is flagged, never replaced by somebody else.
 /// </summary>
 public class ActualReceivingAgentOwnsTheTicketTests
 {
@@ -17,7 +16,7 @@ public class ActualReceivingAgentOwnsTheTicketTests
 
     public static TheoryData<GenesysChannel> AllChannels => new()
     {
-        GenesysChannel.Phone, GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp,
+        GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp,
         GenesysChannel.Instagram, GenesysChannel.Facebook, GenesysChannel.SocialMedia
     };
 
@@ -57,14 +56,6 @@ public class ActualReceivingAgentOwnsTheTicketTests
         if (expected is null) Assert.Empty(current); else Assert.Equal(expected, Assert.Single(current).AssignedEmployeeId);
     }
 
-    private static void AssertQueuedWithTheAiOwner(World w, Ticket t)
-    {
-        Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);
-        Assert.Equal(ServiceAccount, t.AiAgentOwnerEmployeeId);
-        AssertSingleOwner(w, t, null);
-        Assert.True(RotationUntouched(w));
-    }
-
     // ---- 1. a human who wrote to the customer received the interaction ------------------------------------------------------------
 
     [Theory]
@@ -84,7 +75,7 @@ public class ActualReceivingAgentOwnsTheTicketTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task AHumanLineFromAnAgentWhoCannotTakeIt_FlagsTheTicketInTheQueue_AndNobodyIsDealtInTheirPlace(GenesysChannel channel)
+    public async Task AHumanLineFromAnAgentWhoCannotTakeIt_FlagsTheTicket_AndTheSharedRotationGivesItACsAgent(GenesysChannel channel)
     {
         var w = Build();
         var employee = w.F.AddAgent("g-emp", "Dept Employee", roles: Roles.DepartmentEmployee);        // mapped Call Center member, but not a CS Agent
@@ -92,25 +83,24 @@ public class ActualReceivingAgentOwnsTheTicketTests
 
         await HumanLineAsync(w, t, "c-inelig", "HumanAgent", "g-emp");
 
+        Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);
         Assert.NotEqual(employee, t.CurrentOwnerEmployeeId);                              // the non-CS-Agent never owns it
-        AssertQueuedWithTheAiOwner(w, t);                                                 // ...and no CS Agent is dealt by Round Robin instead
+        Assert.Contains(t.CurrentOwnerEmployeeId!.Value, w.Agents);                       // an eligible CS Agent does (final rule: never unassigned)
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == t.TicketId && a.IsCurrent);
         Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == t.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.EntityId == t.TicketId.ToString());
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == t.TicketId.ToString());
     }
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task AHumanLineWithAnUnknownId_StillCountsAsHumanWork_ButNobodyIsAssigned(GenesysChannel channel)
+    public async Task AHumanLineWithAnUnknownId_StillCountsAsHumanWork_AndTakesTheRoundRobinRoute(GenesysChannel channel)
     {
         var w = Build();
         var t = await IngestAsync(w, "c-unknown", channel);
 
         await HumanLineAsync(w, t, "c-unknown", "HumanAgent", "participant-not-an-employee");
 
-        AssertQueuedWithTheAiOwner(w, t);                                                 // a person is involved: queue only, never a Round Robin pick
-        Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == t.TicketId && e.EventType == WorkflowEventType.TicketTransferred && e.ToDepartmentId == w.F.CallCenter!.DepartmentId);
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action is "AssignOnAnswer" or "AutoAssign" && e.EntityId == t.TicketId.ToString());
+        Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);
+        Assert.Contains(t.CurrentOwnerEmployeeId!.Value, w.Agents);
     }
 
     // ---- 7. AI-only stays AI -----------------------------------------------------------------------------------------------------
@@ -126,105 +116,80 @@ public class ActualReceivingAgentOwnsTheTicketTests
         await HumanLineAsync(w, t, "c-bot", "Customer", "g-a1", "m2");
 
         Assert.Equal(w.Cs.DepartmentId, t.CurrentDepartmentId);
-        Assert.Equal(ServiceAccount, t.AiAgentOwnerEmployeeId);
         AssertSingleOwner(w, t, null);
-        Assert.True(RotationUntouched(w));
     }
 
-    // ---- 2-3. AI transfers to a human: the ticket queues with the AI owner, then the agent who ACCEPTS owns it ---------------------
+    // ---- 2-3. AI transfers to a human: provisional pick, then the agent who ACCEPTS owns it ------------------------------------
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task AiTransfersToHuman_TheTicketQueuesWithTheAiOwner_TheAcceptingAgentIsAssignedDirectly(GenesysChannel channel)
+    public async Task AiTransfersToHuman_RoundRobinIsProvisional_TheAcceptingAgentReplacesIt(GenesysChannel channel)
     {
         var w = Build();
         var t = await IngestAsync(w, "c-transfer", channel);
 
         await w.F.TicketUpdate.UpdateAsync(ServiceAccount, t.TicketId, new GenesysTicketUpdateDto(
             "c-transfer", Handoff: new GenesysHandoffUpdateDto(Required: true, AgentAvailable: false, Mode: "HumanTakeover")));
+        var provisional = t.CurrentOwnerEmployeeId!.Value;
+        Assert.Contains(provisional, w.Agents);
 
-        // Nobody has accepted: the department moved to the Call Center queue (the originating one is untouched), the AI Agent is still the owner.
-        AssertQueuedWithTheAiOwner(w, t);
-        Assert.Equal(w.Cs.DepartmentId, t.OriginatingDepartmentId);
-        Assert.DoesNotContain(w.F.AssignmentHistory.Entries, h => h.TicketId == t.TicketId && h.Source == TicketAssignmentSource.GenesysHumanFollowUp);
-        await ConnectAsync(w, t, "c-transfer", "g-a2");
+        var acceptor = w.Agents.First(a => a != provisional);
+        await ConnectAsync(w, t, "c-transfer", w.Agents.ToList().IndexOf(acceptor) switch { 0 => "g-a1", 1 => "g-a2", _ => "g-a3" });
 
-        AssertSingleOwner(w, t, w.Agents[1]);
-        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == t.TicketId);                 // no provisional row ever existed
-        var accepted = Assert.Single(w.F.AssignmentHistory.Entries,
-            h => h.TicketId == t.TicketId && h.NewEmployeeId == w.Agents[1] && h.Source is TicketAssignmentSource.GenesysDirectCall or TicketAssignmentSource.GenesysCallTransfer);
-        Assert.Equal(ServiceAccount, accepted.PreviousEmployeeId);                                 // the previous owner is the AI Agent
-        Assert.True(RotationUntouched(w));
+        AssertSingleOwner(w, t, acceptor);
+        Assert.Equal(2, w.F.TicketAssignments.Added.Count(a => a.TicketId == t.TicketId));        // provisional row retained, superseded
     }
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task AHumanFollowUpFlagRaisedLater_QueuesTheTicket_WritingAQueueRoutingRow_AndAssignsNobody(GenesysChannel channel)
+    public async Task AHumanLine_ReplacesTheProvisionalOwner_ButNotAfterTheOwnerHasWorked(GenesysChannel channel)
     {
         var w = Build();
-        var t = await IngestAsync(w, "c-flag", channel);
-        Assert.Equal(w.Cs.DepartmentId, t.CurrentDepartmentId);
-
-        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, t.TicketId, new GenesysTicketUpdateDto("c-flag", HumanFollowUpRequired: true));
-
-        AssertQueuedWithTheAiOwner(w, t);
-        Assert.Equal(w.Cs.DepartmentId, t.OriginatingDepartmentId);
-        var move = Assert.Single(w.F.AssignmentHistory.Entries, h => h.TicketId == t.TicketId && h.Source == TicketAssignmentSource.GenesysQueueRouting);
-        Assert.Equal(w.Cs.DepartmentId, move.PreviousDepartmentId);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, move.DepartmentId);
-        Assert.Equal(ServiceAccount, move.PreviousEmployeeId);
-        Assert.Equal(ServiceAccount, move.NewEmployeeId);                                          // ownership unchanged: the AI Agent on both sides
-        Assert.DoesNotContain(w.F.AssignmentHistory.Entries, h => h.TicketId == t.TicketId && h.Source == TicketAssignmentSource.GenesysHumanFollowUp);
-    }
-
-    [Theory]
-    [MemberData(nameof(AllChannels))]
-    public async Task AHumanLine_GivesAQueuedTicketToThatAgent_ButNotAfterTheOwnerHasWorked(GenesysChannel channel)
-    {
-        var w = Build();
-        var queued = await IngestAsync(w, "c-repl", channel, humanFollowUp: true);
+        var replaced = await IngestAsync(w, "c-repl", channel, humanFollowUp: true);
         var worked = await IngestAsync(w, "c-work", channel, humanFollowUp: true);
-        AssertQueuedWithTheAiOwner(w, queued);
-        AssertQueuedWithTheAiOwner(w, worked);
+        var workedOwner = worked.CurrentOwnerEmployeeId!.Value;
+        worked.RecordFirstHumanResponse(DateTime.UtcNow);                                        // the provisional owner already answered the customer
 
-        await ConnectAsync(w, worked, "c-work", "g-a1");                                         // agent 1 accepted...
-        if (worked.FirstHumanResponseAtUtc is null) worked.RecordFirstHumanResponse(DateTime.UtcNow);   // ...and already answered the customer (a voice connect records it at the connect time)
+        string IdOf(Guid id) => id == w.Agents[0] ? "g-a1" : id == w.Agents[1] ? "g-a2" : "g-a3";
+        var other1 = w.Agents.First(a => a != replaced.CurrentOwnerEmployeeId);
+        var other2 = w.Agents.First(a => a != workedOwner);
 
-        await HumanLineAsync(w, queued, "c-repl", "HumanAgent", "g-a2");
-        await HumanLineAsync(w, worked, "c-work", "HumanAgent", "g-a3");
+        await HumanLineAsync(w, replaced, "c-repl", "HumanAgent", IdOf(other1));
+        await HumanLineAsync(w, worked, "c-work", "HumanAgent", IdOf(other2));
 
-        AssertSingleOwner(w, queued, w.Agents[1]);
-        AssertSingleOwner(w, worked, w.Agents[0]);
-        Assert.True(RotationUntouched(w));
+        AssertSingleOwner(w, replaced, other1);
+        AssertSingleOwner(w, worked, workedOwner);
     }
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task ConnectedAndFirstReplyInOneUpdate_TheReplyDoesNotMakeAnEarlierAcceptorLookLikeTheWorker(GenesysChannel channel)
+    public async Task ConnectedAndFirstReplyInOneUpdate_TheReplyDoesNotMakeTheProvisionalOwnerLookLikeTheWorker(GenesysChannel channel)
     {
         var w = Build();
         var t = await IngestAsync(w, "c-combined", channel, humanFollowUp: true);
+        var provisional = t.CurrentOwnerEmployeeId!.Value;
+        var incoming = w.Agents.First(a => a != provisional);
+        var incomingId = incoming == w.Agents[0] ? "g-a1" : incoming == w.Agents[1] ? "g-a2" : "g-a3";
 
-        // Connected and the first reply from the SAME agent in one update: they take the queued ticket.
         await w.F.TicketUpdate.UpdateAsync(ServiceAccount, t.TicketId, new GenesysTicketUpdateDto(
             "c-combined",
-            Routing: new GenesysRoutingUpdateDto(AgentId: "g-a2", ConnectedAtUtc: DateTime.UtcNow),
-            Transcript: [new GenesysTranscriptMessageDto("HumanAgent", DateTime.UtcNow, "Hi, I am taking this.", "Agent", "g-a2", "m1")]));
+            Routing: new GenesysRoutingUpdateDto(AgentId: incomingId, ConnectedAtUtc: DateTime.UtcNow),
+            Transcript: [new GenesysTranscriptMessageDto("HumanAgent", DateTime.UtcNow, "Hi, I am taking this.", "Agent", incomingId, "m1")]));
 
-        AssertSingleOwner(w, t, w.Agents[1]);
+        AssertSingleOwner(w, t, incoming);
 
-        // ...whereas a reply written by the agent who ALREADY holds the ticket is their work and keeps it, even when Genesys also reports
-        // somebody else connected in the same update.
+        // ...whereas a reply written by SOMEONE ELSE in the same update is the provisional owner's work and keeps the ticket with them.
         var t2 = await IngestAsync(w, "c-combined-2", channel, humanFollowUp: true);
-        await ConnectAsync(w, t2, "c-combined-2", "g-a1");
-        AssertSingleOwner(w, t2, w.Agents[0]);
+        var provisional2 = t2.CurrentOwnerEmployeeId!.Value;
+        var provisionalId = provisional2 == w.Agents[0] ? "g-a1" : provisional2 == w.Agents[1] ? "g-a2" : "g-a3";
+        var incoming2 = w.Agents.First(a => a != provisional2);
+        var incoming2Id = incoming2 == w.Agents[0] ? "g-a1" : incoming2 == w.Agents[1] ? "g-a2" : "g-a3";
 
         await w.F.TicketUpdate.UpdateAsync(ServiceAccount, t2.TicketId, new GenesysTicketUpdateDto(
             "c-combined-2",
-            Routing: new GenesysRoutingUpdateDto(AgentId: "g-a3", ConnectedAtUtc: DateTime.UtcNow),
-            Transcript: [new GenesysTranscriptMessageDto("HumanAgent", DateTime.UtcNow, "Already answered by the first agent.", "Agent", "g-a1", "m2")]));
+            Routing: new GenesysRoutingUpdateDto(AgentId: incoming2Id, ConnectedAtUtc: DateTime.UtcNow),
+            Transcript: [new GenesysTranscriptMessageDto("HumanAgent", DateTime.UtcNow, "Already answered by the first agent.", "Agent", provisionalId, "m2")]));
 
-        AssertSingleOwner(w, t2, w.Agents[0]);
-        Assert.True(RotationUntouched(w));
+        AssertSingleOwner(w, t2, provisional2);
     }
 }

@@ -541,7 +541,8 @@ public sealed class GenesysInquiryIngestionAppService(
         }
 
         var classified = await classificationAppService.ClassifyAsync(
-            callerEmployeeId, ticketId, conversationId, requestType, "GenesysIngestion", cancellationToken);
+            callerEmployeeId, ticketId, conversationId, requestType, "GenesysIngestion", cancellationToken,
+            voiceOwnership: inquiry.Channel == GenesysChannel.Phone);
 
         return classified.Outcome is GenesysClassificationOutcome.Classified or GenesysClassificationOutcome.AlreadyClassified
             ? classified

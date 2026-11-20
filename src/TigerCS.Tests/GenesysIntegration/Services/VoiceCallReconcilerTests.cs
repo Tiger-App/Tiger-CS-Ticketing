@@ -10,7 +10,7 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
 /// The voice no-answer reconciliation (PR #292): "the call ended and nobody answered" is concluded only after a configurable window measured from when the end was
-/// RECEIVED, then flagged and queued (AI Agent still the owner; never Round Robin); an answering agent whose Genesys id was unmapped is reconciled - never Round Robin - once the
+/// RECEIVED, then dealt by the existing workflow and Round Robin; an answering agent whose Genesys id was unmapped is reconciled - never Round Robin - once the
 /// mapping is corrected. Pure classification first, then the executor through the real services.
 /// </summary>
 public class VoiceCallReconcilerTests
@@ -205,7 +205,7 @@ public class VoiceCallReconcilerTests
     private static void PassTheWindow(World w, int extraSeconds = 5) => w.F.Clock.Advance(w.Options.NoAnswerWindow + TimeSpan.FromSeconds(extraSeconds));
 
     [Fact]
-    public async Task CallEndedUnanswered_BeforeTheWindow_NothingHappens_AfterIt_ItIsQueuedForAPerson_NeverAssigned_Once()
+    public async Task CallEndedUnanswered_BeforeTheWindow_NothingHappens_AfterIt_ItIsDealtByRoundRobin_Once()
     {
         var w = NewWorld();
         var call = await AiCallAsync(w, "r-1");
@@ -220,25 +220,24 @@ public class VoiceCallReconcilerTests
         w.F.Clock.Advance(TimeSpan.FromSeconds(200));
         var concluded = await RunAsync(w, call);
 
-        Assert.Equal(VoiceReconcileOutcome.FlaggedAndQueued, concluded.Outcome);
+        Assert.Equal(VoiceReconcileOutcome.AssignedRoundRobin, concluded.Outcome);
         var t = w.Ticket(call.TicketId);
-        Assert.Null(t.CurrentOwnerEmployeeId);                                                 // BUSINESS RULE: no Round Robin - nobody is chosen
-        Assert.NotNull(t.AiAgentOwnerEmployeeId);                                              // the AI Agent remains the owner
-        Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);                     // waiting in the Call Center queue
+        Assert.Equal(w.Agents[0].Id, t.CurrentOwnerEmployeeId);                                // the existing Round Robin: next in the rotation
+        Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);                     // Call Center first
+        Assert.Null(t.AiAgentOwnerEmployeeId);                                                 // a person now owns it
         Assert.True(w.F.InteractionFor(call.ConversationId)!.RequiresHumanFollowUp);           // concluded: the ticket needs a person (sticky)
         Assert.Single(w.F.Audit.Entries, e => e.Action == GenesysAuditActions.VoiceNoAnswerConcluded && e.EntityId == call.TicketId.ToString());
-        Assert.DoesNotContain(w.F.AssignmentHistory.Entries, h => h.TicketId == call.TicketId && w.Agents.Any(a => a.Id == h.NewEmployeeId));   // no person was ever assigned
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == call.TicketId);
-        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));      // the shared rotation was never consulted
-        Assert.Null(t.FirstHumanResponseAtUtc);                                                // queueing is not a response
+        var row = Assert.Single(w.F.AssignmentHistory.Entries, h => h.NewEmployeeId == w.Agents[0].Id && h.TicketId == call.TicketId);
+        Assert.Equal(TicketAssignmentSource.GenesysHumanFollowUp, row.Source);                 // provisional, system Round Robin - never an acceptance
+        Assert.Null(t.FirstHumanResponseAtUtc);                                                // assignment is not a response
 
-        var again = await RunAsync(w, call);                                                   // idempotent: already flagged and queued
+        var again = await RunAsync(w, call);                                                   // idempotent: it has an owner now
         Assert.Equal(VoiceReconcileOutcome.Skipped, again.Outcome);
         Assert.Single(w.F.Audit.Entries, e => e.Action == GenesysAuditActions.VoiceNoAnswerConcluded && e.EntityId == call.TicketId.ToString());
     }
 
     [Fact]
-    public async Task SeveralUnansweredCalls_AreAllQueued_AndNoneIsDealtToAnyone()
+    public async Task RoundRobinAdvancesTheSharedRotation_ForSeveralUnansweredCalls()
     {
         var w = NewWorld();
         var calls = new List<Call>();
@@ -250,11 +249,11 @@ public class VoiceCallReconcilerTests
         }
 
         PassTheWindow(w);
-        foreach (var c in calls) Assert.Equal(VoiceReconcileOutcome.FlaggedAndQueued, (await RunAsync(w, c)).Outcome);
+        foreach (var c in calls) await RunAsync(w, c);
 
-        Assert.All(calls, c => Assert.Null(w.Ticket(c.TicketId).CurrentOwnerEmployeeId));
-        Assert.All(calls, c => Assert.NotNull(w.Ticket(c.TicketId).AiAgentOwnerEmployeeId));
-        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
+        Assert.Equal(
+            [w.Agents[0].Id, w.Agents[1].Id, w.Agents[2].Id, w.Agents[0].Id],
+            calls.Select(c => w.Ticket(c.TicketId).CurrentOwnerEmployeeId!.Value));
     }
 
     [Fact]
@@ -273,13 +272,12 @@ public class VoiceCallReconcilerTests
         PassTheWindow(w);
         var result = await RunAsync(w, call);
 
-        Assert.Equal(VoiceReconcileOutcome.FlaggedAndQueued, result.Outcome);
-        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);                           // queued, never dealt
-        Assert.NotNull(w.Ticket(call.TicketId).AiAgentOwnerEmployeeId);
+        Assert.Equal(VoiceReconcileOutcome.AssignedRoundRobin, result.Outcome);
+        Assert.Equal(w.Agents[0].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
     }
 
     [Fact]
-    public async Task AnAnswerThatArrivesAfterEnded_InsideTheWindow_OwnsTheTicket_AndTheReconcilerThenHasNothingToDo()
+    public async Task AnAnswerThatArrivesAfterEnded_InsideTheWindow_BeatsRoundRobin_AndTheReconcilerThenHasNothingToDo()
     {
         var w = NewWorld();
         var call = await AiCallAsync(w, "r-late-answer");
@@ -315,7 +313,7 @@ public class VoiceCallReconcilerTests
     }
 
     [Fact]
-    public async Task ClosedByAiAfterTheConclusion_NeverReopensOrAssigns_AndANewConversationIsAnotherTicket()
+    public async Task ClosedByAiAfterTheConclusion_IsRefused_BecauseAPersonNowOwnsAFlaggedTicket()
     {
         var w = NewWorld();
         var call = await AiCallAsync(w, "r-too-late");
@@ -323,19 +321,14 @@ public class VoiceCallReconcilerTests
         PassTheWindow(w);
         await RunAsync(w, call);
 
-        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, call.TicketId, new GenesysTicketUpdateDto(call.ConversationId, ClosedByAi: true));
+        var late = await w.F.TicketUpdate.UpdateAsync(ServiceAccount, call.TicketId, new GenesysTicketUpdateDto(call.ConversationId, ClosedByAi: true));
 
-        // Whatever the closure decision, nobody was auto-assigned, and once Closed a later reconciliation / duplicate event changes nothing.
-        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
-        var status = w.Ticket(call.TicketId).TicketStatus;
-        var again = await RunAsync(w, call);
-        Assert.Equal(status, w.Ticket(call.TicketId).TicketStatus);
-        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
-        if (status == TicketStatus.Closed) Assert.Equal(VoiceReconcileOutcome.Skipped, again.Outcome);
+        Assert.False(late.ClosedByAi);
+        Assert.NotEqual(TicketStatus.Closed, w.Ticket(call.TicketId).TicketStatus);
     }
 
     [Fact]
-    public async Task WithNoCallCenterAgentsAtAll_TheTicketIsStillQueuedAndFlagged_AndALaterHireIsNeverDealtIt()
+    public async Task NoEligibleCallCenterAgent_KeepsTheTicketQueuedAndFlagged_AndANewAgentGetsItOnTheNextRun()
     {
         var w = NewWorld(agents: 0);
         var call = await AiCallAsync(w, "r-nobody");
@@ -343,15 +336,15 @@ public class VoiceCallReconcilerTests
         PassTheWindow(w);
 
         var first = await RunAsync(w, call);
-        Assert.Equal(VoiceReconcileOutcome.FlaggedAndQueued, first.Outcome);
+        Assert.Equal(VoiceReconcileOutcome.QueuedNoEligibleAgent, first.Outcome);
         Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);   // visible in the Call Center queue
 
-        w.F.AddAgent("g-late-hire", "Late Hire");
+        var agent = w.F.AddAgent("g-late-hire", "Late Hire");
         var second = await RunAsync(w, call);
 
-        Assert.Equal(VoiceReconcileOutcome.Skipped, second.Outcome);                           // nothing new: a new agent is not given an unanswered ticket
-        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(VoiceReconcileOutcome.AssignedRoundRobin, second.Outcome);
+        Assert.Equal(agent, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
         Assert.Single(w.F.Audit.Entries, e => e.Action == GenesysAuditActions.VoiceNoAnswerConcluded && e.EntityId == call.TicketId.ToString());   // concluded once
     }
 
@@ -383,7 +376,7 @@ public class VoiceCallReconcilerTests
         w.F.Clock.Advance(TimeSpan.FromSeconds(20));
         Assert.Equal(VoiceReconcileOutcome.Skipped, (await RunAsync(w, call)).Outcome);
         w.F.Clock.Advance(TimeSpan.FromSeconds(20));
-        Assert.Equal(VoiceReconcileOutcome.FlaggedAndQueued, (await RunAsync(w, call)).Outcome);
+        Assert.Equal(VoiceReconcileOutcome.AssignedRoundRobin, (await RunAsync(w, call)).Outcome);
     }
 
     [Fact]
@@ -459,7 +452,7 @@ public class VoiceCallReconcilerTests
     // ---- explicit workflow department ----------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task ExplicitWorkflowDepartment_IsKept_FlaggedAndNeverDealt()
+    public async Task ExplicitWorkflowDepartment_IsKept_AndDealtByItsOwnRoundRobin()
     {
         var w = NewWorld();
         var legal = w.F.Departments.AddDepartment("Legal", "LEGAL");
@@ -475,9 +468,7 @@ public class VoiceCallReconcilerTests
         var result = await RunAsync(w, call);
 
         Assert.Equal(legal.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);         // never pulled into the Call Center
-        Assert.Equal(VoiceReconcileOutcome.FlaggedAndQueued, result.Outcome);
-        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);                           // not even the department's own rotation: a person must accept
-        Assert.NotNull(w.Ticket(call.TicketId).AiAgentOwnerEmployeeId);
-        Assert.True(w.F.InteractionFor(call.ConversationId)!.RequiresHumanFollowUp);
+        Assert.Equal(VoiceReconcileOutcome.AssignedRoundRobin, result.Outcome);
+        Assert.Equal(lawyer, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
     }
 }

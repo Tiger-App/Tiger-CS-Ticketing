@@ -169,16 +169,16 @@ public static class UnassignedTicketClassifier
         if (evidence.PhonePickupByUnmappedAgent)
         {
             return Of(UnassignedTicketClass.HumanAnsweredAgentNotMapped,
-                evidence.HasGenesysInteraction ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter);
+                evidence.GenesysIsPhoneOnly ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter);
         }
 
         if (evidence.RequiresHumanFollowUp || evidence.OpenHandoff || evidence.HumanEvidence)
         {
             // VOICE (phone-only): queue only, never a chosen person - the voice no-answer reconciler deals it once the call ended unanswered. Every other
             // channel keeps the previous behaviour: Call Center first, then Round Robin.
-            var humanAction = evidence.HasGenesysInteraction ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter;
+            var humanAction = evidence.GenesysIsPhoneOnly ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter;
             return inCallCenter
-                ? Of(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, evidence.HasGenesysInteraction ? UnassignedTicketAction.None : humanAction)
+                ? Of(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, evidence.GenesysIsPhoneOnly ? UnassignedTicketAction.None : humanAction)
                 : Of(UnassignedTicketClass.HumanRequiredNotRouted, humanAction);
         }
 
@@ -199,7 +199,7 @@ public static class UnassignedTicketClassifier
 
         // VOICE: a stale AI call is REPORTED (class StaleAiNoEndEvent) and the AI Agent keeps it - ownership of an AI voice ticket changes only on a real answer,
         // an authorised assignment, or the no-answer reconciler's conclusion after the call ended. Other channels keep AssignStaleAi (previous behaviour).
-        return actOnStaleAi && !evidence.HasGenesysInteraction
+        return actOnStaleAi && !evidence.GenesysIsPhoneOnly
             ? Of(UnassignedTicketClass.StaleAiNoEndEvent, UnassignedTicketAction.RoundRobinCallCenter)
             : Of(UnassignedTicketClass.StaleAiNoEndEvent);
     }

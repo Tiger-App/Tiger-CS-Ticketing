@@ -1070,7 +1070,7 @@ public sealed class TicketAutoAssignmentService(
 
         // VOICE (Phone) only: the AI Agent keeps ownership through queue routing, an explicit workflow department is kept, and an answering agent who cannot take
         // the ticket NEVER falls back to Round Robin (flagged + queued instead). Every other channel keeps the previous behaviour.
-        var voice = voiceOwnership || (genesysEvent is not null && GenesysOwnershipRules.AppliesTo(genesysEvent.ChannelId));
+        var voice = voiceOwnership || genesysEvent?.ChannelId == WellKnownChannels.Phone;
 
         if (ticket.TicketStatus is TicketStatus.Closed or TicketStatus.Resolved)
         {

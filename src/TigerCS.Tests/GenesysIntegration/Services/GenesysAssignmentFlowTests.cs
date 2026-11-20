@@ -159,7 +159,7 @@ public class GenesysAssignmentFlowTests
     // ---- Multiple transfers, duplicates, ordering -------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task AiToAToB_EachAgentWhoActuallyAnswersOwnsIt_AndTheWholeHistoryIsPreserved()
+    public async Task AiToAToB_OnAVoiceCall_TheFirstAgentWhoActuallyAnsweredKeepsIt_AndTheLaterAgentsAreHistoryOnly()
     {
         var w = NewWorld();
         var call = await AiCallAsync(w, "conv-multi");
@@ -169,13 +169,16 @@ public class GenesysAssignmentFlowTests
         await ConnectAsync(w, call, b.GenesysId, T0.AddMinutes(2));
         await ConnectAsync(w, call, c.GenesysId, T0.AddMinutes(3));
 
-        Assert.Equal(c.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        // VOICE: automatic subsequent-agent reassignment is disabled. A answered first and keeps the ticket; B and C are recorded as handlers (interaction history).
+        Assert.Equal(a.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
         var current = Assert.Single(w.F.TicketAssignments.Added, x => x.TicketId == call.TicketId && x.IsCurrent);
-        Assert.Equal(c.Id, current.AssignedEmployeeId);                                    // exactly one current assignment, the current assignee
+        Assert.Equal(a.Id, current.AssignedEmployeeId);                                    // exactly one current assignment, the original answerer
         Assert.Equal(
-            new (Guid?, Guid)[] { (null, AiAgent), (AiAgent, a.Id), (a.Id, b.Id), (b.Id, c.Id) },
+            new (Guid?, Guid)[] { (null, AiAgent), (AiAgent, a.Id) },
             w.History(call.TicketId).Select(h => (h.PreviousEmployeeId, h.NewEmployeeId)));
-        Assert.Equal(2, w.F.TicketAssignments.Added.Count(x => x.TicketId == call.TicketId && !x.IsCurrent));   // A and B superseded, never deleted
+        Assert.Single(w.F.TicketAssignments.Added, x => x.TicketId == call.TicketId);      // no second assignment was ever written
+        Assert.Contains(w.F.Handlers.All, h => h.TicketId == call.TicketId && h.HandledByUserId == b.Id);
+        Assert.Contains(w.F.Handlers.All, h => h.TicketId == call.TicketId && h.HandledByUserId == c.Id);
     }
 
     [Fact]

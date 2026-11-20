@@ -266,7 +266,7 @@ public class GenesysLiveTranscriptTests
     // ---- classification and SLA through the same update ----
 
     [Fact]
-    public async Task ClassificationInTheSameUpdate_RoutesToTheRequestTypesDepartment_AssignsNobody_AndAdjustsTheSlaWithoutRestartingTheClock()
+    public async Task ClassificationInTheSameUpdate_RoutesToTheRequestTypesDepartment_AssignsAndAdjustsTheSlaWithoutRestartingTheClock()
     {
         var w = await BuildAsync();
         var employee = Guid.NewGuid();
@@ -287,14 +287,12 @@ public class GenesysLiveTranscriptTests
         Assert.Equal("Classified", result.Classification!.Status);
         Assert.Equal(w.Leasing.DepartmentId, w.Ticket.CurrentDepartmentId);
         Assert.Equal(w.Arrival.DepartmentId, w.Ticket.OriginatingDepartmentId);
-        Assert.Null(w.Ticket.CurrentOwnerEmployeeId);                     // the AI Agent still handles it: the rule assignee is not applied
-        Assert.True(w.Ticket.IsOwnedByAiAgent);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == w.Ticket.TicketId);
+        Assert.Equal(employee, w.Ticket.CurrentOwnerEmployeeId);
         Assert.Same(period, Assert.Single(w.F.Sla.SlaInstances.All));
         Assert.Equal(startedAt, period.PeriodStartAtUtc);
         Assert.Equal(startedAt.AddHours(8), period.ResolutionDueAtUtc);
         Assert.Equal(2, result.TranscriptMessageCount);
         Assert.Empty(w.F.Handoffs.All);
-        Assert.Null(w.Ticket.FirstHumanResponseAtUtc);   // routing the department is not a response either (and nobody was assigned)
+        Assert.Null(w.Ticket.FirstHumanResponseAtUtc);   // being assigned to an employee is not a response either
     }
 }
