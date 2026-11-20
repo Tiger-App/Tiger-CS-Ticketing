@@ -808,6 +808,43 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
+    public async Task AnInactivityClosedTicket_IsViewedByItsLastResponsibleCsAgent_InsideTheWindow_ButReopenIsRefused_ClosedIsTerminal_ThroughTheRealEndpoints()
+    {
+        var own = await DepartmentAsync();
+        var (agent, agentId) = await ClientAsync(departmentId: own);
+        var (otherAgent, _) = await ClientAsync(departmentId: own);
+        var ticket = await CreateManualTicketAsync(agent, own, departmentQueue: true);   // unowned; the creating CS Agent is responsible
+        await _factory.CloseForInactivityAsync(ticket.TicketId, DateTime.UtcNow.AddDays(-2));
+
+        // Visible to them: detail (full access), list, and the other read endpoints; closed to every other CS Agent.
+        var detail = await (await agent.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", detail!.TicketStatus);
+        Assert.False(detail.IsReadOnlyAccess);
+        Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
+        Assert.Equal(HttpStatusCode.OK, (await agent.GetAsync($"/api/tickets/{ticket.TicketId}/history")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
+        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(otherAgent));
+        // The resource-scope check still runs before the terminal rule: another agent is Forbidden, not told "closed".
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await otherAgent.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/reopen", new ReopenTicketRequestDto("Mine now.", own, Convert.FromBase64String(detail.RowVersion)))).StatusCode);
+
+        // The last responsible agent is refused inside the (old) window: Closed is terminal on every channel.
+        var reopen = await agent.PostAsJsonAsync(
+            $"/api/tickets/{ticket.TicketId}/reopen",
+            new ReopenTicketRequestDto("Customer wrote back after the bot closed the chat.", own, Convert.FromBase64String(detail.RowVersion)));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, reopen.StatusCode);
+        Assert.Contains("A closed ticket cannot be reopened", await reopen.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        // Nothing changed: still Closed, unowned, no reopen counted.
+        var after = await (await agent.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", after!.TicketStatus);
+        Assert.Equal(detail.RowVersion, after.RowVersion);
+        Assert.Null(await _factory.GetTicketCurrentOwnerAsync(ticket.TicketId));
+        Assert.NotEqual(Guid.Empty, agentId);
+    }
+
+    [Fact]
     public async Task AnInactivityClosedTicket_OutsideTheWindow_IsNotVisibleToTheCreatorAnyMore()
     {
         var own = await DepartmentAsync();

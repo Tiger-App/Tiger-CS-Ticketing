@@ -112,6 +112,138 @@ public class ReopenApprovalEndpointsTests(TigerCsApiFactory factory) : IClassFix
         new(nameof(ApprovalType.ReopenApproval), reason);
 
     [Fact]
+    public async Task FullFlow_DepartmentEmployeeRequests_IsRefused_AndNeitherAnApprovalNorARealReopenCanMoveTheTicket_ClosedIsTerminal()
+    {
+        var agentClient = await ClientForAsync(Roles.CsAgent);
+        var (ticketId, departmentId, closedRowVersion) = await SeedClosedTicketAsync(agentClient);
+
+        // 1. The Department Employee the (closed) ticket is assigned to - with no direct Reopen - is not offered a Reopen Approval any more, and asking is
+        //    refused. A department colleague the ticket is NOT assigned to still cannot even open it (assignment-only visibility), so cannot ask.
+        var requesterClient = _assignee!;
+        var colleagueClient = await ClientForAsync(Roles.DepartmentEmployee, departmentId);
+        Assert.Equal(HttpStatusCode.Forbidden, (await colleagueClient.GetAsync($"/api/tickets/{ticketId}/approvals")).StatusCode);
+        Assert.Equal(HttpStatusCode.Forbidden, (await colleagueClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest())).StatusCode);
+        var offered = await (await requesterClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
+            .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
+        var requestable = Assert.Single(offered!.RequestableApprovals);
+        Assert.Equal(nameof(ApprovalType.ReopenApproval), requestable.ApprovalType);
+        Assert.False(requestable.CallerCanRequest);
+
+        var requestResponse = await requesterClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, requestResponse.StatusCode);
+
+        // The ticket has not moved, and no approval record exists.
+        var stillClosed = await (await agentClient.GetAsync($"/api/tickets/{ticketId}"))
+            .Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", stillClosed!.TicketStatus);
+        Assert.Equal(0, stillClosed.ReopenCount);
+        Assert.False(stillClosed.IsReopenEligible);
+        Assert.Equal(departmentId, stillClosed.CurrentDepartmentId);
+
+        var supervisorClient = await ClientForAsync(Roles.CsSupervisor);
+        var viewAfterRequest = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
+            .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
+        Assert.Empty(viewAfterRequest!.Approvals);
+
+        // 2. An approval would have granted the requester nothing anyway: they still cannot reopen (role).
+        var stillForbidden = await requesterClient.PostAsJsonAsync(
+            $"/api/tickets/{ticketId}/reopen",
+            new ReopenTicketRequestDto("Approved, so let me.", departmentId, Convert.FromBase64String(closedRowVersion)));
+        Assert.Equal(HttpStatusCode.Forbidden, stillForbidden.StatusCode);
+
+        // 3. A CS Agent trying the real reopen through the endpoint is refused: Closed is terminal.
+        var reopenResponse = await agentClient.PostAsJsonAsync(
+            $"/api/tickets/{ticketId}/reopen",
+            new ReopenTicketRequestDto("Approved reopen request.", departmentId, Convert.FromBase64String(closedRowVersion)));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, reopenResponse.StatusCode);
+        Assert.Contains("A closed ticket cannot be reopened", await reopenResponse.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        var afterAttempt = await (await agentClient.GetAsync($"/api/tickets/{ticketId}"))
+            .Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", afterAttempt!.TicketStatus);
+        Assert.Equal(0, afterAttempt.ReopenCount);
+        Assert.Equal(stillClosed.RowVersion, afterAttempt.RowVersion);
+
+        // Nothing about a reopen reached the history or the outbox.
+        var view = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
+            .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
+        Assert.DoesNotContain(view!.Events, e => e.EventType == "Reopened");
+        Assert.DoesNotContain(view.Events, e => e.EventType == "ApprovalRequested");
+        Assert.Empty(await ReopenedEventsForAsync(ticketId));
+    }
+
+    [Fact]
+    public async Task RequestingReopenApproval_IsForbiddenForRolesWithoutIt_AndNotOfferedToAnyoneAnyMore_ClosedIsTerminal()
+    {
+        var agentClient = await ClientForAsync(Roles.CsAgent);
+        var (ticketId, departmentId, _) = await SeedClosedTicketAsync(agentClient);
+
+        // Reporting User: no request capability at all, department membership
+        // notwithstanding.
+        var reporterClient = await ClientForAsync(Roles.ReportingUser, departmentId);
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await reporterClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest())).StatusCode);
+
+        // A Department Employee of a DIFFERENT department cannot ask either.
+        var otherDepartmentId = await _factory.CreateDepartmentAsync(
+            "Unrelated " + Guid.NewGuid(), Guid.NewGuid().ToString("N")[..8]);
+        var outsiderClient = await ClientForAsync(Roles.DepartmentEmployee, otherDepartmentId);
+        Assert.Equal(
+            HttpStatusCode.Forbidden,
+            (await outsiderClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest())).StatusCode);
+
+        // Executive roles could ask from anywhere before; now the offer is gone and the request is refused (the ticket is Closed, which is terminal).
+        foreach (var role in new[] { Roles.GeneralManager, Roles.ChairmanCeo })
+        {
+            var executiveClient = await ClientForAsync(role);
+            var view = await (await executiveClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
+                .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
+            Assert.False(Assert.Single(view!.RequestableApprovals).CallerCanRequest);
+            Assert.Equal(
+                HttpStatusCode.UnprocessableEntity,
+                (await executiveClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest())).StatusCode);
+        }
+
+        // ...and the roles that hold direct Reopen are never offered it either.
+        foreach (var role in new[] { Roles.CsAgent, Roles.CsSupervisor, Roles.CsManager, Roles.SystemAdministrator })
+        {
+            var csClient = await ClientForAsync(role);
+            if (role == Roles.CsAgent)
+            {
+                // A CS Agent sees a ticket's approvals only if the ticket is theirs to see: this one took the call too.
+                await _factory.RecordHandlerAsync(ticketId, csClient);
+            }
+
+            var view = await (await csClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
+                .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
+            Assert.False(Assert.Single(view!.RequestableApprovals).CallerCanRequest);
+        }
+    }
+
+    [Fact]
+    public async Task AskingForAReopenApproval_SendsNoCustomerEmail_AndTheRefusedRealReopenSendsNone_ClosedIsTerminal()
+    {
+        var agentClient = await ClientForAsync(Roles.CsAgent);
+        var (ticketId, departmentId, closedRowVersion) = await SeedClosedTicketAsync(agentClient);
+
+        var requesterClient = _assignee!;
+        var request = await requesterClient.PostAsJsonAsync($"/api/tickets/{ticketId}/approvals", ReopenRequest());
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, request.StatusCode);
+
+        // Nothing customer-facing was queued by the (refused) request.
+        Assert.Empty(await ReopenedEventsForAsync(ticketId));
+
+        var reopen = await agentClient.PostAsJsonAsync(
+            $"/api/tickets/{ticketId}/reopen",
+            new ReopenTicketRequestDto("Approved reopen.", departmentId, Convert.FromBase64String(closedRowVersion)));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, reopen.StatusCode);
+
+        // ...and the refused reopen queues nothing either: no reopened email exists for this ticket.
+        Assert.Empty(await ReopenedEventsForAsync(ticketId));
+    }
+
+    [Fact]
     public async Task ReopenApproval_RequiresAReason_AndIsRefusedWhenTheRequestTypeForbidsReopen()
     {
         var agentClient = await ClientForAsync(Roles.CsAgent);

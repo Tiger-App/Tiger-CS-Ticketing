@@ -10,8 +10,8 @@ using TigerCS.Tests.IdentityAndAccess.Integration;
 namespace TigerCS.Tests.Notifications.Integration;
 
 /// <summary>
-/// <c>IsTestMode = true</c> through the real API host and the real dispatcher: a ticket created, resolved, closed and reopened
-/// over HTTP produces all four emails — every one addressed to <c>TestEmail</c>, none to the customer.
+/// <c>IsTestMode = true</c> through the real API host and the real dispatcher: a ticket created, resolved and closed (the reopen that used to follow is
+/// refused: Closed is terminal) over HTTP produces the three customer emails — every one addressed to <c>TestEmail</c>, none to the customer.
 /// </summary>
 public sealed class CustomerNotificationTestModeIntegrationTests : LifecycleIntegrationTestBase, IDisposable
 {
@@ -32,19 +32,61 @@ public sealed class CustomerNotificationTestModeIntegrationTests : LifecycleInte
 
     public void Dispose() => _factory.Dispose();
 
-    private async Task<TicketResponseDto> ResolveCloseReopenAsync()
+    private async Task<TicketResponseDto> ResolveCloseAndRefusedReopenAsync()
     {
         var (ticket, _, agent, afterResolve) = await CreateAndResolveAsync();
+
+        // Deliver the Resolved email first: a Resolved event still pending when the ticket is Closed is coalesced into the Closed email (the reopen
+        // that used to keep the ticket active, and so the Resolved email standalone, no longer exists).
+        await _factory.RunOutboxDispatchAsync();
         var afterClose = (await (await agent.PostAsJsonAsync(
                 $"/api/tickets/{ticket.TicketId}/close", new CloseTicketRequestDto(Convert.FromBase64String(afterResolve.RowVersion))))
             .Content.ReadFromJsonAsync<TicketDetailDto>())!;
         var reopen = await agent.PostAsJsonAsync(
             $"/api/tickets/{ticket.TicketId}/reopen",
             new ReopenTicketRequestDto("Fault is back.", ticket.CurrentDepartmentId, Convert.FromBase64String(afterClose.RowVersion)));
-        Assert.Equal(HttpStatusCode.OK, reopen.StatusCode);
+        // Closed is terminal: the reopen that used to produce the fourth email is refused, so no reopened mail exists in either mode.
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, reopen.StatusCode);
         return ticket;
     }
 
+    [Fact]
+    public async Task EveryLifecycleEmail_GoesToTheTestMailboxOnly_AndIsNotRepeated_AndNoReopenEmailExists()
+    {
+        var ticket = await ResolveCloseAndRefusedReopenAsync();
+
+        var first = await _factory.RunOutboxDispatchAsync();
+        await _factory.RunOutboxDispatchAsync();
+        await _factory.RunOutboxDispatchAsync();
+
+        Assert.Equal(0, first.DeadLettered);
+        var mine = _factory.EmailSender.Recorded
+            .Where(e => e.Audience == EmailAudience.Customer && e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal)).ToList();
+        Assert.Equal(3, mine.Count); // received, resolved, closed - the refused reopen sends nothing
+        Assert.DoesNotContain(mine, e => e.Subject.Contains("reopened", StringComparison.OrdinalIgnoreCase));
+        Assert.All(mine, e => Assert.Equal(TestInbox, e.ToAddress));
+        Assert.All(mine, e => Assert.StartsWith("[TEST] ", e.Subject, StringComparison.Ordinal));
+        Assert.DoesNotContain(_factory.EmailSender.Recorded, e => e.ToAddress == Customer);
+        // Staff mail is never redirected by the customer test mode.
+        Assert.DoesNotContain(_factory.EmailSender.Recorded, e => e.Audience == EmailAudience.Internal && e.ToAddress == TestInbox);
+        var notifications = await _factory.GetNotificationsAsync(ticket.TicketId);
+        Assert.DoesNotContain(notifications, n => n.NotificationType == NotificationType.Reopened);
+        Assert.All(
+            notifications.Where(n => n.RecipientEmployeeId is null && n.NotificationType is not (NotificationType.Assigned or NotificationType.InProgress)),
+            n => Assert.Equal(NotificationDeliveryStatus.Sent, n.DeliveryStatus));
+        Assert.DoesNotContain(notifications, n => n.DeliveryStatus is NotificationDeliveryStatus.Failed or NotificationDeliveryStatus.DeadLettered);
+    }
+
+    [Fact]
+    public async Task TheTestEmails_CarryTheReviewLinks_ToTheConfiguredPublicBaseUrl()
+    {
+        var ticket = await ResolveCloseAndRefusedReopenAsync();
+        await _factory.RunOutboxDispatchAsync();
+
+        var resolved = _factory.EmailSender.Recorded.Single(e => e.Subject.EndsWith("Has Been Resolved", StringComparison.Ordinal) && e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal));
+
+        Assert.Matches(@"https://tickets\.example\.com/Review\?t=[A-Za-z0-9_\-]{43}&amp;r=5", resolved.HtmlBody!);
+    }
 }
 
 public sealed class CustomerNotificationMisconfiguredIntegrationTests : LifecycleIntegrationTestBase, IDisposable
