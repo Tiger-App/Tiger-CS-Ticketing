@@ -139,7 +139,7 @@ public sealed class AssignmentHistoryPreviousDepartmentScriptSqlServerTests : ID
         Assert.Equal(2, Scalar<int>("SELECT COUNT(*) FROM TicketAssignmentHistory"));
 
         using var context = CreateContext();
-        Assert.Empty(context.Database.GetPendingMigrations());   // exactly the database EF expects
+        Assert.Equal(["20261120074059_AddInteractionEndReceivedAt"], context.Database.GetPendingMigrations().ToArray());   // only the newer migration remains; this script left EF with nothing else to apply
         context.Database.Migrate();
         Assert.Equal(2, context.TicketAssignmentHistory.Count());
     }

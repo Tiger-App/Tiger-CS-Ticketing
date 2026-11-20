@@ -124,11 +124,11 @@ public static class VoiceCallClassifier
             return Of(VoiceReconcileClass.AnsweringAgentResolvable, VoiceReconcileAction.AssignAnsweringAgent);
         }
 
-        if (e.HumanAnswered || e.PhonePickupByUnmappedAgent)
+        // Confirmed human involvement only (a handler, a human line / first response, a connect / transfer / handoff-started event). An agent id that was merely
+        // offered, assigned or ringing is not evidence (UnassignedTicketEvidence.HumanAnswered), so such a call that ends unanswered is still dealt by Round Robin.
+        if (e.HumanAnswered)
         {
-            return e.PhonePickupByUnmappedAgent
-                ? Of(VoiceReconcileClass.AnsweringAgentMappingPending)
-                : Of(VoiceReconcileClass.HumanInvolved);
+            return Of(VoiceReconcileClass.HumanInvolved);
         }
 
         if (e.VoiceEndReceivedAtUtc is not { } endReceived)

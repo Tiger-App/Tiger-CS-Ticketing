@@ -1297,10 +1297,9 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
-    public async Task ReopenTicket_Returns200()
+    public async Task ReopenTicket_IsRefusedEvenForTheAdministrator_BecauseClosedIsTerminal()
     {
-        // Reopen is CS-layer only (ISSUE-022, TicketRoleSets.Reopen) — the
-        // administrator performs it purely through the ADR-0024 override.
+        // PR #292: Closed is final on every channel. The endpoint still exists and still authorises through the ADR-0024 override, but the answer is a refusal and the ticket stays closed.
         var (client, adminEmployeeId) = await CreateAdministratorAsync();
         var ticket = await CreateVerifiedTicketAsync(client, "Facilities");
 
@@ -1316,21 +1315,18 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
                 $"/api/tickets/{ticket.TicketId}/resolution",
                 new ResolveTicketRequestDto("Resolved", "Fixed the AC unit.", null, null, RowVersionOf(inProgress!))))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
-
-        // Approved rule: Reopen is Closed-only, so the administrator closes
-        // first — also through the override, since Close is CS-layer too.
         var closed = await (await client.PostAsJsonAsync(
                 $"/api/tickets/{ticket.TicketId}/close", new CloseTicketRequestDto(RowVersionOf(resolved!))))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
 
         var reopenResponse = await client.PostAsJsonAsync(
             $"/api/tickets/{ticket.TicketId}/reopen",
-            new ReopenTicketRequestDto(
-                "Customer called back — still not cooling.", ticket.CurrentDepartmentId, RowVersionOf(closed!)));
-        Assert.Equal(HttpStatusCode.OK, reopenResponse.StatusCode);
-        var reopened = await reopenResponse.Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.Equal("InProgress", reopened!.TicketStatus);
-        Assert.Equal(1, reopened.ReopenCount);
+            new ReopenTicketRequestDto("Customer called back.", ticket.CurrentDepartmentId, RowVersionOf(closed!)));
+
+        Assert.False(reopenResponse.IsSuccessStatusCode);
+        var after = await (await client.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", after!.TicketStatus);
+        Assert.Equal(0, after.ReopenCount);
     }
 
     [Fact]

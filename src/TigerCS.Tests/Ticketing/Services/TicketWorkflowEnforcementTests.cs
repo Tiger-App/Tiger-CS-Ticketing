@@ -334,42 +334,6 @@ public class TicketWorkflowEnforcementTests
         return ticket;
     }
 
-    [Fact]
-    public async Task RequestTypeDisablingReopen_RejectsReopen_EvenInsideTheWindow()
-    {
-        var f = CreateService();
-        var ticket = await SeedClosedClassifiedTicketAsync(f, allowReopen: false, closedAtUtc: DateTime.UtcNow.AddDays(-1));
-
-        var result = await f.Service.ReopenAsync(
-            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
-            new ReopenTicketRequestDto("Customer called back", ticket.CurrentDepartmentId, []));
-
-        Assert.Equal(TicketMutationOutcome.NotAllowedForRequestType, result.Outcome);
-        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
-    }
-
-    [Fact]
-    public async Task RequestTypeAllowingReopen_StillGoesThroughTheExistingReopenPolicy()
-    {
-        var f = CreateService();
-
-        // Outside ISSUE-011's window: the capability allows reopen, but the
-        // existing ReopenPolicy remains the final enforcement point.
-        var expired = await SeedClosedClassifiedTicketAsync(f, allowReopen: true, closedAtUtc: DateTime.UtcNow.AddDays(-30));
-        var expiredResult = await f.Service.ReopenAsync(
-            Guid.NewGuid(), [Roles.CsAgent], expired.TicketId,
-            new ReopenTicketRequestDto("Late request", expired.CurrentDepartmentId, []));
-        Assert.Equal(TicketMutationOutcome.ReopenWindowExpired, expiredResult.Outcome);
-
-        // Inside the window it succeeds exactly as before this phase.
-        var fresh = await SeedClosedClassifiedTicketAsync(f, allowReopen: true, closedAtUtc: DateTime.UtcNow.AddDays(-1));
-        var freshResult = await f.Service.ReopenAsync(
-            Guid.NewGuid(), [Roles.CsAgent], fresh.TicketId,
-            new ReopenTicketRequestDto("Customer called back", fresh.CurrentDepartmentId, []));
-        Assert.Equal(TicketMutationOutcome.Success, freshResult.Outcome);
-        Assert.Equal(TicketStatus.InProgress, fresh.TicketStatus);
-    }
-
     // ---- Authorization unchanged ----
 
     [Fact]

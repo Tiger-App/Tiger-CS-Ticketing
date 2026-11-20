@@ -30,8 +30,8 @@ classification assigning an owner, `AssignStaleAi`, and the end-of-conversation 
 
 ## 3. Round Robin for a failed voice call — the reconciliation window
 `VoiceCallReconciler` (recurring, `VoiceCallReconciliationHostedService`) concludes **"AI failed, nobody answered"** only when **all** hold:
-the ticket is Open and unowned; every Genesys interaction is a Phone call; every one has **ended**; **no person answered** (no handler, no human transcript line, no first human
-response, no agent-connected / call-transferred / handoff-started event, no flagged answer); no approval is pending; the end was **received** at least `NoAnswerWindowSeconds` ago and no
+the ticket is Open and unowned; every Genesys interaction is a Phone call; every one has **ended**; **no person answered** (no *confirmed-connection* handler, no human transcript line, no first human
+response, no handoff-started event, no flagged answer); no approval is pending; the end was **received** at least `NoAnswerWindowSeconds` ago and no
 more than `LookbackHours` ago. It then marks the ticket as needing a person (sticky, audited once: `GenesysVoiceNoAnswerConcluded`) and deals it through the existing engine.
 
 | Setting (`VoiceCallReconciliation:`) | Default | Meaning |
@@ -48,6 +48,14 @@ instead of 1 s after as before. During the window the ticket is open in the Call
 that arrives inside the window still gets the ticket directly with the first response dated at the real connect time. Shorter (60 s) → quicker assignment, higher risk of dealing a second
 person when the answer event is late. Longer → a longer unattended period. The window is anchored on **receipt** (`EndReceivedAtUtc`), never on a possibly delayed event time.
 
+**An agent id alone is never evidence of an answer.** A top-level `agentId` on an update / end event, an *offered*, *assigned* or *ringing* agent (named or mapped), and the
+`GenesysAgentConnected` event those produce are all ignored for phone-only tickets. Only a handler recorded from a confirmed connection counts (`routing.agentId` + `connectedAtUtc`,
+the inquiry pickup, a human transcript line, or a legacy handler). A connected agent who maps to nobody is *flagged* (`ManualAssignmentRequired` with the Genesys user id) and is still a
+human answer, so no Round Robin; it is assigned once the mapping is fixed, with the first response dated at the real connect time.
+
+**One job per ticket.** Phone-only tickets are excluded from `CallCenterReconciliation` (class `HandledByVoiceReconciler`); `VoiceCallReconciliation` is the only job that assigns them.
+`CallCenterReconciliation`, `DefaultClassificationBackfill`, `StalePhoneAssignment` and `CsAgentBackfill` stay **disabled by default** (asserted by `ProductionConfigurationTests`).
+
 Not Round Robin, ever, for voice: at **handoff request**; while a **human answer is pending** (call not ended / window not elapsed); when a person **answered but cannot be mapped**.
 
 ## 4. Unmapped (or ineligible) answering agent
@@ -59,8 +67,8 @@ the first response at the real connect time. While the mapping is still missing 
 ## 5. Closed tickets (every channel)
 Closed is terminal. Late or duplicate events (update, handoff, routing, end, transcript, `closedByAi`, document delivery) are audit evidence only: no reopen, no owner/department change,
 no assignment, no SLA change. `ApplyAnsweringAgentAsync`, `RouteExistingTicketToCallCenterAsync`, the reconciler and the voice reconciler all refuse Closed/Resolved tickets. Continuing the
-same conversation (same `conversationId` + `serviceRequestId`) answers the **existing closed ticket**; a new request needs a new `serviceRequestId` / conversation. (A *person* may still reopen
-through the authorised, approval-gated Reopen action — nothing automatic does.)
+same conversation (same `conversationId` + `serviceRequestId`) answers the **existing closed ticket**; a new request needs a new `serviceRequestId` / conversation. **Closed is terminal on every channel, including manual Reopen**: `POST /tickets/{id}/reopen` and the Reopen Approval request/grant are refused for every role (single rule: `ReopenPolicy.IsReopenableOutcome`),
+the UI never offers Reopen, and a customer who writes again gets a new linked ticket.
 
 Closing clears only the **current-owner field** (a person); the assignment rows are superseded, never deleted, and the AI Agent owner is kept. **A closed ticket shows who held it last**
 ("(last responsible)" on the ticket page and in the list): the last assignment, else the AI Agent. AI closure is attributed to the AI Agent (resolution row, status history, audit actor);

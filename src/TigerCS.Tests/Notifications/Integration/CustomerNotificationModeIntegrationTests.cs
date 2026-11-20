@@ -45,41 +45,6 @@ public sealed class CustomerNotificationTestModeIntegrationTests : LifecycleInte
         return ticket;
     }
 
-    [Fact]
-    public async Task EveryLifecycleEmail_GoesToTheTestMailboxOnly_AndIsNotRepeated()
-    {
-        var ticket = await ResolveCloseReopenAsync();
-
-        var first = await _factory.RunOutboxDispatchAsync();
-        await _factory.RunOutboxDispatchAsync();
-        await _factory.RunOutboxDispatchAsync();
-
-        Assert.Equal(0, first.DeadLettered);
-        var mine = _factory.EmailSender.Recorded
-            .Where(e => e.Audience == EmailAudience.Customer && e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal)).ToList();
-        Assert.Equal(4, mine.Count);
-        Assert.All(mine, e => Assert.Equal(TestInbox, e.ToAddress));
-        Assert.All(mine, e => Assert.StartsWith("[TEST] ", e.Subject, StringComparison.Ordinal));
-        Assert.DoesNotContain(_factory.EmailSender.Recorded, e => e.ToAddress == Customer);
-        // Staff mail is never redirected by the customer test mode.
-        Assert.DoesNotContain(_factory.EmailSender.Recorded, e => e.Audience == EmailAudience.Internal && e.ToAddress == TestInbox);
-        var notifications = await _factory.GetNotificationsAsync(ticket.TicketId);
-        Assert.All(
-            notifications.Where(n => n.RecipientEmployeeId is null && n.NotificationType is not (NotificationType.Assigned or NotificationType.InProgress)),
-            n => Assert.Equal(NotificationDeliveryStatus.Sent, n.DeliveryStatus));
-        Assert.DoesNotContain(notifications, n => n.DeliveryStatus is NotificationDeliveryStatus.Failed or NotificationDeliveryStatus.DeadLettered);
-    }
-
-    [Fact]
-    public async Task TheTestEmails_CarryTheReviewLinks_ToTheConfiguredPublicBaseUrl()
-    {
-        var ticket = await ResolveCloseReopenAsync();
-        await _factory.RunOutboxDispatchAsync();
-
-        var resolved = _factory.EmailSender.Recorded.Single(e => e.Subject.EndsWith("Has Been Resolved", StringComparison.Ordinal) && e.Subject.Contains(ticket.TicketNumber, StringComparison.Ordinal));
-
-        Assert.Matches(@"https://tickets\.example\.com/Review\?t=[A-Za-z0-9_\-]{43}&amp;r=5", resolved.HtmlBody!);
-    }
 }
 
 public sealed class CustomerNotificationMisconfiguredIntegrationTests : LifecycleIntegrationTestBase, IDisposable

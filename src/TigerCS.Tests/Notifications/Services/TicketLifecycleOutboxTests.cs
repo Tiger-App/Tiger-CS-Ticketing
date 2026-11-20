@@ -129,48 +129,6 @@ public class TicketLifecycleOutboxTests
     }
 
     [Fact]
-    public async Task Reopen_CommitsATicketReopenedEventKeyedByTheNewCycle()
-    {
-        var f = CreateService();
-        var (ticket, owner) = await SeedInProgressTicketAsync(f);
-        await ResolveAndCloseAsync(f, ticket, owner);
-
-        var result = await f.Service.ReopenAsync(
-            owner, [Roles.CsAgent], ticket.TicketId, new ReopenTicketRequestDto("Customer called back", 2, []));
-
-        Assert.Equal(TicketMutationOutcome.Success, result.Outcome);
-        var reopened = Assert.Single(f.Outbox.Committed, m => m.EventType == OutboxEventTypes.TicketReopened);
-        Assert.Equal(1, TicketLifecycleEventPayload.FromJson(reopened.Payload)!.ReopenCount);
-        Assert.Contains(
-            OutboxEventTypes.LifecycleIdempotencyKeyFor(OutboxEventTypes.TicketReopened, ticket.TicketId, 1, 1),
-            f.Outbox.ReservedKeys);
-    }
-
-    [Fact]
-    public async Task ResolveCloseReopenResolve_ProducesADistinctResolvedEventPerCycle()
-    {
-        var f = CreateService();
-        var (ticket, owner) = await SeedInProgressTicketAsync(f);
-
-        await ResolveAndCloseAsync(f, ticket, owner);
-        await f.Service.ReopenAsync(owner, [Roles.CsAgent], ticket.TicketId, new ReopenTicketRequestDto("Again", 2, []));
-
-        // Reopen clears the owner, so the second resolve comes from whoever
-        // picks the work up — here the same employee, re-assigned.
-        ticket.AssignTo(owner);
-        var second = await ResolveAsync(f, ticket, owner);
-
-        Assert.Equal(TicketMutationOutcome.Success, second.Outcome);
-        Assert.Equal(2, f.Outbox.Committed.Count(m => m.EventType == OutboxEventTypes.TicketResolved));
-        Assert.Equal(
-            [
-                OutboxEventTypes.TicketResolved, OutboxEventTypes.TicketClosed,
-                OutboxEventTypes.TicketReopened, OutboxEventTypes.TicketResolved
-            ],
-            f.Outbox.Committed.Select(m => m.EventType).ToArray());
-    }
-
-    [Fact]
     public async Task ConcurrencyConflictOnResolve_LeavesNoEventBehind()
     {
         var f = CreateService();
