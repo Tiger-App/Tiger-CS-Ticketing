@@ -38,7 +38,9 @@ public sealed record TicketInteractionMessageDto(
 /// <param name="Status">"Ended" once an end was recorded, otherwise "Active" — the INTERACTION's own lifecycle, which is independent of the ticket's status.</param>
 /// <param name="Messages">The transcript, in order. Empty for a voice call, and for a chat with nothing recorded.</param>
 /// <param name="Handoff">The pending human work raised from this interaction, when there is any — so an agent opening the ticket sees <b>why</b> a human was asked for and where that work stands, beside the transcript that led to it. Null when this interaction never needed a human.</param>
-/// <param name="HandlingState">Who is handling a Genesys interaction right now: "Ai" (the virtual agent is the only participant), "WaitingForHuman" (a human was explicitly requested and nobody has taken it) or "Human" (a person took it, spoke, or — on the phone — answered). Null for an interaction Ticketing created itself. Independent of the ticket's status and of whether the interaction has ended.</param>
+/// <param name="HandlingState">Who is handling a Genesys interaction right now: "Ai" (the virtual agent is the live, only participant), "AiEnded" (the AI conversation ended and no human need was recorded), "HumanFollowUp" (human follow-up is required and no person has accepted or replied - whether or not an employee has been provisionally assigned), "WaitingForHuman" (a human was explicitly requested through a handoff and nobody has taken it) or "Human" (a person took it, spoke, or — on the phone — answered). Null for an interaction Ticketing created itself. Independent of the ticket's status.</param>
+/// <param name="HumanAccepted">A person actually accepted the interaction: a handoff taken, a recorded handler, or (phone) an answering agent. Assigning an employee for follow-up is NOT acceptance.</param>
+/// <param name="HumanResponded">A person actually wrote to the customer: a <c>HumanAgent</c> line is in this ticket's own transcript. Assignment and acceptance are not a response.</param>
 public sealed record TicketInteractionDto(
     long TicketInteractionId,
     bool IsOriginatingInteraction,
@@ -60,7 +62,9 @@ public sealed record TicketInteractionDto(
     string Status,
     IReadOnlyList<TicketInteractionMessageDto> Messages,
     AgentHandoffSummaryDto? Handoff = null,
-    string? HandlingState = null);
+    string? HandlingState = null,
+    bool HumanAccepted = false,
+    bool HumanResponded = false);
 
 /// <summary>
 /// The pending-human-work summary shown inside Ticket Details' Conversation

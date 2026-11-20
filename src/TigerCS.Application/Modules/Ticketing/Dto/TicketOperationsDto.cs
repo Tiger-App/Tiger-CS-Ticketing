@@ -22,15 +22,15 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// <param name="ActiveOnly">True: only active tickets — Open, InProgress, PendingCustomer, and any historical ticket still in the legacy PendingThirdParty (the Dashboard's Open Tickets). A legacy pending ticket is non-terminal work and stays in the active set, so it never disappears from a queue before someone returns it to InProgress.</param>
 /// <param name="InDepartmentQueue">True: only active tickets with no current owner — sitting in their department's queue.</param>
 /// <param name="SlaBreached">True: only active tickets whose SLA state is Breached.</param>
-/// <param name="DueToday">True: only active tickets whose current, unbreached SLA resolution deadline falls today (UTC calendar day).</param>
+/// <param name="DueToday">True: only active tickets whose current, unbreached SLA resolution deadline falls today (UAE calendar day).</param>
 /// <param name="BacklogAge">Narrow active tickets to one age bucket by CreatedAtUtc: Under24Hours, OneToThreeDays, ThreeToSevenDays, OverSevenDays.</param>
 /// <param name="PendingApproval">True: only tickets carrying a Pending approval the caller is authorized to action.</param>
-/// <param name="CreatedFrom">Only tickets created on or after this UTC calendar day.</param>
-/// <param name="CreatedTo">Only tickets created on or before this UTC calendar day.</param>
+/// <param name="CreatedFrom">Only tickets created on or after this UAE calendar day.</param>
+/// <param name="CreatedTo">Only tickets created on or before this UAE calendar day.</param>
 /// <param name="Unclassified">True: only tickets with no request type (nobody — human or Genesys AI — has classified them yet). A filter on the ticket queue only: it never implies, requests or creates a human handoff, and department visibility applies exactly as for every other filter.</param>
 /// <param name="ClosureCategory">Only Closed tickets in one Dashboard closure KPI: Reviewed (customer feedback submitted), NotReviewed, ClosedByAi (latest closure audited as AutoCloseByAi) or ClosedByAgent (latest closure audited as Close).</param>
-/// <param name="ClosedFrom">Only Closed tickets whose latest closure was on or after this UTC calendar day (Dashboard closure KPIs).</param>
-/// <param name="ClosedTo">Only Closed tickets whose latest closure was on or before this UTC calendar day.</param>
+/// <param name="ClosedFrom">Only Closed tickets whose latest closure was on or after this UAE calendar day (Dashboard closure KPIs).</param>
+/// <param name="ClosedTo">Only Closed tickets whose latest closure was on or before this UAE calendar day.</param>
 /// <param name="CreatedByMe">True ("Created by Me"): only tickets the caller created — including ones that have since moved to another department, which a CS Agent keeps read-only access to. Never widens visibility: it only narrows the caller's own scope.</param>
 /// <param name="Escalated">Supervisor review: only tickets an agent passed up as UnableToResolve or NeedsEscalation. Requires a supervisory role (CS Supervisor, CS Manager, Department Head, General Manager, Chairman/CEO); other callers get 403. Narrows the caller's normal visibility, never widens it.</param>
 /// <param name="AvailableToTake">Only the unassigned, human-handling tickets a Call Center agent may take ownership of (active, no owner, no pending approval, no active AI conversation). Narrows the caller's normal visibility, never widens it. The Call Center agent's default list and Call Center department filter already include these tickets (read-only until taken).</param>
@@ -79,6 +79,8 @@ public sealed record TicketListRequestDto(
 /// <param name="CreatedAtUtc">When the ticket was created, in UTC.</param>
 /// <param name="CurrentOwnerName">The owner's full display name from the employee directory (Employees / AspNetUsers); null when unassigned or - a data problem to investigate - when the employee row cannot be found. Never a raw id.</param>
 /// <param name="IsAiVirtualAgent">Display only: the ticket is unowned and its Genesys conversation is still live AI with activity inside the last 6 hours (<c>AiVirtualAgentRule</c>). Not an assignment.</param>
+/// <param name="LastResponsibleEmployeeId">Closed tickets only: the employee on the last assignment, else the AI Agent that owned it - history, never an assignment.</param>
+/// <param name="LastResponsibleName">That employee's display name.</param>
 public sealed record TicketSummaryDto(
     long TicketId,
     string TicketNumber,
@@ -91,7 +93,9 @@ public sealed record TicketSummaryDto(
     string RequestSummary,
     DateTime CreatedAtUtc,
     string? CurrentOwnerName = null,
-    bool IsAiVirtualAgent = false);
+    bool IsAiVirtualAgent = false,
+    Guid? LastResponsibleEmployeeId = null,
+    string? LastResponsibleName = null);
 
 /// <summary>One page of the ticket queue.</summary>
 /// <param name="Items">This page's tickets.</param>
@@ -168,7 +172,7 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="IsReopenEligible">Whether FR-RES-04's lifecycle rule currently allows Reopen — Closed, closed as Resolved, and within the ISSUE-011 window measured from closure. Lifecycle only, never a permission statement: the Reopen endpoint separately enforces TicketRoleSets.Reopen AND the caller's access to the ticket. Populated on detail reads; false on write responses.</param>
 /// <param name="ClosedAtUtc">When the ticket reached Closed, in UTC, read from lifecycle history — the moment the reopen window is measured from. Null while the ticket is not closed. Populated on detail reads.</param>
 /// <param name="CurrentOwnerName">The owner's full display name from the employee directory; null when unassigned or when the employee row cannot be found. Never a raw id.</param>
-/// <param name="LastResponsibleEmployeeId">Closed Queueing System tickets only: the employee on the ticket's last assignment. Display only - a closed ticket has no owner and this creates no assignment.</param>
+/// <param name="LastResponsibleEmployeeId">Closed tickets only (every channel): the employee on the ticket's last assignment, else the AI Agent that owned it. Display / reporting only - a closed ticket has no owner and this creates no assignment and changes nothing.</param>
 /// <param name="LastResponsibleName">That employee's display name.</param>
 /// <param name="IsAiVirtualAgent">Display only: unowned, Open/In Progress, Genesys conversation still live AI with activity in the last 6 hours. Not an assignment.</param>
 public sealed record TicketDetailDto(

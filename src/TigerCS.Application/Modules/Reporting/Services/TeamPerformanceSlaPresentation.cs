@@ -1,6 +1,7 @@
 using System.Globalization;
 using TigerCS.Application.Modules.Reporting.Abstractions;
 using TigerCS.Application.Modules.Reporting.Dto;
+using TigerCS.Domain.Common;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 
 namespace TigerCS.Application.Modules.Reporting.Services;
@@ -134,7 +135,7 @@ internal static class TeamPerformanceSlaPresentation
     }
 
     private static string Utc(DateTime? value) =>
-        value is { } v ? v.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC" : "—";
+        value is { } v ? UaeCalendar.ToUae(v).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UAE" : "—";
 
     private static string Explain(TeamPerformanceSlaEvaluationRow row, TeamPerformanceEmployeeRow employee, string slaType, DateTime nowUtc)
     {
@@ -273,7 +274,7 @@ internal static class TeamPerformanceSlaPresentation
                 + "Compliance = Met / Evaluated. The table's totals row uses the combined Met and Evaluated of the employees shown (not an average of percentages) and counts a ticket "
                 + "once even when two employees share its breaches. Pending = clocks still open on tickets the employee holds now (Closed tickets excluded)."),
             new("Period",
-                "UTC calendar days, inclusive, exactly as on the report. Timestamps on this view are UTC.")
+                "UAE calendar days, inclusive, exactly as on the report. Timestamps on this view are shown in UAE time (Asia/Dubai, UTC+4).")
         };
 
         var policies = configuration.Policies

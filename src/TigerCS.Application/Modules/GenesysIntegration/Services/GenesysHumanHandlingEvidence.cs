@@ -26,7 +26,10 @@ public enum GenesysHumanSignal
     /// <summary>The transcript carries a line written by a <c>HumanAgent</c> (never <c>VirtualAgent</c>).</summary>
     HumanTranscriptLine = 5,
 
-    /// <summary>The AI conversation ended and the AI neither resolved nor closed the ticket: nobody finished it, so a person must.</summary>
+    /// <summary>
+    /// <b>No longer produced.</b> An AI conversation that merely ended is not evidence that a person is needed or has taken it; it never marks human work
+    /// or assigns anyone. Kept only so audit rows written before the rule was corrected (11/2026) still read by name.
+    /// </summary>
     AiEndedUnresolved = 6
 }
 

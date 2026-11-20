@@ -12,32 +12,45 @@ namespace TigerCS.Web.Models;
 /// </summary>
 public static class TicketDisplay
 {
+    /// <summary>
+    /// The instant a stored / Api-supplied value denotes, as <see cref="DateTimeKind.Utc"/>. <c>Utc</c> is kept; <c>Local</c> names a real instant and is converted to it
+    /// (never relabelled - relabelling a local wall-clock as UTC is how an extra four hours appear); <c>Unspecified</c> - what EF Core and the Api's JSON hand over for the
+    /// <c>…Utc</c> columns - is UTC by this system's convention.
+    /// </summary>
+    public static DateTime AsUtc(DateTime value) => TigerCS.Domain.Common.UaeCalendar.AsUtc(value);
+
+    /// <summary>
+    /// <b>The one UTC-to-Asia/Dubai conversion of the UI</b> — a thin delegate to <see cref="TigerCS.Domain.Common.UaeCalendar.ToUae"/>, the single implementation shared with the
+    /// business-day filters. The server's own time zone is never consulted (<c>ToLocalTime()</c> is). Returns the UAE wall-clock time, for formatting only.
+    /// </summary>
+    public static DateTime ToUae(DateTime utc) => TigerCS.Domain.Common.UaeCalendar.ToUae(utc);
+
     /// <summary>A UTC instant as UAE time (UTC+4, no daylight saving): "22 Oct 2026 21:40 (UAE)".</summary>
     public static string UaeTime(DateTime utc) =>
-        DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("d MMM yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " (UAE)";
+        ToUae(utc).ToString("d MMM yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture) + " (UAE)";
 
     /// <summary>UAE "d MMM HH:mm" - the year left out, for a dense sidebar value where the ticket's own age makes it obvious.</summary>
     public static string UaeShort(DateTime utc) =>
-        DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("d MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+        ToUae(utc).ToString("d MMM HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>UAE (UTC+4, no daylight saving) "HH:mm" for a chat line.</summary>
     public static string UaeClock(DateTime utc) =>
-        DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+        ToUae(utc).ToString("HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>UAE "d MMM yyyy" — the calendar day a chat line falls on.</summary>
     public static string UaeDate(DateTime utc) =>
-        DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("ddd d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture);
+        ToUae(utc).ToString("ddd d MMM yyyy", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>UAE "d MMM yyyy HH:mm", without a zone suffix (the caller labels the zone once).</summary>
     public static string UaeDateTime(DateTime utc) =>
-        DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("d MMM yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture);
+        ToUae(utc).ToString("d MMM yyyy HH:mm", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>The label every Activity timestamp is shown in — Asia/Dubai is UTC+4 all year (no daylight saving).</summary>
     public const string ActivityTimeZoneLabel = "Asia/Dubai (UTC+4)";
 
     /// <summary>A UTC instant as Asia/Dubai time with seconds, for the Activity timeline: "3 Nov 2026 08:26:41". The caller labels the zone once with <see cref="ActivityTimeZoneLabel"/>.</summary>
     public static string DubaiTimestamp(DateTime utc) =>
-        DateTime.SpecifyKind(utc, DateTimeKind.Utc).AddHours(4).ToString("d MMM yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
+        ToUae(utc).ToString("d MMM yyyy HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>Gold filled stars then grey empty ones for a 1–5 rating, as plain text characters.</summary>
     public static string StarsFor(int rating) => new string('★', Math.Clamp(rating, 0, 5)) + new string('☆', 5 - Math.Clamp(rating, 0, 5));
@@ -165,6 +178,8 @@ public static class TicketDisplay
     public static string HandlingStateLabel(string? state, string? humanAgentName = null) => state switch
     {
         "Ai" => "AI (virtual agent) — no human involved",
+        "AiEnded" => "AI conversation ended — no human involved",
+        "HumanFollowUp" => "Human follow-up required — no agent has accepted or replied yet",
         "WaitingForHuman" => "AI — a human was requested and has not yet taken it",
         "Human" => string.IsNullOrWhiteSpace(humanAgentName) ? "Human agent" : $"Human agent — {humanAgentName}",
         null or "" => "—",
@@ -247,7 +262,7 @@ public static class TicketDisplay
             : age.TotalHours < 1 ? $"{(int)age.TotalMinutes} min ago"
             : age.TotalDays < 1 ? $"{(int)age.TotalHours} h ago"
             : age.TotalDays < 30 ? $"{(int)age.TotalDays} d ago"
-            : atUtc.ToLocalTime().ToString("MMM d, yyyy");
+            : ToUae(atUtc).ToString("MMM d, yyyy");
     }
 
     /// <summary>Up to two initials for an avatar chip — the first letters of the first and last words, or "?" for an empty name.</summary>

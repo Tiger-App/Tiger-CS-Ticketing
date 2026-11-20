@@ -84,7 +84,7 @@ public sealed class BusinessCalendarRepository(TigerCsDbContext dbContext) : IBu
             .OrderBy(h => h)
             .ToListAsync(cancellationToken);
 
-        var today = DateOnly.FromDateTime(DateTime.UtcNow);
+        var today = TigerCS.Domain.Common.UaeCalendar.Today(DateTime.UtcNow);   // holidays are dates on the UAE calendar
         return new SlaCalendarDto(
             calendar.Name,
             calendar.BusinessDayStartLocal.ToString("HH:mm"),

@@ -243,7 +243,7 @@ public sealed class DashboardModel(DashboardApiClient dashboardApiClient) : Page
             new KpiCard("In Department Queue", k.InDepartmentQueue, k.InDepartmentQueue > 0 ? "attention" : null,
                 DashboardLinks.InDepartmentQueue(f), "Active, awaiting an assignee"),
             new KpiCard("SLA Breached", k.SlaBreached, k.SlaBreached > 0 ? "critical" : null, DashboardLinks.SlaBreached(f), "Active, SLA state Breached"),
-            new KpiCard("Due Today", k.DueToday, k.DueToday > 0 ? "attention" : null, DashboardLinks.DueToday(f), "Resolution due today (UTC day)"),
+            new KpiCard("Due Today", k.DueToday, k.DueToday > 0 ? "attention" : null, DashboardLinks.DueToday(f), "Resolution due today (UAE day)"),
             new KpiCard("Pending Approval", k.PendingApproval, k.PendingApproval > 0 ? "attention" : null,
                 DashboardLinks.PendingApproval(f), "Approvals you can action")
         ];

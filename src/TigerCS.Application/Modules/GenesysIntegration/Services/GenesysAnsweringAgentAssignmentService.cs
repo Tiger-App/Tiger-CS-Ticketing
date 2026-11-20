@@ -1,6 +1,7 @@
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Modules.CustomerVerification.Abstractions;
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
+using TigerCS.Application.Modules.SlaAndEscalation.Services;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.Ticketing;
@@ -31,7 +32,9 @@ public sealed class GenesysAnsweringAgentAssignmentService(
     TicketAutoAssignmentService autoAssignment,
     ITicketAgentHandoffRepository handoffRepository,
     ITicketingUnitOfWork unitOfWork,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    FirstHumanResponseRecorder? firstHumanResponseRecorder = null,
+    IAuditEntryWriter? auditWriter = null)
 {
     /// <summary>Maps the resolver's answer onto the Ticketing-side description of the answering agent. Pure; never invents a mapping.</summary>
     public static AnsweringAgent ToAnsweringAgent(string genesysUserId, GenesysAgentResolutionResult resolution)
@@ -100,13 +103,21 @@ public sealed class GenesysAnsweringAgentAssignmentService(
 
         await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
 
+        var correlationId = Guid.NewGuid();
+        var now = timeProvider.GetUtcNow().UtcDateTime;
         var result = await autoAssignment.ApplyAnsweringAgentAsync(
-            ticket, agent, source, timeProvider.GetUtcNow().UtcDateTime, Guid.NewGuid(), callerEmployeeId,
+            ticket, agent, source, now, correlationId, callerEmployeeId == Guid.Empty ? null : callerEmployeeId,
             routeToCallCenterIfAgentUnavailable: humanManaged, cancellationToken,
             firstResponseIsFromTheAnsweringAgent: firstResponseIsFromTheAnsweringAgent,
             genesysEvent: new GenesysAnswerEvent(connectedAtUtc, interaction.GenesysConversationId, allowOwnerTransfer, interaction.ChannelId, evidenceAtUtc));
 
-        if (!result.Wrote)
+        // VOICE first response: the first MAPPED person who answered the call satisfies it at the call's ACTUAL connect time - not when the transcript arrives, and
+        // not at receipt time (receipt is only the audited fallback when Genesys sent no connect time). Write-once; a later agent never moves it; a transcript line
+        // later finds it set. An ineligible or unmapped answerer records nothing here (an unmapped id has no employee to credit).
+        var firstResponseRecorded = !identityIsTranscriptSenderId
+            && await TryRecordVoiceFirstResponseAsync(ticket, interaction, agent, connectedAtUtc, now, correlationId, cancellationToken);
+
+        if (!result.Wrote && !firstResponseRecorded)
         {
             return result;
         }
@@ -123,5 +134,41 @@ public sealed class GenesysAnsweringAgentAssignmentService(
 
         await transaction.CommitAsync(cancellationToken);
         return result;
+    }
+
+    /// <summary>
+    /// Records <see cref="Ticket.FirstHumanResponseAtUtc"/> for a PHONE interaction at <paramref name="connectedAtUtc"/> (Genesys' connect time), credited to the
+    /// answering employee. Returns whether it wrote. Closed / Resolved tickets and an already-recorded response are left exactly as they are.
+    /// </summary>
+    public async Task<bool> TryRecordVoiceFirstResponseAsync(
+        Ticket ticket, TicketInteraction interaction, AnsweringAgent agent, DateTime? connectedAtUtc, DateTime nowUtc, Guid correlationId,
+        CancellationToken cancellationToken = default)
+    {
+        if (firstHumanResponseRecorder is null
+            || interaction.ChannelId != WellKnownChannels.Phone
+            || agent.EmployeeId is not { } answeredBy
+            || ticket.FirstHumanResponseAtUtc is not null
+            || ticket.TicketStatus is TicketStatus.Closed or TicketStatus.Resolved)
+        {
+            return false;
+        }
+
+        var connectTimeMissing = connectedAtUtc is null;
+        var occurredAtUtc = connectedAtUtc is { } c && c <= nowUtc ? c : nowUtc;
+
+        var recorded = await firstHumanResponseRecorder.TryRecordAsync(
+            ticket, occurredAtUtc, nowUtc, answeredBy, actorIsSystem: false, FirstResponseSource.GenesysCallAnswer, correlationId, cancellationToken);
+
+        if (recorded && connectTimeMissing && auditWriter is not null)
+        {
+            await auditWriter.WriteAsync(
+                answeredBy, GenesysAuditActions.VoiceFirstResponseConnectTimeMissing, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null,
+                afterValue: $"TicketId={ticket.TicketId};ConversationId={interaction.GenesysConversationId};GenesysUserId={agent.GenesysUserId};"
+                    + $"ConnectedAtUtc=(not sent);FirstHumanResponseAtUtc={occurredAtUtc:O} (receipt time used as the last resort)",
+                correlationId, cancellationToken);
+        }
+
+        return recorded;
     }
 }

@@ -45,7 +45,7 @@ namespace TigerCS.Application.Modules.Ticketing.Abstractions;
 /// <param name="RangeStartUtc">Inclusive start of the volume date range.</param>
 /// <param name="RangeEndUtc">Exclusive end of the volume date range.</param>
 /// <param name="NowUtc">The evaluation instant — passed in so the query is deterministic under test.</param>
-/// <param name="TodayStartUtc">Start of "today" (UTC calendar day) for Due Today.</param>
+/// <param name="TodayStartUtc">The UTC instant at which "today" (the UAE calendar day) began, for Due Today.</param>
 /// <param name="AtRiskWindow">How far ahead of a pending SLA deadline ranks as "due soon" in the Recent/Critical list.</param>
 /// <param name="RecentLimit">Maximum Recent/Critical rows.</param>
 /// <param name="AgentScopeEmployeeId">Set only for a restricted CS Agent: every count and list is then limited to tickets assigned to, or handled on Genesys by, that employee (plus <paramref name="ScopeDepartmentIds"/>, empty for a CS Agent). See <c>TicketQuery</c>.</param>

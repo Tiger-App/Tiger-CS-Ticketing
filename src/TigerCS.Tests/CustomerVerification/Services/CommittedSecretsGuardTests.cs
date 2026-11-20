@@ -154,12 +154,12 @@ public sealed class CommittedSecretsGuardTests
     }
 
     /// <summary>
-    /// A scan that silently finds nothing would pass forever. Pin that both
-    /// trees are actually reached, so a moved test file or a renamed directory
+    /// A scan that silently finds nothing would pass forever. Pin that the
+    /// committed tree is actually reached, so a moved test file or a renamed directory
     /// fails loudly instead of turning the guards above into no-ops.
     /// </summary>
     [Fact]
-    public void TheScan_ActuallyReachesBothTrees()
+    public void TheScan_ActuallyReachesTheCommittedTree()
     {
         var root = RepositoryRoot();
         var scanned = CommittedSettingsFiles()
@@ -170,13 +170,12 @@ public sealed class CommittedSecretsGuardTests
             File.Exists(Path.Combine(root, "docs", "DEV-SETUP.md")),
             $"Repository root did not resolve to the repository: {root}");
 
-        foreach (var tree in ScannedRoots)
-        {
-            Assert.True(
-                scanned.Any(path => path.StartsWith($"{tree}/", StringComparison.Ordinal)),
-                $"Found no appsettings*.json under '{tree}/' — the guard would be vacuous. Scanned: "
-                + (scanned.Count == 0 ? "(nothing)" : string.Join(", ", scanned)));
-        }
+        // publish/ is no longer a committed tree (tools/check-repo-hygiene.sh forbids tracking it), so it is scanned only when a local, git-ignored
+        // publish exists; the committed tree that must always be reached is src/.
+        Assert.True(
+            scanned.Any(path => path.StartsWith("src/", StringComparison.Ordinal)),
+            "Found no appsettings*.json under 'src/' — the guard would be vacuous. Scanned: "
+            + (scanned.Count == 0 ? "(nothing)" : string.Join(", ", scanned)));
     }
 
     /// <summary>

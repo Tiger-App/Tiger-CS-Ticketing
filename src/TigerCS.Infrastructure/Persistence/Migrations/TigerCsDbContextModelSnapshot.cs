@@ -3730,6 +3730,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<Guid>("NewEmployeeId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<int?>("PreviousDepartmentId")
+                        .HasColumnType("int");
+
                     b.Property<Guid?>("PreviousEmployeeId")
                         .HasColumnType("uniqueidentifier");
 
@@ -3866,6 +3869,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.Property<string>("EndReason")
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
+
+                    b.Property<DateTime?>("EndReceivedAtUtc")
+                        .HasColumnType("datetime2");
 
                     b.Property<DateTime?>("EndedAtUtc")
                         .HasColumnType("datetime2");

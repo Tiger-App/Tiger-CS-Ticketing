@@ -15,6 +15,11 @@
         @* Closed: empty by rule. No owner: the AI virtual agent or the awaiting-agent label (see TicketDisplay). Owned: the employee's full name, never an id. *@
         @if (t.TicketStatus == "Closed")
         {
+            @* A Closed ticket has no current owner, but who held it last is history: shown, never an assignment. *@
+            @if (!string.IsNullOrWhiteSpace(t.LastResponsibleName))
+            {
+                <text>@t.LastResponsibleName <span class="is-muted">(last responsible)</span></text>
+            }
         }
         else if (TicketDisplay.IsDepartmentQueue(t.CurrentOwnerEmployeeId))
         {
@@ -25,5 +30,5 @@
             @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, t.CurrentOwnerName ?? Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName)
         }
     </td>
-    <td class="text-secondary text-mono">@t.CreatedAtUtc.ToLocalTime().ToString("MMM d, HH:mm")</td>
+    <td class="text-secondary text-mono">@TigerCS.Web.Models.TicketDisplay.ToUae(t.CreatedAtUtc).ToString("MMM d, HH:mm")</td>
 </tr>

@@ -10,8 +10,9 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 ///
 /// Root cause covered here: Genesys opens the ticket first and only LATER reports <c>humanFollowUpRequired: true</c>. That update
 /// recorded the flag but never routed the ticket, so it stayed unassigned in its originating department. Every Genesys channel
-/// (Phone, Website chat, WhatsApp, Social media) must now reach Call Center — at creation when the flag is already known, and on the
-/// update otherwise — with ONE Round Robin agent, and without ever overwriting human ownership or touching an AI-only conversation.
+/// (Phone, Website chat, WhatsApp, Social media) must reach the Call Center QUEUE — at creation when the flag is already known, and on the
+/// update otherwise. The AI Agent stays the owner and NO person is dealt the ticket (no Round Robin, rotation untouched) until somebody actually
+/// accepts it; human ownership is never overwritten and an AI-only conversation is never touched.
 /// </summary>
 public class CallCenterAllChannelsRegressionTests
 {
@@ -53,12 +54,25 @@ public class CallCenterAllChannelsRegressionTests
         return s.F.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
     }
 
+    /// <summary>Waiting in the Call Center queue for a person: department moved (originating untouched), still the AI's, nobody dealt, no assignment row.</summary>
+    private static void AssertQueuedForAPerson(Scenario s, Ticket ticket)
+    {
+        Assert.Equal(s.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(s.Leasing.DepartmentId, ticket.OriginatingDepartmentId);                 // preserved
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                           // no human owner
+        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);                          // the AI Agent is still the owner
+        Assert.DoesNotContain(s.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.DoesNotContain(s.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticket.TicketId.ToString());
+    }
+
+    private static bool RotationUntouched(Scenario s) => s.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null);
+
     private static Task<GenesysTicketUpdateResult> UpdateAsync(Scenario s, Ticket ticket, string conversationId, bool? humanFollowUp) =>
         s.F.TicketUpdate.UpdateAsync(
             ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto(conversationId, HumanFollowUpRequired: humanFollowUp));
 
     [Fact]
-    public async Task EveryChannel_ShareOneRotation_InFixedOrder_WhateverTheDepartment_AndAiHandledTicketsNeedNoAgent()
+    public async Task EveryChannel_QueuesInTheCallCenter_NobodyIsDealt_TheRotationNeverAdvances_AndAiHandledTicketsStayWithTheAi()
     {
         var s = Build(agentCount: 3);
         var channels = new[]
@@ -67,45 +81,40 @@ public class CallCenterAllChannelsRegressionTests
             GenesysChannel.Instagram, GenesysChannel.Facebook, GenesysChannel.Phone
         };
 
-        var owners = new List<Guid?>();
         for (var i = 0; i < channels.Length; i++)
         {
             var ticket = await IngestAsync(s, $"c-seq-{i}", channels[i], humanFollowUp: true);
-            Assert.NotNull(ticket.CurrentOwnerEmployeeId);                       // every human-handled ticket has a CS Agent
-            owners.Add(ticket.CurrentOwnerEmployeeId);
+            AssertQueuedForAPerson(s, ticket);                                   // every human-needed ticket waits in the queue, whatever the channel
         }
 
-        // One rotation across ALL channels: agents 1,2,3,1,2,3,1 in the stable order.
-        Assert.Equal(
-            [s.Agents[0], s.Agents[1], s.Agents[2], s.Agents[0], s.Agents[1], s.Agents[2], s.Agents[0]],
-            owners);
+        Assert.True(RotationUntouched(s));                                       // Round Robin is not used for AI-handled tickets: the cursor never moved
+        Assert.Empty(s.F.TicketAssignments.Added);
 
-        // An AI-only conversation (no human requested) is not dealt an agent and is not an assignment failure; it does not advance the rotation.
+        // An AI-only conversation (no human requested) stays exactly where it is with the AI and is not an assignment failure.
         var ai = await IngestAsync(s, "c-ai", GenesysChannel.WebsiteChat, humanFollowUp: false);
         Assert.Null(ai.CurrentOwnerEmployeeId);
+        Assert.Equal(ServiceAccount, ai.AiAgentOwnerEmployeeId);
+        Assert.Equal(s.Leasing.DepartmentId, ai.CurrentDepartmentId);
         Assert.DoesNotContain(s.F.WorkflowEvents.All, e => e.TicketId == ai.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
-        var next = await IngestAsync(s, "c-seq-next", GenesysChannel.Phone, humanFollowUp: true);
-        Assert.Equal(s.Agents[1], next.CurrentOwnerEmployeeId);
+        Assert.True(RotationUntouched(s));
     }
 
     [Theory]
     [MemberData(nameof(Channels))]
-    public async Task HumanFollowUpKnownAtCreation_EntersCallCenter_WithOneRoundRobinAgent(GenesysChannel channel)
+    public async Task HumanFollowUpKnownAtCreation_EntersTheCallCenterQueue_StillOwnedByTheAi_WithNoRoundRobinAgent(GenesysChannel channel)
     {
         var s = Build();
 
         var t1 = await IngestAsync(s, "c-1", channel, humanFollowUp: true);
         var t2 = await IngestAsync(s, "c-2", channel, humanFollowUp: true);
 
-        Assert.All(new[] { t1, t2 }, t => Assert.Equal(s.F.CallCenter!.DepartmentId, t.CurrentDepartmentId));
-        Assert.All(new[] { t1, t2 }, t => Assert.Equal(s.Leasing.DepartmentId, t.OriginatingDepartmentId));
-        Assert.Equal(s.Agents[0], t1.CurrentOwnerEmployeeId);
-        Assert.Equal(s.Agents[1], t2.CurrentOwnerEmployeeId);
+        Assert.All(new[] { t1, t2 }, t => AssertQueuedForAPerson(s, t));
+        Assert.True(RotationUntouched(s));
     }
 
     [Theory]
     [MemberData(nameof(Channels))]
-    public async Task HumanFollowUpReportedAfterCreation_RoutesTheUnassignedTicketToCallCenter_WithOneAgent(GenesysChannel channel)
+    public async Task HumanFollowUpReportedAfterCreation_RoutesTheTicketToTheCallCenterQueue_WithNoAgentDealt(GenesysChannel channel)
     {
         var s = Build();
 
@@ -118,30 +127,36 @@ public class CallCenterAllChannelsRegressionTests
         var update = await UpdateAsync(s, ticket, "c-late", humanFollowUp: true);
 
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
-        Assert.Equal(s.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(s.Leasing.DepartmentId, ticket.OriginatingDepartmentId);   // preserved
-        Assert.Equal(s.Agents[0], ticket.CurrentOwnerEmployeeId);                // exactly one eligible Call Center agent
+        AssertQueuedForAPerson(s, ticket);
+        Assert.True(RotationUntouched(s));                                       // no Round Robin turn
         Assert.Equal(statusBefore, ticket.TicketStatus);                         // status untouched
-        Assert.Single(s.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId && a.IsCurrent);
         Assert.Contains(s.F.Audit.Entries, e => e.Action == "Transfer" && e.AfterValue!.Contains("routed to Call Center first"));
-        Assert.Contains(s.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Trigger=CallCenterIntake"));
+        var queued = s.F.AssignmentHistory.Entries.Where(h => h.TicketId == ticket.TicketId).OrderBy(h => h.ChangedAtUtc).ThenBy(h => h.TicketAssignmentHistoryEntryId).Last();
+        Assert.Equal(TicketAssignmentSource.GenesysQueueRouting, queued.Source);
+        Assert.Equal(s.Leasing.DepartmentId, queued.PreviousDepartmentId);
+        Assert.Equal(s.F.CallCenter!.DepartmentId, queued.DepartmentId);
+        Assert.Equal(ServiceAccount, queued.PreviousEmployeeId);                 // the AI Agent stays the owner: AI Agent -> AI Agent, only the department moved
+        Assert.Equal(ServiceAccount, queued.NewEmployeeId);
     }
 
     [Fact]
-    public async Task RepeatedHumanFollowUpUpdate_IsIdempotent_NoSecondAssignmentAndTheRotationDoesNotAdvance()
+    public async Task RepeatedHumanFollowUpUpdate_IsIdempotent_NoSecondMoveNoAssignmentAndTheRotationNeverAdvances()
     {
         var s = Build();
         var ticket = await IngestAsync(s, "c-idem", GenesysChannel.WebsiteChat, humanFollowUp: null);
         await UpdateAsync(s, ticket, "c-idem", humanFollowUp: true);
-        var owner = ticket.CurrentOwnerEmployeeId;
-        var assignments = s.F.TicketAssignments.Added.Count;
+        AssertQueuedForAPerson(s, ticket);
+        var history = s.F.AssignmentHistory.Entries.Count(h => h.TicketId == ticket.TicketId);
+        var transfers = s.F.Audit.Entries.Count(e => e.Action == "Transfer" && e.EntityId == ticket.TicketId.ToString());
 
         await UpdateAsync(s, ticket, "c-idem", humanFollowUp: true);
 
-        Assert.Equal(owner, ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(assignments, s.F.TicketAssignments.Added.Count);
+        AssertQueuedForAPerson(s, ticket);
+        Assert.Equal(history, s.F.AssignmentHistory.Entries.Count(h => h.TicketId == ticket.TicketId));
+        Assert.Equal(transfers, s.F.Audit.Entries.Count(e => e.Action == "Transfer" && e.EntityId == ticket.TicketId.ToString()));
         var next = await IngestAsync(s, "c-next", GenesysChannel.WebsiteChat, humanFollowUp: true);
-        Assert.Equal(s.Agents[1], next.CurrentOwnerEmployeeId);                  // the cursor moved exactly once
+        AssertQueuedForAPerson(s, next);                                         // the next ticket is queued too: nobody is dealt, the cursor never moved
+        Assert.True(RotationUntouched(s));
     }
 
     [Fact]
@@ -177,15 +192,17 @@ public class CallCenterAllChannelsRegressionTests
     }
 
     [Fact]
-    public async Task NoEligibleCallCenterAgent_LeavesTheRoutedTicketVisiblyUnassignedInCallCenter()
+    public async Task NoEligibleCallCenterAgent_StillQueuesTheTicketInCallCenter_WithTheAiAsOwner_AndNoAssignmentFailure()
     {
+        // Routing to the queue no longer needs an agent: with nobody available the ticket waits there exactly as it does with a full team, and no
+        // "could not assign" failure is raised because no assignment is attempted.
         var s = Build(agentCount: 0);
         var ticket = await IngestAsync(s, "c-none", GenesysChannel.SocialMedia, humanFollowUp: null);
 
         await UpdateAsync(s, ticket, "c-none", humanFollowUp: true);
 
-        Assert.Equal(s.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Contains(s.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Status=Unassigned"));
+        AssertQueuedForAPerson(s, ticket);
+        Assert.DoesNotContain(s.F.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
+        Assert.True(RotationUntouched(s));
     }
 }

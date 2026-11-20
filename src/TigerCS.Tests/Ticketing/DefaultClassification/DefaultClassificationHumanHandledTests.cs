@@ -12,7 +12,8 @@ using TigerCS.Tests.Ticketing.Fakes;
 namespace TigerCS.Tests.Ticketing.DefaultClassification;
 
 /// <summary>
-/// Human-handled tickets: an eligible CS Agent and a valid Department / Category / Request Type. A known department and request type are kept;
+/// Human-handled tickets: a valid Department / Category / Request Type, waiting in the Call Center queue (still owned by the AI Agent, nobody dealt) until an
+/// eligible CS Agent actually accepts the interaction, and then owned by that agent. A known department and request type are kept;
 /// a missing category or request type becomes General within the same department; an unknown department becomes Customer Services; a department
 /// is never changed because its General is missing (the gap is reported); the assigned CS Agent can review and correct the classification, and a
 /// reclassification keeps the agent, SLA, status and history.
@@ -40,6 +41,7 @@ public class DefaultClassificationHumanHandledTests
         public required Category HandoverCategory { get; init; }
         public required RequestType HandoverType { get; init; }
         public Guid[] Agents { get; init; } = [];
+        public string[] AgentGenesysIds { get; init; } = [];
     }
 
     private static World Build(int agents = 2)
@@ -54,26 +56,63 @@ public class DefaultClassificationHumanHandledTests
         var handoverCategory = f.Categories.Seed(handover.DepartmentId, "Handover Request");
         var t2 = f.WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: 601));
         var handoverType = f.RequestTypes.Add(new RequestType(handover.DepartmentId, "Handover Request", t2.WorkflowId, (byte)PriorityLevel.Medium, false, true, true, true));
-        var ids = Enumerable.Range(0, agents).Select(_ => Guid.NewGuid()).OrderBy(i => i).ToArray();
-        foreach (var id in ids)
-        {
-            f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(id, f.CallCenter!.DepartmentId, true, DateTime.UtcNow, null));
-        }
+        // Mapped Call Center CS Agents: one of them can ACCEPT (connect to) the interaction, which is the only way a person gets an AI-created ticket.
+        var pairs = Enumerable.Range(0, agents).Select(i => (Id: f.AddAgent($"g-hh-{i}", $"Agent {i}"), GenesysId: $"g-hh-{i}")).OrderBy(a => a.Id).ToArray();
+        var ids = pairs.Select(a => a.Id).ToArray();
 
         return new World
         {
             F = f, Cs = cs, CsGeneral = csGeneral, Leasing = leasing, LeasingGeneral = leasingGeneral, LeasingGeneralType = leasingType,
-            Handover = handover, HandoverCategory = handoverCategory, HandoverType = handoverType, Agents = ids
+            Handover = handover, HandoverCategory = handoverCategory, HandoverType = handoverType, Agents = ids,
+            AgentGenesysIds = pairs.Select(a => a.GenesysId).ToArray()
         };
     }
 
+    /// <summary>
+    /// Ingests the inquiry. A human-handled ticket waits in the Call Center queue (AI owner, nobody assigned); with <paramref name="accept"/> (default) the first
+    /// CS Agent then ACCEPTS the interaction, which is what gives the person the ticket: on a phone call by picking up at creation (the inquiry names the
+    /// connected agent, so it is assigned directly and never waits), on every other channel by a connected-agent event after creation.
+    /// </summary>
     private static async Task<Ticket> IngestAsync(
-        World w, string conv, int? departmentId, GenesysChannel channel = GenesysChannel.Phone, bool? human = true, GenesysRequestTypeDto? type = null)
+        World w, string conv, int? departmentId, GenesysChannel channel = GenesysChannel.Phone, bool? human = true, GenesysRequestTypeDto? type = null, bool accept = true)
     {
+        var pickup = human == true && accept && channel == GenesysChannel.Phone;
         var result = await w.F.Ingestion.IngestAsync(
-            ServiceAccount, new GenesysInquiryDto(conv, channel, CustomerPhone: Phone, DepartmentId: departmentId, RequestType: type, HumanFollowUpRequired: human));
+            ServiceAccount, new GenesysInquiryDto(
+                conv, channel, CustomerPhone: Phone, DepartmentId: departmentId, RequestType: type, HumanFollowUpRequired: human,
+                AgentId: pickup ? w.AgentGenesysIds[0] : null));
         Assert.Equal(GenesysIngestionOutcome.TicketCreated, result.Outcome);
-        return w.F.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
+        var ticket = w.F.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
+        if (pickup)
+        {
+            Assert.Equal(w.Agents[0], ticket.CurrentOwnerEmployeeId);          // answered at creation: assigned directly to that person, not queued
+        }
+        else if (human == true && accept)
+        {
+            await AcceptAsync(w, ticket);
+        }
+
+        return ticket;
+    }
+
+    private static async Task AcceptAsync(World w, Ticket ticket, int agent = 0)
+    {
+        var conversation = w.F.Interactions.All.Single(i => i.TicketId == ticket.TicketId).GenesysConversationId!;
+        var update = await w.F.TicketUpdate.UpdateAsync(
+            ServiceAccount, ticket.TicketId,
+            new GenesysTicketUpdateDto(conversation, Routing: new GenesysRoutingUpdateDto(AgentId: w.AgentGenesysIds[agent], ConnectedAtUtc: DateTime.UtcNow)));
+        Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
+        Assert.Equal(w.Agents[agent], ticket.CurrentOwnerEmployeeId);
+    }
+
+    /// <summary>Human work nobody has accepted: in the Call Center queue, still the AI Agent's, no person dealt, no Round Robin turn.</summary>
+    private static void AssertWaitingForAPerson(World w, Ticket t)
+    {
+        Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);
+        Assert.Null(t.CurrentOwnerEmployeeId);
+        Assert.Equal(ServiceAccount, t.AiAgentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == t.TicketId);
+        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
     }
 
     private static async Task AssertValidAsync(World w, Ticket t) =>
@@ -83,13 +122,17 @@ public class DefaultClassificationHumanHandledTests
 
     [Theory]
     [MemberData(nameof(Channels))]
-    public async Task HumanHandled_OnEveryChannel_HasACsAgentAndAValidClassification_InTheSameDepartment(GenesysChannel channel)
+    public async Task HumanHandled_OnEveryChannel_WaitsInTheCallCenterQueue_ThenIsOwnedByTheCsAgentWhoAccepts_WithAValidClassification(GenesysChannel channel)
     {
         var w = Build();
 
-        var t = await IngestAsync(w, "conv-h", w.Leasing.DepartmentId, channel);
+        var t = await IngestAsync(w, "conv-h", w.Leasing.DepartmentId, channel, accept: false);
 
+        AssertWaitingForAPerson(w, t);                                         // no Round Robin: nobody is dealt it before somebody accepts
+        await AcceptAsync(w, t, agent: 1);                                      // the agent who actually answers - not "the next in rotation" - owns it
         Assert.Contains(t.CurrentOwnerEmployeeId, w.Agents.Cast<Guid?>());
+        Assert.Equal(w.Agents[1], t.CurrentOwnerEmployeeId);
+        Assert.Null(t.AiAgentOwnerEmployeeId);
         Assert.Equal(w.Leasing.DepartmentId, t.OriginatingDepartmentId);
         Assert.Equal(w.LeasingGeneral.CategoryId, t.CategoryId);
         Assert.Equal(w.LeasingGeneralType.RequestTypeId, t.RequestTypeId);
@@ -101,24 +144,37 @@ public class DefaultClassificationHumanHandledTests
     {
         var w = Build();
 
-        var t = await IngestAsync(w, "conv-known", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var t = await IngestAsync(w, "conv-known", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId), accept: false);
 
         Assert.Equal(w.HandoverCategory.CategoryId, t.CategoryId);
         Assert.Equal(w.HandoverType.RequestTypeId, t.RequestTypeId);
         Assert.Equal(w.Handover.DepartmentId, t.OriginatingDepartmentId);
-        Assert.NotNull(t.CurrentOwnerEmployeeId);
+        // The known request type is an explicit workflow routing: the ticket stays in its department, the AI keeps it, nobody is assigned.
+        Assert.Equal(w.HandoverType.DepartmentId, t.CurrentDepartmentId);
+        Assert.Null(t.CurrentOwnerEmployeeId);
+        Assert.Equal(ServiceAccount, t.AiAgentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == t.TicketId);
+        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "ApplyDefaultClassification");
+
+        // The same known classification when an agent picks the call up at creation: owned by that person at once, classification untouched.
+        var picked = await IngestAsync(w, "conv-known-pickup", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        Assert.Equal(w.Agents[0], picked.CurrentOwnerEmployeeId);
+        Assert.Equal(w.HandoverType.RequestTypeId, picked.RequestTypeId);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "ApplyDefaultClassification");
     }
 
     [Fact]
-    public async Task AnUnknownDepartment_IsCustomerServicesGeneral_WithACsAgent()
+    public async Task AnUnknownDepartment_IsCustomerServicesGeneral_WaitingForACsAgentWhoAccepts()
     {
         var w = Build();
 
-        var t = await IngestAsync(w, "conv-unknown", departmentId: null);
+        var t = await IngestAsync(w, "conv-unknown", departmentId: null, accept: false);
 
         Assert.Equal(w.Cs.DepartmentId, t.OriginatingDepartmentId);
         Assert.Equal(w.CsGeneral.CategoryId, t.CategoryId);
+        AssertWaitingForAPerson(w, t);
+        await AcceptAsync(w, t);
         Assert.NotNull(t.CurrentOwnerEmployeeId);
         await AssertValidAsync(w, t);
     }
@@ -151,11 +207,13 @@ public class DefaultClassificationHumanHandledTests
         Assert.Equal(GenesysIngestionOutcome.DefaultClassificationNotConfigured, refused.Outcome);
 
         var (general, type) = w.F.SeedGeneral(w.Handover);   // EnsureDefaultGeneralClassification.sql
-        var t = await IngestAsync(w, "conv-retry", w.Handover.DepartmentId);
+        var t = await IngestAsync(w, "conv-retry", w.Handover.DepartmentId, accept: false);
 
         Assert.Equal(general.CategoryId, t.CategoryId);
         Assert.Equal(type.RequestTypeId, t.RequestTypeId);
         Assert.Equal(w.Handover.DepartmentId, t.OriginatingDepartmentId);
+        AssertWaitingForAPerson(w, t);
+        await AcceptAsync(w, t);
         Assert.NotNull(t.CurrentOwnerEmployeeId);
         await AssertValidAsync(w, t);
     }
@@ -219,7 +277,7 @@ public class DefaultClassificationHumanHandledTests
     }
 
     [Fact]
-    public async Task ALegacyTicketWhoseHumanFollowUpIsRequested_GetsItsDepartmentsGeneral_WithoutLosingItsDepartmentOrAgent()
+    public async Task ALegacyTicketWhoseHumanFollowUpIsRequested_GetsItsDepartmentsGeneral_WaitsInTheCallCenterQueue_AndAssignsNobody()
     {
         var (f, leasing, ticket, agent) = await LegacyTicketAsync();
         var (general, type) = f.SeedGeneral(leasing);
@@ -230,7 +288,12 @@ public class DefaultClassificationHumanHandledTests
         Assert.Equal(general.CategoryId, ticket.CategoryId);
         Assert.Equal(type.RequestTypeId, ticket.RequestTypeId);
         Assert.Equal(leasing.DepartmentId, ticket.OriginatingDepartmentId);
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);       // the human queue
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                 // the Call Center agent is NOT dealt it (no Round Robin)
+        Assert.NotEqual(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);                // the AI Agent stays the owner until a person accepts
+        Assert.DoesNotContain(f.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.All(f.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
         Assert.Equal(TicketClassificationState.Valid, await f.DefaultClassification.AssessAsync(ticket.CategoryId, ticket.RequestTypeId));
     }
 

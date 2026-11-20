@@ -85,7 +85,9 @@ public sealed class GenesysTicketUpdateAppService(
         ArgumentNullException.ThrowIfNull(request);
 
         // Every instant Genesys sent is UTC from here on (see GenesysTimestamps): an offset-bearing or zoneless value is never stored as local wall-clock time.
-        request = GenesysTimestamps.Normalize(request);
+        // An event cannot be later than the moment it was received: an impossible start time is dropped, a connect / end time is limited to receipt.
+        var timestamps = new GenesysTimestampContext(timeProvider.GetUtcNow().UtcDateTime, options.FutureTimestampTolerance);
+        request = GenesysTimestamps.Normalize(request, timestamps);
 
         if (!options.Enabled)
         {
@@ -122,6 +124,15 @@ public sealed class GenesysTicketUpdateAppService(
             return GenesysTicketUpdateResult.Failure(
                 GenesysTicketUpdateOutcome.ConversationNotFound,
                 "This conversation never produced a ticket, so there is nothing to update.");
+        }
+
+        if (timestamps.Describe() is { } timestampAnomaly)
+        {
+            // Evidence for the audit trail (saved with the next write of this update): what was sent, in which wire form, and what was done with it.
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.TimestampAnomaly, "Ticket", ticket.TicketId.ToString(),
+                beforeValue: null, afterValue: $"TicketId={ticket.TicketId};ConversationId={conversationId};{timestampAnomaly}",
+                Guid.NewGuid(), cancellationToken);
         }
 
         // Checked before anything is written, like the transcript: a
@@ -218,6 +229,11 @@ public sealed class GenesysTicketUpdateAppService(
         // department, the priority, the SLA and the status are untouched, and a valid classification is never replaced.
         // Closed is terminal: a late event never classifies, routes, assigns or reopens a Closed ticket (see ClosedTicketGuard).
         var ticketIsClosed = ClosedTicketGuard.IsTerminal(ticket);
+
+        // The AI-ownership / answering-agent rules apply to EVERY channel (GenesysOwnershipRules): voice and WhatsApp behave the same. Only the meaning of "the
+        // call ended" differs for Phone (the answering agent can still be reported after it), see isVoice below.
+        var ownershipRules = GenesysOwnershipRules.AppliesTo(interaction.ChannelId);
+        var isVoice = GenesysOwnershipRules.IsVoice(interaction.ChannelId);
 
         if (defaultClassification is not null
             && !ticketIsClosed
@@ -355,7 +371,7 @@ public sealed class GenesysTicketUpdateAppService(
             var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
                 callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken,
                 firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, answeringAgentId),
-                connectedAtUtc: request.Routing?.ConnectedAtUtc, allowOwnerTransfer: options.ReassignOnTransfer && !interaction.IsEnded);   // a transfer is only meaningful while the call is live
+                connectedAtUtc: request.Routing?.ConnectedAtUtc, allowOwnerTransfer: options.ReassignOnTransfer && !interaction.IsEnded);   // a transfer is only meaningful while the conversation is live; the person who ACTUALLY accepted the interaction owns it - the same for every channel (Genesys:ReassignOnTransfer, default true; set false to keep the first person who answered)
             if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
             {
                 return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);
@@ -513,11 +529,20 @@ public sealed class GenesysTicketUpdateAppService(
             && (await agentResolution.ResolveByGenesysUserIdAsync(routingAgentId, cancellationToken)).IsResolved;
         var humanSignal = GenesysHumanHandlingEvidence.ForUpdate(request, routingAgentIsHuman);
 
-        // The AI conversation ended and nobody finished the ticket: it is NOT left sitting unassigned in its department - it is routed for human
-        // handling (Call Center first, shared round robin as the provisional owner until an agent actually accepts). Never when the AI closes it in this
-        // same update, when the customer confirmed, while the AI is still waiting for the customer's reply (the inactivity close handles that), or when
-        // a person already owns / handled it. Redelivery heals a ticket whose routing never ran; routing itself is idempotent.
-        if (humanSignal == GenesysHumanSignal.None
+        // <b>An AI conversation ending is NOT evidence of a human handoff.</b> It used to be: an end event with no human signal, no owner and no
+        // handler was promoted to "AiEndedUnresolved", which marked the ticket as human work, moved it to the Call Center and dealt it to an agent
+        // by Round Robin one second after the conversation ended (ticket TG-REG-20261119-0027) - without any transcript evidence, so it also bypassed
+        // Genesys:AssignOnTranscriptEvidence. The ticket now stays exactly where it is (the AI's, with its own auto-close / inactivity rules). A person
+        // gets it only on real evidence: an explicit humanFollowUpRequired / handoff, a mapped agent CONNECTED, an agent taking pending work, or a
+        // HumanAgent transcript line while the transcript-evidence fallback is enabled.
+        // The AI conversation ENDED without resolving or closing the ticket: it is marked as unresolved, requiring follow-up, so it is visible in the
+        // follow-up queue and no inactivity / AI close can make it disappear. This is NOT a handoff and NOT an assignment: no person is chosen, no
+        // Round Robin runs, the AI Agent stays the owner (AiEndedUnresolved is a follow-up flag, never an assignment trigger).
+        // VOICE: ended alone is never "AI failed" - the answering agent can still arrive after it. The voice no-answer reconciler concludes it once, after the
+        // configured window (VoiceNoAnswerReconciler); no sticky follow-up flag, handoff or assignment is created from the end event.
+        // Every other channel: the ended, unfinished AI conversation is flagged for follow-up and queued in the Call Center, AI Agent still the owner - never Round Robin.
+        if (!isVoice
+            && humanSignal == GenesysHumanSignal.None
             && request.Ended is not null
             && request.ClosedByAi != true
             && request.CustomerConfirmation is null
@@ -528,6 +553,12 @@ public sealed class GenesysTicketUpdateAppService(
             && ticket.TicketStatus is TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer)
         {
             humanSignal = GenesysHumanSignal.AiEndedUnresolved;
+        }
+
+        if (ownershipRules && humanSignal == GenesysHumanSignal.HumanTranscriptLine && !options.AssignOnTranscriptEvidence)
+        {
+            // The fallback is switched off: a transcript line alone neither moves nor assigns the ticket (the Genesys connect event does).
+            humanSignal = GenesysHumanSignal.None;
         }
 
         if (ticketIsClosed)
@@ -645,7 +676,10 @@ public sealed class GenesysTicketUpdateAppService(
             return (false, "Not closed: a human agent is handling this conversation.");
         }
 
-        if (await CustomerInactivityScope.IsCallCenterTicketAsync(ticket, departmentRepository, cancellationToken))
+        // VOICE: a valid AI closure is never refused merely because the ticket sits in (or originated in) the Call Center - voice tickets are created and queued
+        // there by design. The checks above (no pending human work, no person owning it, no human handling) are what decide. Other channels keep the rule.
+        if (!GenesysOwnershipRules.IsVoice(interaction.ChannelId)
+            && await CustomerInactivityScope.IsCallCenterTicketAsync(ticket, departmentRepository, cancellationToken))
         {
             return (false, "Not closed: Call Center tickets are managed by people and are never closed by the AI.");
         }
@@ -678,8 +712,10 @@ public sealed class GenesysTicketUpdateAppService(
             ? await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken)
             : null;
 
+        // The closure is attributed to the AI Agent that owned the ticket (the resolution row, the status history and the audit actor), never to a person. The AI
+        // Agent stays the recorded owner of the closed ticket (ClearOwnerOnClosure only clears a PERSON owner), so the closed ticket still reads "owned by the AI Agent".
         var result = await lifecycleAppService.CloseForAiCompletionAsync(
-            callerEmployeeId, ticket.TicketId, ClosedByAiReason,
+            ticket.AiAgentOwnerEmployeeId ?? callerEmployeeId, ticket.TicketId, ClosedByAiReason,
             $"ConversationId={interaction.GenesysConversationId}"
                 + (preAssignedOwner is null ? string.Empty : $";AutomaticPreAssignmentReleased=true;ReleasedOwnerEmployeeId={preAssignedOwner}"),
             beforeCommit: _ =>
@@ -924,14 +960,19 @@ public sealed class GenesysTicketUpdateAppService(
         // then reports humanFollowUpRequired), so it is still sitting unassigned in its category/queue department. It enters the Call
         // Center now and gets ONE agent by Round Robin — unless a person already owns it, or it is closed/resolved. Evaluated even when the
         // flag was already set, so a redelivered update heals a ticket whose routing never ran; routing itself is idempotent.
+        // VOICE: NO Round Robin and no assignment - the follow-up is flagged and the ticket waits in the queue (or stays in its workflow department) with the AI
+        // Agent as owner until a person actually answers it, an authorised person assigns it, or the call ends unanswered and the no-answer window passes.
+        // Other channels keep the previous behaviour: Call Center first, then ONE agent by the shared rotation.
+        var voice = GenesysOwnershipRules.AppliesTo(interaction.ChannelId);   // every channel: queue only, no Round Robin
         var routed = autoAssignmentService is not null
             && await autoAssignmentService.RouteExistingTicketToCallCenterAsync(
                 ticket, timeProvider.GetUtcNow().UtcDateTime, correlationId,
-                "Human follow-up required — routed to Call Center first", cancellationToken);
+                "Human follow-up required — routed to Call Center first", cancellationToken, requiredRole: null, dealToAgent: !voice, voiceOwnership: voice);
 
         // Routing declined (already in / passed through the Call Center, or an automatic owner that is kept) but the person who is needed still
-        // has no CS Agent: the shared rotation gives one. No-op for an owned / closed ticket; a failure is recorded once, never silent.
-        var ensured = autoAssignmentService is not null
+        // has no CS Agent: the shared rotation gives one. No-op for an owned / closed ticket; a failure is recorded once, never silent. NEVER for voice.
+        var ensured = !voice
+            && autoAssignmentService is not null
             && !routed
             && ticket.CurrentOwnerEmployeeId is null
             && (await autoAssignmentService.EnsureCsAgentAsync(
@@ -1007,6 +1048,7 @@ public sealed class GenesysTicketUpdateAppService(
         GenesysHandoffOutcome.InvalidMode => GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.InvalidHandoffMode, result.Detail),
         GenesysHandoffOutcome.InvalidTrigger => GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.InvalidHandoffTrigger, result.Detail),
         GenesysHandoffOutcome.ReasonRequired => GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.HandoffReasonRequired, result.Detail),
+        GenesysHandoffOutcome.TicketClosed => GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.TicketClosed, result.Detail),
         GenesysHandoffOutcome.NoOpenHandoff => GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.NoOpenHandoff, result.Detail),
         GenesysHandoffOutcome.ConversationNotFound => GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConversationNotFound, result.Detail),
         _ => GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.NoOpenHandoff, result.Detail)

@@ -15,7 +15,7 @@ namespace TigerCS.Application.Modules.Ticketing.Dto;
 /// <param name="SlaBreached">Active tickets whose SlaState is Breached.</param>
 /// <param name="CriticalOrHigh">Active tickets at priority Critical or High.</param>
 /// <param name="PendingCustomer">Tickets currently in PendingCustomer.</param>
-/// <param name="ResolvedToday">Tickets whose current resolution was recorded today (UTC day).</param>
+/// <param name="ResolvedToday">Tickets whose current resolution was recorded today (UAE day).</param>
 /// <param name="Reopened">Active tickets that have been reopened at least once.</param>
 /// <param name="MyTickets">Tickets currently assigned to the caller, in any status.</param>
 /// <param name="AttentionTickets">The Tickets Requiring Attention rows — breached, due soon, critical/high, or unassigned — most urgent first.</param>
@@ -68,12 +68,11 @@ public sealed record DashboardAttentionTicketDto(
 /// The Operational Dashboard's filters, bound from the query string. Every
 /// filter is optional. The department filter can only narrow the caller's
 /// visible scope, never widen it; the agent filter is an existing Ticketing
-/// user's employee id (the ticket's current owner). Dates are UTC calendar
-/// days — the same "UTC day" convention the dashboard already uses for
-/// today — and default to the last 30 days when both are omitted.
+/// user's employee id (the ticket's current owner). Dates are UAE calendar
+/// days (Asia/Dubai; the storage stays UTC and the range is converted to UTC instants), the same day that "today" means, and default to the last 30 days when both are omitted.
 /// </summary>
-/// <param name="DateFrom">First UTC calendar day of the volume date range (inclusive).</param>
-/// <param name="DateTo">Last UTC calendar day of the volume date range (inclusive).</param>
+/// <param name="DateFrom">First UAE calendar day of the volume date range (inclusive).</param>
+/// <param name="DateTo">Last UAE calendar day of the volume date range (inclusive).</param>
 /// <param name="DepartmentId">Narrow to one department the caller may already see.</param>
 /// <param name="OwnerEmployeeId">Narrow to tickets currently owned by one agent.</param>
 /// <param name="ChannelId">Narrow to tickets whose originating interaction arrived on one channel.</param>
@@ -159,7 +158,7 @@ public sealed record DashboardAppliedFiltersDto(
 /// <param name="MyTickets">Tickets (any status) whose CurrentOwnerEmployeeId is the caller.</param>
 /// <param name="InDepartmentQueue">Active tickets with no current owner — queued to their responsible department.</param>
 /// <param name="SlaBreached">Active tickets whose SlaState is Breached.</param>
-/// <param name="DueToday">Active tickets whose current, unbreached SLA resolution deadline falls today (UTC calendar day).</param>
+/// <param name="DueToday">Active tickets whose current, unbreached SLA resolution deadline falls today (UAE calendar day).</param>
 /// <param name="PendingApproval">Tickets carrying a Pending approval the caller is authorized to action.</param>
 /// <param name="AwaitingHumanAgent">
 /// Customer interactions waiting for a human to take them

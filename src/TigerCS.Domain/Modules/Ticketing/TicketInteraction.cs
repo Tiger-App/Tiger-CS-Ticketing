@@ -148,6 +148,13 @@ public class TicketInteraction
     /// <summary>When the conversation ended/disconnected (Genesys' clock where it supplies one), or null while the interaction is still live or was never reported ended.</summary>
     public DateTime? EndedAtUtc { get; private set; }
 
+    /// <summary>
+    /// When TigerCS RECEIVED the end event (the server clock), as distinct from <see cref="EndedAtUtc"/> (the sender's clock for when the call ended). The anchor of the voice
+    /// no-answer reconciliation window: a routing event (the answering agent) may still arrive after <c>ended</c>, so "nobody answered" is concluded only a configured time
+    /// after the end was RECEIVED - never from a possibly delayed event time. Null for interactions ended before this column existed (the reconciler then falls back to <see cref="EndedAtUtc"/>).
+    /// </summary>
+    public DateTime? EndReceivedAtUtc { get; private set; }
+
     /// <summary>Why the conversation ended, as reported (e.g. "AgentDisconnect", "CustomerDisconnect", "Timeout") — free text until the Genesys contract fixes an enumeration; null when not reported.</summary>
     public string? EndReason { get; private set; }
 
@@ -296,7 +303,7 @@ public class TicketInteraction
     /// an ended chat is not a closed ticket — the ticket keeps following the
     /// existing TigerCS workflow.
     /// </summary>
-    public void End(DateTime endedAtUtc, string? endReason)
+    public void End(DateTime endedAtUtc, string? endReason, DateTime? receivedAtUtc = null)
     {
         if (EndedAtUtc is { } already)
         {
@@ -304,6 +311,7 @@ public class TicketInteraction
         }
 
         EndedAtUtc = endedAtUtc;
+        EndReceivedAtUtc = receivedAtUtc;
         EndReason = Truncate(endReason, EndReasonMaxLength);
 
         // An ended conversation is not waiting on anybody: the inactivity

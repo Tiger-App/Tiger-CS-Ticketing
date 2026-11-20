@@ -91,7 +91,7 @@ public sealed class DashboardQueryRepository(TigerCsDbContext dbContext, ReopenP
         var myTickets = await scoped.CountAsync(t => t.CurrentOwnerEmployeeId == query.CallerEmployeeId, cancellationToken);
         var inDepartmentQueue = await backlog.CountAsync(t => t.CurrentOwnerEmployeeId == null, cancellationToken);
         var slaBreached = await backlog.CountAsync(t => t.SlaState == SlaState.Breached, cancellationToken);
-        var dueToday = await backlog.DueOnUtcDay(dbContext, query.TodayStartUtc).CountAsync(cancellationToken);
+        var dueToday = await backlog.DueOnUaeDay(dbContext, query.TodayStartUtc).CountAsync(cancellationToken);
         var pendingApproval = await scoped.WithPendingApprovalActionableBy(dbContext, query.ApproverScope).CountAsync(cancellationToken);
 
         // ---- Closure KPIs (date range applies to the latest closure date) ----

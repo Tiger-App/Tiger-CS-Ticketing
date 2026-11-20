@@ -395,7 +395,7 @@
                                 @foreach (var ticket in Model.Overview.RecentTickets)
                                 {
                                     var deptName = TicketDisplay.AssignedDepartmentLabel(ticket.CurrentDepartmentId, ticket.DepartmentName);
-                                    var created = ticket.CreatedAtUtc.ToLocalTime();
+                                    var created = TigerCS.Web.Models.TicketDisplay.ToUae(ticket.CreatedAtUtc);
                                     <tr class="is-link" data-href="/Tickets/@ticket.TicketId">
                                         <td><a class="ticket-id-link" href="/Tickets/@ticket.TicketId">@ticket.TicketNumber</a></td>
                                         <td>
@@ -418,7 +418,7 @@
                                             }
                                         </td>
                                         <td class="dash-last-action">@(string.IsNullOrWhiteSpace(ticket.LastActionByName) ? "—" : ticket.LastActionByName)</td>
-                                        <td class="text-secondary text-mono" title="@created.ToString("yyyy-MM-dd HH:mm")">@(created.Date == DateTime.Now.Date ? created.ToString("HH:mm") : created.ToString("MMM d, HH:mm"))</td>
+                                        <td class="text-secondary text-mono" title="@created.ToString("yyyy-MM-dd HH:mm")">@(created.Date == TigerCS.Web.Models.TicketDisplay.ToUae(DateTime.UtcNow).Date ? created.ToString("HH:mm") : created.ToString("MMM d, HH:mm"))</td>
                                     </tr>
                                 }
                             </tbody>
