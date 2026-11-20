@@ -153,6 +153,14 @@
                 });
                 body.appendChild(tr);
             });
+            const count = document.querySelector('[data-assignment-history-count]');
+            const latest = document.querySelector('[data-assignment-history-latest]');
+            if (count) count.textContent = String(items.length);
+            if (latest && items.length) {
+                const h = items[items.length - 1];
+                const when = new Date(h.changedAtUtc).toLocaleString('en-GB', { timeZone: 'Asia/Dubai', dateStyle: 'medium', timeStyle: 'short' });
+                latest.textContent = 'Latest: ' + (h.previousEmployeeName || 'No one') + ' → ' + h.newEmployeeName + ', ' + when;
+            }
             table.hidden = items.length === 0;
             if (empty) empty.hidden = items.length > 0;
         }
