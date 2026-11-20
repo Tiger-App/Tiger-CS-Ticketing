@@ -146,5 +146,6 @@ BEGIN
     SELECT TOP 3 MigrationId FROM dbo.__EFMigrationsHistory ORDER BY MigrationId DESC;   -- expect ...AddInteractionEndReceivedAt on top
     SELECT c.name AS ColumnName, t.name AS TypeName, c.is_nullable FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id
     WHERE c.object_id = OBJECT_ID(N'dbo.TicketInteractions') AND c.name = N'EndReceivedAtUtc';   -- expect 1 row: datetime2, is_nullable = 1
-    SELECT COUNT_BIG(*) AS RowsWithEndReceived FROM dbo.TicketInteractions WHERE EndReceivedAtUtc IS NOT NULL;   -- 0 right after deployment; grows as ended calls arrive
+    -- (dynamic SQL: after a DRY RUN the column was rolled back, so a plain reference would not even compile - the whole batch would fail before the guard runs)
+    EXEC sp_executesql N'SELECT COUNT_BIG(*) AS RowsWithEndReceived FROM dbo.TicketInteractions WHERE EndReceivedAtUtc IS NOT NULL;';   -- 0 right after deployment; grows as ended calls arrive
 END;
