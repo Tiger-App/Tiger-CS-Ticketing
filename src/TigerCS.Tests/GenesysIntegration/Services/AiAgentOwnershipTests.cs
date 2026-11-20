@@ -63,15 +63,18 @@ public class AiAgentOwnershipTests
     }
 
     [Fact]
-    public async Task AConversationThatNeedsAPersonFromTheStart_GoesToRoundRobin_NotToTheAi()
+    public async Task AConversationThatNeedsAPersonFromTheStart_WaitsInTheCallCenterQueue_StillOwnedByTheAi_NoRoundRobin()
     {
         var (f, cs) = World();
         f.AddAgent("g-rr", "RR Agent");
 
         var ticket = await IngestAsync(f, cs, "conv-human", human: true);
 
-        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
-        Assert.Null(ticket.AiAgentOwnerEmployeeId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                       // nobody is dealt the ticket
+        Assert.Equal(AiAgent, ticket.AiAgentOwnerEmployeeId);             // the AI stays the owner until a person actually accepts
+        Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Empty(f.TicketAssignments.Added);
+        Assert.All(f.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
     }
 
     [Fact]

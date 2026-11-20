@@ -225,7 +225,7 @@ public sealed class CallCenterUnassignedWorkReconciler(
             {
                 var answer = await autoAssignment.ApplyAnsweringAgentAsync(
                     ticket, actual, "Reconciler", now, correlationId,
-                    reportedByEmployeeId: null, routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: evidence.GenesysIsPhoneOnly);
+                    reportedByEmployeeId: null, routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: evidence.HasGenesysInteraction);
                 if (answer.Outcome == AnswerAssignmentOutcome.AssignedToAnsweringAgent)
                 {
                     assigned = answer.AssignedEmployeeId;
@@ -253,9 +253,9 @@ public sealed class CallCenterUnassignedWorkReconciler(
                 {
                     await autoAssignment.RouteExistingTicketToCallCenterAsync(
                         ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to Call Center", cancellationToken, requiredRole,
-                        dealToAgent: !evidence.GenesysIsPhoneOnly, voiceOwnership: evidence.GenesysIsPhoneOnly);
+                        dealToAgent: !evidence.HasGenesysInteraction, voiceOwnership: evidence.HasGenesysInteraction);
                 }
-                else if (!evidence.GenesysIsPhoneOnly)
+                else if (!evidence.HasGenesysInteraction)
                 {
                     await autoAssignment.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken, requiredRole);
                 }

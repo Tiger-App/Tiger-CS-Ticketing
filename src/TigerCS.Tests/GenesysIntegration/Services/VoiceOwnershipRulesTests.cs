@@ -279,19 +279,38 @@ public class VoiceOwnershipRulesTests
     }
 
     [Fact]
-    public async Task ManyAgentsInTurn_OnlyTheFirstOwns_AndTheSameEventTwiceChangesNothing()
+    public async Task ManyAgentsInTurn_TheAgentWhoLastActuallyAnsweredOwns_AndTheSameEventTwiceChangesNothing()
     {
         var w = NewWorld();
         var call = await AiCallAsync(w, "v-many");
-        await ConnectAsync(w, call, w.Agents[2].GenesysId);
+        var t0 = DateTime.UtcNow.AddMinutes(-10);
+        await ConnectAsync(w, call, w.Agents[2].GenesysId, t0.AddMinutes(1));
 
-        await ConnectAsync(w, call, w.Agents[0].GenesysId);
-        await ConnectAsync(w, call, w.Agents[1].GenesysId);
-        await ConnectAsync(w, call, w.Agents[2].GenesysId);                                    // duplicate of the first agent's event
+        await ConnectAsync(w, call, w.Agents[0].GenesysId, t0.AddMinutes(2));
+        await ConnectAsync(w, call, w.Agents[1].GenesysId, t0.AddMinutes(3));
+        await ConnectAsync(w, call, w.Agents[1].GenesysId, t0.AddMinutes(3));                  // the same event twice
+        await ConnectAsync(w, call, w.Agents[2].GenesysId, t0.AddMinutes(1));                  // a late, older event: stale, never overwrites the newest assignment
+
+        // Same rule as every channel (Genesys:ReassignOnTransfer, default true): the person who ACTUALLY accepted the interaction owns it; history keeps every step.
+        Assert.Equal(w.Agents[1].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Single(w.Current(call.TicketId));
+        Assert.Equal(1, w.F.TicketAssignments.Added.Count(a => a.TicketId == call.TicketId && a.AssignedEmployeeId == w.Agents[1].Id));
+    }
+
+    [Fact]
+    public async Task ManyAgentsInTurn_WhenReassignOnTransferIsSwitchedOff_TheFirstPersonWhoAnsweredKeepsIt()
+    {
+        var w = NewWorld();
+        w.F.Options.ReassignOnTransfer = false;
+        var call = await AiCallAsync(w, "v-many-off");
+        var t0 = DateTime.UtcNow.AddMinutes(-10);
+        await ConnectAsync(w, call, w.Agents[2].GenesysId, t0.AddMinutes(1));
+
+        await ConnectAsync(w, call, w.Agents[0].GenesysId, t0.AddMinutes(2));
+        await ConnectAsync(w, call, w.Agents[1].GenesysId, t0.AddMinutes(3));
 
         Assert.Equal(w.Agents[2].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
         Assert.Single(w.Current(call.TicketId));
-        Assert.Equal(1, w.F.TicketAssignments.Added.Count(a => a.TicketId == call.TicketId && a.AssignedEmployeeId == w.Agents[2].Id));
     }
 
     // ---- 6. A person's manual / authorised transfer is preserved ---------------------------------------------------------------------

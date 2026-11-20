@@ -12,11 +12,11 @@ namespace TigerCS.Application.Modules.GenesysIntegration.Services;
 ///
 /// <para>
 /// <b>Proposed value and its impact - <see cref="NoAnswerWindowSeconds"/> = 300 (5 minutes).</b> It is measured from the moment TigerCS RECEIVED the end event
-/// (<see cref="TicketInteraction.EndReceivedAtUtc"/>), never from the sender's possibly delayed event time. A failed-AI call is therefore dealt to an agent by Round
-/// Robin <i>window + up to one run interval</i> (default 5 min + 1 min) after the end was received, instead of one second after it as before. During the window
-/// the ticket stays open in the Call Center queue with the AI Agent as the owner; the first-response and resolution SLA clocks are NOT paused or delayed (they run
-/// from creation), and an answering agent that arrives inside the window still gets the ticket directly. A shorter window (for example 60 s) assigns sooner but
-/// risks dealing a ticket to a second person when the answer event is delayed; a longer one lengthens the unattended period. Change it with
+/// (<see cref="TicketInteraction.EndReceivedAtUtc"/>), never from the sender's possibly delayed event time. A failed-AI call is therefore flagged "waiting for a
+/// person" and queued in the Call Center <i>window + up to one run interval</i> (default 5 min + 1 min) after the end was received. NOTHING is assigned (no Round Robin).
+/// During the window the ticket stays open with the AI Agent as the owner; the first-response and resolution SLA clocks are NOT paused or delayed (they run
+/// from creation), and an answering agent that arrives inside the window still gets the ticket directly. A shorter window (for example 60 s) flags sooner but
+/// risks flagging a call whose answer event is merely delayed; a longer one lengthens the time before the ticket is visibly "waiting for a person". Change it with
 /// <c>VoiceCallReconciliation:NoAnswerWindowSeconds</c> - no deployment is needed (the setting is re-read every run).
 /// </para>
 /// </summary>
@@ -77,7 +77,7 @@ public enum VoiceReconcileClass
     /// <summary>The answering agent's mapping is now valid (or a recorded handler never got the ticket): give the ticket to THAT agent.</summary>
     AnsweringAgentResolvable,
 
-    /// <summary>The call ended, nobody answered, the window passed, the AI did not close the ticket: Round Robin.</summary>
+    /// <summary>The call ended, nobody answered, the window passed, the AI did not close the ticket: flagged and queued for a person (never Round Robin).</summary>
     NoAnswerConcluded,
 }
 
@@ -151,9 +151,11 @@ public enum VoiceReconcileOutcome
 {
     WouldAct,
     AssignedToAnsweringAgent,
-    AssignedRoundRobin,
 
-    /// <summary>Concluded unanswered, but no eligible Call Center CS Agent exists right now: the ticket stays queued (flagged) and is retried next run.</summary>
+    /// <summary>Concluded unanswered: flagged as needing a person and queued in the Call Center, AI Agent still the owner. NOTHING was assigned (no Round Robin).</summary>
+    FlaggedAndQueued,
+
+    /// <summary>No active Call Center department is configured: nothing could be queued; retried next run.</summary>
     QueuedNoEligibleAgent,
 
     /// <summary>The answering agent still cannot take the ticket (unmapped / ineligible): left flagged in the queue.</summary>
@@ -169,8 +171,8 @@ public sealed record VoiceReconcileResult(long TicketId, VoiceReconcileClass Cla
 /// <b>Voice call reconciliation.</b> The recurring half of the voice ownership rules (see <see cref="VoiceCallReconciliationOptions"/> for the window):
 /// <list type="bullet">
 /// <item>The call ENDED, no person answered, the AI did not close the ticket, and the reconciliation window has passed -> conclude "AI failed, nobody answered":
-/// flag the ticket for human follow-up (once, audited) and deal it by the EXISTING workflow and Round Robin (Call Center first; an explicit workflow
-/// department keeps its own Round Robin; Collections tower routing is left to Collections).</item>
+/// flag the ticket for human follow-up (once, audited) and queue it in the Call Center (an explicit workflow department keeps it). The AI Agent stays the owner and
+/// NOBODY is assigned: no Round Robin, ever. A person gets it only by actually answering or by an authorised manual assignment.</item>
 /// <item>A person answered but the ticket was never given to them because their Genesys id was unmapped / ineligible: once the mapping is corrected (and the ticket is
 /// still Open and unowned) the ticket goes to THAT person, dated at the real connect time. Until then it stays queued and flagged - never Round Robin.</item>
 /// </list>
@@ -298,37 +300,27 @@ public sealed class VoiceCallReconciler(
                     beforeValue: null,
                     afterValue: $"TicketId={ticketId};Conversations={string.Join(',', phone.Select(i => i.GenesysConversationId ?? "(none)"))};"
                         + $"EndReceivedAtUtc={evidence.VoiceEndReceivedAtUtc:O};WindowSeconds={(int)options.NoAnswerWindow.TotalSeconds};ConcludedAtUtc={now:O};"
-                        + "Reason=The call ended, no person answered, the AI did not close the ticket and the reconciliation window passed; dealt by the existing workflow and Round Robin",
+                        + "Reason=The call ended, no person answered, the AI did not close the ticket and the reconciliation window passed; queued for a person - no automatic assignment",
                     correlationId, cancellationToken);
             }
 
-            const string reason = "Voice call ended unanswered — routed to Call Center first";
-            if (ticket.CurrentDepartmentId == callCenter.DepartmentId)
-            {
-                await autoAssignment.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken);
-            }
-            else
-            {
-                var routed = await autoAssignment.RouteExistingTicketToCallCenterAsync(
-                    ticket, now, correlationId, reason, cancellationToken, requiredRole: null, dealToAgent: true, voiceOwnership: true);
+            // BUSINESS RULE (applies to every channel): an unresolved AI conversation is NEVER dealt to somebody by Round Robin. It waits in the Call Center queue
+            // (an explicit workflow department keeps the ticket), flagged as needing a person, with the AI Agent still the owner and NO assignment, until a person
+            // actually answers / accepts it (the answering-agent path above and the live connect event) or an authorised person assigns it.
+            const string reason = "Voice call ended unanswered - queued in the Call Center for a person (AI Agent remains the owner)";
+            var routed = ticket.CurrentDepartmentId != callCenter.DepartmentId
+                && await autoAssignment.RouteExistingTicketToCallCenterAsync(
+                    ticket, now, correlationId, reason, cancellationToken, requiredRole: null, dealToAgent: false, voiceOwnership: true);
 
-                // An explicit workflow department (Legal, Leasing, ...) keeps the ticket: its OWN Round Robin deals it. Collections tower routing owns
-                // Collections assignments and is left alone.
-                if (!routed
-                    && ticket.CurrentOwnerEmployeeId is null
-                    && await autoAssignment.HasExplicitWorkflowRoutingPublicAsync(ticket, callCenter.DepartmentId, cancellationToken)
-                    && !await autoAssignment.IsCollectionsDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken))
-                {
-                    await autoAssignment.AssignDepartmentRoundRobinAsync(ticket, AutoAssignmentTrigger.Reconciler, now, correlationId, carriedOverOwnerEmployeeId: null, cancellationToken);
-                }
+            if (!flagged && !routed)
+            {
+                return new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.Skipped);   // already flagged and queued: nothing new
             }
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            return ticket.CurrentOwnerEmployeeId is { } owner
-                ? new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.AssignedRoundRobin, owner)
-                : new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.QueuedNoEligibleAgent);
+            return new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.FlaggedAndQueued);
         }
         catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {

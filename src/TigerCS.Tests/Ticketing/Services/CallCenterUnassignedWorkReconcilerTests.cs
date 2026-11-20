@@ -3,6 +3,7 @@ using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
+using TigerCS.Tests.Collections;
 using TigerCS.Tests.CustomerVerification.Fakes;
 using TigerCS.Tests.IdentityAndAccess.Fakes;
 using TigerCS.Tests.Notifications.Fakes;
@@ -12,8 +13,9 @@ using TigerCS.Tests.Ticketing.Fakes;
 namespace TigerCS.Tests.Ticketing.Services;
 
 /// <summary>
-/// The safety net for human work with no owner: routing (Call Center first), assignment (answering agent, else Round Robin), no
-/// redistribution of owned tickets, protection of AI conversations, idempotency and concurrency.
+/// The safety net for human work with no owner: routing (Call Center first), assignment (the answering agent; Round Robin ONLY for tickets with no
+/// Genesys interaction - a Genesys ticket is queued and flagged, never dealt), no redistribution of owned tickets, protection of AI conversations,
+/// idempotency and concurrency.
 /// </summary>
 public class CallCenterUnassignedWorkReconcilerTests
 {
@@ -56,6 +58,7 @@ public class CallCenterUnassignedWorkReconcilerTests
         public FakeTicketAssignmentRepository Assignments { get; } = new();
         public FakeTicketWorkflowEventRepository Events { get; } = new();
         public FakeRotation Rotation { get; } = new();
+        public FakeTicketAssignmentHistoryRepository History { get; } = new();
         public FakeTicketingUnitOfWork UnitOfWork { get; } = new();
         public StubEvidence Evidence { get; } = new();
         public FakeUserRoleReader RoleReader { get; } = new();
@@ -69,7 +72,7 @@ public class CallCenterUnassignedWorkReconcilerTests
             Leasing = Departments.AddDepartment("Leasing Customer Services", "LCS");
             var engine = new TicketAutoAssignmentService(
                 new FakeRequestTypeAssignmentRuleRepository(), new FakeDepartmentWorkflowSettingsRepository(), Members, Assignments, Audit,
-                Rotation, Departments, roleReader: RoleReader, workflowEventRepository: Events);
+                Rotation, Departments, roleReader: RoleReader, workflowEventRepository: Events, assignmentHistoryRepository: History);
             Reconciler = new CallCenterUnassignedWorkReconciler(Evidence, Tickets, engine, UnitOfWork, new FixedClock());
         }
 
@@ -108,6 +111,33 @@ public class CallCenterUnassignedWorkReconcilerTests
 
     private static CallCenterReconciliationOptions Live() => new() { Enabled = true, DryRun = false, MinTicketAgeMinutes = 3 };
 
+    /// <summary>
+    /// Reconciles a ticket the way the recurring job does: a ticket with no Genesys interaction may need two runs (the first moves it into the Call
+    /// Center queue, the next - once it is in the queue - deals it by Round Robin), so the evidence is refreshed from the ticket and the run repeated
+    /// while it is still unowned. Returns the last result.
+    /// </summary>
+    private static async Task<ReconcileResult> ReconcileUntilSettledAsync(Env env, Ticket ticket)
+    {
+        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+        if (ticket.CurrentOwnerEmployeeId is null && env.Evidence.Rows[ticket.TicketId].CurrentDepartmentId != ticket.CurrentDepartmentId)
+        {
+            env.Evidence.Rows[ticket.TicketId] = env.Evidence.Rows[ticket.TicketId] with { CurrentDepartmentId = ticket.CurrentDepartmentId };
+            result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+        }
+
+        return result;
+    }
+
+    private static readonly Guid AiAgent = Guid.Parse("a1a1a1a1-0000-0000-0000-000000000001");
+
+    private static void AssertNobodyWasChosen(Env env, Ticket ticket)
+    {
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(env.Assignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.Empty(env.Rotation.Rows);   // Round Robin was never consulted: the cursor did not move
+        Assert.DoesNotContain(env.Audit.Entries, w => w.Action == "AutoAssign");
+    }
+
     [Fact]
     public async Task ManualTicketStuckInADepartmentQueue_IsMovedToTheCallCenter_AndDealtToOneAgent()
     {
@@ -115,7 +145,7 @@ public class CallCenterUnassignedWorkReconcilerTests
         var agents = env.AddCallCenterAgents(2);
         var ticket = await env.AddQueuedTicketAsync();
 
-        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), dryRun: false);
+        var result = await ReconcileUntilSettledAsync(env, ticket);   // a non-Genesys ticket: moved into the queue, then dealt by Round Robin
 
         Assert.Equal(ReconcileOutcome.AssignedRoundRobin, result.Outcome);
         Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
@@ -126,16 +156,76 @@ public class CallCenterUnassignedWorkReconcilerTests
     }
 
     [Fact]
-    public async Task FailedGenesysRouting_HumanFlaggedTicket_GetsRoutedAndAssigned()
+    public async Task FailedGenesysRouting_HumanFlaggedTicket_IsQueuedAndFlagged_NeverDealtByRoundRobin()
     {
         var env = new Env();
-        var agents = env.AddCallCenterAgents(1);
+        env.AddCallCenterAgents(3);   // plenty of eligible agents: still nobody is chosen for a Genesys ticket
         var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, RequiresHumanFollowUp = true });
 
         var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
 
         Assert.Equal(UnassignedTicketClass.HumanRequiredNotRouted, result.Class);
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, result.Outcome);
+        Assert.Null(result.AssignedEmployeeId);
+        Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);       // queue only
+        Assert.Equal(env.Leasing.DepartmentId, ticket.OriginatingDepartmentId);      // origin untouched
+        AssertNobodyWasChosen(env, ticket);
+    }
+
+    [Fact]
+    public async Task FailedGenesysRouting_AiOwnedTicket_MovesToTheQueue_AndTheAiAgentKeepsIt()
+    {
+        var env = new Env();
+        env.AddCallCenterAgents(2);
+        var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, OpenHandoff = true });
+        ticket.AssignToAiAgent(AiAgent);
+
+        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+
+        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, result.Outcome);
+        Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(AiAgent, ticket.AiAgentOwnerEmployeeId);
+        Assert.True(ticket.IsOwnedByAiAgent);
+        AssertNobodyWasChosen(env, ticket);
+        var history = Assert.Single(env.History.Entries, h => h.TicketId == ticket.TicketId);
+        Assert.Equal(TicketAssignmentSource.GenesysQueueRouting, history.Source);
+        Assert.Equal(env.Leasing.DepartmentId, history.PreviousDepartmentId);
+        Assert.Equal(AiAgent, history.PreviousEmployeeId);
+        Assert.Equal(AiAgent, history.NewEmployeeId);
+    }
+
+    [Fact]
+    public async Task FailedGenesysRouting_ExplicitWorkflowDepartment_IsKept_NothingIsMovedOrAssigned()
+    {
+        var env = new Env();
+        env.AddCallCenterAgents(2);
+        var legal = env.Departments.AddDepartment("Legal", "LGL");
+        var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, RequiresHumanFollowUp = true });
+        ticket.TransferToDepartment(legal.DepartmentId);   // a request type / a person chose Legal, which differs from the originating Leasing
+        env.Evidence.Rows[ticket.TicketId] = env.Evidence.Rows[ticket.TicketId] with { CurrentDepartmentId = legal.DepartmentId };
+
+        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+
+        Assert.Equal(UnassignedTicketClass.HumanRequiredNotRouted, result.Class);
+        Assert.Equal(legal.DepartmentId, ticket.CurrentDepartmentId);   // not pulled into the Call Center
+        AssertNobodyWasChosen(env, ticket);
+        Assert.Empty(env.History.Entries);
+    }
+
+    [Fact]
+    public async Task GenesysHumanTicket_AlreadyInTheCallCenterQueue_IsLeftAloneForAPersonToAccept()
+    {
+        var env = new Env();
+        env.AddCallCenterAgents(2);
+        var ticket = await env.AddQueuedTicketAsync(
+            e => e with { CurrentDepartmentId = env.CallCenter.DepartmentId, HasGenesysInteraction = true, HasLiveGenesysInteraction = true, RequiresHumanFollowUp = true }, env.CallCenter);
+
+        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+
+        Assert.Equal(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, result.Class);
+        Assert.Equal(ReconcileOutcome.Skipped, result.Outcome);
+        AssertNobodyWasChosen(env, ticket);
+        Assert.Empty(env.Audit.Entries);
     }
 
     [Fact]
@@ -154,38 +244,46 @@ public class CallCenterUnassignedWorkReconcilerTests
     }
 
     [Fact]
-    public async Task UnusableAnsweringAgent_IsFlagged_AndTheSharedRotationGivesTheTicketACsAgent()
+    public async Task UnusableAnsweringAgent_IsFlagged_AndTheTicketWaitsInTheQueue_WithoutRoundRobin()
     {
         var env = new Env();
-        var agents = env.AddCallCenterAgents(2);
+        env.AddCallCenterAgents(2);
         var notACallCenterMember = Guid.NewGuid();
         var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, AnsweringEmployeeId = notACallCenterMember, AnsweringGenesysUserId = "gen-9" });
+        ticket.AssignToAiAgent(AiAgent);
 
         var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
 
-        // The person who actually answered cannot take it: it is flagged for staff, and (final rule) dealt to the next CS Agent of the shared rotation.
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, result.Outcome);
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
-        Assert.NotEqual(notACallCenterMember, ticket.CurrentOwnerEmployeeId);
+        // The person who actually answered cannot take it: it sits in the Call Center queue flagged for staff, with NO owner change and NO Round Robin fallback.
+        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, result.Outcome);
+        Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(AiAgent, ticket.AiAgentOwnerEmployeeId);
+        AssertNobodyWasChosen(env, ticket);
+        Assert.Contains(env.Events.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
+        Assert.Contains(env.Audit.Entries, w => w.Action == "AnswerAssignmentSkipped");
     }
 
     [Fact]
-    public async Task PhoneCallAnsweredByAnUnmappedAgent_IsFlagged_AndGetsANextRotationCsAgent()
+    public async Task PhoneCallAnsweredByAnUnmappedAgent_IsQueuedAndFlagged_NeverGivenToTheNextRotationAgent()
     {
         var env = new Env();
-        var agents = env.AddCallCenterAgents(1);
+        env.AddCallCenterAgents(1);
         var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, PhonePickupByUnmappedAgent = true, UnmappedGenesysAgentId = "gen-x" });
 
-        // Same as live ingestion: a person picked up but cannot be identified, so the ticket is flagged and dealt to the next shared-rotation CS Agent.
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, (await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false)).Outcome);
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
+        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+
+        // A person picked up but cannot be identified: the ticket is in the Call Center queue for staff; nobody is chosen for them.
+        Assert.Equal(UnassignedTicketClass.HumanAnsweredAgentNotMapped, result.Class);
+        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, result.Outcome);
+        Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
+        AssertNobodyWasChosen(env, ticket);
     }
 
     [Fact]
-    public async Task InCallCenterQueue_UnassignedBecauseNoAgentWasEligibleBefore_IsAssignedOnceAgentsExist()
+    public async Task NonGenesysTicketInTheCallCenterQueue_UnassignedBecauseNoAgentWasEligibleBefore_IsAssignedOnceAgentsExist()
     {
         var env = new Env();
-        var ticket = await env.AddQueuedTicketAsync(e => e with { CurrentDepartmentId = env.CallCenter.DepartmentId, HasGenesysInteraction = true, RequiresHumanFollowUp = true }, env.CallCenter);
+        var ticket = await env.AddQueuedTicketAsync(e => e with { CurrentDepartmentId = env.CallCenter.DepartmentId }, env.CallCenter);
 
         var before = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
         Assert.Equal(ReconcileOutcome.NoEligibleAgent, before.Outcome);   // reported, left queued, nothing invented
@@ -195,6 +293,40 @@ public class CallCenterUnassignedWorkReconcilerTests
         var after = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
         Assert.Equal(ReconcileOutcome.AssignedRoundRobin, after.Outcome);
         Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task GenesysTicketInTheCallCenterQueue_IsNotAssignedWhenAgentsLaterExist_ItWaitsForAPerson()
+    {
+        var env = new Env();
+        var ticket = await env.AddQueuedTicketAsync(e => e with { CurrentDepartmentId = env.CallCenter.DepartmentId, HasGenesysInteraction = true, RequiresHumanFollowUp = true }, env.CallCenter);
+        ticket.AssignToAiAgent(AiAgent);
+
+        Assert.Equal(ReconcileOutcome.Skipped, (await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false)).Outcome);
+        env.AddCallCenterAgents(2);
+        Assert.Equal(ReconcileOutcome.Skipped, (await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false)).Outcome);
+
+        Assert.Equal(AiAgent, ticket.AiAgentOwnerEmployeeId);
+        AssertNobodyWasChosen(env, ticket);
+    }
+
+    [Fact]
+    public async Task StaleAiNoEndEvent_IsReportOnly_EvenWhenAssignStaleAiIsOn_TheAiAgentKeepsIt()
+    {
+        var env = new Env();
+        env.AddCallCenterAgents(2);
+        var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, LastActivityUtc = Now.AddHours(-72) });
+        ticket.AssignToAiAgent(AiAgent);
+        var options = new CallCenterReconciliationOptions { Enabled = true, DryRun = false, MinTicketAgeMinutes = 3, StaleAiAfterHours = 24, AssignStaleAi = true };
+
+        var listed = await env.Reconciler.ListAsync(0, options);
+        var result = await env.Reconciler.TryReconcileAsync(ticket.TicketId, options, false);
+
+        Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.StaleAiNoEndEvent, UnassignedTicketAction.None), listed.Single().Classification);
+        Assert.Equal(ReconcileOutcome.Skipped, result.Outcome);
+        Assert.Equal(env.Leasing.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(AiAgent, ticket.AiAgentOwnerEmployeeId);
+        AssertNobodyWasChosen(env, ticket);
     }
 
     [Fact]
@@ -261,8 +393,9 @@ public class CallCenterUnassignedWorkReconcilerTests
         env.AddCallCenterAgents(2);
         var ticket = await env.AddQueuedTicketAsync();
 
-        await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+        await ReconcileUntilSettledAsync(env, ticket);
         var owner = ticket.CurrentOwnerEmployeeId;
+        Assert.NotNull(owner);
         var auditCount = env.Audit.Entries.Count;
         env.Evidence.Rows[ticket.TicketId] = env.Evidence.Rows[ticket.TicketId] with { OwnerEmployeeId = owner, CurrentDepartmentId = env.CallCenter.DepartmentId };
 
@@ -274,6 +407,53 @@ public class CallCenterUnassignedWorkReconcilerTests
     }
 
     [Fact]
+    public async Task AGenesysRunTwice_IsIdempotent_TheSecondFindsItAlreadyQueuedAndWritesNothing()
+    {
+        var env = new Env();
+        env.AddCallCenterAgents(2);
+        var ticket = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, RequiresHumanFollowUp = true });
+        ticket.AssignToAiAgent(AiAgent);
+
+        await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+        var audits = env.Audit.Entries.Count;
+        var history = env.History.Entries.Count;
+        env.Evidence.Rows[ticket.TicketId] = env.Evidence.Rows[ticket.TicketId] with { CurrentDepartmentId = env.CallCenter.DepartmentId };
+
+        var second = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
+
+        Assert.Equal(ReconcileOutcome.Skipped, second.Outcome);
+        Assert.Equal(audits, env.Audit.Entries.Count);
+        Assert.Equal(history, env.History.Entries.Count);
+        Assert.Equal(AiAgent, ticket.AiAgentOwnerEmployeeId);
+        AssertNobodyWasChosen(env, ticket);
+    }
+
+    [Fact]
+    public async Task ManyGenesysTickets_AreQueuedNotDealt_TheRotationNeverAdvances()
+    {
+        var env = new Env();
+        env.AddCallCenterAgents(3);
+        var tickets = new List<Ticket>();
+        for (var i = 0; i < 6; i++)
+        {
+            var t = await env.AddQueuedTicketAsync(e => e with { HasGenesysInteraction = true, HasLiveGenesysInteraction = true, RequiresHumanFollowUp = true });
+            t.AssignToAiAgent(AiAgent);
+            tickets.Add(t);
+        }
+
+        foreach (var t in tickets) await env.Reconciler.TryReconcileAsync(t.TicketId, Live(), false);
+
+        Assert.All(tickets, t =>
+        {
+            Assert.Equal(env.CallCenter.DepartmentId, t.CurrentDepartmentId);
+            Assert.Null(t.CurrentOwnerEmployeeId);
+            Assert.Equal(AiAgent, t.AiAgentOwnerEmployeeId);
+        });
+        Assert.Empty(env.Assignments.Added);
+        Assert.Empty(env.Rotation.Rows);
+    }
+
+    [Fact]
     public async Task ManyTickets_AreDealtEvenlyAcrossAgents_NoAgentGetsTwoInARow()
     {
         var env = new Env();
@@ -281,7 +461,7 @@ public class CallCenterUnassignedWorkReconcilerTests
         var tickets = new List<Ticket>();
         for (var i = 0; i < 9; i++) tickets.Add(await env.AddQueuedTicketAsync());
 
-        foreach (var t in tickets) await env.Reconciler.TryReconcileAsync(t.TicketId, Live(), false);
+        foreach (var t in tickets) await ReconcileUntilSettledAsync(env, t);
 
         Assert.All(agents, a => Assert.Equal(3, tickets.Count(t => t.CurrentOwnerEmployeeId == a)));
     }
@@ -335,7 +515,7 @@ public class CallCenterUnassignedWorkReconcilerTests
         var tickets = new List<Ticket>();
         for (var i = 0; i < 6; i++) tickets.Add(await env.AddQueuedTicketAsync());
 
-        foreach (var t in tickets) await env.Reconciler.TryReconcileAsync(t.TicketId, Live(), false);
+        foreach (var t in tickets) await ReconcileUntilSettledAsync(env, t);
 
         Assert.DoesNotContain(tickets, t => t.CurrentOwnerEmployeeId == nonAgent);
         Assert.All(agents, a => Assert.Equal(3, tickets.Count(t => t.CurrentOwnerEmployeeId == a)));
@@ -390,22 +570,5 @@ public class CallCenterUnassignedWorkReconcilerTests
 
         Assert.Equal(ReconcileOutcome.NoEligibleAgent, result.Outcome);
         Assert.Equal(0, uow.TransactionsBegun);
-    }
-
-    // [PR #292] NonGenesysTicketInTheCallCenterQueue_UnassignedBecauseNoAgentWasEligibleBefore_IsAssignedOnceAgentsExist
-    [Fact]
-    public async Task NonGenesysTicketInTheCallCenterQueue_UnassignedBecauseNoAgentWasEligibleBefore_IsAssignedOnceAgentsExist()
-    {
-        var env = new Env();
-        var ticket = await env.AddQueuedTicketAsync(e => e with { CurrentDepartmentId = env.CallCenter.DepartmentId }, env.CallCenter);
-
-        var before = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
-        Assert.Equal(ReconcileOutcome.NoEligibleAgent, before.Outcome);   // reported, left queued, nothing invented
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-
-        var agents = env.AddCallCenterAgents(1);
-        var after = await env.Reconciler.TryReconcileAsync(ticket.TicketId, Live(), false);
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, after.Outcome);
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
     }
 }

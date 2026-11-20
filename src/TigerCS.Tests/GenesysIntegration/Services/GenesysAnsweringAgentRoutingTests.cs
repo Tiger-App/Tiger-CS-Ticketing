@@ -9,9 +9,9 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
 /// "Who answered owns the ticket." A Genesys call answered by a mapped, eligible Call Center agent is assigned DIRECTLY to that agent in the
-/// Call Center - never to the next agent in the rotation. Round Robin remains only for a human handoff nobody has accepted. An answering agent
-/// who cannot take the ticket (unmapped / deactivated / locked out / service account / not in the Call Center) leaves it unowned in the Call
-/// Center queue, flagged for manual assignment. A person's ownership - and a person's transfer - are never overwritten by a later Genesys event.
+/// Call Center - never to the next agent in the rotation. There is NO Round Robin for a Genesys ticket any more: a human handoff nobody has accepted
+/// waits in the Call Center queue with the AI Agent as owner. An answering agent who cannot take the ticket (unmapped / deactivated / locked out /
+/// service account / not in the Call Center) leaves it in the Call Center queue with no owner change, flagged for manual assignment. A person's ownership - and a person's transfer - are never overwritten by a later Genesys event.
 /// </summary>
 public class GenesysAnsweringAgentRoutingTests
 {
@@ -99,6 +99,22 @@ public class GenesysAnsweringAgentRoutingTests
         }
     }
 
+    /// <summary>
+    /// The ticket waits in the Call Center queue for a person: department moved (originating untouched), the AI Agent is still its owner, no person owns it,
+    /// no assignment row exists and the Round Robin cursor never moved.
+    /// </summary>
+    private static void AssertQueuedWithAiOwner(World w, long ticketId)
+    {
+        var ticket = w.Ticket(ticketId);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);
+        AssertSingleOwner(w, ticketId, null);
+        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticketId);
+        Assert.True(RoundRobinCursorUntouched(w));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticketId.ToString());
+    }
+
     private static int FlagCount(World w, long ticketId) =>
         w.F.WorkflowEvents.All.Count(e => e.TicketId == ticketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
 
@@ -176,7 +192,7 @@ public class GenesysAnsweringAgentRoutingTests
     [Theory]
     [InlineData("unmapped")]
     [InlineData("locked")]
-    public async Task HandoffWithAnUnusableConnectedAgentInTheSameUpdate_IsFlagged_AndTheSharedRotationGivesItACsAgent(string kind)
+    public async Task HandoffWithAnUnusableConnectedAgentInTheSameUpdate_IsFlagged_AndTheTicketWaitsInTheQueue_WithTheAiOwner(string kind)
     {
         var w = NewWorld();
         var gid = kind == "locked" ? "g-locked-agent" : "g-nobody";
@@ -195,24 +211,23 @@ public class GenesysAnsweringAgentRoutingTests
                 Routing: new GenesysRoutingUpdateDto(AgentId: gid, ConnectedAtUtc: DateTime.UtcNow)));
 
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, result.Outcome);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);   // in the Call Center queue
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);   // flagged AND dealt to the next shared-rotation CS Agent - never unassigned
+        AssertQueuedWithAiOwner(w, chat.TicketId);   // in the Call Center queue, flagged, NOT dealt to a shared-rotation agent
         Assert.Equal(1, FlagCount(w, chat.TicketId));
     }
 
     [Fact]
-    public async Task RollbackLever_AssignOnAnswerOff_RestoresRoundRobin_ForEveryEntryPoint()
+    public async Task RollbackLever_AssignOnAnswerOff_StillNeverDealsTheTicketToAnybody_ForEveryEntryPoint()
     {
         var w = NewWorld(assignOnAnswer: false);
 
-        // A call answered at creation with the lever off: a mapped agent at pickup is still human evidence, so the ticket enters the Call Center and the answering
-        // agent is a recorded handler - but VOICE never deals a ticket by Round Robin at creation (a person may be the answerer): the ticket waits in the queue.
+        // A call answered at creation with the lever off: a mapped agent at pickup is still human evidence, so the ticket enters the Call Center
+        // queue - but the answering agent is only a recorded handler and Round Robin no longer exists as a fallback, so nobody is assigned.
         var call = await IngestPhoneCallAsync(w, "conv-lever-call", w.Answering.GenesysId);
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);
         AssertSingleOwner(w, call.TicketId, null);
         Assert.Contains(w.F.Handlers.All, h => h.TicketId == call.TicketId && h.HandledByUserId == w.Answering.Id);
 
-        // An agent connecting later and a handoff with a connected agent: no direct assignment, no flag.
+        // An agent connecting later and a handoff with a connected agent: no direct assignment, no flag, no rotation pick - the ticket waits in the queue.
         var chat = await IngestAiChatAsync(w, "conv-lever-chat");
         await w.F.TicketUpdate.UpdateAsync(
             ServiceAccount, chat.TicketId,
@@ -220,9 +235,9 @@ public class GenesysAnsweringAgentRoutingTests
                 chat.ConversationId,
                 Handoff: new GenesysHandoffUpdateDto(Required: true, Mode: "HumanTakeover"),
                 Routing: new GenesysRoutingUpdateDto(AgentId: w.Answering.GenesysId, ConnectedAtUtc: DateTime.UtcNow)));
-        Assert.NotEqual(w.Answering.Id, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
-        Assert.NotNull(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);                 // Round Robin, as before the rule existed
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action is "AssignOnAnswer" or "AnswerAssignmentSkipped");
+        AssertQueuedWithAiOwner(w, chat.TicketId);
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action is "AssignOnAnswer" or "AnswerAssignmentSkipped" or "AutoAssign");
+        Assert.True(RoundRobinCursorUntouched(w));
 
         // An unmapped id at pickup is no evidence of a person: before the rule it moved nothing, and with the lever off it still does not.
         var unmapped = await IngestPhoneCallAsync(w, "conv-lever-unmapped", "ghost-agent");
@@ -231,11 +246,11 @@ public class GenesysAnsweringAgentRoutingTests
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------
-    // 3. Round Robin only when a handoff is requested and nobody has accepted it
+    // 3. A handoff nobody has accepted waits in the Call Center queue (no Round Robin)
     // ---------------------------------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task HandoffRequestedBeforeAnyAgentAccepted_UsesRoundRobin()
+    public async Task HandoffRequestedBeforeAnyAgentAccepted_QueuesInTheCallCenter_WithTheAiOwner_AndNoRoundRobin()
     {
         var w = NewWorld();
         var chat = await IngestAiChatAsync(w, "conv-rr");
@@ -243,14 +258,12 @@ public class GenesysAnsweringAgentRoutingTests
         var handoff = await RequestHandoffAsync(w, chat);
 
         Assert.Equal(GenesysHandoffOutcome.HandoffRecorded, handoff.Outcome);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Trigger=CallCenterIntake"));
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer");
+        AssertQueuedWithAiOwner(w, chat.TicketId);
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action is "AutoAssign" or "AssignOnAnswer");
     }
 
     [Fact]
-    public async Task AgentOnlyAssignedOrRinging_IsNotAnAnswer_RoundRobinStillApplies()
+    public async Task AgentOnlyAssignedOrRinging_IsNotAnAnswer_TheTicketWaitsInTheQueue_WithTheAiOwner()
     {
         var w = NewWorld();
         var chat = await IngestAiChatAsync(w, "conv-ringing");
@@ -259,7 +272,7 @@ public class GenesysAnsweringAgentRoutingTests
         var handoff = await RequestHandoffAsync(w, chat, assignedButNotConnectedAgent: w.Answering.GenesysId);
 
         Assert.Equal(GenesysHandoffOutcome.HandoffRecorded, handoff.Outcome);
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);                         // Round Robin, not the named agent
+        AssertQueuedWithAiOwner(w, chat.TicketId);                                        // neither the named agent nor a rotation pick owns it
         Assert.NotEqual(w.Answering.Id, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer");
     }
@@ -280,27 +293,31 @@ public class GenesysAnsweringAgentRoutingTests
                 Handoff: new GenesysHandoffUpdateDto(AssignedAgentId: w.Answering.GenesysId)));
 
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, result.Outcome);
+        Assert.Null(ownerBefore);                                                        // the handoff alone assigns nobody
         Assert.Equal(ownerBefore, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
-        AssertSingleOwner(w, chat.TicketId, ownerBefore);
+        AssertQueuedWithAiOwner(w, chat.TicketId);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer");
     }
 
     [Fact]
-    public async Task AnswerAfterRoundRobinPreAssignment_ReplacesTheAutomaticOwner_AndKeepsTheHistory()
+    public async Task AnswerWhileTheTicketWaitsInTheQueue_AssignsTheAnsweringAgentDirectly_AndTheAiAgentIsThePreviousOwner()
     {
         var w = NewWorld();
-        var chat = await IngestAiChatAsync(w, "conv-rr-then-answer");
+        var chat = await IngestAiChatAsync(w, "conv-queue-then-answer");
         await RequestHandoffAsync(w, chat);
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);
+        AssertQueuedWithAiOwner(w, chat.TicketId);
 
         await ConnectAsync(w, chat, w.Answering.GenesysId);
 
         AssertSingleOwner(w, chat.TicketId, w.Answering.Id);
-        // The automatic pre-assignment is superseded, never deleted: both rows exist, only the answering agent's is current.
-        var rows = w.F.TicketAssignments.Added.Where(a => a.TicketId == chat.TicketId).ToList();
-        Assert.Equal(2, rows.Count);
-        Assert.False(rows.Single(a => a.AssignedEmployeeId == w.RoundRobinNext.Id).IsCurrent);
-        Assert.True(rows.Single(a => a.AssignedEmployeeId == w.Answering.Id).IsCurrent);
+        Assert.Null(w.Ticket(chat.TicketId).AiAgentOwnerEmployeeId);                       // the person's assignment ends the AI's ownership
+        Assert.True(RoundRobinCursorUntouched(w));
+        // There was never a provisional row: exactly one assignment row exists and it is the answering agent's.
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == chat.TicketId);
+        // The history records the AI Agent as the previous owner of the AI-to-human acceptance.
+        var accepted = Assert.Single(w.F.AssignmentHistory.Entries, h => h.TicketId == chat.TicketId && h.NewEmployeeId == w.Answering.Id);
+        Assert.Equal(ServiceAccount, accepted.PreviousEmployeeId);
+        Assert.Contains(accepted.Source, new TicketAssignmentSource?[] { TicketAssignmentSource.GenesysDirectCall, TicketAssignmentSource.GenesysCallTransfer });
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------
@@ -363,11 +380,11 @@ public class GenesysAnsweringAgentRoutingTests
         var w = NewWorld();
         var chat = await IngestAiChatAsync(w, "conv-manual-owner");
         await RequestHandoffAsync(w, chat);
+        AssertQueuedWithAiOwner(w, chat.TicketId);
 
-        // A person takes the ticket by hand: the assignment row's actor is the person, not the system.
+        // A person takes the ticket by hand from the queue: the assignment row's actor is the person, not the system.
         var manualOwner = w.Agents[1];
         var ticket = w.Ticket(chat.TicketId);
-        w.F.TicketAssignments.Added.Single(a => a.TicketId == chat.TicketId && a.IsCurrent).MarkSuperseded();
         ticket.AssignTo(manualOwner.Id);
         await w.F.TicketAssignments.AddAsync(new TicketAssignment(chat.TicketId, manualOwner.Id, ticket.CurrentDepartmentId, DateTime.UtcNow, manualOwner.Id));
 
@@ -383,23 +400,74 @@ public class GenesysAnsweringAgentRoutingTests
     // ---------------------------------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task UnmappedAgentConnectsAfterRoundRobin_KeepsTheExistingEligibleCsAgent_WithoutAnotherRotationTurn()
+    public async Task UnmappedAnsweringAgent_FlagsTheTicket_AndItWaitsInTheCallCenterQueue_WithNoOwner()
     {
         var w = NewWorld();
-        var chat = await IngestAiChatAsync(w, "conv-rr-then-unmapped");
+
+        var call = await IngestPhoneCallAsync(w, "conv-unmapped", "genesys-user-nobody-mapped");
+
+        var ticket = w.Ticket(call.TicketId);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);
+        AssertSingleOwner(w, call.TicketId, null);                  // flagged and left in the queue - no Round Robin fallback, nobody dealt it
+        Assert.True(RoundRobinCursorUntouched(w));
+        Assert.Equal(1, FlagCount(w, call.TicketId));
+        var flag = w.F.WorkflowEvents.All.Single(e => e.TicketId == call.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
+        Assert.Contains("genesys-user-nobody-mapped", flag.Note);
+        Assert.Contains("not mapped", flag.Note);
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.AfterValue!.Contains("ManualAssignmentRequired=true"));
+    }
+
+    [Theory]
+    [InlineData("deactivated", AnsweringAgentIssue.Inactive)]
+    [InlineData("locked", AnsweringAgentIssue.LockedOut)]
+    [InlineData("service", AnsweringAgentIssue.ServiceAccount)]
+    [InlineData("outsider", AnsweringAgentIssue.NotCallCenterMember)]
+    [InlineData("readonly", AnsweringAgentIssue.NoOperationalRole)]
+    public async Task AnsweringAgentWhoCannotTakeTheTicket_IsFlagged_AndNeverOwnsIt_NorDoesAnyoneElse(string kind, AnsweringAgentIssue expected)
+    {
+        var w = NewWorld();
+        var gid = $"g-{kind}";
+        var id = kind switch
+        {
+            "deactivated" => w.F.AddAgent(gid, "Gone Agent", isActive: false),
+            "locked" => w.F.AddAgent(gid, "Locked Agent", lockedOut: true),
+            "service" => w.F.AddAgent(gid, "Integration"),
+            "outsider" => w.F.AddAgent(gid, "Finance Person", inCallCenter: false),
+            _ => w.F.AddAgent(gid, "Reporting Person", roles: [Roles.ReportingUser])
+        };
+        if (kind == "service")
+        {
+            w.F.ServiceIdentities!.Add(id);
+        }
+
+        var call = await IngestPhoneCallAsync(w, $"conv-{kind}", gid);
+
+        // Never the unusable person, and no Round Robin fallback either: the ticket waits in the Call Center queue, flagged, with no owner and no
+        // assignment row, and the shared rotation cursor never moves.
+        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.NotEqual(id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Empty(CurrentRows(w, call.TicketId));
+        Assert.True(RoundRobinCursorUntouched(w));
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);
+        Assert.Equal(1, FlagCount(w, call.TicketId));
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.AfterValue!.Contains($"Issue={expected}"));
+    }
+
+    [Fact]
+    public async Task UnmappedAgentConnectsWhileTheTicketIsQueued_FlagsIt_AndItStaysQueued_WithTheAiOwnerAndNoRotationTurn()
+    {
+        var w = NewWorld();
+        var chat = await IngestAiChatAsync(w, "conv-queued-then-unmapped");
         await RequestHandoffAsync(w, chat);
-        Assert.Equal(w.RoundRobinNext.Id, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
-        var cursorAfterHandoff = w.F.Rotation.Rows.Values.Single().LastAssignedEmployeeId;
+        AssertQueuedWithAiOwner(w, chat.TicketId);
 
         await ConnectAsync(w, chat, "unknown-genesys-id");
 
-        // The person who really answered is unknown, but the ticket already has an eligible CS Agent: that agent is preserved (final rule, priority 3),
-        // not released and not re-dealt.
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);
-        Assert.Equal(cursorAfterHandoff, w.F.Rotation.Rows.Values.Single().LastAssignedEmployeeId);           // no new rotation turn
-        var rows = w.F.TicketAssignments.Added.Where(a => a.TicketId == chat.TicketId).ToList();
-        Assert.Single(rows);
-        Assert.True(rows[0].IsCurrent);
+        // The person who really answered is unknown: the ticket is flagged for staff exactly where it is - no owner change, nobody dealt it by rotation.
+        AssertQueuedWithAiOwner(w, chat.TicketId);
+        Assert.Equal(1, FlagCount(w, chat.TicketId));
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.EntityId == chat.TicketId.ToString());
     }
 
     [Fact]
@@ -418,6 +486,23 @@ public class GenesysAnsweringAgentRoutingTests
         Assert.True(RoundRobinCursorUntouched(w));
     }
 
+    [Fact]
+    public async Task UnmappedAgentConnectsToAnEarlierPhoneTicket_RoutesItToTheCallCenterQueue_AndFlagsIt_WithoutAssigningAnyone()
+    {
+        var w = NewWorld();
+        var call = await IngestPhoneCallAsync(w, "conv-phone-no-agent-yet", answeringGenesysId: null);
+        Assert.Equal(w.Cs.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);    // created before anybody answered: stays put
+
+        await ConnectAsync(w, call, "ghost-agent");
+
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);
+        AssertSingleOwner(w, call.TicketId, null);                  // flagged in the queue, never dealt by the shared rotation
+        Assert.Equal(w.Cs.DepartmentId, w.Ticket(call.TicketId).OriginatingDepartmentId);
+        Assert.Equal(ServiceAccount, w.Ticket(call.TicketId).AiAgentOwnerEmployeeId);
+        Assert.True(RoundRobinCursorUntouched(w));
+        Assert.Equal(1, FlagCount(w, call.TicketId));
+    }
+
     // ---------------------------------------------------------------------------------------------------------------------------
     // 5b. Final rule: a human-needed ticket that is ALREADY in the Call Center (so no routing happens) must still get a CS Agent
     // ---------------------------------------------------------------------------------------------------------------------------
@@ -431,8 +516,19 @@ public class GenesysAnsweringAgentRoutingTests
         return new Ingested(result.Ticket!.TicketId, conversationId);
     }
 
+    /// <summary>A ticket CREATED in the Call Center (so it did not move): still the AI Agent's, nobody owns it, no assignment row, no rotation turn.</summary>
+    private static void AssertInCallCenterQueueWithAiOwner(World w, long ticketId)
+    {
+        var ticket = w.Ticket(ticketId);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
+        AssertSingleOwner(w, ticketId, null);
+        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticketId);
+        Assert.True(RoundRobinCursorUntouched(w));
+    }
+
     [Fact]
-    public async Task HandoffOnAnAiTicketAlreadyInTheCallCenter_StillGetsACsAgent()
+    public async Task HandoffOnAnAiTicketAlreadyInTheCallCenter_StaysInTheQueue_WithTheAiOwner_AndNobodyIsDealtIt()
     {
         var w = NewWorld();
         var chat = await IngestAiChatInCallCenterAsync(w, "conv-ai-in-cc");
@@ -440,12 +536,11 @@ public class GenesysAnsweringAgentRoutingTests
 
         await RequestHandoffAsync(w, chat);
 
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);                        // previously: stayed unassigned (no routing => no assignment)
+        AssertInCallCenterQueueWithAiOwner(w, chat.TicketId);                            // previously: dealt a CS Agent by Round Robin
     }
 
     [Fact]
-    public async Task HumanFollowUpUpdateOnAnAiTicketAlreadyInTheCallCenter_StillGetsACsAgent_AndARedeliveryAssignsNobodyElse()
+    public async Task HumanFollowUpUpdateOnAnAiTicketAlreadyInTheCallCenter_StaysQueued_AndARedeliveryChangesNothing()
     {
         var w = NewWorld();
         var chat = await IngestAiChatInCallCenterAsync(w, "conv-ai-in-cc-update");
@@ -453,10 +548,12 @@ public class GenesysAnsweringAgentRoutingTests
 
         var first = await w.F.TicketUpdate.UpdateAsync(ServiceAccount, chat.TicketId, update);
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, first.Outcome);
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);
+        AssertInCallCenterQueueWithAiOwner(w, chat.TicketId);
+        var auditAfterFirst = w.F.Audit.Entries.Count;
 
         await w.F.TicketUpdate.UpdateAsync(ServiceAccount, chat.TicketId, update);       // redelivery
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);                        // idempotent: same owner, one current row
+        AssertInCallCenterQueueWithAiOwner(w, chat.TicketId);                            // idempotent: still nobody, no new assignment or rotation turn
+        Assert.DoesNotContain(w.F.Audit.Entries.Skip(auditAfterFirst), e => e.Action is "AutoAssign" or "AssignOnAnswer");
     }
 
     [Fact]
@@ -477,44 +574,43 @@ public class GenesysAnsweringAgentRoutingTests
     }
 
     [Fact]
-    public async Task MappedButIneligiblePersonConnectsToAnAiChat_IsFlagged_NotTreatedAsABot_AndTheRotationAssignsACsAgent()
+    public async Task MappedButIneligiblePersonConnectsToAnAiChat_IsFlagged_NotTreatedAsABot_AndTheTicketWaitsInTheQueue()
     {
         var w = NewWorld();
         // A real Ticketing user (mapped) who is not a Call Center agent: a person, never a bot - so the chat is human-answered, but this
-        // person cannot own a Call Center ticket. It waits in the Call Center queue, flagged; Round Robin must not hand it to someone else.
+        // person cannot own a Call Center ticket. It waits in the Call Center queue, flagged; nobody else is dealt it.
         w.F.AddAgent("g-finance-person", "Finance Person", inCallCenter: false);
         var chat = await IngestAiChatAsync(w, "conv-mapped-ineligible");
 
         await ConnectAsync(w, chat, "g-finance-person");
 
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
-        AssertSingleOwner(w, chat.TicketId, w.RoundRobinNext.Id);   // flagged AND dealt to the next shared-rotation CS Agent - never unassigned
+        AssertQueuedWithAiOwner(w, chat.TicketId);
         Assert.Equal(1, FlagCount(w, chat.TicketId));
         Assert.Contains(w.F.WorkflowEvents.All, e => e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note!.Contains("not a Call Center member"));
     }
 
     [Fact]
-    public async Task ChatCreatedWithATopLevelAgentIdAndHumanFollowUp_IsNotAnAnswer_ItGoesToRoundRobin_UntilTheAgentIsReportedConnected()
+    public async Task ChatCreatedWithATopLevelAgentIdAndHumanFollowUp_IsNotAnAnswer_ItWaitsInTheQueue_UntilTheAgentIsReportedConnected()
     {
         var w = NewWorld();
 
         // A top-level agentId on a digital channel is only who is offered/assigned/queued: not proof of acceptance, even with
-        // humanFollowUpRequired. The ticket enters the Call Center and Round Robin gives it to ONE eligible agent.
+        // humanFollowUpRequired. The ticket enters the Call Center QUEUE with the AI Agent as owner; nobody is dealt it.
         var result = await w.F.Ingestion.IngestAsync(
             ServiceAccount,
             new GenesysInquiryDto("conv-chat-answered", GenesysChannel.WebsiteChat, CustomerPhone: "+971500000001",
                 DepartmentId: w.Cs.DepartmentId, AgentId: w.Answering.GenesysId, HumanFollowUpRequired: true));
 
         var ticket = w.Ticket(result.Ticket!.TicketId);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        AssertQueuedWithAiOwner(w, ticket.TicketId);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticket.TicketId.ToString());
-        Assert.False(RoundRobinCursorUntouched(w));
 
-        // The agent actually connects: the automatic pick is replaced by the agent who accepted.
+        // The agent actually connects: they are assigned directly and the AI Agent stops being the owner.
         await ConnectAsync(w, new Ingested(ticket.TicketId, "conv-chat-answered"), w.Answering.GenesysId);
 
         AssertSingleOwner(w, ticket.TicketId, w.Answering.Id);
+        Assert.Null(ticket.AiAgentOwnerEmployeeId);
+        Assert.True(RoundRobinCursorUntouched(w));
     }
 
     // ---------------------------------------------------------------------------------------------------------------------------
@@ -574,6 +670,29 @@ public class GenesysAnsweringAgentRoutingTests
     }
 
     [Fact]
+    public async Task TransferredIntoAnUnstaffedDepartment_WaitsUnassignedWithTheReasonFlagged_AndIsNeitherPulledBackNorAssignedByALateGenesysUpdate()
+    {
+        var w = NewWorld();
+        var legal = w.F.Departments.AddDepartment("Legal", "LEG");     // nobody staffs Legal: the CS Agent stays on the ticket regardless
+
+        var call = await IngestPhoneCallAsync(w, "conv-transfer-queue", w.Answering.GenesysId);
+        var transfer = await TransferService(w).TransferAsync(
+            w.Answering.Id, [Roles.CsAgent], call.TicketId,
+            new TransferTicketRequestDto(legal.DepartmentId, "Legal matter", [], ReasonCode: TicketTransferReason.WrongDepartment));
+        Assert.Equal(TicketMutationOutcome.Success, transfer.Outcome);
+        AssertSingleOwner(w, call.TicketId, null);                                           // nobody eligible in Legal: unassigned in Legal's queue...
+        Assert.Equal(1, FlagCount(w, call.TicketId));                                        // ...with the reason recorded for staff
+
+        await ConnectAsync(w, call, w.Answering.GenesysId);
+        await ConnectAsync(w, call, w.Agents[0].GenesysId);
+
+        Assert.Equal(legal.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);       // not routed back to CC
+        AssertSingleOwner(w, call.TicketId, null);                                           // a person's transfer stands: late Genesys events neither assign it nor deal it to a rotation agent
+        Assert.True(RoundRobinCursorUntouched(w));
+        Assert.Equal(1, FlagCount(w, call.TicketId));                                        // still only the transfer's own reason - no new flag from the late events
+    }
+
+    [Fact]
     public async Task TheAnsweringAgentOwnsTheTicketLikeAnyOwner_CanTransferItWithTheExistingCsAgentPermission()
     {
         var w = NewWorld();
@@ -624,15 +743,17 @@ public class GenesysAnsweringAgentRoutingTests
         var w = NewWorld();
         var chat = await IngestAiChatAsync(w, "conv-closed");
         await RequestHandoffAsync(w, chat);
-        var owner = w.RoundRobinNext.Id;
+        AssertQueuedWithAiOwner(w, chat.TicketId);
 
-        // The owner works it and it is closed (InProgress -> Resolved -> Closed, as the lifecycle does).
+        // A person works it (took it from the queue) and it is closed (InProgress -> Resolved -> Closed, as the lifecycle does).
         var ticket = w.Ticket(chat.TicketId);
+        ticket.AssignTo(w.Agents[1].Id);
         ticket.ChangeStatus(TicketStatus.InProgress);
         ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
         ticket.Close();
         var assignmentsBefore = w.F.TicketAssignments.Added.Count;
         var auditBefore = w.F.Audit.Entries.Count;
+        var cursorBefore = w.F.Rotation.Rows.Values.Select(r => r.LastAssignedEmployeeId).ToList();
 
         var late = await ConnectAsync(w, chat, w.Answering.GenesysId);
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, late.Outcome);
@@ -640,9 +761,9 @@ public class GenesysAnsweringAgentRoutingTests
         Assert.Equal(TicketStatus.Closed, w.Ticket(chat.TicketId).TicketStatus);
         // Closure cleared the owner, and a late Genesys update must NOT hand a Closed ticket to anybody (no automatic reassignment).
         Assert.Null(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
-        Assert.NotEqual(Guid.Empty, owner);
         Assert.Equal(assignmentsBefore, w.F.TicketAssignments.Added.Count);
-        Assert.DoesNotContain(w.F.Audit.Entries.Skip(auditBefore), e => e.Action is "AssignOnAnswer" or "Transfer" or "Unassign" or "AnswerAssignmentSkipped");
+        Assert.Equal(cursorBefore, w.F.Rotation.Rows.Values.Select(r => r.LastAssignedEmployeeId).ToList());
+        Assert.DoesNotContain(w.F.Audit.Entries.Skip(auditBefore), e => e.Action is "AssignOnAnswer" or "Transfer" or "Unassign" or "AnswerAssignmentSkipped" or "AutoAssign");
         Assert.Equal(0, FlagCount(w, chat.TicketId));
     }
 
@@ -658,104 +779,5 @@ public class GenesysAnsweringAgentRoutingTests
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Equal(status, ticket.TicketStatus);
         Assert.Equal(1, ticket.CurrentDepartmentId);
-    }
-
-    // [PR #292] UnmappedAnsweringAgent_FlagsTheTicket_AndItWaitsInTheCallCenterQueue_WithNoOwner
-    [Fact]
-    public async Task UnmappedAnsweringAgent_FlagsTheTicket_AndItWaitsInTheCallCenterQueue_WithNoOwner()
-    {
-        var w = NewWorld();
-
-        var call = await IngestPhoneCallAsync(w, "conv-unmapped", "genesys-user-nobody-mapped");
-
-        var ticket = w.Ticket(call.TicketId);
-        Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);
-        AssertSingleOwner(w, call.TicketId, null);                  // flagged and left in the queue - no Round Robin fallback, nobody dealt it
-        Assert.True(RoundRobinCursorUntouched(w));
-        Assert.Equal(1, FlagCount(w, call.TicketId));
-        var flag = w.F.WorkflowEvents.All.Single(e => e.TicketId == call.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
-        Assert.Contains("genesys-user-nobody-mapped", flag.Note);
-        Assert.Contains("not mapped", flag.Note);
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.AfterValue!.Contains("ManualAssignmentRequired=true"));
-    }
-
-    // [PR #292] AnsweringAgentWhoCannotTakeTheTicket_IsFlagged_AndNeverOwnsIt_NorDoesAnyoneElse
-    [Theory]
-    [InlineData("deactivated", AnsweringAgentIssue.Inactive)]
-    [InlineData("locked", AnsweringAgentIssue.LockedOut)]
-    [InlineData("service", AnsweringAgentIssue.ServiceAccount)]
-    [InlineData("outsider", AnsweringAgentIssue.NotCallCenterMember)]
-    [InlineData("readonly", AnsweringAgentIssue.NoOperationalRole)]
-    public async Task AnsweringAgentWhoCannotTakeTheTicket_IsFlagged_AndNeverOwnsIt_NorDoesAnyoneElse(string kind, AnsweringAgentIssue expected)
-    {
-        var w = NewWorld();
-        var gid = $"g-{kind}";
-        var id = kind switch
-        {
-            "deactivated" => w.F.AddAgent(gid, "Gone Agent", isActive: false),
-            "locked" => w.F.AddAgent(gid, "Locked Agent", lockedOut: true),
-            "service" => w.F.AddAgent(gid, "Integration"),
-            "outsider" => w.F.AddAgent(gid, "Finance Person", inCallCenter: false),
-            _ => w.F.AddAgent(gid, "Reporting Person", roles: [Roles.ReportingUser])
-        };
-        if (kind == "service")
-        {
-            w.F.ServiceIdentities!.Add(id);
-        }
-
-        var call = await IngestPhoneCallAsync(w, $"conv-{kind}", gid);
-
-        // Never the unusable person, and no Round Robin fallback either: the ticket waits in the Call Center queue, flagged, with no owner and no
-        // assignment row, and the shared rotation cursor never moves.
-        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
-        Assert.NotEqual(id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
-        Assert.Empty(CurrentRows(w, call.TicketId));
-        Assert.True(RoundRobinCursorUntouched(w));
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);
-        Assert.Equal(1, FlagCount(w, call.TicketId));
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.AfterValue!.Contains($"Issue={expected}"));
-    }
-
-    // [PR #292] UnmappedAgentConnectsToAnEarlierPhoneTicket_RoutesItToTheCallCenterQueue_AndFlagsIt_WithoutAssigningAnyone
-    [Fact]
-    public async Task UnmappedAgentConnectsToAnEarlierPhoneTicket_RoutesItToTheCallCenterQueue_AndFlagsIt_WithoutAssigningAnyone()
-    {
-        var w = NewWorld();
-        var call = await IngestPhoneCallAsync(w, "conv-phone-no-agent-yet", answeringGenesysId: null);
-        Assert.Equal(w.Cs.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);    // created before anybody answered: stays put
-
-        await ConnectAsync(w, call, "ghost-agent");
-
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);
-        AssertSingleOwner(w, call.TicketId, null);                  // flagged in the queue, never dealt by the shared rotation
-        Assert.Equal(w.Cs.DepartmentId, w.Ticket(call.TicketId).OriginatingDepartmentId);
-        Assert.Equal(ServiceAccount, w.Ticket(call.TicketId).AiAgentOwnerEmployeeId);
-        Assert.True(RoundRobinCursorUntouched(w));
-        Assert.Equal(1, FlagCount(w, call.TicketId));
-    }
-
-    // [PR #292] TransferredIntoAnUnstaffedDepartment_WaitsUnassignedWithTheReasonFlagged_AndIsNeitherPulledBackNorAssignedByALateGenesysUpdate
-    [Fact]
-    public async Task TransferredIntoAnUnstaffedDepartment_WaitsUnassignedWithTheReasonFlagged_AndIsNeitherPulledBackNorAssignedByALateGenesysUpdate()
-    {
-        var w = NewWorld();
-        var legal = w.F.Departments.AddDepartment("Legal", "LEG");     // nobody staffs Legal: the CS Agent stays on the ticket regardless
-
-        var call = await IngestPhoneCallAsync(w, "conv-transfer-queue", w.Answering.GenesysId);
-        var transfer = await TransferService(w).TransferAsync(
-            w.Answering.Id, [Roles.CsAgent], call.TicketId,
-            new TransferTicketRequestDto(legal.DepartmentId, "Legal matter", [], ReasonCode: TicketTransferReason.WrongDepartment));
-        Assert.Equal(TicketMutationOutcome.Success, transfer.Outcome);
-        AssertSingleOwner(w, call.TicketId, null);                                           // nobody eligible in Legal: unassigned in Legal's queue...
-        Assert.Equal(1, FlagCount(w, call.TicketId));                                        // ...with the reason recorded for staff
-
-        await ConnectAsync(w, call, w.Answering.GenesysId);
-        await ConnectAsync(w, call, w.Agents[0].GenesysId);
-
-        Assert.Equal(legal.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);       // not routed back to CC
-        AssertSingleOwner(w, call.TicketId, null);                                           // a person's transfer stands: late Genesys events neither assign it nor deal it to a rotation agent
-        Assert.True(RoundRobinCursorUntouched(w));
-        Assert.Equal(1, FlagCount(w, call.TicketId));                                        // still only the transfer's own reason - no new flag from the late events
     }
 }

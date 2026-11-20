@@ -47,7 +47,8 @@ public class UnassignedTicketClassifierTests
     {
         var stale = Ev(genesys: true, live: true, silentHours: 72);
         Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.StaleAiNoEndEvent, UnassignedTicketAction.None), C(stale, TimeSpan.FromHours(24)));
-        Assert.Equal(UnassignedTicketAction.RoundRobinCallCenter, C(stale, TimeSpan.FromHours(24), actOnStale: true).Action);
+        // AssignStaleAi can no longer hand an AI ticket to anyone: even when enabled it stays report-only and the AI Agent keeps it.
+        Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.StaleAiNoEndEvent, UnassignedTicketAction.None), C(stale, TimeSpan.FromHours(24), actOnStale: true));
     }
 
     [Fact]
@@ -55,17 +56,32 @@ public class UnassignedTicketClassifierTests
         Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.AiEndedNoHumanNeed, UnassignedTicketAction.None), C(Ev(genesys: true, live: false)));
 
     [Fact]
-    public void FailedGenesysRouting_HumanFlagOrOpenHandoffOutsideCallCenter_IsRoutedByRoundRobin()
+    public void FailedGenesysRouting_HumanFlagOrOpenHandoffOutsideCallCenter_IsRoutedToTheQueue_NeverRoundRobin()
     {
-        Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HumanRequiredNotRouted, UnassignedTicketAction.RoundRobinCallCenter), C(Ev(genesys: true, live: true, humanFlag: true)));
-        Assert.Equal(UnassignedTicketClass.HumanRequiredNotRouted, C(Ev(genesys: true, live: true, handoff: true)).Class);
-        Assert.Equal(UnassignedTicketClass.HumanRequiredNotRouted, C(Ev(genesys: true, live: true, humanEvidence: true)).Class);
+        Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HumanRequiredNotRouted, UnassignedTicketAction.RouteToCallCenterQueue), C(Ev(genesys: true, live: true, humanFlag: true)));
+        Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HumanRequiredNotRouted, UnassignedTicketAction.RouteToCallCenterQueue), C(Ev(genesys: true, live: true, handoff: true)));
+        Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HumanRequiredNotRouted, UnassignedTicketAction.RouteToCallCenterQueue), C(Ev(genesys: true, live: true, humanEvidence: true)));
     }
 
     [Fact]
-    public void InCallCenterWithNoOwner_Human_IsDealtByRoundRobin() =>
+    public void InCallCenterWithNoOwner_GenesysHuman_StaysInTheQueue_NobodyIsChosen()
+    {
+        // Already in the Call Center queue with the AI Agent as owner: nothing to move and nobody to choose - a person must accept it.
+        foreach (var e in new[]
+        {
+            Ev(department: CallCenter, genesys: true, live: true, humanFlag: true),
+            Ev(department: CallCenter, genesys: true, live: true, handoff: true),
+            Ev(department: CallCenter, genesys: true, live: true, humanEvidence: true),
+        })
+        {
+            Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, UnassignedTicketAction.None), C(e));
+        }
+    }
+
+    [Fact]
+    public void InCallCenterWithNoOwner_NoGenesysInteraction_IsStillDealtByRoundRobin() =>
         Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, UnassignedTicketAction.RoundRobinCallCenter),
-            C(Ev(department: CallCenter, genesys: true, live: true, humanFlag: true)));
+            C(Ev(department: CallCenter, humanFlag: true)));
 
     [Fact]
     public void AMappedAgentWhoAnswered_OwnsIt_EvenWhenNothingElseFlagsHumanWork()
@@ -76,8 +92,8 @@ public class UnassignedTicketClassifierTests
     }
 
     [Fact]
-    public void APhoneCallAnsweredByAnUnmappedAgent_IsHumanWork_RoundRobin() =>
-        Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HumanAnsweredAgentNotMapped, UnassignedTicketAction.RoundRobinCallCenter),
+    public void APhoneCallAnsweredByAnUnmappedAgent_IsHumanWork_QueuedAndFlagged_NeverRoundRobin() =>
+        Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HumanAnsweredAgentNotMapped, UnassignedTicketAction.RouteToCallCenterQueue),
             C(Ev(genesys: true, live: true, phoneUnmapped: true)));
 
     [Fact]

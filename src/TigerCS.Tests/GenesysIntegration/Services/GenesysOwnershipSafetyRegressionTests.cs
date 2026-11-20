@@ -79,19 +79,26 @@ public class GenesysOwnershipSafetyRegressionTests
         var w = NewWorld();
         var call = await AiCallAsync(w, "conv-oha-unmapped");
 
-        // VOICE: an id that maps to nobody is flagged and the ticket waits in the Call Center queue - NO Round Robin fallback, so nobody (and certainly not
-        // the unmapped id) is the Original Human Agent. The first MAPPED person who then answers owns it and becomes the Original Human Agent (write-once).
+        // An id that maps to nobody is flagged: the ticket sits in the Call Center queue with the AI Agent as owner and NO person (no Round Robin
+        // fallback), so nobody - least of all the unmapped id - becomes the Original Human Agent.
         await ConnectAsync(w, call, "g-not-in-tigercs", T0.AddMinutes(1));
         Assert.Null(w.Ticket(call.TicketId).OriginalHumanAgentId);
         Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(AiAgent, w.Ticket(call.TicketId).AiAgentOwnerEmployeeId);
+        Assert.Equal(0, w.OriginalAgentAudits(call.TicketId));
+        Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == call.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
 
-        var next = w.Agents[1];
-        await ConnectAsync(w, call, next.GenesysId, T0.AddMinutes(2));
-        var later = w.Agents[2];
-        await ConnectAsync(w, call, later.GenesysId, T0.AddMinutes(3));
+        // The first mapped, eligible agent to be reported connected takes it directly and is the first Original Human Agent.
+        var original = w.Agents[0];
+        await ConnectAsync(w, call, original.GenesysId, T0.AddMinutes(2));
+        Assert.Equal(original.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(original.Id, w.Ticket(call.TicketId).OriginalHumanAgentId);
+
+        var next = w.Agents.First(a => a.Id != original.Id);
+        await ConnectAsync(w, call, next.GenesysId, T0.AddMinutes(3));
 
         Assert.Equal(next.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
-        Assert.Equal(next.Id, w.Ticket(call.TicketId).OriginalHumanAgentId);                // write-once: a later agent never rewrites it
+        Assert.Equal(original.Id, w.Ticket(call.TicketId).OriginalHumanAgentId);            // write-once
     }
 
     [Fact]
@@ -105,12 +112,9 @@ public class GenesysOwnershipSafetyRegressionTests
         await ConnectAsync(w, call, b.GenesysId, T0.AddMinutes(2));
         await ConnectAsync(w, call, c.GenesysId, T0.AddMinutes(3));
 
-        // VOICE: no automatic reassignment to a later agent - A answered first and keeps the ticket; B and C are recorded as handlers in the interaction history.
-        Assert.Equal(a.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(c.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
         Assert.Equal(a.Id, w.Ticket(call.TicketId).OriginalHumanAgentId);                   // write-once: still A
         Assert.Equal(1, w.OriginalAgentAudits(call.TicketId));
-        Assert.Contains(w.F.Handlers.All, h => h.TicketId == call.TicketId && h.HandledByUserId == b.Id);
-        Assert.Contains(w.F.Handlers.All, h => h.TicketId == call.TicketId && h.HandledByUserId == c.Id);
     }
 
     [Fact]
@@ -152,7 +156,7 @@ public class GenesysOwnershipSafetyRegressionTests
         Assert.Null(w.Ticket(call.TicketId).OriginalHumanAgentId);
         Assert.Null(w.Ticket(call.TicketId).ActiveOriginalHumanAgentId);
         Assert.Equal(0, w.OriginalAgentAudits(call.TicketId));
-        Assert.Equal(w.Agents[0].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);       // VOICE: the first answering agent keeps it; the second is a handler only
+        Assert.Equal(w.Agents[1].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);       // ownership itself still follows the answering agent
     }
 
     // ---- 2. Same active conversation only -------------------------------------------------------------------------------------------
@@ -269,10 +273,9 @@ public class GenesysOwnershipSafetyRegressionTests
         await ConnectAsync(w, call, c.GenesysId, T0.AddMinutes(5));                          // duplicate of C's
         await ConnectAsync(w, call, a.GenesysId, T0.AddMinutes(1));                          // duplicate of A's, long superseded
 
-        // VOICE: A answered first and keeps the ticket; C, the late B and the duplicates are never owners and add no assignment-history row.
-        Assert.Equal(a.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(c.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
         Assert.Equal(
-            new (Guid?, Guid)[] { (null, AiAgent), (AiAgent, a.Id) },
+            new (Guid?, Guid)[] { (null, AiAgent), (AiAgent, a.Id), (a.Id, c.Id) },
             w.History(call.TicketId).Select(h => (h.PreviousEmployeeId, h.NewEmployeeId)));
         Assert.Single(w.F.TicketAssignments.Added, x => x.TicketId == call.TicketId && x.IsCurrent);
         Assert.Equal(a.Id, w.Ticket(call.TicketId).OriginalHumanAgentId);

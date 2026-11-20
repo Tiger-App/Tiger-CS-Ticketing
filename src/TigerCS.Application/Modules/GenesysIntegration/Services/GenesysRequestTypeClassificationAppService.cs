@@ -91,8 +91,7 @@ public sealed class GenesysRequestTypeClassificationAppService(
         string conversationId,
         GenesysRequestTypeDto requestType,
         string source,
-        CancellationToken cancellationToken = default,
-        bool voiceOwnership = false)
+        CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(requestType);
 
@@ -149,7 +148,7 @@ public sealed class GenesysRequestTypeClassificationAppService(
             try
             {
                 routed = await routingService.ApplyAsync(
-                    ticket, resolution, callerEmployeeId, source, defaultPriority, now, correlationId, cancellationToken, reclassify, voiceAiOwnership: voiceOwnership);
+                    ticket, resolution, callerEmployeeId, source, defaultPriority, now, correlationId, cancellationToken, reclassify);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
             }
             catch (TicketConcurrentlyModifiedException)

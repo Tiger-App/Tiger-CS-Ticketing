@@ -206,8 +206,7 @@ public sealed class GenesysTicketUpdateAppService(
         if (request.RequestType is { IsSupplied: true } requestType)
         {
             classification = await classificationAppService.ClassifyAsync(
-                callerEmployeeId, ticketId, conversationId, requestType, "GenesysUpdate", cancellationToken,
-                voiceOwnership: interaction.ChannelId == WellKnownChannels.Phone);
+                callerEmployeeId, ticketId, conversationId, requestType, "GenesysUpdate", cancellationToken);
 
             var classificationFailure = classification.Outcome switch
             {
@@ -231,9 +230,10 @@ public sealed class GenesysTicketUpdateAppService(
         // Closed is terminal: a late event never classifies, routes, assigns or reopens a Closed ticket (see ClosedTicketGuard).
         var ticketIsClosed = ClosedTicketGuard.IsTerminal(ticket);
 
-        // The new AI-ownership / answering-agent rules apply to PHONE interactions only; every digital channel keeps its previous assignment behaviour
-        // (until its own requirements are finalised). Closed-ticket protection is NOT channel-specific and applies everywhere.
-        var isVoice = interaction.ChannelId == WellKnownChannels.Phone;
+        // The AI-ownership / answering-agent rules apply to EVERY channel (GenesysOwnershipRules): voice and WhatsApp behave the same. Only the meaning of "the
+        // call ended" differs for Phone (the answering agent can still be reported after it), see isVoice below.
+        var ownershipRules = GenesysOwnershipRules.AppliesTo(interaction.ChannelId);
+        var isVoice = GenesysOwnershipRules.IsVoice(interaction.ChannelId);
 
         if (defaultClassification is not null
             && !ticketIsClosed
@@ -371,7 +371,7 @@ public sealed class GenesysTicketUpdateAppService(
             var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
                 callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken,
                 firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, answeringAgentId),
-                connectedAtUtc: request.Routing?.ConnectedAtUtc, allowOwnerTransfer: options.ReassignOnTransfer && !interaction.IsEnded && !isVoice);   // a transfer is only meaningful while the call is live; VOICE never reassigns: later agents are history only
+                connectedAtUtc: request.Routing?.ConnectedAtUtc, allowOwnerTransfer: options.ReassignOnTransfer && !interaction.IsEnded);   // a transfer is only meaningful while the conversation is live; the person who ACTUALLY accepted the interaction owns it - the same for every channel (Genesys:ReassignOnTransfer, default true; set false to keep the first person who answered)
             if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
             {
                 return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);
@@ -540,7 +540,7 @@ public sealed class GenesysTicketUpdateAppService(
         // Round Robin runs, the AI Agent stays the owner (AiEndedUnresolved is a follow-up flag, never an assignment trigger).
         // VOICE: ended alone is never "AI failed" - the answering agent can still arrive after it. The voice no-answer reconciler concludes it once, after the
         // configured window (VoiceNoAnswerReconciler); no sticky follow-up flag, handoff or assignment is created from the end event.
-        // Other channels keep the previous behaviour: an ended, unfinished AI conversation is promoted to human work (Call Center first, shared Round Robin).
+        // Every other channel: the ended, unfinished AI conversation is flagged for follow-up and queued in the Call Center, AI Agent still the owner - never Round Robin.
         if (!isVoice
             && humanSignal == GenesysHumanSignal.None
             && request.Ended is not null
@@ -555,7 +555,7 @@ public sealed class GenesysTicketUpdateAppService(
             humanSignal = GenesysHumanSignal.AiEndedUnresolved;
         }
 
-        if (isVoice && humanSignal == GenesysHumanSignal.HumanTranscriptLine && !options.AssignOnTranscriptEvidence)
+        if (ownershipRules && humanSignal == GenesysHumanSignal.HumanTranscriptLine && !options.AssignOnTranscriptEvidence)
         {
             // The fallback is switched off: a transcript line alone neither moves nor assigns the ticket (the Genesys connect event does).
             humanSignal = GenesysHumanSignal.None;
@@ -678,7 +678,7 @@ public sealed class GenesysTicketUpdateAppService(
 
         // VOICE: a valid AI closure is never refused merely because the ticket sits in (or originated in) the Call Center - voice tickets are created and queued
         // there by design. The checks above (no pending human work, no person owning it, no human handling) are what decide. Other channels keep the rule.
-        if (interaction.ChannelId != WellKnownChannels.Phone
+        if (!GenesysOwnershipRules.IsVoice(interaction.ChannelId)
             && await CustomerInactivityScope.IsCallCenterTicketAsync(ticket, departmentRepository, cancellationToken))
         {
             return (false, "Not closed: Call Center tickets are managed by people and are never closed by the AI.");
@@ -963,7 +963,7 @@ public sealed class GenesysTicketUpdateAppService(
         // VOICE: NO Round Robin and no assignment - the follow-up is flagged and the ticket waits in the queue (or stays in its workflow department) with the AI
         // Agent as owner until a person actually answers it, an authorised person assigns it, or the call ends unanswered and the no-answer window passes.
         // Other channels keep the previous behaviour: Call Center first, then ONE agent by the shared rotation.
-        var voice = interaction.ChannelId == WellKnownChannels.Phone;
+        var voice = GenesysOwnershipRules.AppliesTo(interaction.ChannelId);   // every channel: queue only, no Round Robin
         var routed = autoAssignmentService is not null
             && await autoAssignmentService.RouteExistingTicketToCallCenterAsync(
                 ticket, timeProvider.GetUtcNow().UtcDateTime, correlationId,
