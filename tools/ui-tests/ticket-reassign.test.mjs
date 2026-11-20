@@ -105,3 +105,26 @@ test('same department with no employee is blocked with a message (existing rule)
     assert.match(t.d.querySelector('[data-reassign-emp-hint]').textContent, /already in this department/);
     assert.equal(t.d.querySelector('[data-reassign-retry]').hidden, true);
 });
+
+test('changing department never leaves the previous department\'s employee selected', async () => {
+    const t = await start(async url => ({ ok: true, json: async () => ({ ok: true, employees: String(url).includes('departmentId=7') ? [{ id: 'c1', name: 'Collections Cara' }] : [{ id: 'o1', name: 'Olga' }, { id: 'cs2', name: 'Sam' }] }) }));
+    pick(t, t.dept, 'Collections').click(); await tick();
+    t.emp.value = 'c1'; t.emp.dispatchEvent(new t.w.Event('change', { bubbles: true }));
+    pick(t, t.dept, 'Customer Service').click(); await tick();
+    assert.deepEqual(Array.from(t.emp.options).map(o => o.value), ['', 'o1', 'cs2']);   // no 'c1' left in the list
+    assert.equal(t.emp.value, 'o1');                                                      // back in the current department: the current owner again
+    pick(t, t.dept, 'Collections').click(); await tick();
+    assert.equal(t.emp.value, '');                                                        // another department: nobody preselected
+    assert.ok(!Array.from(t.emp.options).some(o => o.value === 'o1' || o.value === 'cs2'));
+});
+
+test('overlapping loads: a slow response for an earlier department cannot overwrite the latest one', async () => {
+    const resolvers = {};
+    const t = await start(url => new Promise(res => { resolvers[new URL(url, 'http://x').searchParams.get('departmentId')] = () => res({ ok: true, json: async () => ({ ok: true, employees: [{ id: 'emp-' + new URL(url, 'http://x').searchParams.get('departmentId'), name: 'E' }] }) }); }));
+    pick(t, t.dept, 'Collections').click();            // dept 7 starts loading (slow)
+    pick(t, t.dept, 'Customer Service').click();       // dept 2 starts loading before 7 answers
+    resolvers['2'](); await tick();
+    resolvers['7'](); await tick();                    // the stale answer arrives last
+    assert.deepEqual(Array.from(t.emp.options).map(o => o.value), ['', 'emp-2']);
+    assert.equal(t.emp.disabled, false);
+});
