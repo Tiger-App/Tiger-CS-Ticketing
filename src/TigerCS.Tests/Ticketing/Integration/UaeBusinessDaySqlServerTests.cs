@@ -62,6 +62,12 @@ public sealed class UaeBusinessDaySqlServerTests : IDisposable
 
         using var context = CreateContext();
         context.Database.Migrate();
+        // The migrated schema carries no reference rows; the SLA period's priority foreign key needs the one the seeded tickets use.
+        if (!context.Priorities.Any(p => p.PriorityId == (byte)PriorityLevel.Medium))
+        {
+            context.Priorities.Add(new Priority((byte)PriorityLevel.Medium, nameof(PriorityLevel.Medium), (byte)PriorityLevel.Medium));
+        }
+
         var department = new Department("UAE Day Test", "UDT");
         context.Departments.Add(department);
         context.SaveChanges();
