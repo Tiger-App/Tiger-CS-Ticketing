@@ -149,42 +149,48 @@ else
                         var currentDept = Model.ReassignDepartments.FirstOrDefault(d => d.DepartmentId == t.CurrentDepartmentId);
                         <details class="disclosure" id="action-reassign" data-action="reassign" open="@(Model.OpenSection == "reassign" ? "open" : null)">
                             <summary class="btn btn-sm">Assign / Reassign</summary>
-                            <div class="disclosure__panel action-modal" role="dialog" aria-modal="true" aria-label="Assign or reassign ticket">
-                                <div class="action-modal__head"><h2 class="action-modal__title">Assign / Reassign ticket</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
-                                <form method="post" asp-page-handler="Reassign" class="action-form" data-reassign data-employees-url="@Url.Page("TicketDetails", "ReassignEmployees", new { id = t.TicketId })" data-current-department="@t.CurrentDepartmentId" data-current-owner="@t.CurrentOwnerEmployeeId" data-me="@Model.Viewer?.EmployeeId">
+                            <div class="disclosure__panel action-modal action-modal--reassign" role="dialog" aria-modal="true" aria-labelledby="reassign-modal-title">
+                                <div class="action-modal__head"><h2 class="action-modal__title" id="reassign-modal-title">Assign / Reassign ticket</h2><button type="button" class="action-modal__close" data-modal-close aria-label="Close">@TicketIcons.Svg("close")</button></div>
+                                <form method="post" asp-page-handler="Reassign" class="action-form reassign-form" data-reassign data-employees-url="@Url.Page("TicketDetails", "ReassignEmployees", new { id = t.TicketId })" data-current-department="@t.CurrentDepartmentId" data-current-owner="@t.CurrentOwnerEmployeeId" data-me="@Model.Viewer?.EmployeeId">
+                                    <div class="action-modal__body">
                                     <input type="hidden" asp-for="Reassign.RowVersionBase64" />
-                                    <dl class="reassign-current">
-                                        <div><dt>Current department</dt><dd>@(Model.DepartmentName ?? currentDept?.Name ?? "Unknown department")</dd></div>
-                                        <div><dt>Assigned to</dt><dd>@(Model.OwnerName ?? (t.CurrentOwnerEmployeeId is null ? "Not assigned to anyone" : TicketDisplay.UnknownEmployeeLabel))</dd></div>
+                                    @* Compact summary of where the ticket is now. The two labels are what the page's tests (and screen readers) key on. *@
+                                    <dl class="reassign-summary">
+                                        <div class="reassign-summary__item"><dt>@TicketIcons.Svg("building", "ic")Current department</dt><dd>@(Model.DepartmentName ?? currentDept?.Name ?? "Unknown department")</dd></div>
+                                        <div class="reassign-summary__item"><dt>@TicketIcons.Svg("user", "ic")Assigned to</dt><dd class="@(t.CurrentOwnerEmployeeId is null ? "is-none" : null)">@(Model.OwnerName ?? (t.CurrentOwnerEmployeeId is null ? "Not assigned to anyone" : TicketDisplay.UnknownEmployeeLabel))</dd></div>
                                     </dl>
+                                    @* Both pickers are plain <select>s (they post without script). ticket-reassign.js upgrades each into a searchable dropdown. *@
                                     <div class="field-group">
-                                        <label class="field-label" for="reassign-dept-search">Department</label>
-                                        <input type="search" class="form-control reassign-search" id="reassign-dept-search" placeholder="Search departments…" autocomplete="off" data-search-list />
-                                        <select class="field-select reassign-list" size="5" asp-for="Reassign.TargetDepartmentId" aria-label="Department" data-reassign-dept>
+                                        <label class="field-label" for="Reassign_TargetDepartmentId">Department</label>
+                                        <select class="field-select" asp-for="Reassign.TargetDepartmentId" data-reassign-dept data-combo data-combo-placeholder="Search departments…" data-combo-empty="No department matches your search.">
                                             @foreach (var d in Model.ReassignDepartments)
                                             {
-                                                <option value="@d.DepartmentId" selected="@(d.DepartmentId == t.CurrentDepartmentId ? "selected" : null)">@d.Name@(d.DepartmentId == t.CurrentDepartmentId ? " (current)" : "")</option>
+                                                <option value="@d.DepartmentId" data-label="@d.Name" data-current="@(d.DepartmentId == t.CurrentDepartmentId ? "true" : null)" selected="@(d.DepartmentId == t.CurrentDepartmentId ? "selected" : null)">@d.Name@(d.DepartmentId == t.CurrentDepartmentId ? " (current)" : "")</option>
                                             }
                                         </select>
                                     </div>
                                     <partial name="_CollectionsTowerUnit" model="@(new TigerCS.Web.Models.CollectionsTowerUnitFields("reassign", "Reassign", "#Reassign_TargetDepartmentId", Model.CollectionsDepartmentIds, t.TicketId, Optional: true))" />
                                     <div class="field-group">
-                                        <label class="field-label" for="reassign-emp-search">Employee <span class="field-optional">(optional)</span></label>
-                                        <input type="search" class="form-control reassign-search" id="reassign-emp-search" placeholder="Search employees…" autocomplete="off" data-search-list />
-                                        <select class="field-select reassign-list" size="6" asp-for="Reassign.EmployeeId" aria-label="Employee" data-reassign-emp>
-                                            <option value="">— No specific employee (department only) —</option>
+                                        <label class="field-label" for="Reassign_EmployeeId">Employee <span class="field-optional">(optional)</span></label>
+                                        <select class="field-select" asp-for="Reassign.EmployeeId" data-reassign-emp data-combo data-combo-placeholder="Search employees…" data-combo-empty="No employee matches your search.">
+                                            <option value="" data-label="No specific employee" data-note="Assign to the department only">— No specific employee (department only) —</option>
                                             @foreach (var member in Model.ReassignEmployees)
                                             {
-                                                <option value="@member.EmployeeId" selected="@(member.EmployeeId == t.CurrentOwnerEmployeeId ? "selected" : null)">@member.DisplayName@(member.EmployeeId == Model.Viewer?.EmployeeId ? " (me)" : "")@(member.EmployeeId == t.CurrentOwnerEmployeeId ? " — current" : "")</option>
+                                                <option value="@member.EmployeeId" data-label="@member.DisplayName" data-me="@(member.EmployeeId == Model.Viewer?.EmployeeId ? "true" : null)" data-current="@(member.EmployeeId == t.CurrentOwnerEmployeeId ? "true" : null)" selected="@(member.EmployeeId == t.CurrentOwnerEmployeeId ? "selected" : null)">@member.DisplayName@(member.EmployeeId == Model.Viewer?.EmployeeId ? " (me)" : "")@(member.EmployeeId == t.CurrentOwnerEmployeeId ? " — current" : "")</option>
                                             }
                                         </select>
-                                        <span class="field-hint" data-reassign-emp-hint>Active employees of the selected department. Leave on “No specific employee” to hand the ticket to the department only.</span>
+                                        <span class="field-hint" data-reassign-emp-hint role="status" aria-live="polite">Active employees of the selected department. Leave on “No specific employee” to hand the ticket to the department only.</span>
+                                        <button type="button" class="reassign-retry" data-reassign-retry hidden>@TicketIcons.Svg("refresh", "ic")Try again</button>
                                     </div>
                                     <div class="field-group">
                                         <label class="field-label" asp-for="Reassign.Comment">Transfer comment <span class="field-optional">(optional)</span></label>
                                         <textarea class="form-control" asp-for="Reassign.Comment" rows="2" maxlength="500" placeholder="Why the ticket is changing hands"></textarea>
                                     </div>
-                                    <div class="action-form__footer"><button type="submit" class="btn btn-gold btn-sm">Save</button></div>
+                                    </div>
+                                    <div class="action-modal__foot">
+                                        <button type="button" class="btn reassign-btn reassign-btn--cancel" data-modal-close>@TicketIcons.Svg("close", "ic ic--btn")Cancel</button>
+                                        <button type="submit" class="btn reassign-btn reassign-btn--confirm" data-reassign-submit>@TicketIcons.Svg("check", "ic ic--btn")<span class="btn-spinner" aria-hidden="true"></span>Confirm Transfer</button>
+                                    </div>
                                 </form>
                             </div>
                         </details>
