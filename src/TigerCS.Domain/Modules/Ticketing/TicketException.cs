@@ -76,6 +76,17 @@ public sealed class TicketNotEligibleForReopenException(long ticketId, TicketSta
 }
 
 /// <summary>
+/// <b>Closed is terminal (approved, every channel).</b> A Closed ticket is never reopened - not by a person, an approval, an API call, a background job or any
+/// automation. The domain refuses it here so that no caller, present or future, can bypass the application-level policy. A customer who writes again after
+/// closure gets a new linked ticket instead.
+/// </summary>
+public sealed class ClosedTicketIsTerminalException(long ticketId)
+    : TicketException($"Ticket {ticketId} is Closed, and Closed is terminal: it is never reopened. Raise a new linked ticket instead.")
+{
+    public long TicketId { get; } = ticketId;
+}
+
+/// <summary>
 /// The approved Reopen rule covers work that was genuinely completed:
 /// Cancelled, Rejected and Duplicate are terminal dispositions, and a
 /// customer returning on one of those raises a new ticket instead.
