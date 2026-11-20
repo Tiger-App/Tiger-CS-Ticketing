@@ -37,7 +37,7 @@ more than `LookbackHours` ago. It then marks the ticket as needing a person (sti
 | Setting (`VoiceCallReconciliation:`) | Default | Meaning |
 |---|---|---|
 | `Enabled` | `true` | Registered whether or not Hangfire runs. Turn off only to stop automatic assignment of failed-AI voice calls. |
-| `DryRun` | `false` (**Production file: `true`**) | `true` classifies and logs, writes nothing. Production ships observe-only so the new automatic Round Robin for failed voice calls is switched on deliberately after reviewing a day of logs. |
+| `DryRun` | **`true`** (every environment) | `true` classifies and logs, writes nothing. The reconciler ships observe-only: the automatic Round Robin for a failed call is switched on deliberately (`VoiceCallReconciliation__DryRun=false`) after a day of logs has been reviewed. |
 | **`NoAnswerWindowSeconds`** | **`300`** | Time after the end was **received** before "nobody answered" is concluded. Re-read every run — no deployment needed to change it. |
 | `LookbackHours` | `24` | Calls that ended longer ago are never swept up (no backlog assignment by this job). |
 | `IntervalSeconds` | `60` | Run cadence (clamped 15–3600). |

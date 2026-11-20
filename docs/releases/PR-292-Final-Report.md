@@ -13,7 +13,7 @@ History: a review round briefly unified the two lifecycles under one rule set. T
 ## 2. What this review changed on top of the two sessions' work
 * Fixed a defect in `Deploy_TigerCS_PROD_AddInteractionEndReceivedAt.sql` (a dry run failed to compile because the post-commit section referenced the new column statically) and added real-SQL-Server tests for it and for the verification script.
 * The `PreviousDepartmentId` migration test now accepts the later `EndReceivedAtUtc` migration as the only pending one.
-* Production ships `VoiceCallReconciliation:DryRun = true` (observe-only) so the new automatic voice Round Robin is enabled deliberately after reviewing the logs.
+* `VoiceCallReconciliation:DryRun = true` is shipped in **every** environment (observe-only) so the new automatic voice Round Robin is enabled deliberately after reviewing the logs.
 * Repository hygiene / secret guard, Web `/health` version, clean-publish tooling, historical-timestamp scripts, secret-rotation guide (earlier rounds) are preserved.
 
 ## 3. Migrations (apply in this order, before deploying the build)
@@ -34,7 +34,7 @@ Historical timestamp remediation is separate and not part of this order (`Diagno
 | `Genesys:AutoRaiseHandoffOnConversationEnd` | false | Raise a handoff work item from an end event alone. | **false** (it never assigns now, but would create work items) |
 | `Genesys:FutureTimestampToleranceMinutes` | 5 | An event time further in the future than this is impossible (clock skew / local-as-UTC) and is not stored as sent; audited. | **5** |
 | `VoiceCallReconciliation:Enabled` | true | Registers the job (independent of Hangfire). **Voice only.** | **true** |
-| `VoiceCallReconciliation:DryRun` | false (Production file: **true**) | true = classify and log only. When live it deals a failed voice call by Round Robin (and gives a ticket to a person who answered once their id is mapped). | **true for the first day, then false** after reviewing the log |
+| `VoiceCallReconciliation:DryRun` | **true** (shipped in every environment) | true = classify and log only. When live it deals a failed voice call by Round Robin (and gives a ticket to a person who answered once their id is mapped). | **true for the first day, then false** after reviewing the log |
 | `VoiceCallReconciliation:NoAnswerWindowSeconds` | 300 | Seconds after the end was *received* before "nobody answered" is concluded (flag + queue). Re-read every run. | **300** (60 flags sooner but risks flagging a call whose answer event is late) |
 | `VoiceCallReconciliation:LookbackHours` | 24 | Older ended calls are never swept up. | **24** |
 | `VoiceCallReconciliation:IntervalSeconds` / `BatchSize` / `MaxActionsPerRun` | 60 / 100 / 50 | Cadence and write limits. | defaults |

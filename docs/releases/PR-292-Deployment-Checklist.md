@@ -75,7 +75,7 @@ Historical timestamp remediation (script 4 above) is **not part of this deployme
 7c. [ ] Re-run `Verify_…AllMigrations_ReadOnly.sql`: nothing pending, `TicketInteractions.EndReceivedAtUtc` **Present = 1**.
 
 **C3. Configuration (no deployment needed to change later)**
-7d. [ ] `VoiceCallReconciliation` (shipped in `appsettings*.json`; **Production ships `DryRun = true`** = classify and log, write nothing, so the new automatic Round Robin for an unanswered ended **voice** call is switched on deliberately): leave it observe-only for the first day, read the `DRY RUN: would reconcile …` log lines, then set `VoiceCallReconciliation:DryRun=false` (environment variable `VoiceCallReconciliation__DryRun`, no deployment). Window/impact: `docs/Genesys/Voice-Ownership-Rules.md` §3. Digital channels are not affected by this setting.
+7d. [ ] `VoiceCallReconciliation` (shipped in `appsettings*.json`; **every environment ships `DryRun = true`** = classify and log, write nothing, so the new automatic Round Robin for an unanswered ended **voice** call is switched on deliberately): leave it observe-only for the first day, read the `DRY RUN: would reconcile …` log lines, then set `VoiceCallReconciliation:DryRun=false` (environment variable `VoiceCallReconciliation__DryRun`, no deployment). Window/impact: `docs/Genesys/Voice-Ownership-Rules.md` §3. Digital channels are not affected by this setting.
 
 **D. Clean build and IIS deployment**
 8. [ ] On the build machine, from a clean clone checked out at `<APPROVED>`: `.\tools\deploy\Publish-TigerCS.ps1 -Output C:\build\TigerCS` (runs tests, stamps the commit, blocks secrets / Development / UAT settings, writes `MANIFEST.txt`). Alternative: run the *Release package* workflow on `<APPROVED>` and download the artifact.
