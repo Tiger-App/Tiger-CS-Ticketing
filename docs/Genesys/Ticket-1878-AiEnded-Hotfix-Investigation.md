@@ -79,7 +79,9 @@ check; it would still be stored as sent. The durable fix is upstream: Architect 
 ## 2. Verifying the deployed build
 `GET /health` returns `{"status":"healthy","version":"x.y.z+<full git commit>"}` (verified locally: it reports the commit it was built from). Compare with
 `git rev-parse 5bb4a0e` / the merge commit of #288 (`9478ad7`) — `git merge-base --is-ancestor 9478ad7 <deployed commit>`. The repo also contains a committed
-`publish/TigerCS.Api` folder dated **18 Nov 05:32 — before #288 merged (20:49)**; if that folder is what was deployed, #288 is **not** in Production. Database
+`publish/` folder; its binaries are stamped with commit `3e48b2f` (22 Oct), which is **222 commits behind `main` and does not contain #288** (file dates in the folder only
+reflect checkout time and prove nothing). If that folder is what was deployed, #288 is **not** in Production — see "Stale `publish/` folder" in
+`docs/releases/PR-292-Deployment-Checklist.md`. Database
 evidence: `Diagnose_TigerCS_PROD_Ticket1878_GenesysTimelineOwnership_ReadOnly.sql` §0 (`AssignToAiAgent` audit row at creation exists only on a #288 build).
 
 ## 3. Needs Production confirmation
@@ -159,7 +161,7 @@ sandbox, which hides exactly this class of bug). The same true-UTC instant was s
 | Web deserialization → display | `TicketDisplay` treats stored values as UTC and adds +4 **exactly once**. 11:07:11 → 15:07:11. **The single legitimate conversion, applied to an already-wrong stored value.** |
 
 The `AddHours(4)` in the UI is not duplicated anywhere; the second four hours were baked into the stored value. Ticket 1878 therefore ran on **a build without PR #288** (the
-repository's committed `publish/` folder is dated before #288 merged) **and** Genesys wrote UTC with an explicit offset. (Any explicit-offset spelling reproduces it.)
+repository's committed `publish/` folder is a build of `3e48b2f`, which predates #288 — to be confirmed with `GET /health` on Production) **and** Genesys wrote UTC with an explicit offset. (Any explicit-offset spelling reproduces it.)
 The #288 build, run through the identical experiment, is correct — but only because `ToUtc` reverses the host-zone conversion after the fact, i.e. it still *depends on* the
 host zone being the same one the reader used.
 

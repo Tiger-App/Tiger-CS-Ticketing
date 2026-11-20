@@ -218,6 +218,8 @@ app.MapGet("/PendingCustomerInteractions", (HttpRequest request) =>
     return Results.Redirect($"/Tickets{query}", permanent: true);
 });
 
-app.MapGet("/health", () => Results.Ok(new { status = "healthy" })).AllowAnonymous();
+// The version carries the git commit when published with -p:SourceRevisionId (tools/build-release.sh, tools/deploy/Publish-TigerCS.ps1), so a deployed Web can be
+// compared with the deployed Api (GET /health on each) and with tools/verify-deployed-fixes.sh. Anonymous and contains no secrets.
+app.MapGet("/health", () => Results.Ok(new { status = "healthy", version = TigerCS.Web.BuildInfo.Version })).AllowAnonymous();
 
 app.Run();

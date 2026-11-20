@@ -32,3 +32,6 @@ Thumbs.db
 
 # release packages built by tools/build-release.sh
 /artifacts/
+
+# Build output must never be committed: the tracked publish/ folder is a stale build of 3e48b2f (22 Oct, before #288) and contains committed secrets. Publish with tools/deploy/Publish-TigerCS.ps1 / tools/build-release.sh (output outside the repo).
+/publish/
