@@ -21,7 +21,7 @@ All 30 (plus the `DateTime.Now.Date` on the Dashboard) are in `TigerCS.Web` **di
 * **Why it is the same or better:** `ToLocalTime()` used the *web server's* zone (identity on a UTC server, +4 only if the IIS host was UAE-zoned) and returned the value unchanged for `Kind=Unspecified` (what EF materialises). `ToUae` treats every stored value as UTC and converts exactly once, on any host. A test bans any new `ToLocalTime` in Web (`GenesysWireTimestampTests`).
 * **Dashboard date filters, daily/monthly reports, SLA, Excel exports are unaffected:** none of them call `ToLocalTime`. Filters and the dashboard/report day boundaries are computed server-side in the Application layer on UTC (`DashboardAppService` uses `nowUtc.Date`); SLA working-hours use an explicit `TimeZoneInfo` (Asia/Dubai) in the Application layer; the Excel/CSV exports (`CollectionsCampaignReviewWorkbook`, `DispatchAdminReportService`) contain no zone conversion. The 30 sites are labels, tooltips and "today / yesterday" cell text.
 * **Only visible change:** the Dashboard "today" comparison now uses the UAE day (`ToUae(UtcNow).Date`) instead of the server-local day, so a ticket created at 00:30 UAE is "today", also on a UTC server.
-* **Pre-existing, not changed here (flag for a later decision):** dashboard/report *filters* bucket by UTC calendar day, so tickets created 00:00–04:00 UAE appear under the previous UTC date in date-range filters. Changing it alters report numbers, so it is deliberately not part of this hotfix.
+* **Pre-existing, not changed here (flag for a later decision):** dashboard/report *filters* bucket by UTC calendar day, so tickets created 00:00–04:00 UAE appear under the previous UTC date in date-range filters. Changing it alters report numbers, so it is deliberately not part of this hotfix; it is tracked as a separate follow-up task (UAE calendar boundaries for every business-day filter, daily/monthly report, performance/SLA report and export, with UTC storage unchanged).
 
 ## 3. Database scripts (all NOT executed; run in SSMS, one batch each, in this order)
 
@@ -35,35 +35,56 @@ All 30 (plus the `DateTime.Now.Date` on the Dashboard) are in `TigerCS.Web` **di
 
 **Remediation rules.** It never subtracts four hours blindly. A conversation is changed only when two independent server-recorded facts prove it (start later than the ticket's own server-clock creation; end/transcript later than the audit-recorded receipt of the end event; each by more than 5 min and at most 4 h + 5 min) and the corrected values are internally consistent. Single-evidence or mixed conversations are **SUSPECT** and never touched. It changes only `InteractionStartedAtUtc`, `EndedAtUtc`, `SentAtUtc`, `ConnectedAtUtc`. Ticket status, owner, department, closure, resolution, assignments, status history, SLA rows and all existing audit rows are checksum-verified unchanged inside the transaction (it rolls back otherwise); one new append-only `GenesysTimestampCorrected` audit row per corrected ticket records old and new values; a `ROLLBACK STATEMENTS` result set restores the exact old values; re-running finds nothing. SLA is **not** recalculated: affected SLA flags are listed separately for a separate decision. Pilot with `@TicketId = 1878`, set `@OnlyCreatedBeforeUtc` to the go-live moment of the new build. Tested on SQL Server (`GenesysHistoricalTimestampScriptsSqlServerTests`: proven / correct / two suspect conversations, dry run writes nothing, only timestamp columns change, protected state byte-identical, idempotent, pilot scoping, wrong-database abort).
 
-## 4. Stale `publish/` folder — findings
+## 4. Stale `publish/` folder — resolved in this PR
 
-* `publish/` is tracked in git (230 files, 320 MB). Its binaries are stamped with commit **`3e48b2f` (22 Oct 2026)**, which is **222 commits behind `main`** and does **not** contain #288 (nor #292). *(An earlier note in this PR said the folder was "dated 18 Nov 05:32"; that was only the checkout time of the files and is withdrawn.)*
-* If Production was deployed from it, Production runs a pre-#288 build, which is exactly what reproduced the +4h on 1878. Confirm with `GET /health` on the Production API: `version` ends with `+<commit>`; run `tools/verify-deployed-fixes.sh <version>`.
-* **Security:** the committed `publish/TigerCS.Api/appsettings.json` and `appsettings.Development.json` contain non-empty secret settings (an SMTP `Password` and a `ClientSecret`). Treat them as exposed: **rotate** them. Values are intentionally not repeated here. See the `security/remove-committed-*` branches.
-* This PR adds `/publish/` to `.gitignore` (stops new commits). It does **not** delete the 320 MB from the repository (that needs your approval); when approved: `git rm -r --cached publish && git commit -m "Stop tracking build output"` (history purge is a separate decision, see the security branches).
-* **Clean build and deploy (never from the repo's `publish/`):**
-  1. On the build machine, from a clean clone of the merged `main` commit: `.\tools\deploy\Publish-TigerCS.ps1 -Output C:\build\TigerCS` (refuses output inside the repo or a dirty tree; runs the tests; stamps `-p:SourceRevisionId=<commit>`; blocks secrets/Development/UAT settings; writes `MANIFEST.txt` with the commit). Linux/CI equivalent: `tools/build-release.sh`.
-  2. Back up Production (full DB backup + the current IIS site folders), then `.\tools\deploy\Deploy-TigerCS.ps1` with the new stamped folder; roll back with `tools/deploy/Rollback-TigerCS.ps1`.
-  3. Production secrets live only in the server's environment / secret store, never in the package.
+* The tracked `publish/` folder (230 files, 320 MB) was a build of commit **`3e48b2f` (22 Oct 2026)**, **222 commits behind `main`**, without #288 or #292. *(An earlier note said "dated 18 Nov 05:32"; that was only checkout time and is withdrawn.)* If Production was deployed from it, Production runs a pre-#288 build, which is what reproduced the +4h on 1878; confirm with `GET /health` on the Production API (`version` ends with `+<commit>`; `tools/verify-deployed-fixes.sh <version>`).
+* **Removed from the current tree** (`git rm -r publish`); `/publish/` stays in `.gitignore`. **History is not rewritten** (separate approval).
+* **Secrets:** see `docs/releases/PR-292-Secret-Rotation.md` (key `EmailNotifications:Password`; rotation steps).
+* **Guardrails:** `tools/check-repo-hygiene.sh` + `RepositoryHygieneTests` + CI step block tracked binaries, build output and non-empty secret settings.
+* **Artifacts come only from an approved commit:** `Publish-TigerCS.ps1` and `tools/build-release.sh` refuse a dirty tree, run the tests, stamp `-p:SourceRevisionId=<commit>`, write `MANIFEST.txt`; the manual *Release package* workflow builds from the exact commit it runs on and uploads the package.
 
 ## 5. Verifying the deployed version
 
-* API: `GET https://<api>/health` → `{"status":"healthy","version":"1.0.0+<commit>"}`
-* Web: `GET https://<web>/health` → `{"status":"healthy","version":"1.0.0+<commit>"}` (**new in this PR**)
-* `PR292_COMMIT=<final commit> tools/verify-deployed-fixes.sh <api-version> <web-version>` — exit 0 only if every required fix (incl. #288) is in the build **and** Api and Web are the same commit. `unknown` as a version means the package was not built by the release script.
+* API: `GET https://<api>/health` → `{"status":"healthy","version":"1.0.0+<commit>"}`; Web: `GET https://<web>/health` → same shape (new in this PR).
+* `PR292_COMMIT=<approved commit> tools/verify-deployed-fixes.sh <api-version> <web-version>` — exit 0 only if every required fix (incl. #288 and #292) is in the build **and** Api and Web are the same commit. `unknown` means the package was not built by the release script.
 
-## 6. Deployment checklist (in order; each step needs your go-ahead)
+## 6. Ordered deployment checklist (application only; each step waits for your go-ahead; nothing is executed yet)
 
-1. [ ] CI green on the final commit; PR approved and merged by you.
-2. [ ] Full DB backup; copy of the current IIS Api and Web folders.
-3. [ ] Run script 0 (before) and save the output.
-4. [ ] Script 1 with `@DryRun = 1`; read the output; then `@DryRun = 0`.
-5. [ ] Clean publish from the merged commit (section 4); deploy Api then Web.
-6. [ ] `GET /health` on both; `verify-deployed-fixes.sh` passes (same commit).
-7. [ ] Script 0 again: nothing pending, column present.
-8. [ ] Create a test Genesys conversation with `+00:00` timestamps; check start/end/transcript match the Genesys clock (UTC) and show +4h exactly once in the UI.
-9. [ ] Script 2 (ticket 1878) and script 3 (all history); review CONFIRMED vs SUSPECT.
-10. [ ] **Only with your approval:** script 4 pilot (`@TicketId = 1878`, dry run, then real), review, then the rest in batches.
-11. [ ] Rotate the secrets that were committed under `publish/`.
+Historical timestamp remediation (script 4 above) is **not part of this deployment**. It is a separate change with its own approval, run only after the application is verified.
 
-Rollback: DB column is additive (header of script 1 has the `DROP COLUMN`); application via `Rollback-TigerCS.ps1`; timestamp corrections via the generated `ROLLBACK STATEMENTS`.
+**A. Before anything**
+1. [ ] PR #292 approved and merged **by you**; note the merge commit SHA = `<APPROVED>`; CI green on it.
+2. [ ] Full database backup (verify it restores) and a copy of the current IIS Api and Web folders (`Deploy-TigerCS.ps1` also snapshots; keep your own).
+3. [ ] Rotate the committed SMTP secret (`docs/releases/PR-292-Secret-Rotation.md`) and set it as a server-side setting.
+
+**B. Production migration verification**
+4. [ ] SSMS on `TGAESHJDBP02`, database `TigerCS_Ticketing_Prod`: run `Verify_TigerCS_PROD_AllMigrations_ReadOnly.sql`. Expect: `20261119120249_AddAssignmentHistoryPreviousDepartment` listed as **pending**; nothing "unknown"; no other pending. Save the output. (Stop if anything else is pending/unknown.)
+
+**C. `PreviousDepartmentId` migration**
+5. [ ] **Dry run:** `Deploy_TigerCS_PROD_AddAssignmentHistoryPreviousDepartment.sql` exactly as committed (`@DryRun = 1`). Expect: guard passed, "DRY RUN SUCCESS … ROLLED BACK", column not present afterwards.
+6. [ ] **Actual execution (after your approval):** set `@DryRun = 0`, run once as one batch. Expect "COMMITTED", migration recorded, row counts unchanged.
+7. [ ] Re-run `Verify_…AllMigrations_ReadOnly.sql`: nothing pending, `TicketAssignmentHistory.PreviousDepartmentId` **Present = 1**.
+
+**D. Clean build and IIS deployment**
+8. [ ] On the build machine, from a clean clone checked out at `<APPROVED>`: `.\tools\deploy\Publish-TigerCS.ps1 -Output C:\build\TigerCS` (runs tests, stamps the commit, blocks secrets / Development / UAT settings, writes `MANIFEST.txt`). Alternative: run the *Release package* workflow on `<APPROVED>` and download the artifact.
+9. [ ] Confirm `MANIFEST.txt` commit == `<APPROVED>`.
+10. [ ] IIS: `.\tools\deploy\Test-IisReadiness.ps1`, then `.\tools\deploy\Deploy-TigerCS.ps1 -Source C:\build\TigerCS\<stamp>` (Api then Web). Rollback path: `.\tools\deploy\Rollback-TigerCS.ps1` (DB column is additive; the old build ignores it).
+
+**E. Build-version verification**
+11. [ ] `GET <api>/health` and `GET <web>/health`: both `healthy`, both `version` end with `+<APPROVED>`.
+12. [ ] `PR292_COMMIT=<APPROVED> tools/verify-deployed-fixes.sh <api-version> <web-version>` → exit 0 (all PRESENT, same commit).
+
+**F. Production smoke tests** (use a test customer/ticket; record results)
+13. [ ] Login to Web as Manager and as a CS Agent; dashboard and a ticket list load; dates look right.
+14. [ ] Genesys test conversation with `…T..:..:..+00:00` timestamps: stored start/end/transcript equal the Genesys UTC time (check in SQL) and the UI shows them +4h exactly once (UAE).
+15. [ ] AI-handled test ticket: owner = AI Agent, status "AI is handling"; no person assigned automatically; Assignment History shows the AI Agent row.
+16. [ ] Same ticket, AI ends unresolved / asks for a human: flagged "Waiting for human", in the Call Center queue, AI Agent still owner, **no Round Robin assignment**, SLA timers not reset.
+17. [ ] A mapped Call Center agent connects: the ticket is assigned to that agent, history shows AI → employee with previous/new department.
+18. [ ] Closed ticket stays closed after a late Genesys event; a Collections/Legal-routed ticket keeps its department.
+19. [ ] Run `Diagnose_TigerCS_PROD_Ticket1878_GenesysTimelineOwnership_ReadOnly.sql` and `Diagnose_TigerCS_PROD_GenesysHistoricalTimestamps_ReadOnly.sql` (both read-only); give the output to the reviewer.
+20. [ ] Send a test email notification (new SMTP secret) and confirm delivery.
+
+**G. Separate, later, only with explicit approval — historical timestamp remediation**
+21. [ ] Review step 19 output (CONFIRMED vs SUSPECT, SLA REVIEW). Then, only on your written approval: `Remediate_TigerCS_PROD_GenesysHistoricalTimestamps.sql` dry run → pilot `@TicketId = 1878` → remainder in batches, with `@OnlyCreatedBeforeUtc` set to the go-live moment of step 10.
+
+Rollback: DB column additive (`DROP COLUMN` in the script header); application via `Rollback-TigerCS.ps1`; timestamp corrections via the generated `ROLLBACK STATEMENTS`.
