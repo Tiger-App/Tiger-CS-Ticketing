@@ -162,7 +162,7 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
     [InlineData(Roles.CsManager)]
     public async Task ActionsMenu_OffersAssignReassignToEveryTicketUser_WithSearchableDepartmentAndEmployeePickers(string role)
     {
-        var html = Dec(await Page(212, role));
+        var html = Dec(await Page(212, role, dump: "reassign-" + role));
 
         Assert.Contains("id=\"action-reassign\"", html);
         Assert.Contains(">Assign / Reassign</summary>", html);
@@ -176,6 +176,18 @@ public sealed class TicketDetailsRedesignRenderTests : IDisposable
         Assert.Contains("Assigned to", dialog);
         Assert.Contains("name=\"Reassign.Comment\"", dialog);          // optional transfer comment
         Assert.Contains("(optional)", dialog);
+
+        // Redesign: compact modal, searchable dropdowns over the native selects (no exposed list boxes, no separate search inputs), Cancel + Confirm Transfer.
+        Assert.Contains("action-modal--reassign", dialog);
+        Assert.Contains("class=\"reassign-summary\"", dialog);          // compact summary card of the current department / assignee
+        Assert.Equal(2, Count(dialog, "data-combo data-combo-placeholder="));
+        Assert.DoesNotContain(" size=\"", dialog);                       // no <select size=N> list boxes
+        Assert.DoesNotContain("type=\"search\"", dialog);               // the search boxes are built by the dropdown itself
+        Assert.Contains("data-current=\"true\"", dialog);               // the current department is marked, so the dropdown can tag it
+        Assert.Contains("reassign-btn--cancel", dialog);
+        Assert.Contains("Confirm Transfer", dialog);
+        Assert.DoesNotContain(">Save</button>", dialog);
+        Assert.Contains("action-modal__foot", dialog);
     }
 
     [Fact]

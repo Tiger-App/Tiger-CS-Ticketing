@@ -518,7 +518,7 @@
       details.parentElement.querySelectorAll(":scope > details[data-action][open]").forEach(function (other) {
         if (other !== details) other.removeAttribute("open");
       });
-      var first = details.querySelector(".action-modal__body select, .action-modal__body textarea, .action-modal__body input:not([type=hidden]), .action-modal__body button, .action-modal__body a[href]");
+      var first = details.querySelector(".action-modal__body select:not([hidden]), .action-modal__body textarea, .action-modal__body input:not([type=hidden]), .action-modal__body button, .action-modal__body a[href]");
       if (first) first.focus({ preventScroll: true });
     } else if (!document.activeElement || document.activeElement === document.body || details.contains(document.activeElement)) {
       // Back to the control that opened it: the action's row, or the Actions button when the whole menu closed (Escape, outside click).
@@ -529,7 +529,11 @@
   }, true);
 
   document.addEventListener("click", function (event) {
-    var close = event.target instanceof Element ? event.target.closest("[data-modal-close]") : null;
+    var target = event.target instanceof Element ? event.target : null;
+    if (!target) return;
+    // The dimmed backdrop is a pseudo-element of the open action's <details>, so a click on it targets the <details> itself.
+    if (target.matches(".actions-menu__panel > details[data-action][open]")) { target.removeAttribute("open"); return; }
+    var close = target.closest("[data-modal-close]");
     if (!close) return;
     var details = close.closest("details");
     if (details) details.removeAttribute("open");
