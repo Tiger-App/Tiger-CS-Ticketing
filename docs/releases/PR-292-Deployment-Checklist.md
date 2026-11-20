@@ -7,12 +7,15 @@ Nothing in this document has been executed against Production. Every Production 
 | Approved change | Code | Proof (tests; all run in CI, SQL ones on a real SQL Server) |
 |---|---|---|
 | Correct UTC handling, host-independent | `GenesysUtcDateTimeConverter` (7 inbound fields) · `TigerCsDbContext.NormalizeLocalDateTimesToUtc` · `TicketDisplay.ToUae` (single +4h) | `GenesysWireTimestampTests` (every spelling `Z`/`+00:00`/`+04:00`/zoneless/fractions), run on a UTC host **and** with `TZ=Asia/Dubai` (CI step "Genesys timestamps on a UTC+4 host"); `AiEndedHumanFollowUpSqlServerTests.GenesysUtc_InEveryWireSpelling…` |
-| Actual AI ownership | `Tickets.AiAgentOwnerEmployeeId` vs `CurrentOwnerEmployeeId`, `Ticket.TransferToDepartment(keepAiAgentOwner)` | `AiEndedHumanFollowUpSqlServerTests` (full lifecycle), `AgentHandoffTests` |
-| No automatic Round Robin after AI conversation completion | removed from every Genesys path; `AssignStaleAi` report-only; unresolved tickets go to the Call Center queue with the AI Agent still owner | ~30 rewritten test classes, `CallCenterReconciliationSqlServerTests` |
-| Human assignment only on valid acceptance / enabled transcript evidence / authorized manual assignment | `GenesysHumanHandlingEvidence`, `TicketAutoAssignmentService.ApplyAnsweringAgentAsync`, `TicketAssignmentAppService.RecordGenesysManualAssignmentAsync` | `AiEndedHumanFollowUpSqlServerTests`, `AnsweringAgentAssignmentSqlServerTests` |
+| **Scope: the ownership rules are PHONE-only** (second pass, 20 Nov) | gated on the interaction's channel in `GenesysTicketUpdateAppService`, `GenesysAgentHandoffAppService`, `TicketAutoAssignmentService` (`voiceOwnership`), `TicketCreationAppService`, `TicketRequestTypeRoutingService`, `UnassignedTicketClassifier`; digital channels keep their previous behaviour | `DigitalChannelsKeepTheirPreviousBehaviourTests`; the digital tests of the first pass restored from `main` |
+| Actual AI ownership (voice) | `Tickets.AiAgentOwnerEmployeeId` vs `CurrentOwnerEmployeeId`, `Ticket.TransferToDepartment(keepAiAgentOwner)` | `VoiceOwnershipRulesTests`, `AiEndedHumanFollowUpSqlServerTests` (full lifecycle), `AgentHandoffTests` |
+| AI closure: explicit `closedByAi` only; `ended` never closes / flags / assigns; `ended` may precede `closedByAi`; Call Center no longer blocks a voice closure | `GenesysTicketUpdateAppService.ApplyClosedByAiAsync`, `GenesysConversationEndAppService` | `VoiceOwnershipRulesTests`, `ClosedByAiTests` |
+| Round Robin for a failed voice call only after the call ended, nobody answered and a configurable window passed — never at handoff time | `VoiceCallReconciler` + `VoiceCallReconciliationHostedService`, `VoiceCallReconciliation:*`, `TicketInteractions.EndReceivedAtUtc` | `VoiceCallReconcilerTests` (classifier + executor), `VoiceEvidenceSqliteTests`, `VoiceCallReconciliationRegistrationTests` |
+| Human assignment only on valid acceptance (voice: first mapped person who answered; later agents are history, never replace; unmapped agent: queued + flagged, reconciled when the mapping is fixed) | `GenesysHumanHandlingEvidence`, `TicketAutoAssignmentService.ApplyAnsweringAgentAsync`, `TicketAssignmentAppService.RecordGenesysManualAssignmentAsync` | `VoiceOwnershipRulesTests`, `VoiceCallReconcilerTests`, `AiEndedHumanFollowUpSqlServerTests`, `AnsweringAgentAssignmentSqlServerTests` |
+| Voice first response = the real connect time of the first mapped person who answered | `GenesysAnsweringAgentAssignmentService.TryRecordVoiceFirstResponseAsync`, inquiry `connectedAtUtc`, `TeamPerformanceQueryRepository.FirstResponseMetMoments` | `VoiceOwnershipRulesTests`, `VoiceFirstResponseAttributionSqliteTests` |
 | Complete Assignment History | `TicketAssignmentHistoryEntry` (+`PreviousDepartmentId`), queue-routing / department-transfer / follow-up rows | lifecycle test asserts every transition row; `EfModelAndMigrationConsistencyTests` |
 | Correct SLA calculation | queue routing is never a human response and never resets SLA timers; explicit-workflow departments (Collections/Legal) preserved | `SlaAndEscalation` suite, `GenesysTimelineAndOwnershipTimingTests`, lifecycle SQL test |
-| No automatic reopening of closed tickets | Closed is terminal for automated flows | `ClosedTicketIsTerminalTests` |
+| No automatic reopening of closed tickets, **every channel**; the historical owner stays visible | Closed is terminal for automated flows; `GenesysAgentHandoffAppService.RequestAsync` refuses a closed ticket; `TicketQueryAppService` "last responsible" for every closed ticket | `ClosedTicketIsTerminalTests`, `ClosedTicketAllChannelsTests` |
 
 ## 2. Review of the 30 `ToLocalTime()` replacements
 
@@ -27,8 +30,9 @@ All 30 (plus the `DateTime.Now.Date` on the Dashboard) are in `TigerCS.Web` **di
 
 | # | Script | Writes? | Notes |
 |---|---|---|---|
-| 0 | `Verify_TigerCS_PROD_AllMigrations_ReadOnly.sql` | no | before: expect `20261119120249_AddAssignmentHistoryPreviousDepartment` **pending**; after: nothing pending, `PreviousDepartmentId` **Present = 1** |
+| 0 | `Verify_TigerCS_PROD_AllMigrations_ReadOnly.sql` | no | before: expect `20261119120249_AddAssignmentHistoryPreviousDepartment` and `20261120074059_AddInteractionEndReceivedAt` **pending**; after: nothing pending, `PreviousDepartmentId` and `TicketInteractions.EndReceivedAtUtc` **Present = 1** |
 | 1 | `Deploy_TigerCS_PROD_AddAssignmentHistoryPreviousDepartment.sql` | **yes** | one nullable `int` column, no backfill, guarded (server + DB name), `@DryRun = 1` by default (applies, validates, ROLLS BACK). Set `@DryRun = 0` to commit. Rollback in the header. Tested on SQL Server (`AssignmentHistoryPreviousDepartmentScriptSqlServerTests`). |
+| 1b | `Deploy_TigerCS_PROD_AddInteractionEndReceivedAt.sql` | **yes** | one nullable `datetime2` column on `TicketInteractions` (when TigerCS received a call's end — the anchor of the voice no-answer window), no backfill, guarded, `@DryRun = 1` by default. Run **after** 1 and **before** the application. Rollback in the header. EF-generated equivalent: `AddInteractionEndReceivedAt.sql`. |
 | 2 | `Diagnose_TigerCS_PROD_Ticket1878_GenesysTimelineOwnership_ReadOnly.sql` | no | evidence for ticket 1878 |
 | 3 | `Diagnose_TigerCS_PROD_GenesysHistoricalTimestamps_ReadOnly.sql` | no | classifies every Genesys conversation `CONFIRMED_PLUS4H` / `SUSPECT` / OK, shows stored → proposed values, transcript lines, connect times, a separate **SLA REVIEW** result set |
 | 4 | `Remediate_TigerCS_PROD_GenesysHistoricalTimestamps.sql` | **yes, only after your approval** | `@DryRun = 1` default (returns before opening any transaction). See below. |
@@ -58,12 +62,20 @@ Historical timestamp remediation (script 4 above) is **not part of this deployme
 3. [ ] Rotate the committed SMTP secret (`docs/releases/PR-292-Secret-Rotation.md`) and set it as a server-side setting.
 
 **B. Production migration verification**
-4. [ ] SSMS on `TGAESHJDBP02`, database `TigerCS_Ticketing_Prod`: run `Verify_TigerCS_PROD_AllMigrations_ReadOnly.sql`. Expect: `20261119120249_AddAssignmentHistoryPreviousDepartment` listed as **pending**; nothing "unknown"; no other pending. Save the output. (Stop if anything else is pending/unknown.)
+4. [ ] SSMS on `TGAESHJDBP02`, database `TigerCS_Ticketing_Prod`: run `Verify_TigerCS_PROD_AllMigrations_ReadOnly.sql`. Expect: `20261119120249_AddAssignmentHistoryPreviousDepartment` and `20261120074059_AddInteractionEndReceivedAt` listed as **pending**; nothing "unknown"; no other pending. Save the output. (Stop if anything else is pending/unknown.)
 
 **C. `PreviousDepartmentId` migration**
 5. [ ] **Dry run:** `Deploy_TigerCS_PROD_AddAssignmentHistoryPreviousDepartment.sql` exactly as committed (`@DryRun = 1`). Expect: guard passed, "DRY RUN SUCCESS … ROLLED BACK", column not present afterwards.
 6. [ ] **Actual execution (after your approval):** set `@DryRun = 0`, run once as one batch. Expect "COMMITTED", migration recorded, row counts unchanged.
-7. [ ] Re-run `Verify_…AllMigrations_ReadOnly.sql`: nothing pending, `TicketAssignmentHistory.PreviousDepartmentId` **Present = 1**.
+7. [ ] Re-run `Verify_…AllMigrations_ReadOnly.sql`: only `AddInteractionEndReceivedAt` still pending, `TicketAssignmentHistory.PreviousDepartmentId` **Present = 1**.
+
+**C2. `EndReceivedAtUtc` migration (voice reconciliation window anchor)**
+7a. [ ] **Dry run:** `Deploy_TigerCS_PROD_AddInteractionEndReceivedAt.sql` exactly as committed (`@DryRun = 1`). Expect: guard passed, "DRY RUN SUCCESS … ROLLED BACK".
+7b. [ ] **Actual execution (after your approval):** `@DryRun = 0`, one batch. Expect "COMMITTED", row counts unchanged, no backfill.
+7c. [ ] Re-run `Verify_…AllMigrations_ReadOnly.sql`: nothing pending, `TicketInteractions.EndReceivedAtUtc` **Present = 1**.
+
+**C3. Configuration (no deployment needed to change later)**
+7d. [ ] `VoiceCallReconciliation` (shipped in `appsettings*.json`): `Enabled = true`, `DryRun = false`, **`NoAnswerWindowSeconds = 300`**, `LookbackHours = 24`, `IntervalSeconds = 60`. Proposed window and its impact: `docs/Genesys/Voice-Ownership-Rules.md` §3. Optionally start with `DryRun = true` for a day: it logs what it WOULD assign and writes nothing. It is the only thing that deals a failed-AI voice call to an agent — leaving it off means such tickets wait in the Call Center queue with the AI Agent as owner.
 
 **D. Clean build and IIS deployment**
 8. [ ] On the build machine, from a clean clone checked out at `<APPROVED>`: `.\tools\deploy\Publish-TigerCS.ps1 -Output C:\build\TigerCS` (runs tests, stamps the commit, blocks secrets / Development / UAT settings, writes `MANIFEST.txt`). Alternative: run the *Release package* workflow on `<APPROVED>` and download the artifact.
@@ -77,10 +89,11 @@ Historical timestamp remediation (script 4 above) is **not part of this deployme
 **F. Production smoke tests** (use a test customer/ticket; record results)
 13. [ ] Login to Web as Manager and as a CS Agent; dashboard and a ticket list load; dates look right.
 14. [ ] Genesys test conversation with `…T..:..:..+00:00` timestamps: stored start/end/transcript equal the Genesys UTC time (check in SQL) and the UI shows them +4h exactly once (UAE).
-15. [ ] AI-handled test ticket: owner = AI Agent, status "AI is handling"; no person assigned automatically; Assignment History shows the AI Agent row.
-16. [ ] Same ticket, AI ends unresolved / asks for a human: flagged "Waiting for human", in the Call Center queue, AI Agent still owner, **no Round Robin assignment**, SLA timers not reset.
-17. [ ] A mapped Call Center agent connects: the ticket is assigned to that agent, history shows AI → employee with previous/new department.
-18. [ ] Closed ticket stays closed after a late Genesys event; a Collections/Legal-routed ticket keeps its department.
+15. [ ] **Voice**, AI-handled test call: owner = AI Agent, status "AI is handling"; no person assigned automatically; Assignment History shows the AI Agent row.
+16. [ ] Same call, AI asks for a human (handoff): "Waiting for human", in the Call Center queue, AI Agent still owner, **no Round Robin at handoff time**, SLA timers not reset. Hang up with nobody answering: after ≈ 5–6 minutes (window + one interval) the ticket is dealt by Round Robin once (audit `GenesysVoiceNoAnswerConcluded`); an agent who answers inside the window gets it directly instead.
+17. [ ] A mapped Call Center agent answers (`routing.agentId` + `connectedAtUtc`): the ticket is assigned to that agent, history shows AI → employee, `FirstHumanResponseAtUtc` = the connect time; a second agent connecting later does **not** take it (handler only). A call answered by an **unmapped** agent id: queued + flagged, not Round Robin; map the id and the next run assigns it.
+17a. [ ] **Digital** (WhatsApp / web chat) test conversation: behaviour unchanged from before this PR (Call Center first, one Round Robin agent).
+18. [ ] Closed ticket stays closed after a late Genesys event (any channel) and still names its last responsible; a Collections/Legal-routed ticket keeps its department.
 19. [ ] Run `Diagnose_TigerCS_PROD_Ticket1878_GenesysTimelineOwnership_ReadOnly.sql` and `Diagnose_TigerCS_PROD_GenesysHistoricalTimestamps_ReadOnly.sql` (both read-only); give the output to the reviewer.
 20. [ ] Send a test email notification (new SMTP secret) and confirm delivery.
 
