@@ -121,7 +121,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         // 1. The AI creates the ticket: owned by the AI Agent, in its department, nobody assigned.
         var create = await w.Genesys.PostAsync("/api/genesys/tickets", Json(new
         {
-            conversationId = conversation, channel = "LiveChat", customerPhone = "+971500000011", departmentId = w.CustomerService,
+            conversationId = conversation, channel = "Phone", customerPhone = "+971500000011", departmentId = w.CustomerService,
             startedAtUtc = zonelessFuture
         }));
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
@@ -145,11 +145,13 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
 
         Assert.Equal("Ai", (await InteractionAsync(w, ticketId)).HandlingState);
 
-        // 2. The AI conversation ENDS unresolved: marked as requiring follow-up and queued in the Call Center - but nobody is assigned, nothing round-robins,
+        // 2. VOICE (approved voice rules): the AI asks for a person and the call ends. (A call's end ALONE concludes nothing - the answering agent can still be reported - see
+        //    VoiceCallReconcilerTests; the explicit request is what flags it.) Marked as requiring follow-up and queued in the Call Center - nobody is assigned, nothing round-robins,
         //    and the AI Agent stays the owner. (Ticket 1878: this exact event dealt the ticket to an agent one second later.)
         var end = await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(new
         {
             conversationId = conversation,
+            humanFollowUpRequired = true,
             ended = new
             {
                 endedAtUtc = Z(DateTime.UtcNow), endReason = "CustomerDisconnect",
@@ -244,7 +246,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
             Assert.Equal(1, await db.TicketInteractions.AsNoTracking().CountAsync(i => i.GenesysConversationId == conversation));   // no duplicate ticket
             Assert.Equal(1, await db.Tickets.AsNoTracking().CountAsync(t => t.TicketId == ticketId));
             Assert.Single(await db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId && a.IsCurrent).ToListAsync());
-            Assert.Null(ticket.FirstHumanResponseAtUtc);                                               // accepting is not responding
+            Assert.NotNull(ticket.FirstHumanResponseAtUtc);                                            // VOICE: the first response is the real connect time of the person who answered (queue routing and the AI never counted)
             Assert.Equal(answering, (await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).HandledByUserId);
 
             var history = await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).OrderBy(h => h.TicketAssignmentHistoryEntryId).ToListAsync();
@@ -328,12 +330,12 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
             Assert.DoesNotContain(await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == directId).ToListAsync(), h => h.Source == TicketAssignmentSource.GenesysAiAgent);
         }
 
-        // Explicit workflow routing (the department differs from the originating one): a human follow-up is FLAGGED where the ticket already is.
+        // VOICE (approved voice rules) with explicit workflow routing (the department differs from the originating one): a human follow-up is FLAGGED where the ticket already is.
         var other = await _factory!.CreateDepartmentAsync("Legal", "LEG");
         var conversation = $"legal-{Guid.NewGuid():N}"[..20];
         var created = await w.Genesys.PostAsync("/api/genesys/tickets", Json(new
         {
-            conversationId = conversation, channel = "LiveChat", customerPhone = "+971500000013", departmentId = w.CustomerService
+            conversationId = conversation, channel = "Phone", customerPhone = "+971500000013", departmentId = w.CustomerService
         }));
         var legalTicket = (await created.Content.ReadFromJsonAsync<GenesysAcceptedDto>())!.TicketId;
         using (var db = Db())

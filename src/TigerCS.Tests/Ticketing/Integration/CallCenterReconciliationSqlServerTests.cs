@@ -136,6 +136,11 @@ public sealed class CallCenterReconciliationSqlServerTests : IDisposable
         {
             var i = Interaction(t); i.MarkRequiresHumanFollowUp(); db.TicketInteractions.Add(i);
         });
+        // The same need on a VOICE call (approved voice rules): queued only, nobody chosen. A digital conversation keeps the behaviour from main (Round Robin).
+        var flaggedCall = AddTicket(seed.AccountingId, after: (db, t) =>
+        {
+            var i = Interaction(t, WellKnownChannels.Phone); i.MarkRequiresHumanFollowUp(); db.TicketInteractions.Add(i);
+        });
         var activeAi = AddTicket(seed.AccountingId, after: (db, t) => db.TicketInteractions.Add(Interaction(t)));
         var endedAi = AddTicket(seed.AccountingId, after: (db, t) => { var i = Interaction(t); i.End(Now.AddMinutes(-20), "done"); db.TicketInteractions.Add(i); });
         var closed = AddTicket(seed.AccountingId, t => ClaimTestData.MakeClosedUnowned(t, seed.Worker));
@@ -145,12 +150,14 @@ public sealed class CallCenterReconciliationSqlServerTests : IDisposable
         var before = SnapshotAssignments(preOwned.Append(ownedElsewhere));
 
         var eligible = await ListEligibleIdsAsync();
-        Assert.Equal([manualStuck, flaggedStuck], eligible.Order().ToArray());
+        Assert.Equal([manualStuck, flaggedStuck, flaggedCall], eligible.Order().ToArray());
 
         // A ticket entered by hand (no Genesys conversation) is dealt by the Call Center rotation exactly as before...
         Assert.Equal(ReconcileOutcome.AssignedRoundRobin, (await ReconcileAsync(manualStuck)).Outcome);
-        // ...a Genesys-handled ticket flagged for a person is only QUEUED in the Call Center: nobody is chosen for it.
-        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, (await ReconcileAsync(flaggedStuck)).Outcome);
+        // ...a DIGITAL Genesys ticket flagged for a person keeps the behaviour from main (Call Center first, then Round Robin)...
+        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, (await ReconcileAsync(flaggedStuck)).Outcome);
+        // ...while a VOICE call flagged for a person is only QUEUED in the Call Center: nobody is chosen for it.
+        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, (await ReconcileAsync(flaggedCall)).Outcome);
 
         using var read = CreateContext();
         var manual = read.Tickets.AsNoTracking().Single(x => x.TicketId == manualStuck);
@@ -159,10 +166,14 @@ public sealed class CallCenterReconciliationSqlServerTests : IDisposable
         Assert.NotEqual(seed.DepartmentEmployee, manual.CurrentOwnerEmployeeId);              // restricted to CS Agents
         Assert.Equal(1, read.TicketAssignments.Count(a => a.TicketId == manualStuck && a.IsCurrent));
 
-        var flagged = read.Tickets.AsNoTracking().Single(x => x.TicketId == flaggedStuck);
-        Assert.Equal(seed.CallCenterId, flagged.CurrentDepartmentId);                          // queue routing
-        Assert.Null(flagged.CurrentOwnerEmployeeId);                                           // no Round Robin for a Genesys ticket
-        Assert.Equal(0, read.TicketAssignments.Count(a => a.TicketId == flaggedStuck));
+        var digital = read.Tickets.AsNoTracking().Single(x => x.TicketId == flaggedStuck);
+        Assert.Equal(seed.CallCenterId, digital.CurrentDepartmentId);
+        Assert.Contains(digital.CurrentOwnerEmployeeId!.Value, seed.CsAgents);                  // digital: dealt by the Call Center rotation, as on main
+
+        var call = read.Tickets.AsNoTracking().Single(x => x.TicketId == flaggedCall);
+        Assert.Equal(seed.CallCenterId, call.CurrentDepartmentId);                              // queue routing
+        Assert.Null(call.CurrentOwnerEmployeeId);                                               // no Round Robin for a voice call
+        Assert.Equal(0, read.TicketAssignments.Count(a => a.TicketId == flaggedCall));
 
         Assert.Equal(before, SnapshotAssignments(preOwned.Append(ownedElsewhere)));          // owners, departments and assignment rows byte-for-byte unchanged
         foreach (var id in new[] { activeAi, endedAi, closed, transferredOut })
