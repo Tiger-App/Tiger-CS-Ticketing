@@ -238,10 +238,11 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
     [Fact]
     public async Task DateRange_BoundsTheBreachesIdenticallyOnTheReportAndTheDetails()
     {
-        var day = new DateTime(2026, 9, 1, 0, 0, 0, DateTimeKind.Utc);
+        // 00:00 UAE on Sep 1 is 20:00Z on Aug 31: the period is UAE calendar days.
+        var day = new DateTime(2026, 8, 31, 20, 0, 0, DateTimeKind.Utc);
         using (var context = _db.CreateContext())
         {
-            // Recorded exactly at the start of Sep 1 (inclusive), the last second of Sep 3 (inclusive), and the first instant of Sep 4 (exclusive).
+            // Recorded exactly at the start of Sep 1 UAE (inclusive), the last second of Sep 3 (inclusive), and the first instant of Sep 4 (exclusive).
             foreach (var (name, at) in new[] { ("start", day), ("end", day.AddDays(3).AddSeconds(-1)), ("after", day.AddDays(3)), ("before", day.AddSeconds(-1)) })
             {
                 var ticket = NewTicket(context, _aminaId, day.AddDays(-20), day.AddDays(-19));
@@ -251,8 +252,8 @@ public sealed class TeamPerformanceSlaDetailsTests : IDisposable
             }
         }
 
-        var from = DateOnly.FromDateTime(day);
-        var to = DateOnly.FromDateTime(day.AddDays(2));
+        var from = new DateOnly(2026, 9, 1);
+        var to = new DateOnly(2026, 9, 3);
         var report = await ReportAsync(new TeamPerformanceRequestDto(DateFrom: from, DateTo: to));
         var details = await DetailsAsync(_aminaId, r => r with { DateFrom = from, DateTo = to });
 

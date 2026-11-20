@@ -25,7 +25,7 @@ public sealed class TeamPerformanceReportTests : IDisposable
 {
     private static readonly DateTime Now = DashboardSqliteFixture.Now;
 
-    /// <summary>The default period the service resolves at <see cref="Now"/>: the last 30 UTC days, today included.</summary>
+    /// <summary>The default period the service resolves at <see cref="Now"/>: the last 30 UAE days, today included (Now is 16:00 UAE, the same date as in UTC).</summary>
     private static readonly DateTime PeriodStart = Now.Date.AddDays(-29);
 
     private readonly DashboardSqliteFixture _db = new();
@@ -343,6 +343,48 @@ public sealed class TeamPerformanceReportTests : IDisposable
         Assert.Equal(4, Row(report, _aminaId).CurrentlyAssigned);
         Assert.Equal(1, Row(report, _bilalId).CurrentlyAssigned);
         Assert.Equal(5, report.Totals.CurrentlyAssigned);
+    }
+
+    [Fact]
+    public async Task Period_IsMadeOfUaeCalendarDays_SoWorkAt0030And0359UaeCountsOnThatUaeDay()
+    {
+        var day = new DateOnly(2026, 9, 3);
+        static DateTime Uae(DateOnly d, int h, int m, int sec = 0) => DateTime.SpecifyKind(d.ToDateTime(new TimeOnly(h, m, sec)).AddHours(-4), DateTimeKind.Utc);
+
+        using (var context = _db.CreateContext())
+        {
+            // Amina notes one ticket at each instant: the last second of the 2nd UAE (outside), then 00:00, 00:30, 03:59 and 23:30 UAE on the 3rd
+            // (inside), then 00:00 UAE on the 4th (outside). The old UTC-day period put 00:00-03:59 UAE on the 2nd.
+            foreach (var at in new[] { Uae(day.AddDays(-1), 23, 59, 59), Uae(day, 0, 0), Uae(day, 0, 30), Uae(day, 3, 59), Uae(day, 23, 30), Uae(day.AddDays(1), 0, 0) })
+            {
+                var ticket = _db.AddTicket(context, _db.CustomerServiceId, createdAtUtc: at.AddDays(-5));
+                context.TicketNotes.Add(new TicketNote(ticket.TicketId, "Called the customer.", _aminaId, at));
+            }
+
+            context.SaveChanges();
+        }
+
+        var report = await ReportAsync(new TeamPerformanceRequestDto(day, day));
+
+        Assert.Equal(4, Row(report, _aminaId).TicketsWorked);
+        Assert.Equal(day, report.Filters.DateFrom);
+        Assert.Equal(day, report.Filters.DateTo);
+        Assert.Equal(Uae(day, 0, 0), TeamPerformanceAppService.RangeStartUtc(day));
+        Assert.Equal(Uae(day.AddDays(1), 0, 0), TeamPerformanceAppService.RangeEndUtc(day));
+    }
+
+    [Fact]
+    public async Task DefaultPeriod_AtHalfPastMidnightUae_EndsOnTheNewUaeDay()
+    {
+        // 20:30Z is 00:30 UAE on the next calendar day: "today" for a manager is already that UAE day.
+        var halfPastMidnightUae = new DateTime(2026, 9, 9, 20, 30, 0, DateTimeKind.Utc);
+        using var context = _db.CreateContext();
+        var service = new TeamPerformanceAppService(new TeamPerformanceQueryRepository(context), new DashboardSqliteFixture.FixedTimeProvider(halfPastMidnightUae));
+
+        var report = await service.GetReportAsync(new TeamPerformanceRequestDto());
+
+        Assert.Equal(new DateOnly(2026, 9, 10), report.Filters.DateTo);
+        Assert.Equal(new DateOnly(2026, 8, 12), report.Filters.DateFrom);
     }
 
     [Fact]

@@ -17,18 +17,13 @@ public static class TicketDisplay
     /// (never relabelled - relabelling a local wall-clock as UTC is how an extra four hours appear); <c>Unspecified</c> - what EF Core and the Api's JSON hand over for the
     /// <c>…Utc</c> columns - is UTC by this system's convention.
     /// </summary>
-    public static DateTime AsUtc(DateTime value) => value.Kind switch
-    {
-        DateTimeKind.Utc => value,
-        DateTimeKind.Local => value.ToUniversalTime(),
-        _ => DateTime.SpecifyKind(value, DateTimeKind.Utc)
-    };
+    public static DateTime AsUtc(DateTime value) => TigerCS.Domain.Common.UaeCalendar.AsUtc(value);
 
     /// <summary>
-    /// <b>The one UTC-to-Asia/Dubai conversion of the UI.</b> Asia/Dubai is UTC+4 with no daylight saving, so the offset is fixed and the server's own time zone is never
-    /// consulted (<c>ToLocalTime()</c> is - it gives UAE time on the UAE host and UTC on a UTC host). Returns the UAE wall-clock time, for formatting only.
+    /// <b>The one UTC-to-Asia/Dubai conversion of the UI</b> — a thin delegate to <see cref="TigerCS.Domain.Common.UaeCalendar.ToUae"/>, the single implementation shared with the
+    /// business-day filters. The server's own time zone is never consulted (<c>ToLocalTime()</c> is). Returns the UAE wall-clock time, for formatting only.
     /// </summary>
-    public static DateTime ToUae(DateTime utc) => AsUtc(utc).AddHours(4);
+    public static DateTime ToUae(DateTime utc) => TigerCS.Domain.Common.UaeCalendar.ToUae(utc);
 
     /// <summary>A UTC instant as UAE time (UTC+4, no daylight saving): "22 Oct 2026 21:40 (UAE)".</summary>
     public static string UaeTime(DateTime utc) =>

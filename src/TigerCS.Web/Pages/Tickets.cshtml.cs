@@ -87,7 +87,7 @@ public sealed class TicketsModel(
     /// <summary>One Dashboard closure KPI (Reviewed, NotReviewed, ClosedByAi, ClosedByAgent) — passed straight to the queue endpoint's <c>closureCategory</c> filter.</summary>
     public string? ClosureCategory { get; set; }
 
-    /// <summary>The latest-closure date range of the Dashboard closure KPIs (UTC calendar days, inclusive).</summary>
+    /// <summary>The latest-closure date range of the Dashboard closure KPIs (UAE calendar days, inclusive).</summary>
     public DateOnly? ClosedFrom { get; set; }
     public DateOnly? ClosedTo { get; set; }
 

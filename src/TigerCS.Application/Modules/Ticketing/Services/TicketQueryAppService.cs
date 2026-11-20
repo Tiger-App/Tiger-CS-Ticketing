@@ -5,6 +5,7 @@ using TigerCS.Application.Modules.Notifications;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.WorkflowConfiguration.Abstractions;
+using TigerCS.Domain.Common;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
@@ -110,14 +111,14 @@ public sealed class TicketQueryAppService(
             DueToday: request.DueToday == true,
             BacklogAge: ParseEnum<BacklogAgeBucket>(request.BacklogAge),
             PendingApprovalFor: approverScope,
-            // Calendar days are UTC days — the dashboard's existing "today" convention.
-            CreatedFromUtc: request.CreatedFrom?.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-            CreatedToUtc: request.CreatedTo?.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            // Created/Closed dates are UAE calendar days (Asia/Dubai); the SQL range is the matching half-open UTC interval.
+            CreatedFromUtc: UaeCalendar.DayStartUtcOrNull(request.CreatedFrom),
+            CreatedToUtc: UaeCalendar.DayEndUtcOrNull(request.CreatedTo),
             NowUtc: timeProvider.GetUtcNow().UtcDateTime,
             Unclassified: request.Unclassified == true,
             ClosureCategory: ParseEnum<TicketClosureCategory>(request.ClosureCategory),
-            ClosedFromUtc: request.ClosedFrom?.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-            ClosedToUtc: request.ClosedTo?.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            ClosedFromUtc: UaeCalendar.DayStartUtcOrNull(request.ClosedFrom),
+            ClosedToUtc: UaeCalendar.DayEndUtcOrNull(request.ClosedTo),
             ReviewsAreTest: notificationMode?.IsTest == true,
             Escalated: request.Escalated == true,
             AgentScopeEmployeeId: agentScope,

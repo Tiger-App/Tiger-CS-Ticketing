@@ -199,7 +199,7 @@ public sealed class OneClickApprovalTests
         Assert.Contains("Success", message.Subject);
         Assert.Contains(CampaignReminderTypes.StageName(CampaignReminderType.CurrentMonth), message.Body);
         Assert.Contains($"Approved by: {h.Manager.EmployeeId:D}", message.Body);
-        Assert.Contains("Approved at: 2026-10-14 08:00 UTC", message.Body);
+        Assert.Contains("Approved at: 2026-10-14 12:00 UAE (Asia/Dubai)", message.Body);
         Assert.Contains("Approved customers: 2", message.Body);
         Assert.Contains("AED 203.00", message.Body);
         Assert.Contains("Uploaded to Genesys: 2", message.Body);

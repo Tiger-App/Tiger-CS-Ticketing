@@ -162,7 +162,7 @@ public sealed class GenesysExportService(
         if (repeat.Notice is not null) notices.Add(repeat.Notice);
         // The labels travel in the file name (the CSV itself must stay the six-column template for the import), so an unverified file is never mistaken for a verified one.
         var labels = (schema.Verified ? "" : $" ({NotVerifiedLabel})") + (data.Verified ? "" : $" ({UnverifiedDataLabel})");
-        var fileName = $"genesys-{type}-to-{destination}-{now:yyyyMMdd-HHmm}{labels}.csv";
+        var fileName = $"genesys-{type}-to-{destination}-{TigerCS.Domain.Common.UaeCalendar.ToUae(now):yyyyMMdd-HHmm}{labels}.csv";
         return CollectionsResult<GenesysExportDto>.Ok(new(fileName, csv, payloads.Count, CampaignReminderTypes.StageName(type), listLabel, listId, total, currency,
             (manualExport ? GenesysContactTemplate.ManualColumns : GenesysContactTemplate.Columns.Concat(schema.Columns.Where(c => !GenesysContactTemplate.Columns.Contains(c, StringComparer.Ordinal)))).ToList(), schema.Verified, notices, hash,
             repeat.Customers, repeat.Customers > 0 ? repeat.LastUtc : null, units.Count,

@@ -2,6 +2,7 @@ using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.Notifications;
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
+using TigerCS.Domain.Common;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
@@ -33,7 +34,7 @@ public sealed class DashboardAppService(
     CustomerNotificationModePolicy? notificationMode = null,
     CustomerDirectoryAppService? customerDirectoryAppService = null)
 {
-    /// <summary>The default volume period when no date range is requested: the last 30 UTC calendar days, today included.</summary>
+    /// <summary>The default volume period when no date range is requested: the last 30 UAE calendar days, today included.</summary>
     public const int DefaultPeriodDays = 30;
 
     /// <summary>The Recent/Critical list stays a short, scannable queue — it links to the full ticket queue for everything else.</summary>
@@ -70,10 +71,8 @@ public sealed class DashboardAppService(
                 visibleDepartmentIds,
                 callerEmployeeId,
                 nowUtc,
-                // "Today" is the UTC calendar day — a deliberate, documented
-                // simplification until a business-timezone day boundary is an
-                // approved requirement.
-                nowUtc.Date,
+                // "Today" is the UAE calendar day (Asia/Dubai): this is the UTC instant at which it began (20:00Z the evening before).
+                UaeCalendar.TodayRangeUtc(nowUtc).StartUtc,
                 AtRiskWindow,
                 AttentionLimit,
                 agentScope,
@@ -121,8 +120,10 @@ public sealed class DashboardAppService(
         var scope = agentScope is null ? ResolveScope(visibleDepartmentIds, request.DepartmentId) : visibleDepartmentIds;
 
         var nowUtc = timeProvider.GetUtcNow().UtcDateTime;
-        var today = DateOnly.FromDateTime(nowUtc);
+        var today = UaeCalendar.Today(nowUtc);
         var (dateFrom, dateTo) = ResolvePeriod(request.DateFrom, request.DateTo, today);
+        // The requested dates are UAE calendar days; the SQL predicates compare the UTC column against these UTC instants.
+        var (rangeStartUtc, rangeEndUtc) = UaeCalendar.DayRangeUtc(dateFrom, dateTo);
         var ticketStatus = ParseStatus(request.TicketStatus);
 
         var query = new DashboardOverviewQuery(
@@ -134,12 +135,11 @@ public sealed class DashboardAppService(
             request.RequestTypeId,
             ticketStatus,
             request.PriorityId,
-            dateFrom.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-            dateTo.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+            rangeStartUtc,
+            rangeEndUtc,
             nowUtc,
-            // "Today" is the UTC calendar day — the existing dashboard
-            // convention; no separate timezone strategy is introduced here.
-            nowUtc.Date,
+            // "Today" is the UAE calendar day: the UTC instant at which it began.
+            UaeCalendar.TodayRangeUtc(nowUtc).StartUtc,
             AtRiskWindow,
             RecentLimit,
             ReviewsAreTest: notificationMode?.IsTest == true,
@@ -237,7 +237,7 @@ public sealed class DashboardAppService(
             return null;
         }
 
-        var (dateFrom, dateTo) = ResolvePeriod(request.DateFrom, request.DateTo, DateOnly.FromDateTime(timeProvider.GetUtcNow().UtcDateTime));
+        var (dateFrom, dateTo) = ResolvePeriod(request.DateFrom, request.DateTo, UaeCalendar.Today(timeProvider));
         var ticketStatus = ParseStatus(request.TicketStatus);
 
         var counts = await customerDirectoryAppService.CountByLocationAsync(

@@ -4,12 +4,12 @@ namespace TigerCS.Application.Modules.Reporting.Dto;
 
 /// <summary>
 /// The Team Performance report's filters, bound from the query string.
-/// Every filter is optional. Dates are UTC calendar days (the same "UTC
-/// day" convention the Dashboard uses) and default to the last 30 days
+/// Every filter is optional. Dates are UAE calendar days (the same
+/// UAE-day convention the Dashboard uses) and default to the last 30 days
 /// when both are omitted.
 /// </summary>
-/// <param name="DateFrom">First UTC calendar day of the period (inclusive).</param>
-/// <param name="DateTo">Last UTC calendar day of the period (inclusive).</param>
+/// <param name="DateFrom">First UAE calendar day of the period (inclusive).</param>
+/// <param name="DateTo">Last UAE calendar day of the period (inclusive).</param>
 /// <param name="EmployeeId">Narrow to one active employee.</param>
 /// <param name="Role">Narrow to employees holding this Identity role (case-insensitive; an unknown role is ignored).</param>
 /// <param name="DepartmentId">Narrow to employees who are members of this department.</param>
@@ -120,13 +120,13 @@ public enum TeamPerformanceMetric
 
 /// <summary>
 /// The records behind one count on the report, for one employee. The
-/// period is interpreted exactly as on the report (UTC days, inclusive,
+/// period is interpreted exactly as on the report (UAE days, inclusive,
 /// defaulted the same way), so the list always matches the number.
 /// </summary>
 /// <param name="EmployeeId">The employee whose count is being opened.</param>
 /// <param name="Metric">One of CurrentlyAssigned, TicketsWorked, CompletedFollowUps, SlaBreaches.</param>
-/// <param name="DateFrom">First UTC calendar day of the period (inclusive); ignored for CurrentlyAssigned.</param>
-/// <param name="DateTo">Last UTC calendar day of the period (inclusive); ignored for CurrentlyAssigned.</param>
+/// <param name="DateFrom">First UAE calendar day of the period (inclusive); ignored for CurrentlyAssigned.</param>
+/// <param name="DateTo">Last UAE calendar day of the period (inclusive); ignored for CurrentlyAssigned.</param>
 public sealed record TeamPerformanceRecordsRequestDto(
     Guid EmployeeId,
     string Metric,
@@ -242,8 +242,8 @@ public static class TeamPerformanceSlaSortKeys
 /// report's count uses, so the two always agree.
 /// </summary>
 /// <param name="EmployeeId">The employee whose SLA evaluations are listed.</param>
-/// <param name="DateFrom">First UTC calendar day of the period (inclusive); defaults like the report.</param>
-/// <param name="DateTo">Last UTC calendar day of the period (inclusive).</param>
+/// <param name="DateFrom">First UAE calendar day of the period (inclusive); defaults like the report.</param>
+/// <param name="DateTo">Last UAE calendar day of the period (inclusive).</param>
 /// <param name="Role">The report's Role filter, if applied — the employee must satisfy it.</param>
 /// <param name="DepartmentId">The report's Department filter, if applied — the employee must satisfy it.</param>
 /// <param name="Status">Narrow the list to <c>Met</c>, <c>Breached</c> or <c>Pending</c>; omitted = all. The summary always covers every status.</param>

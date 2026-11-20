@@ -31,6 +31,9 @@ public static class TicketIcons
         ["external"] = "<path d=\"M13.5 4H20v6.5M20 4l-8.5 8.5M18 14v4.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 4 18.5v-11A1.5 1.5 0 0 1 5.5 6H10\"/>",
         ["info"] = "<circle cx=\"12\" cy=\"12\" r=\"9\"/><path d=\"M12 11v5.5M12 7.6h.01\" stroke-width=\"2\"/>",
         ["search"] = "<circle cx=\"11\" cy=\"11\" r=\"7\"/><path d=\"m21 21-4.35-4.35\"/>",
+        ["check"] = "<path d=\"m5 12.5 4.5 4.5L19 7.5\"/>",
+        ["alert"] = "<path d=\"M12 4 3 19.5h18L12 4Z\"/><path d=\"M12 10v4.5M12 17.2h.01\" stroke-width=\"2\"/>",
+        ["refresh"] = "<path d=\"M20 11a8 8 0 0 0-14.3-4.5L4 8.5M4 4v4.5h4.5M4 13a8 8 0 0 0 14.3 4.5l1.7-2M20 20v-4.5h-4.5\"/>",
         ["close"] = "<path d=\"m6 6 12 12M18 6 6 18\"/>",
     };
 

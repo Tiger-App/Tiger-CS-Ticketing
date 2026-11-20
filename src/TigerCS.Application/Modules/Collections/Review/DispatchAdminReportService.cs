@@ -158,7 +158,7 @@ public sealed class DispatchAdminReportService(
         if (uploaded == 0) verdict = failed > 0 || unknown > 0 ? "Failure" : "Nothing uploaded";
         var totals = string.Join(" · ", ToTotals(items.Where(i => i.Status != DispatchItemStatus.Excluded && i.Status != DispatchItemStatus.Released), i => i.Amount));
         var uploadedTotals = string.Join(" · ", ToTotals(items.Where(i => i.Status == DispatchItemStatus.UploadedToGenesys), i => i.Amount));
-        var approvedAt = d.InitiatedAtUtc.ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UTC";
+        var approvedAt = TigerCS.Domain.Common.UaeCalendar.ToUae(d.InitiatedAtUtc).ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) + " UAE (Asia/Dubai)";
         var subject = $"Collections campaign {verdict}: {campaign} ({uploaded} of {d.ApprovedCount} uploaded to Genesys)";
 
         var lines = new List<(string Label, string Value)>
