@@ -390,6 +390,36 @@ public class CustomerHistoryAppServiceTests
     }
 
     [Fact]
+    public async Task History_StampsNoReopenEligibility_Ever_ClosedIsTerminal_RegardlessOfTheClosureMomentAndTheWindow()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new Notifications.Fakes.FakeTimeProvider(now));
+
+        var recentlyClosed = await SeedCrmBuyerTicketAsync(f.Tickets, 2, 493575, "2508", now.AddDays(-10));
+        await CloseAsync(f, recentlyClosed, now.AddDays(-3), now.AddDays(-2), "Fixed.");
+
+        var longClosed = await SeedCrmBuyerTicketAsync(f.Tickets, 2, 493575, "2608", now.AddDays(-40));
+        await CloseAsync(f, longClosed, now.AddDays(-31), now.AddDays(-30), "Fixed long ago.");
+
+        // Resolved but never closed: not reopenable, however recent the resolution.
+        var resolvedOnly = await SeedCrmBuyerTicketAsync(f.Tickets, 2, 493575, "2709", now.AddDays(-5));
+        MoveToResolved(resolvedOnly);
+        await f.Resolutions.AddAsync(new TicketResolution(
+            resolvedOnly.TicketId, ResolutionOutcome.Resolved, "Done.", null, null, Guid.NewGuid(), now.AddDays(-1)));
+
+        var stillOpen = await SeedCrmBuyerTicketAsync(f.Tickets, 2, 493575, "2810", now.AddDays(-1));
+
+        var result = await f.Service.GetByCrmCustomerIdAsync(Guid.NewGuid(), [Roles.CsManager], 493575, limit: 10);
+
+        // Inside the old window, outside it, resolved-only and open: every row is "not eligible".
+        Assert.False(result.Tickets.Single(t => t.TicketId == recentlyClosed.TicketId).IsReopenEligible);
+        Assert.False(result.Tickets.Single(t => t.TicketId == longClosed.TicketId).IsReopenEligible);
+        Assert.False(result.Tickets.Single(t => t.TicketId == resolvedOnly.TicketId).IsReopenEligible);
+        Assert.False(result.Tickets.Single(t => t.TicketId == stillOpen.TicketId).IsReopenEligible);
+        Assert.Equal(now.AddDays(-3), result.Tickets.Single(t => t.TicketId == recentlyClosed.TicketId).ResolvedAtUtc);
+    }
+
+    [Fact]
     public async Task History_CarriesTheRequestSummary_ForListScanning()
     {
         var f = CreateService();

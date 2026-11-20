@@ -129,6 +129,56 @@ public class TicketLifecycleOutboxTests
     }
 
     [Fact]
+    public async Task Reopen_IsRefused_AndCommitsNoTicketReopenedEvent_ClosedIsTerminal()
+    {
+        var f = CreateService();
+        var (ticket, owner) = await SeedInProgressTicketAsync(f);
+        await ResolveAndCloseAsync(f, ticket, owner);
+        var eventsBefore = f.Outbox.Committed.Select(m => m.EventType).ToArray();
+        var ownerBefore = ticket.CurrentOwnerEmployeeId;
+        var keysBefore = f.Outbox.ReservedKeys.Count();
+        var auditBefore = f.Audit.Entries.Count;
+        var transactionsBefore = f.UnitOfWork.TransactionsCommitted;
+
+        var result = await f.Service.ReopenAsync(
+            owner, [Roles.CsAgent], ticket.TicketId, new ReopenTicketRequestDto("Customer called back", 2, []));
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Equal(0, ticket.ReopenCount);
+        Assert.Equal(ownerBefore, ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(f.Outbox.Committed, m => m.EventType == OutboxEventTypes.TicketReopened);
+        Assert.Equal(eventsBefore, f.Outbox.Committed.Select(m => m.EventType).ToArray());
+        Assert.Equal(keysBefore, f.Outbox.ReservedKeys.Count());
+        Assert.DoesNotContain(
+            OutboxEventTypes.LifecycleIdempotencyKeyFor(OutboxEventTypes.TicketReopened, ticket.TicketId, 1, 1),
+            f.Outbox.ReservedKeys);
+        Assert.Equal(auditBefore, f.Audit.Entries.Count);
+        Assert.Equal(transactionsBefore, f.UnitOfWork.TransactionsCommitted);
+    }
+
+    [Fact]
+    public async Task ResolveCloseThenRefusedReopen_ProducesNoSecondCycle_NoSecondResolvedEvent()
+    {
+        var f = CreateService();
+        var (ticket, owner) = await SeedInProgressTicketAsync(f);
+
+        await ResolveAndCloseAsync(f, ticket, owner);
+        var reopen = await f.Service.ReopenAsync(owner, [Roles.CsAgent], ticket.TicketId, new ReopenTicketRequestDto("Again", 2, []));
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, reopen.Outcome);
+
+        // The ticket is still Closed, so a second resolve (the one a reopened cycle would have produced) cannot happen either.
+        var second = await ResolveAsync(f, ticket, owner);
+
+        Assert.NotEqual(TicketMutationOutcome.Success, second.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Equal(1, f.Outbox.Committed.Count(m => m.EventType == OutboxEventTypes.TicketResolved));
+        Assert.Equal(
+            [OutboxEventTypes.TicketResolved, OutboxEventTypes.TicketClosed],
+            f.Outbox.Committed.Select(m => m.EventType).ToArray());
+    }
+
+    [Fact]
     public async Task ConcurrencyConflictOnResolve_LeavesNoEventBehind()
     {
         var f = CreateService();

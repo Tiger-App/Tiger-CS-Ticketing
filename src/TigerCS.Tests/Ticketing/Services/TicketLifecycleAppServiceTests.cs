@@ -449,6 +449,51 @@ public class TicketLifecycleAppServiceTests
 
     // -- Status eligibility --
 
+    /// <summary>A refused reopen writes nothing at all: same status, owner, department, resolution, SLA, assignments, events, audit and outbox.</summary>
+    private static void AssertReopenWroteNothing(Fixture f, Ticket ticket, Guid? ownerBefore, int departmentBefore, int resolutionsBefore = 1)
+    {
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.NotNull(ticket.ResolutionOutcome);
+        Assert.Equal(0, ticket.ReopenCount);
+        Assert.Equal(ownerBefore, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(departmentBefore, ticket.CurrentDepartmentId);
+        Assert.Equal(resolutionsBefore, f.Resolutions.Added.Count);
+        Assert.All(f.Resolutions.Added, r => Assert.True(r.IsCurrent));
+        Assert.DoesNotContain(f.Assignments.Added, a => a.IsCurrent);
+        Assert.DoesNotContain(f.StatusHistory.Added, h => h.OldValue == (byte)TicketStatus.Closed);
+        Assert.DoesNotContain(f.Audit.Entries, a => a.Action is "Reopen" or "AutoAssign");
+        Assert.Empty(f.WorkflowEvents.All);
+        Assert.Empty(f.Outbox.Committed);
+        Assert.DoesNotContain(f.Sla.SlaInstances.All, i => i.ChangeReason == SlaChangeReason.Reopen);
+        Assert.Equal(0, f.UnitOfWork.TransactionsBegun);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ByCsAgent_OnClosedTicket_IsRefused_ClosedIsTerminal_NothingArchivedOrWritten()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-2));
+        var agent = Guid.NewGuid();
+        var ownerBefore = ticket.CurrentOwnerEmployeeId;
+        var historyBefore = f.StatusHistory.Added.Count;
+
+        var result = await f.Service.ReopenAsync(agent, [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Equal(0, ticket.ReopenCount);
+        Assert.Equal((byte)ResolutionOutcome.Resolved, ticket.ResolutionOutcome);   // the closure outcome is kept
+
+        // FR-RES-04 used to archive the resolution on reopen; now the resolution stays the current one, untouched.
+        Assert.True(Assert.Single(f.Resolutions.Added).IsCurrent);
+        Assert.Equal(historyBefore, f.StatusHistory.Added.Count);
+        Assert.DoesNotContain(f.Audit.Entries, w => w.Action == "Reopen");
+        Assert.DoesNotContain(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.Reopened);
+        Assert.Equal(0, f.UnitOfWork.TransactionsCommitted);
+        AssertReopenWroteNothing(f, ticket, ownerBefore, ClosingDepartmentId);
+    }
+
     [Fact]
     public async Task ReopenAsync_OnResolvedTicket_IsRejected_ResolvedIsNoLongerReopenable()
     {
@@ -550,6 +595,24 @@ public class TicketLifecycleAppServiceTests
     // -- Authorization --
 
     [Theory]
+    [InlineData(Roles.CsAgent)]
+    [InlineData(Roles.CsSupervisor)]
+    [InlineData(Roles.CsManager)]
+    public async Task ReopenAsync_ByAnyCsLayerRole_IsRefused_ClosedIsTerminal(string role)
+    {
+        // The role and resource gates still PASS for the CS layer (all three are cross-department for View), so the answer is the terminal-state
+        // refusal - not Forbidden - and nothing changes.
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [role], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        AssertReopenWroteNothing(f, ticket, ownerBefore: null, ClosingDepartmentId);
+    }
+
+    [Theory]
     [InlineData(Roles.DepartmentEmployee)]
     [InlineData(Roles.DepartmentHead)]
     [InlineData(Roles.GeneralManager)]
@@ -586,6 +649,23 @@ public class TicketLifecycleAppServiceTests
         // System Administrator is deliberately NOT a member: ADR-0024's
         // central override is what authorizes it (asserted below).
         Assert.DoesNotContain(Roles.SystemAdministrator, TicketRoleSets.Reopen);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ByACsAgentOfAnotherDepartment_IsRefusedAsTerminal_NotForbidden_BecauseTheAgentRoleIsCrossDepartment()
+    {
+        // The resource check narrows, it does not re-scope a role that is already cross-department: CS Agent holds cross-department View
+        // (Security-Architecture.md section 3), so an agent who belongs to no department at all passes it - and then meets the terminal rule.
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var agentFromAnotherDepartment = Guid.NewGuid();
+        var result = await f.Service.ReopenAsync(
+            agentFromAnotherDepartment, [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        AssertReopenWroteNothing(f, ticket, ownerBefore: null, ClosingDepartmentId);
     }
 
     [Fact]
@@ -633,6 +713,21 @@ public class TicketLifecycleAppServiceTests
             f.DepartmentAssignments, member, [Roles.DepartmentEmployee], ticket.CurrentDepartmentId));
     }
 
+    [Fact]
+    public async Task ReopenAsync_BySystemAdministrator_PassesTheAdr0024Override_ButIsStillRefused_ClosedIsTerminal()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var result = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.SystemAdministrator], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        AssertReopenWroteNothing(f, ticket, ownerBefore: null, ClosingDepartmentId);
+    }
+
     // -- Required input --
 
     [Theory]
@@ -666,7 +761,148 @@ public class TicketLifecycleAppServiceTests
         Assert.Equal(0, f.UnitOfWork.TransactionsBegun);
     }
 
+    [Fact]
+    public async Task ReopenAsync_WithAnUnknownOrInactiveDepartment_IsRefusedAsTerminal_BeforeTheDepartmentIsEvenLookedAt()
+    {
+        // TargetDepartmentInactive is no longer reachable for a Closed ticket: the terminal-state refusal runs before routing validation, so both an unknown
+        // and a deactivated target department get the same answer and nothing is written.
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var unknown = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(targetDepartmentId: 999));
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, unknown.Outcome);
+
+        var retired = f.Departments.AddDepartment("Retired", "RET", isActive: false);
+        var inactive = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(targetDepartmentId: retired.DepartmentId));
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, inactive.Outcome);
+
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        AssertReopenWroteNothing(f, ticket, ownerBefore: null, ClosingDepartmentId);
+    }
+
     // -- Routing and assignment --
+
+    [Fact]
+    public async Task ReopenAsync_DoesNotMoveCurrentDepartment_LeavesOriginatingDepartment_AndTheOwnerUntouched()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, previousOwner) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+        var originating = ticket.OriginatingDepartmentId;
+        var ownerBefore = ticket.CurrentOwnerEmployeeId;
+
+        var result = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(targetDepartmentId: OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(ClosingDepartmentId, ticket.CurrentDepartmentId);               // not moved to OtherDepartmentId
+        Assert.Equal(originating, ticket.OriginatingDepartmentId);
+        Assert.Equal(ownerBefore, ticket.CurrentOwnerEmployeeId);
+        AssertReopenWroteNothing(f, ticket, ownerBefore, ClosingDepartmentId);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_WithNoAssignmentRule_IsRefused_AndLeavesTheTicketInItsDepartmentWithNoQueueAssignmentAudit()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var result = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "Reopen");
+        Assert.DoesNotContain(f.Audit.Entries, e => e.AfterValue is not null && e.AfterValue.Contains("AssignedEmployeeId=DepartmentQueue", StringComparison.Ordinal));
+        AssertReopenWroteNothing(f, ticket, ownerBefore: null, ClosingDepartmentId);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_IntoTheSameDepartment_IsRefused_ClosedIsTerminal()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var result = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(targetDepartmentId: ClosingDepartmentId));
+
+        // Naming the closing department used to be a legitimate reopen (never AlreadyInTargetDepartment); now it is the same terminal refusal.
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(ClosingDepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        AssertReopenWroteNothing(f, ticket, ownerBefore: null, ClosingDepartmentId);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_PreservesTicketIdentityAndWorkflowPinning_BecauseNothingChanges()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var ticketId = ticket.TicketId;
+        var ticketNumber = ticket.TicketNumber;
+        var requestTypeId = ticket.RequestTypeId;
+        var workflowTemplateId = ticket.WorkflowTemplateId;
+
+        var result = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(ticketId, ticket.TicketId);
+        Assert.Equal(ticketNumber, ticket.TicketNumber);
+        Assert.Equal(requestTypeId, ticket.RequestTypeId);
+        Assert.Equal(workflowTemplateId, ticket.WorkflowTemplateId);
+        Assert.Single(f.Tickets.All);                                               // no copy / successor ticket either
+    }
+
+    [Fact]
+    public async Task ReopenAsync_DoesNotRunTheAssignmentAutomation_SoTheTargetDepartmentsConfiguredOwnerIsNeverAssigned()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        SeedDepartments(f);
+
+        // A classified ticket whose request type routes to a named employee in the department a reopen would have targeted.
+        var template = f.WorkflowTemplates.Add(TestWorkflows.PublishedPending(workflowId: 100));
+        var requestType = f.RequestTypes.Add(new RequestType(
+            departmentId: OtherDepartmentId, "NOC for Resale", template.WorkflowId, (byte)PriorityLevel.Medium,
+            allowAgentPriorityChange: true, allowPendingCustomer: true, allowPendingInternal: true, allowReopen: true));
+
+        var configuredAssignee = Guid.NewGuid();
+        f.AssignmentRules.Add(RequestTypeAssignmentRule.ForSpecificEmployee(requestType.RequestTypeId, configuredAssignee));
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(
+            configuredAssignee, OtherDepartmentId, isPrimary: true, now.AddYears(-1), assignedByEmployeeId: null));
+
+        var previousOwner = Guid.NewGuid();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, previousOwner, ClosingDepartmentId);
+        ticket.ClassifyRequestType(requestType.RequestTypeId);
+        ticket.PinWorkflowVersion(template.WorkflowTemplateId);
+        ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
+        await f.Resolutions.AddAsync(new TicketResolution(
+            ticket.TicketId, ResolutionOutcome.Resolved, "Issued.", null, null, previousOwner, now.AddDays(-1)));
+        ticket.Close();
+        await f.StatusHistory.AddAsync(new TicketStatusHistory(
+            ticket.TicketId, TicketStatusDimension.TicketStatus, (byte)TicketStatus.Resolved, (byte)TicketStatus.Closed,
+            previousOwner, actorIsSystem: false, note: null, Guid.NewGuid(), now.AddDays(-1)));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(ClosingDepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.NotEqual(configuredAssignee, ticket.CurrentOwnerEmployeeId);
+
+        // No system assignment under a reopen's correlation id: the one engine never ran.
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action is "Reopen" or "AutoAssign");
+        Assert.Empty(f.Assignments.Added);
+        Assert.Empty(f.WorkflowEvents.All);
+    }
 
     // -- Reopen always ends with an eligible CS Agent (previous one kept, otherwise the shared rotation) --
 
@@ -682,7 +918,158 @@ public class TicketLifecycleAppServiceTests
         return (ticket, owner, Guid.Empty);
     }
 
-    // -- Window --
+    [Fact]
+    public async Task ReopenAsync_DoesNotReturnTheTicketToThePreviousCsAgent_EvenWhenStillEligible_AndEvenIntoADepartmentWithNoStaff()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, previousAgent, _) = await ClosedTicketOwnedByCallCenterAgentAsync(f, now, previousStillCsAgent: true);
+        var otherAgent = Guid.NewGuid();
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(otherAgent, 4, true, now.AddYears(-1), null));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(ClosingDepartmentId, ticket.CurrentDepartmentId);              // the department did not follow the reopen request...
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                 // ...and the previous CS Agent was not restored
+        Assert.NotEqual(previousAgent, ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign");
+        Assert.DoesNotContain(f.Assignments.Added, a => a.IsCurrent);
+        Assert.DoesNotContain(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.ManualAssignmentRequired);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_WhenThePreviousAgentIsGone_DoesNotTakeTheNextAgentOfTheSharedRotation()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, previousAgent, _) = await ClosedTicketOwnedByCallCenterAgentAsync(f, now, previousStillCsAgent: false);
+        var callCenterId = (await f.Departments.ListAsync(activeOnly: true)).Single(d => d.Code == "CC").DepartmentId;
+        var current = Guid.NewGuid();
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(current, callCenterId, true, now.AddYears(-1), null));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.NotEqual(previousAgent, ticket.CurrentOwnerEmployeeId);
+        Assert.NotEqual(current, ticket.CurrentOwnerEmployeeId);                    // the rotation is never consulted
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(ClosingDepartmentId, ticket.CurrentDepartmentId);
+        Assert.DoesNotContain(f.Assignments.Added, a => a.IsCurrent);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_WithNoEligibleAgent_IsStillTheSameTerminalRefusal_AndRecordsNoAssignmentFailure()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _, _) = await ClosedTicketOwnedByCallCenterAgentAsync(f, now, previousStillCsAgent: false);
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.ManualAssignmentRequired);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_TheSourceDepartmentsTransferSetting_NoLongerMatters_BothMovingOutAndReopeningInPlaceAreRefusedAsTerminal()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+        f.DepartmentSettings.Add(new DepartmentWorkflowSettings(
+            ClosingDepartmentId, allowAssignment: true, allowInternalReassignment: true, allowTransferToOtherDepartments: false));
+
+        // Moving out used to be refused by the department's own rule (DisabledByDepartmentSettings); the terminal rule is evaluated first.
+        var movedOut = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(targetDepartmentId: OtherDepartmentId));
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, movedOut.Outcome);
+
+        // Reopening in place used to stand; now it is refused as well.
+        var inPlace = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(targetDepartmentId: ClosingDepartmentId));
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, inPlace.Outcome);
+        AssertReopenWroteNothing(f, ticket, ownerBefore: null, ClosingDepartmentId);
+    }
+
+    // -- Window (the window no longer matters: inside and outside it are refused alike) --
+
+    [Fact]
+    public async Task ReopenAsync_OutsideTheWindowMeasuredFromClosure_IsRefusedAsTerminal_NotAsWindowExpired_NoStateChange()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-8));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.NotEqual(TicketMutationOutcome.ReopenWindowExpired, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Equal(0, ticket.ReopenCount);
+        Assert.Equal(0, f.UnitOfWork.TransactionsBegun);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ExactlyAtTheWindowBoundary_IsRefused_ClosedIsTerminal()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-7));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_WindowRunsFromClosureNotFromResolution_ButBothInsideAndOutsideAreRefused()
+    {
+        // Resolved 20 days ago but closed yesterday: dating the window from the resolution used to wrongly refuse this reopen, and a closure
+        // 20 days ago would have expired it. Neither matters now.
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        SeedDepartments(f);
+
+        var owner = Guid.NewGuid();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, owner, ClosingDepartmentId);
+        ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
+        await f.Resolutions.AddAsync(new TicketResolution(
+            ticket.TicketId, ResolutionOutcome.Resolved, "Fixed.", null, null, owner, now.AddDays(-20)));
+        ticket.Close();
+        await f.StatusHistory.AddAsync(new TicketStatusHistory(
+            ticket.TicketId, TicketStatusDimension.TicketStatus, (byte)TicketStatus.Resolved, (byte)TicketStatus.Closed,
+            owner, actorIsSystem: false, note: null, Guid.NewGuid(), now.AddDays(-1)));
+
+        var inside = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, inside.Outcome);
+
+        // The display rule agrees at any distance from the closure: inside the window and 30 days later alike, never eligible.
+        Assert.False(ReopenPolicy.Default.IsReopenEligible(TicketStatus.Closed, (byte)ResolutionOutcome.Resolved, now.AddDays(-1), now));
+        Assert.False(ReopenPolicy.Default.IsReopenEligible(TicketStatus.Closed, (byte)ResolutionOutcome.Resolved, now.AddDays(-1), now.AddDays(30)));
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_WindowIsConfigurable_ButAnyConfiguredWindowIsRefused_ClosedIsTerminal()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now), new ReopenPolicy(WindowDays: 14));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-10));   // inside the configured 14 days, outside the default 7
+
+        var inside = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, inside.Outcome);
+
+        var wide = CreateService(new FakeTimeProvider(now), new ReopenPolicy(WindowDays: 3650));
+        var (recent, _) = await SeedClosedTicketAsync(wide, closedAtUtc: now.AddMinutes(-1));
+        var widest = await wide.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], recent.TicketId, ReopenRequest());
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, widest.Outcome);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Equal(TicketStatus.Closed, recent.TicketStatus);
+    }
 
     // -- Concurrency --
 
@@ -702,13 +1089,285 @@ public class TicketLifecycleAppServiceTests
         Assert.Equal(0, f.UnitOfWork.TransactionsBegun);
     }
 
+    [Fact]
+    public async Task ReopenAsync_TwiceWithTheSameToken_IsRefusedTwice_AndAStaleTokenIsStillAConcurrencyConflict()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var first = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, first.Outcome);
+
+        // A request still holding an old token says "your copy is stale" (409) - checked before the terminal rule - not "this ticket is ineligible".
+        FakeTicketRepository.SetStoredRowVersion(ticket, [7, 7, 7, 7]);
+        var second = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ConcurrencyConflict, second.Outcome);
+        Assert.Equal(0, ticket.ReopenCount);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.DoesNotContain(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.Reopened);
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "Reopen");
+        Assert.DoesNotContain(f.Outbox.Committed, m => m.EventType == OutboxEventTypes.TicketReopened);
+        Assert.DoesNotContain(f.Sla.SlaInstances.All, i => i.ChangeReason == SlaChangeReason.Reopen);
+    }
+
     // -- SLA (the approved rule's critical clause) --
+
+    [Fact]
+    public async Task ReopenAsync_DoesNotEndTheOriginalResolutionCycle_AndOpensNoNewOne()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+        var original = f.Sla.SlaInstances.All.Single();
+        var originalResolutionDue = original.ResolutionDueAtUtc;
+        var periodEndBefore = original.PeriodEndAtUtc;
+        var slaStateBefore = ticket.SlaState;
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Single(f.Sla.SlaInstances.All);
+
+        // The original cycle is exactly as it was - not ended at the reopen moment, not rewritten.
+        Assert.Equal(periodEndBefore, original.PeriodEndAtUtc);
+        Assert.NotEqual(now, original.PeriodEndAtUtc);
+        Assert.Equal(originalResolutionDue, original.ResolutionDueAtUtc);
+        Assert.Equal(SlaChangeReason.InitialCreation, original.ChangeReason);
+        Assert.Equal(slaStateBefore, ticket.SlaState);
+        Assert.DoesNotContain(f.Sla.SlaInstances.All, i => i.ChangeReason == SlaChangeReason.Reopen);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_ComputesNoSlaDeadline_SoTheSlaPolicyIsNeverConsultedForAReopenedCycle()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+        var instancesBefore = f.Sla.SlaInstances.All.Count;
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        // Whatever the seeded policy would have computed from the reopen moment, no cycle carrying it exists.
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        var (_, expectedResolutionDue) = await f.Sla.DueDates.ComputeDueDatesAsync((byte)PriorityLevel.High, now);
+        Assert.Equal(instancesBefore, f.Sla.SlaInstances.All.Count);
+        Assert.DoesNotContain(f.Sla.SlaInstances.All, i => i.ResolutionDueAtUtc == expectedResolutionDue && i.ChangeReason == SlaChangeReason.Reopen);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_LeavesFirstResponseAlone_ItsDeadlineAndResultStayOnTheOriginalCycle()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(
+            f, closedAtUtc: now.AddDays(-1), firstHumanResponseAtUtc: now.AddDays(-4));
+
+        var original = f.Sla.SlaInstances.All.Single();
+        original.MarkBreached(SlaDeadlineType.FirstResponse);
+        var originalFirstResponseDue = original.FirstResponseDueAtUtc;
+        var firstResponseAt = ticket.FirstHumanResponseAtUtc;
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+
+        // The ticket's own first-response fact is untouched, the original cycle keeps its recorded result and deadline, and no successor cycle exists.
+        Assert.Equal(firstResponseAt, ticket.FirstHumanResponseAtUtc);
+        Assert.True(original.FirstResponseBreached);
+        Assert.Equal(originalFirstResponseDue, original.FirstResponseDueAtUtc);
+        Assert.Single(f.Sla.SlaInstances.All);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_SchedulesNoSlaDeadlineCheckAtAll()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+        f.Sla.Scheduler.Scheduled.Clear();
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Empty(f.Sla.Scheduler.Scheduled);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_TheSweepHasNothingNewToBreach_AClosedTicketKeepsItsSlaResult()
+    {
+        // The old regression guard (a ticket resolved ON TIME and then reopened must not be swept against its historical deadline) is moot - there is no
+        // reopened ticket - but the Closed ticket must come out of a refused reopen with its SLA result exactly as it was: no breach, no escalation.
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+        var slaStateBefore = ticket.SlaState;
+
+        var reopen = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, reopen.Outcome);
+
+        Assert.Equal(slaStateBefore, ticket.SlaState);
+        Assert.NotEqual(SlaState.Breached, ticket.SlaState);
+        Assert.Empty(f.Sla.Escalations.All);
+        Assert.Single(f.Sla.SlaInstances.All);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_NoNewCycleExistsToBreachLater_TheOriginalPeriodIsTheOnlyOne()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.DoesNotContain(f.Sla.SlaInstances.All, i => i.ChangeReason == SlaChangeReason.Reopen);
+        var only = f.Sla.SlaInstances.All.Single();
+        Assert.Equal(SlaChangeReason.InitialCreation, only.ChangeReason);
+        Assert.False(only.ResolutionBreached);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_OnATicketWithNoSlaPeriod_IsRefused_AndInventsNoClock()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1), withSlaPeriod: false);
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Empty(f.Sla.SlaInstances.All);
+    }
 
     // -- Customer email --
 
+    [Fact]
+    public async Task ReopenAsync_QueuesNoReopenedEvent_NotForARefusedRoleReasonOrDepartment_AndNotForTheTerminalRefusalEither()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        // Refused on every ground that is still checked before the terminal rule: nothing is queued.
+        var forbidden = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.DepartmentHead], ticket.TicketId, ReopenRequest());
+        Assert.Equal(TicketMutationOutcome.Forbidden, forbidden.Outcome);
+        var noReason = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(reason: "  "));
+        Assert.Equal(TicketMutationOutcome.ReopenReasonRequired, noReason.Outcome);
+        Assert.Empty(f.Outbox.Committed);
+
+        // An unknown department used to be rejected by routing validation; the terminal rule answers first. Still nothing queued.
+        var unknownDepartment = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(targetDepartmentId: 999));
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, unknownDepartment.Outcome);
+        Assert.Empty(f.Outbox.Committed);
+
+        // ...and the fully valid request that used to queue exactly one TicketReopened event queues none.
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Empty(f.Outbox.Committed);
+        Assert.DoesNotContain(f.Outbox.Committed, m => m.EventType == OutboxEventTypes.TicketReopened);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_WhenTheTransactionWouldFail_IsRefusedBeforeAnyTransaction_QueuesNoEmailAndWritesNothing()
+    {
+        // The refusal happens before a transaction is begun, so a failing unit of work is never reached: the answer is the terminal refusal, not a
+        // ConcurrencyConflict, and nothing is queued or written either way.
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+        f.UnitOfWork.ThrowTicketConcurrencyConflictOnCall = 1;
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Empty(f.Outbox.Committed);
+        Assert.Equal(0, f.UnitOfWork.TransactionsBegun);
+        Assert.Equal(0, f.UnitOfWork.TransactionsCommitted);
+    }
+
     // -- Second cycle --
 
-    // ---- Ticket transfer tracking: a reopen records where ownership landed on its own event type, never as an escalation ----
+    [Fact]
+    public async Task ReopenAsync_ThenResolveAgain_IsNotPossible_NoSecondResolution_ReopenCountStaysZero()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, owner) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-1));
+
+        var reopen = await f.Service.ReopenAsync(
+            Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(targetDepartmentId: ClosingDepartmentId));
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, reopen.Outcome);
+
+        // Without a reopen there is no second cycle: a resolve on the Closed ticket is refused, and the one resolution stays current.
+        var resolveAgain = await f.Service.ResolveAsync(
+            owner, [Roles.DepartmentEmployee], ticket.TicketId,
+            new ResolveTicketRequestDto("Resolved", "Replaced the whole unit this time.", null, null, []));
+        Assert.NotEqual(TicketMutationOutcome.Success, resolveAgain.Outcome);
+
+        Assert.Single(f.Resolutions.Added);
+        Assert.True(f.Resolutions.Added[0].IsCurrent);
+        Assert.Equal(0, ticket.ReopenCount);
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+    }
+
+    // ---- Ticket transfer tracking: a refused reopen records no ownership move on any event type, and never an escalation ----
+
+    [Fact]
+    public async Task ReopenAsync_RecordsNoOwnershipLanding_NoReopenedEvent_NoTransferOrEscalation()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        SeedDepartments(f);
+
+        var template = f.WorkflowTemplates.Add(TestWorkflows.PublishedPending(workflowId: 100));
+        var requestType = f.RequestTypes.Add(new RequestType(
+            departmentId: OtherDepartmentId, "NOC for Resale", template.WorkflowId, (byte)PriorityLevel.Medium,
+            allowAgentPriorityChange: true, allowPendingCustomer: true, allowPendingInternal: true, allowReopen: true));
+        var configuredAssignee = Guid.NewGuid();
+        f.AssignmentRules.Add(RequestTypeAssignmentRule.ForSpecificEmployee(requestType.RequestTypeId, configuredAssignee));
+        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(
+            configuredAssignee, OtherDepartmentId, isPrimary: true, now.AddYears(-1), assignedByEmployeeId: null));
+
+        var previousOwner = Guid.NewGuid();
+        var ticket = await SeedInProgressTicketAsync(f.Tickets, previousOwner, ClosingDepartmentId);
+        ticket.ClassifyRequestType(requestType.RequestTypeId);
+        ticket.PinWorkflowVersion(template.WorkflowTemplateId);
+        ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
+        await f.Resolutions.AddAsync(new TicketResolution(
+            ticket.TicketId, ResolutionOutcome.Resolved, "Issued.", null, null, previousOwner, now.AddDays(-1)));
+        ticket.Close();
+        await f.StatusHistory.AddAsync(new TicketStatusHistory(
+            ticket.TicketId, TicketStatusDimension.TicketStatus, (byte)TicketStatus.Resolved, (byte)TicketStatus.Closed,
+            previousOwner, actorIsSystem: false, note: null, Guid.NewGuid(), now.AddDays(-1)));
+
+        var agent = Guid.NewGuid();
+        var result = await f.Service.ReopenAsync(agent, [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Empty(f.WorkflowEvents.All);   // not a Reopened event, not a TicketTransferred one, not an escalation
+        Assert.Equal(ClosingDepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+    }
+
+    [Fact]
+    public async Task ReopenAsync_IntoADepartmentQueue_RecordsNoReceivingEmployee_AndNoReopenedEventAtAll()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, _) = await SeedClosedTicketAsync(f, closedAtUtc: now.AddDays(-2));
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest());
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.DoesNotContain(f.WorkflowEvents.All, e => e.EventType == WorkflowEventType.Reopened);
+        Assert.Empty(f.WorkflowEvents.All);
+        Assert.DoesNotContain(f.WorkflowEvents.All, e => e.IsEscalation);
+    }
 
     // ---- Resolve / Close: the assignee, whatever their role or department ----
 
@@ -872,4 +1531,21 @@ public class TicketLifecycleAppServiceTests
         Assert.Single(f.Assignments.Added, a => a == row);
     }
 
+    [Fact]
+    public async Task AClosedTicket_ThatIsReopened_IsNotReturnedToThePreviousAgent_TheAssignmentHistoryIsLeftAlone()
+    {
+        var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
+        var f = CreateService(new FakeTimeProvider(now));
+        var (ticket, previousAgent, _) = await ClosedTicketOwnedByCallCenterAgentAsync(f, now, previousStillCsAgent: true);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                              // closed: nobody owns it
+        var assignmentsBefore = f.Assignments.Added.Count;
+
+        var result = await f.Service.ReopenAsync(Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId, ReopenRequest(OtherDepartmentId));
+
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                              // the previous agent is NOT restored from the history
+        Assert.Equal(assignmentsBefore, f.Assignments.Added.Count);
+        Assert.DoesNotContain(f.Assignments.Added, a => a.IsCurrent && a.AssignedEmployeeId == previousAgent);
+        Assert.DoesNotContain(f.Audit.Entries, w => w.Action == "Reopen");       // no audit naming who held it before
+    }
 }

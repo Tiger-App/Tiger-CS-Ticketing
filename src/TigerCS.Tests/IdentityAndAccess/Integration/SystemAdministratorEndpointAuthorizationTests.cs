@@ -1323,7 +1323,7 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
             $"/api/tickets/{ticket.TicketId}/reopen",
             new ReopenTicketRequestDto("Customer called back.", ticket.CurrentDepartmentId, RowVersionOf(closed!)));
 
-        Assert.False(reopenResponse.IsSuccessStatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, reopenResponse.StatusCode);
         var after = await (await client.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.Equal("Closed", after!.TicketStatus);
         Assert.Equal(0, after.ReopenCount);
