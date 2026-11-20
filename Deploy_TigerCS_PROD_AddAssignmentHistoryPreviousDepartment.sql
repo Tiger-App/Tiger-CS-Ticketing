@@ -303,8 +303,12 @@ WHERE c.object_id = OBJECT_ID(N'dbo.TicketAssignmentHistory')
 SELECT COUNT(*) AS ColumnCount FROM sys.columns WHERE object_id = OBJECT_ID(N'dbo.TicketAssignmentHistory');
 
 -- 6.4 No backfill (expect 0 right after deployment; grows only as the new application build records department changes)
-SELECT COUNT_BIG(*) AS RowsWithPreviousDepartment FROM dbo.TicketAssignmentHistory WITH (NOLOCK)
-WHERE PreviousDepartmentId IS NOT NULL;
+--      (Dynamic SQL and guarded: after a DRY RUN the column was rolled back, so a plain reference would not compile.)
+IF COL_LENGTH(N'dbo.TicketAssignmentHistory', N'PreviousDepartmentId') IS NULL
+    SELECT CAST(NULL AS bigint) AS RowsWithPreviousDepartment, 'column not present (dry run, or not yet deployed)' AS Note;
+ELSE
+    EXEC sp_executesql N'SELECT COUNT_BIG(*) AS RowsWithPreviousDepartment, ''column present'' AS Note
+                         FROM dbo.TicketAssignmentHistory WITH (NOLOCK) WHERE PreviousDepartmentId IS NOT NULL;';
 
 -- 6.5 Existing data sanity (compare with the row counts shown above; none of these are modified)
 SELECT (SELECT COUNT_BIG(*) FROM dbo.Tickets) AS Tickets,
