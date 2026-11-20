@@ -7,9 +7,9 @@ namespace TigerCS.Web.Pages.Collections;
 /// <summary>Display helpers shared by the Receivables and Campaigns pages.</summary>
 public static class CollectionsDisplay
 {
-    /// <summary>Gulf Standard Time has no daylight saving, so a fixed +4 h offset is exact.</summary>
+    /// <summary>Dubai time through the one shared conversion (<see cref="TigerCS.Web.Models.DubaiTime"/>); Gulf Standard Time has no daylight saving.</summary>
     public static string DubaiTime(DateTime? utc) => utc is { } value
-        ? value.AddHours(4).ToString("dd MMM yyyy HH:mm", CultureInfo.InvariantCulture) + " (Dubai)"
+        ? TigerCS.Web.Models.DubaiTime.Format(value, "dd MMM yyyy HH:mm") + " (Dubai)"
         : "never";
 
     /// <summary>The companies whose data could not be loaded: never loaded, stale, last refresh failed, or part of the requested dates missing. Null when everything is loaded.</summary>
@@ -56,7 +56,7 @@ public static class CollectionsDisplay
     public static string Money(decimal amount) => amount.ToString("N2", CultureInfo.InvariantCulture);
 
     /// <summary>Today in Dubai (UTC+4, no DST): the preview date when a page has no report to take it from.</summary>
-    public static DateOnly DubaiToday() => DateOnly.FromDateTime(DateTime.UtcNow.AddHours(4));
+    public static DateOnly DubaiToday() => DateOnly.FromDateTime(TigerCS.Web.Models.DubaiTime.TodayFrom(DateTime.UtcNow));
 
     public static string NoticeText(string? code) => code switch
     {

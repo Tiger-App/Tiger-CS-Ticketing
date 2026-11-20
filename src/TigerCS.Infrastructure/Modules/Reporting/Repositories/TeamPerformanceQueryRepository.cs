@@ -320,6 +320,9 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
             {
                 t.TicketId,
                 At = t.FirstHumanResponseAtUtc!.Value,
+                // A voice call is answered BEFORE its ticket exists (the ticket is created a moment after pickup): the response is dated at the real connect time,
+                // but the person who held the ticket from its creation - the answering agent - is who it is credited to. Never an unattributed response.
+                HolderAt = t.FirstHumanResponseAtUtc!.Value < t.CreatedAtUtc ? t.CreatedAtUtc : t.FirstHumanResponseAtUtc!.Value,
                 // First Response is carried across periods, so the latest period holds its due time and breach flag.
                 Due = dbContext.TicketSlaInstances.Where(i => i.TicketId == t.TicketId)
                     .OrderByDescending(i => i.PeriodStartAtUtc).ThenByDescending(i => i.TicketSlaInstanceId)
@@ -341,12 +344,12 @@ public sealed class TeamPerformanceQueryRepository(TigerCsDbContext dbContext) :
                 DueAtUtc = x.Due,
                 PeriodId = x.PeriodId,
                 HolderEmployeeId = dbContext.TicketAssignments
-                    .Where(a => a.TicketId == x.TicketId && a.AssignedAtUtc <= x.At)
+                    .Where(a => a.TicketId == x.TicketId && a.AssignedAtUtc <= x.HolderAt)
                     .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
-                    .Select(a => a.IsCurrent || a.SupersededAtUtc == null || a.SupersededAtUtc > x.At ? (Guid?)a.AssignedEmployeeId : null)
+                    .Select(a => a.IsCurrent || a.SupersededAtUtc == null || a.SupersededAtUtc > x.HolderAt ? (Guid?)a.AssignedEmployeeId : null)
                     .FirstOrDefault(),
                 HolderDepartmentId = dbContext.TicketAssignments
-                    .Where(a => a.TicketId == x.TicketId && a.AssignedAtUtc <= x.At)
+                    .Where(a => a.TicketId == x.TicketId && a.AssignedAtUtc <= x.HolderAt)
                     .OrderByDescending(a => a.AssignedAtUtc).ThenByDescending(a => a.TicketAssignmentId)
                     .Select(a => (int?)a.AssignedDepartmentId)
                     .FirstOrDefault()

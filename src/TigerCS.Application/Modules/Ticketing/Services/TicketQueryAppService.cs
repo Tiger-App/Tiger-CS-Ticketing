@@ -144,13 +144,23 @@ public sealed class TicketQueryAppService(
     /// </summary>
     private async Task<List<TicketSummaryDto>> EnrichSummariesAsync(IReadOnlyList<Ticket> tickets, CancellationToken cancellationToken)
     {
-        var names = await ResolveOwnerNamesAsync(tickets.Select(t => t.CurrentOwnerEmployeeId), cancellationToken);
+        // Closed is terminal and clears the CURRENT-owner field, but who owned the ticket is history that must stay visible: the last assignment (else the AI Agent
+        // that owned it). Display only - nothing is assigned, changed or reopened.
+        var closed = tickets.Where(t => t.TicketStatus == TicketStatus.Closed).ToList();
+        var lastAssigned = closed.Count > 0 && ticketAssignmentRepository is not null
+            ? await ticketAssignmentRepository.GetLastAssignedEmployeesAsync([.. closed.Select(t => t.TicketId)], cancellationToken)
+            : new Dictionary<long, Guid>();
+        Guid? Historical(Ticket t) => t.TicketStatus != TicketStatus.Closed ? null : lastAssigned.TryGetValue(t.TicketId, out var e) ? e : t.AiAgentOwnerEmployeeId;
+
+        var names = await ResolveOwnerNamesAsync(tickets.Select(t => t.CurrentOwnerEmployeeId).Concat(tickets.Select(Historical)), cancellationToken);
         var aiTicketIds = await ResolveAiVirtualAgentTicketIdsAsync(tickets, cancellationToken);
         return tickets
             .Select(t => ToSummaryDto(t) with
             {
                 CurrentOwnerName = t.CurrentOwnerEmployeeId is { } id ? names.GetValueOrDefault(id) : null,
-                IsAiVirtualAgent = aiTicketIds.Contains(t.TicketId)
+                IsAiVirtualAgent = aiTicketIds.Contains(t.TicketId),
+                LastResponsibleEmployeeId = Historical(t),
+                LastResponsibleName = Historical(t) is { } historical ? names.GetValueOrDefault(historical) : null
             })
             .ToList();
     }
@@ -270,15 +280,18 @@ public sealed class TicketQueryAppService(
                 && callerRoles.Contains(TigerCS.Domain.Modules.IdentityAndAccess.Roles.CsAgent)
         };
 
-        // A closed Queueing System ticket has no owner, but the person who last held it is still shown (display only - no assignment is created).
-        if (ticket.IsQueueManaged && ticket.TicketStatus == TicketStatus.Closed && ticketAssignmentRepository is not null)
+        // A closed ticket (any channel, human or AI closure) has no current owner, but who held it last is history that stays visible: the last assignment, else the
+        // AI Agent that owned it (display only - no assignment is created, nothing changes).
+        if (ticket.TicketStatus == TicketStatus.Closed)
         {
-            var last = (await ticketAssignmentRepository.ListByTicketIdAsync(ticketId, cancellationToken))
-                .OrderByDescending(a => a.TicketAssignmentId).FirstOrDefault();
-            if (last is not null)
+            var last = ticketAssignmentRepository is null
+                ? null
+                : (await ticketAssignmentRepository.ListByTicketIdAsync(ticketId, cancellationToken)).OrderByDescending(a => a.TicketAssignmentId).FirstOrDefault();
+            var historicalOwner = last?.AssignedEmployeeId ?? ticket.AiAgentOwnerEmployeeId;
+            if (historicalOwner is { } owner)
             {
-                var names = await ResolveOwnerNamesAsync([last.AssignedEmployeeId], cancellationToken);
-                detail = detail with { LastResponsibleEmployeeId = last.AssignedEmployeeId, LastResponsibleName = names.GetValueOrDefault(last.AssignedEmployeeId) };
+                var names = await ResolveOwnerNamesAsync([owner], cancellationToken);
+                detail = detail with { LastResponsibleEmployeeId = owner, LastResponsibleName = names.GetValueOrDefault(owner) };
             }
         }
 

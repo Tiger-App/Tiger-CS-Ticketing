@@ -72,6 +72,7 @@ public enum GenesysChannel
 /// <param name="AgentId">The Genesys agent handling the inquiry, where supplied.</param>
 /// <param name="AgentName">The Genesys agent's display name, where supplied.</param>
 /// <param name="StartedAtUtc">When the interaction started on the Genesys side (UTC), where supplied.</param>
+/// <param name="ConnectedAtUtc">PHONE only: when the agent named in <c>agentId</c> actually ANSWERED the call (UTC) - Genesys' connected time, not the call start. It is the moment the first-response SLA is satisfied and the assignment is dated. Optional; when absent TigerCS falls back to the moment it received the inquiry and says so in the audit trail.</param>
 /// <param name="DepartmentId">
 /// The department the customer explicitly selected — the website chat's
 /// Leasing / Customer Service / Maintenance choice. Takes priority over the
@@ -111,7 +112,8 @@ public sealed record GenesysInquiryDto(
     string? Subject = null,
     GenesysRequestTypeDto? RequestType = null,
     string? ServiceRequestId = null,
-    bool? HumanFollowUpRequired = null);
+    bool? HumanFollowUpRequired = null,
+    DateTime? ConnectedAtUtc = null);
 
 /// <summary>
 /// The normalized end-of-conversation report, with the transcript available

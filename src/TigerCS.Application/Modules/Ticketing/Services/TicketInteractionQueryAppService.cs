@@ -236,13 +236,19 @@ public sealed class TicketInteractionQueryAppService(
             return "WaitingForHuman";
         }
 
-        // A person is needed (explicit follow-up) but nobody has accepted or replied: not "AI handling", whether or not an employee was assigned.
+        // VOICE only (the ownership rules of PR #292 apply to Phone; every digital channel keeps its previous display until its own rules are final):
+        // a person is needed (explicit follow-up) but nobody has accepted or replied - not "AI handling", whether or not an employee was assigned; and an AI
+        // call that is over with nobody asking for a person is no longer "being handled".
+        if (interaction.ChannelId != WellKnownChannels.Phone)
+        {
+            return "Ai";
+        }
+
         if (interaction.RequiresHumanFollowUp)
         {
             return "HumanFollowUp";
         }
 
-        // The AI conversation is over and nobody asked for a person: it is no longer "being handled".
         return interaction.IsEnded ? "AiEnded" : "Ai";
     }
 }

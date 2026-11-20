@@ -49,7 +49,11 @@ public static class GenesysTimestamps
     // ---- With the receipt clock: zone normalization, then the "an event cannot be in the future" guard. ----
 
     public static GenesysInquiryDto Normalize(GenesysInquiryDto inquiry, GenesysTimestampContext? context) =>
-        inquiry with { StartedAtUtc = Resolve(context, "inquiry.startedAtUtc", inquiry.StartedAtUtc, FuturePolicy.Reject) };
+        inquiry with
+        {
+            StartedAtUtc = Resolve(context, "inquiry.startedAtUtc", inquiry.StartedAtUtc, FuturePolicy.Reject),
+            ConnectedAtUtc = Resolve(context, "inquiry.connectedAtUtc", inquiry.ConnectedAtUtc, FuturePolicy.ClampToReceipt)
+        };
 
     public static GenesysConversationEndDto Normalize(GenesysConversationEndDto end, GenesysTimestampContext? context) =>
         end with

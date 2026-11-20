@@ -131,7 +131,7 @@ public sealed class GenesysConversationEndAppService(
         // would stay permanently incomplete.
         if (!alreadyEnded)
         {
-            interaction.End(endedAtUtc, request.EndReason);
+            interaction.End(endedAtUtc, request.EndReason, timeProvider.GetUtcNow().UtcDateTime);
         }
 
         interaction.RecordAgentIfAbsent(request.AgentId, request.AgentName);
@@ -146,7 +146,10 @@ public sealed class GenesysConversationEndAppService(
         // the end event in one call.
         var transcript = stored.Concat(pendingMessages).ToList();
 
-        var autoRaisedHandoff = options.AutoRaiseHandoffOnConversationEnd
+        // VOICE: the end of a call is NOT evidence that nobody answered it - the answering agent (routing.agentId) can still arrive after "ended". No handoff
+        // work item (a sticky human-follow-up fact) is raised from the end event alone; the voice no-answer reconciler concludes it, once, after the configured
+        // reconciliation window (VoiceNoAnswerReconciler). Every other channel keeps the previous behaviour.
+        var autoRaisedHandoff = options.AutoRaiseHandoffOnConversationEnd && interaction.ChannelId != WellKnownChannels.Phone
             ? await TryAutoRaiseHandoffAsync(callerEmployeeId, interaction, ticket, transcript, endedAtUtc, cancellationToken)
             : null;
 

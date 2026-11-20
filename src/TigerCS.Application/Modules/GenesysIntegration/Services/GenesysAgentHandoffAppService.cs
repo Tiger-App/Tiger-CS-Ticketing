@@ -139,6 +139,14 @@ public sealed class GenesysAgentHandoffAppService(
             return GenesysHandoffResult.Failure(GenesysHandoffOutcome.ConversationNotFound);
         }
 
+        // Closed is terminal on EVERY channel: pending human work is never raised on a closed ticket (a late or replayed request is history, not work).
+        // Nothing is written - no work item, no routing, no assignment.
+        if (ClosedTicketGuard.IsTerminal(ticket))
+        {
+            return GenesysHandoffResult.Failure(
+                GenesysHandoffOutcome.TicketClosed, "The ticket is closed, so human follow-up cannot be queued on it. A new request needs a new ticket.");
+        }
+
         // Idempotency, before anything is written. Genesys' own work-item id
         // is the stronger key when supplied; the conversation's outstanding
         // work is the key that always exists.
@@ -165,13 +173,17 @@ public sealed class GenesysAgentHandoffAppService(
         // A human was requested: Call Center is the first human queue. A ticket nobody owns yet (and that is not already a
         // deliberate agent-to-agent transfer) moves there; its previous department stays in the audit trail. A ticket a person
         // already owns is left with them.
-        var callCenter = await ResolveCallCenterRoutingAsync(ticket, trigger, cancellationToken);
+        // VOICE (Phone) only: the AI Agent stays the owner while a human is requested / pending, an explicit workflow department is kept, and Round Robin does not
+        // run at handoff time (a human may still answer; the voice no-answer reconciler concludes otherwise after the call ended and the window passed).
+        // Every other channel keeps the previous behaviour: Call Center first and one agent by Round Robin.
+        var voice = interaction.ChannelId == WellKnownChannels.Phone;
+        var callCenter = await ResolveCallCenterRoutingAsync(ticket, trigger, voice, cancellationToken);
         var routedFromDepartmentId = ticket.CurrentDepartmentId;
         var routedFromOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;   // non-null only for an automatic pre-assignment (see ResolveCallCenterRoutingAsync)
         if (callCenter is not null)
         {
             // Queue routing of an AI-handled ticket: the AI Agent stays the recorded owner until a person actually accepts (see below).
-            var aiOwnerBefore = ticket.AiAgentOwnerEmployeeId;
+            var aiOwnerBefore = voice ? ticket.AiAgentOwnerEmployeeId : null;
             ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: aiOwnerBefore is not null);
             if (aiOwnerBefore is { } aiOwner && autoAssignmentService is not null)
             {
@@ -238,10 +250,14 @@ public sealed class GenesysAgentHandoffAppService(
                 {
                     await autoAssignmentService.ApplyAnsweringAgentAsync(
                         ticket, answered, "HandoffRequest", now, requestCorrelationId, callerEmployeeId,
-                        routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+                        routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: voice);
                 }
-                // Nobody has accepted yet: NO Round Robin. The ticket waits in the Call Center queue ("Waiting for Human") with the AI Agent as owner
-                // until a real connect / acceptance event names the person who answers.
+                else if (!voice)
+                {
+                    await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, requestCorrelationId, cancellationToken);
+                }
+                // VOICE, nobody has answered yet: NO Round Robin. The ticket waits in the Call Center queue ("Waiting for Human") with the AI Agent as owner
+                // until a connect event names the person who answers - or, if the call ends unanswered, until the no-answer reconciliation window passes.
             }
         }
         else if (autoAssignmentService is not null
@@ -256,9 +272,14 @@ public sealed class GenesysAgentHandoffAppService(
             {
                 await autoAssignmentService.ApplyAnsweringAgentAsync(
                     ticket, answeredInPlace, "HandoffRequest", now, requestCorrelationId, callerEmployeeId,
-                    routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+                    routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: voice);
             }
 
+            if (!voice)
+            {
+                await autoAssignmentService.EnsureCsAgentAsync(
+                    ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.CallCenterIntake, now, requestCorrelationId, cancellationToken);
+            }
         }
 
         await workflowEventRepository.AddAsync(
@@ -332,7 +353,7 @@ public sealed class GenesysAgentHandoffAppService(
     /// still goes to Call Center first, and that pre-assignment is released (superseded, audited). Human ownership is never overwritten.
     /// </summary>
     private async Task<Domain.Modules.IdentityAndAccess.Department?> ResolveCallCenterRoutingAsync(
-        Ticket ticket, HandoffTrigger? trigger, CancellationToken cancellationToken)
+        Ticket ticket, HandoffTrigger? trigger, bool voice, CancellationToken cancellationToken)
     {
         if (departmentRepository is null
             || ticket.TicketStatus == TicketStatus.Closed
@@ -354,8 +375,8 @@ public sealed class GenesysAgentHandoffAppService(
             return null;
         }
 
-        // A department chosen by an explicit workflow (Legal, Collections, a person's transfer) is preserved: the request is flagged where it is.
-        return autoAssignmentService is not null && await autoAssignmentService.HasExplicitWorkflowRoutingPublicAsync(ticket, callCenter.DepartmentId, cancellationToken)
+        // VOICE only: a department chosen by an explicit workflow (Legal, Collections, a person's transfer) is preserved: the request is flagged where it is.
+        return voice && autoAssignmentService is not null && await autoAssignmentService.HasExplicitWorkflowRoutingPublicAsync(ticket, callCenter.DepartmentId, cancellationToken)
             ? null
             : callCenter;
     }

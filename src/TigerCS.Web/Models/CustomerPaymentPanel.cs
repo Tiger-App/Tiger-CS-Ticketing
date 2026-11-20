@@ -161,17 +161,8 @@ public sealed class CustomerPaymentPanel
 
     public static string ScheduleStatusCss(string status) => status switch { "Overdue" => "critical", "Due" => "pending", _ => "neutral" };
 
-    private static readonly TimeZoneInfo DubaiZone = FindDubai();
-
-    private static TimeZoneInfo FindDubai()
-    {
-        try { return TimeZoneInfo.FindSystemTimeZoneById("Asia/Dubai"); }
-        catch (Exception ex) when (ex is TimeZoneNotFoundException or InvalidTimeZoneException) { return TimeZoneInfo.CreateCustomTimeZone("Dubai", TimeSpan.FromHours(4), "Dubai", "Dubai"); }
-    }
-
-    /// <summary>A UTC instant as Dubai time ("14 Oct 2026 12:00"), the zone every Collections date rule runs in.</summary>
-    public static string DubaiTime(DateTime utc) =>
-        TimeZoneInfo.ConvertTimeFromUtc(DateTime.SpecifyKind(utc, DateTimeKind.Utc), DubaiZone).ToString("d MMM yyyy HH:mm", CultureInfo.InvariantCulture);
+    /// <summary>A UTC instant as Dubai time ("14 Oct 2026 12:00"), the zone every Collections date rule runs in. One shared conversion: <see cref="TigerCS.Web.Models.DubaiTime"/>.</summary>
+    public static string DubaiTime(DateTime utc) => TigerCS.Web.Models.DubaiTime.Format(utc, "d MMM yyyy HH:mm");
 
     /// <summary>Plain words for the machine reasons the linking reports.</summary>
     public static string ReasonText(string reason) => reason switch

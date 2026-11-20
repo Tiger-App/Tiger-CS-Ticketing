@@ -77,7 +77,8 @@ INSERT @Repo (MigrationId) VALUES
     (N'20261118120000_AddCustomerProfileOverrides'),
     (N'20261118124858_AddTicketAiAgentOwner'),
     (N'20261119081103_AddCustomerProfileAuditAndProperties'),
-    (N'20261119120249_AddAssignmentHistoryPreviousDepartment');
+    (N'20261119120249_AddAssignmentHistoryPreviousDepartment'),
+    (N'20261120074059_AddInteractionEndReceivedAt');
 
 -- 1. Pending: in the repository, not applied in production
 SELECT r.MigrationId AS PendingMigration FROM @Repo r
@@ -120,7 +121,8 @@ FROM (VALUES
     (N'AddCustomerProfileAuditAndProperties',  N'column CustomerProfileOverrides.Emirate',   N'CustomerProfileOverrides', N'Emirate'),
     (N'AddCustomerProfileAuditAndProperties',  N'column CustomerProfileOverrides.Location',  N'CustomerProfileOverrides', N'Location'),
     (N'AddCustomerProfileAuditAndProperties',  N'column CustomerProfileOverrides.PreferredLanguage', N'CustomerProfileOverrides', N'PreferredLanguage'),
-    (N'AddAssignmentHistoryPreviousDepartment', N'column TicketAssignmentHistory.PreviousDepartmentId', N'TicketAssignmentHistory', N'PreviousDepartmentId')
+    (N'AddAssignmentHistoryPreviousDepartment', N'column TicketAssignmentHistory.PreviousDepartmentId', N'TicketAssignmentHistory', N'PreviousDepartmentId'),
+    (N'AddInteractionEndReceivedAt', N'column TicketInteractions.EndReceivedAtUtc', N'TicketInteractions', N'EndReceivedAtUtc')
 ) x(Migration, Object, Tbl, Col)
 ORDER BY Present, x.Migration;
 

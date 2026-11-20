@@ -498,10 +498,11 @@ public sealed class TicketCreationAppService(
                 // A Human Agent who creates the ticket by hand owns it: the Call Center rotation is not consulted (it would hand a ticket Kawthar
                 // created to the next agent). An ineligible creator (not a Call Center CS Agent) falls through to the rotation below.
             }
-            else if (request.GenesysContext is not null)
+            else if (request.GenesysContext is not null && intakeRecord.ChannelId == WellKnownChannels.Phone)
             {
-                // A Genesys conversation nobody has answered is the AI Agent's (recorded right after this block): it waits in the Call Center
-                // queue for follow-up - NO Round Robin, nobody is chosen. A person gets it when they actually answer / accept, or are assigned.
+                // VOICE: a call nobody has answered is the AI Agent's (recorded right after this block): it waits in the Call Center queue - NO Round
+                // Robin, nobody is chosen. A person gets it when they actually answer, or are assigned; if the call ends unanswered, the voice no-answer
+                // reconciler deals it by Round Robin once the reconciliation window has passed. Every other channel keeps Round Robin at creation.
             }
             else
             {

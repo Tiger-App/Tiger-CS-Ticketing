@@ -245,14 +245,14 @@
                                         <td><span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(r.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(r.TicketStatus)</span></td>
                                         <td><span class="badge badge-priority-@TicketDisplay.PriorityCssKey(r.PriorityId)">@TicketDisplay.PriorityLabel(r.PriorityId)</span></td>
                                         <td>@(string.IsNullOrWhiteSpace(r.DepartmentName) ? "—" : r.DepartmentName)</td>
-                                        <td class="text-secondary text-mono">@r.CreatedAtUtc.ToLocalTime().ToString("MMM d, HH:mm")</td>
+                                        <td class="text-secondary text-mono">DubaiTime.Format(r.CreatedAtUtc, "MMM d, HH:mm")</td>
                                         @if (showBreach)
                                         {
-                                            <td class="text-mono">@(r.BreachedAtUtc is DateTime breached ? breached.ToLocalTime().ToString("MMM d, HH:mm") : "—")</td>
+                                            <td class="text-mono">@(r.BreachedAtUtc is DateTime breached ? DubaiTime.Format(breached, "MMM d, HH:mm") : "—")</td>
                                         }
                                         @if (showCompleted)
                                         {
-                                            <td class="text-mono">@(r.CompletedAtUtc is DateTime completed ? completed.ToLocalTime().ToString("MMM d, HH:mm") : "—")</td>
+                                            <td class="text-mono">@(r.CompletedAtUtc is DateTime completed ? DubaiTime.Format(completed, "MMM d, HH:mm") : "—")</td>
                                         }
                                     </tr>
                                 }

@@ -201,7 +201,8 @@ public sealed class CallCenterUnassignedWorkReconciler(
             {
                 // Genesys-handled and needs a person: into the Call Center queue (an explicit workflow department is kept), owner unchanged, nobody chosen.
                 await autoAssignment.RouteExistingTicketToCallCenterAsync(
-                    ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to the Call Center queue", cancellationToken);
+                    ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to the Call Center queue", cancellationToken,
+                    requiredRole: null, dealToAgent: false, voiceOwnership: true);
                 await unitOfWork.SaveChangesAsync(cancellationToken);
                 await transaction.CommitAsync(cancellationToken);
                 return new ReconcileResult(ticketId, classification.Class, ReconcileOutcome.FlaggedForManualAssignment);
@@ -224,7 +225,7 @@ public sealed class CallCenterUnassignedWorkReconciler(
             {
                 var answer = await autoAssignment.ApplyAnsweringAgentAsync(
                     ticket, actual, "Reconciler", now, correlationId,
-                    reportedByEmployeeId: null, routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+                    reportedByEmployeeId: null, routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: evidence.GenesysIsPhoneOnly);
                 if (answer.Outcome == AnswerAssignmentOutcome.AssignedToAnsweringAgent)
                 {
                     assigned = answer.AssignedEmployeeId;
@@ -252,9 +253,9 @@ public sealed class CallCenterUnassignedWorkReconciler(
                 {
                     await autoAssignment.RouteExistingTicketToCallCenterAsync(
                         ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to Call Center", cancellationToken, requiredRole,
-                        dealToAgent: classification.Action == UnassignedTicketAction.RoundRobinCallCenter);
+                        dealToAgent: !evidence.GenesysIsPhoneOnly, voiceOwnership: evidence.GenesysIsPhoneOnly);
                 }
-                else
+                else if (!evidence.GenesysIsPhoneOnly)
                 {
                     await autoAssignment.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken, requiredRole);
                 }

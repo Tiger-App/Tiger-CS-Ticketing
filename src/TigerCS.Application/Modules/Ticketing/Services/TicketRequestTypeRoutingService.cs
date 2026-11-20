@@ -213,7 +213,8 @@ public sealed class TicketRequestTypeRoutingService(
         DateTime nowUtc,
         Guid correlationId,
         CancellationToken cancellationToken = default,
-        bool reclassify = false)
+        bool reclassify = false,
+        bool voiceAiOwnership = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         if (!resolution.IsValid || resolution.RequestType is null || resolution.PublishedWorkflow is null)
@@ -225,7 +226,8 @@ public sealed class TicketRequestTypeRoutingService(
         var previousDepartmentId = ticket.CurrentDepartmentId;
         var previousOwner = ticket.CurrentOwnerEmployeeId;
         var previousRequestTypeId = ticket.RequestTypeId;
-        var aiHandled = source.StartsWith("Genesys", StringComparison.OrdinalIgnoreCase) && ticket.AiAgentOwnerEmployeeId is not null && ticket.CurrentOwnerEmployeeId is null;
+        // VOICE only: the AI classifying its own phone conversation routes the department and SLA but assigns nobody. Digital channels keep the previous behaviour.
+        var aiHandled = voiceAiOwnership && source.StartsWith("Genesys", StringComparison.OrdinalIgnoreCase) && ticket.AiAgentOwnerEmployeeId is not null && ticket.CurrentOwnerEmployeeId is null;
 
         if (reclassify)
         {

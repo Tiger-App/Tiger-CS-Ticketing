@@ -3870,6 +3870,9 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<DateTime?>("EndReceivedAtUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<DateTime?>("EndedAtUtc")
                         .HasColumnType("datetime2");
 

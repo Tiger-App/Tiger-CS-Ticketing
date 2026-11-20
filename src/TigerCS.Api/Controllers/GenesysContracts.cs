@@ -39,6 +39,7 @@ namespace TigerCS.Api.Controllers;
 /// <param name="AgentId">The handling Genesys agent's <b>Genesys User ID</b> (the immutable id, not a name), where available. When supplied, it is resolved server-side to the mapped Ticketing user and that user is recorded as the interaction's handler; an unmapped id is recorded verbatim with no handler.</param>
 /// <param name="AgentName">The handling agent's display name, where available. Display only — never an identity key.</param>
 /// <param name="StartedAtUtc">When the interaction started, UTC.</param>
+/// <param name="ConnectedAtUtc">PHONE only: when the agent in <c>agentId</c> answered the call, UTC (Genesys' connected time). Satisfies the first-response SLA at that actual moment; falls back to the receipt time, audited, when absent.</param>
 /// <param name="DepartmentId">The department the customer explicitly selected (website chat). Wins over the queue mapping.</param>
 /// <param name="DepartmentCode">The same explicit selection as a TigerCS department code, for a caller that knows codes rather than ids.</param>
 /// <param name="TowerName">The tower/project the customer typed into the chat form, where collected.</param>
@@ -70,7 +71,8 @@ public sealed record GenesysInquiryRequest(
     string? Subject = null,
     GenesysRequestTypePart? RequestType = null,
     string? ServiceRequestId = null,
-    [property: JsonConverter(typeof(LenientNullableBoolConverter))] bool? HumanFollowUpRequired = null);
+    [property: JsonConverter(typeof(LenientNullableBoolConverter))] bool? HumanFollowUpRequired = null,
+    DateTime? ConnectedAtUtc = null);
 
 /// <summary>
 /// The request type the bot identified. Send <c>requestTypeId</c> (preferred) or
@@ -581,7 +583,8 @@ internal static class GenesysContractMapper
             Absent(request.Subject),
             Map(request.RequestType),
             Absent(request.ServiceRequestId)?.Trim(),
-            request.HumanFollowUpRequired);
+            request.HumanFollowUpRequired,
+            request.ConnectedAtUtc);
         return true;
     }
 

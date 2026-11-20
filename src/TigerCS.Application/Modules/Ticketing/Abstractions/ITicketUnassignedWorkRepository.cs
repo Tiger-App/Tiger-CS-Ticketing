@@ -14,6 +14,14 @@ public interface ITicketUnassignedWorkRepository
     /// </summary>
     Task<IReadOnlyList<UnassignedTicketEvidence>> ListActiveUnownedAsync(long afterTicketId, int limit, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// VOICE: the next page of Open, unowned tickets that have a Genesys PHONE interaction which ENDED at or after <paramref name="endedSinceUtc"/> (by the time TigerCS
+    /// received the end), plus any whose answering agent was flagged (an unmapped / ineligible agent, however old). Oldest id first, with evidence. The default
+    /// implementation filters <see cref="ListOpenUnownedAsync"/>; the EF repository overrides it with one narrow query.
+    /// </summary>
+    async Task<IReadOnlyList<UnassignedTicketEvidence>> ListVoiceCandidatesAsync(DateTime endedSinceUtc, long afterTicketId, int limit, CancellationToken cancellationToken = default) =>
+        [.. (await ListOpenUnownedAsync(afterTicketId, limit, cancellationToken)).Where(e => e.GenesysIsPhoneOnly)];
+
     /// <summary>The evidence for one ticket (null when it does not exist), whatever its state — used to re-check under the transaction before acting.</summary>
     Task<UnassignedTicketEvidence?> GetEvidenceAsync(long ticketId, CancellationToken cancellationToken = default);
 
