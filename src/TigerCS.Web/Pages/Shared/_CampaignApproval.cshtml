@@ -57,7 +57,7 @@
         <p class="send-verdict send-verdict--@verdict.Css" role="status" data-send-verdict>@verdict.Text</p>
         <p>@d.ApprovedCount approved ·
             @foreach (var total in d.ApprovedTotalsByCurrency) { <span>@total.Key @CampaignsModel.Money(total.Value) </span> }
-            · approved by @(d.ApprovedByName ?? d.InitiatedByEmployeeId.ToString("D")) · @DubaiTime.Format(d.InitiatedAtUtc, "yyyy-MM-dd HH:mm") Dubai</p>
+            · approved by @(d.ApprovedByName ?? d.InitiatedByEmployeeId.ToString("D")) · @TicketDisplay.ToUae(d.InitiatedAtUtc).ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) Dubai</p>
         @if (!string.IsNullOrEmpty(d.StatusReason)) { <p role="status">@d.StatusReason</p> }
         <ul class="review-tally">
             <li><strong>@d.UploadedCount</strong> uploaded to Genesys<partial name="_InfoTip" model="@(new InfoTipModel("tip-tally-uploaded", "Uploaded to Genesys", "Accepted by Genesys."))" /></li>
@@ -207,7 +207,7 @@
             @foreach (var send in Model.History)
             {
                 <tr data-history-row>
-                    <td>@DubaiTime.Format(send.InitiatedAtUtc, "yyyy-MM-dd HH:mm") Dubai</td>
+                    <td>@TicketDisplay.ToUae(send.InitiatedAtUtc).ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) Dubai</td>
                     <td>@(send.ApprovedByName ?? send.InitiatedByEmployeeId.ToString("D"))</td>
                     <td>@send.ApprovedCount · @send.UploadedCount uploaded</td>
                     <td>@CampaignsModel.Label(send.Status)</td>

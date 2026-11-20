@@ -69,7 +69,7 @@
             <div class="payment-toolbar__meta">
                 <span data-currency-configured>Currency <strong>@currency</strong></span>
                 <span>Source <strong>@sourceLabel</strong></span>
-                <span data-retrieved-at>Last updated <strong>DubaiTime.Format(summary.RetrievedAtUtc, "d MMM yyyy HH:mm")</strong></span>
+                <span data-retrieved-at>Last updated <strong>@TigerCS.Web.Models.TicketDisplay.ToUae(summary.RetrievedAtUtc).ToString("d MMM yyyy HH:mm")</strong></span>
             </div>
         </div>
 

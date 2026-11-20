@@ -113,7 +113,7 @@ public enum FuturePolicy
 /// <summary>One instant that was not taken as sent: what arrived (and in which wire form), and what TigerCS did with it.</summary>
 /// <param name="Field">The contract field.</param>
 /// <param name="RawValue">The value exactly as the JSON reader produced it, before any conversion.</param>
-/// <param name="WireForm">How the sender wrote the zone: "Utc" (<c>…Z</c>), "Offset" (<c>…+04:00</c>) or "Zoneless" (nothing - which TigerCS reads as UTC, per the contract).</param>
+/// <param name="WireForm">The <see cref="DateTime.Kind"/> of the value as the caller handed it over: "Utc", "Offset" (<c>Local</c>) or "Zoneless" (<c>Unspecified</c>). The HTTP boundary (<c>GenesysUtcDateTimeConverter</c>) already parses every Genesys instant to UTC, so for requests that arrive over HTTP this is "Utc"; it still distinguishes callers that bypass the converter.</param>
 /// <param name="ReceivedAtUtc">The server clock when the request arrived.</param>
 /// <param name="Action">"RejectedFuture", "ClampedToReceipt" or "ObservedFuture".</param>
 /// <param name="AppliedUtc">What was stored instead (null for a rejection / an observation).</param>

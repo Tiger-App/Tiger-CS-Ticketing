@@ -138,7 +138,7 @@
                     <tbody>
                     @foreach (var h in Model.History)
                     {
-                        <tr><td>@DubaiTime.Format(h.ChangedAtUtc, "yyyy-MM-dd HH:mm")</td><td>@h.TowerCode</td><td>@h.Action</td><td>@(h.PreviousEmployeeName ?? "—")</td><td>@(h.NewEmployeeName ?? "—")</td><td>@h.ChangedByName</td></tr>
+                        <tr><td>@TicketDisplay.ToUae(h.ChangedAtUtc).ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture)</td><td>@h.TowerCode</td><td>@h.Action</td><td>@(h.PreviousEmployeeName ?? "—")</td><td>@(h.NewEmployeeName ?? "—")</td><td>@h.ChangedByName</td></tr>
                     }
                     </tbody>
                 </table>

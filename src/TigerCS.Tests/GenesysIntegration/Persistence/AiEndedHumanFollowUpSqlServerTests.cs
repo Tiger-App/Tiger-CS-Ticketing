@@ -134,7 +134,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
             Assert.Null(interaction.InteractionStartedAtUtc);                                          // the impossible start was NOT stored
             var anomaly = await db.AuditEntries.AsNoTracking().SingleAsync(a => a.Action == GenesysAuditActions.TimestampAnomaly && a.EntityId == ticketId.ToString());
             Assert.Contains("RejectedFuture", anomaly.AfterValue);
-            Assert.Contains("Zoneless", anomaly.AfterValue);
+            Assert.Contains("inquiry.startedAtUtc", anomaly.AfterValue);                               // the boundary normalized the text first, so the audit names the field and the refused UTC value
 
             var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId);
             aiAgent = Assert.NotNull(ticket.AiAgentOwnerEmployeeId);
@@ -354,6 +354,72 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
             Assert.Null(ticket.CurrentOwnerEmployeeId);
             Assert.NotNull(ticket.AiAgentOwnerEmployeeId);
             Assert.True((await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == legalTicket)).RequiresHumanFollowUp);
+        }
+    }
+
+    /// <summary>
+    /// Ticket 1878's defect, on a real SQL Server, over the real endpoints: Genesys sends UTC, in whichever spelling, and the database must hold that UTC instant - for the
+    /// conversation start, every transcript line and the end. Before the fix an explicit-offset spelling (<c>+00:00</c>) was read into the HOST's zone and stored four hours late
+    /// on the UTC+4 application server; this test fails on such a host without the fix (CI runs it with <c>TZ=Asia/Dubai</c> as well as on its UTC runner).
+    /// </summary>
+    [VisibilitySqlServerFact]
+    public async Task GenesysUtc_InEveryWireSpelling_IsStoredAsTheSameUtcInstant_ForStartTranscriptAndEnd_WhateverTheHostZone()
+    {
+        var w = await StartAsync();
+        // Ticket 1878's shape, moved to "three minutes ago" so the receipt-time future guard is not involved: the same UTC instant in every spelling.
+        var now = DateTime.UtcNow;
+        var start = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, now.Second, DateTimeKind.Utc).AddMinutes(-3);
+
+        string Spell(DateTime d, string form) => form switch
+        {
+            "Z" => d.ToString("yyyy-MM-ddTHH:mm:ss") + "Z",
+            "offset0" => d.ToString("yyyy-MM-ddTHH:mm:ss") + "+00:00",
+            "zoneless" => d.ToString("yyyy-MM-ddTHH:mm:ss"),
+            _ => d.AddHours(4).ToString("yyyy-MM-ddTHH:mm:ss") + "+04:00"       // the same instant written as UAE wall-clock WITH its offset
+        };
+
+        var tickets = new Dictionary<string, long>();
+        foreach (var form in new[] { "Z", "offset0", "zoneless", "uae" })
+        {
+            var conversation = $"tz-{form}-{Guid.NewGuid():N}"[..24];
+            var created = await w.Genesys.PostAsync("/api/genesys/tickets", Json(new
+            {
+                conversationId = conversation, channel = "WhatsApp", customerPhone = "+971500000014", departmentId = w.CustomerService,
+                startedAtUtc = Spell(start, form)
+            }));
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            var id = (await created.Content.ReadFromJsonAsync<GenesysAcceptedDto>())!.TicketId;
+            tickets[form] = id;
+
+            Assert.Equal(HttpStatusCode.OK, (await w.Genesys.PatchAsync($"/api/genesys/tickets/{id}", Json(new
+            {
+                conversationId = conversation,
+                transcript = new object[]
+                {
+                    new { sender = "Customer", sentAtUtc = Spell(start.AddSeconds(5), form), body = "Hello" },
+                    new { sender = "VirtualAgent", sentAtUtc = Spell(start.AddSeconds(9), form), body = "How can I help?" }
+                }
+            }))).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await w.Genesys.PatchAsync($"/api/genesys/tickets/{id}", Json(new
+            {
+                conversationId = conversation, ended = new { endedAtUtc = Spell(start.AddSeconds(40), form), endReason = "CustomerDisconnect" }
+            }))).StatusCode);
+        }
+
+        using var db = Db();
+        foreach (var (form, id) in tickets)
+        {
+            var interaction = await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == id);
+            Assert.True(interaction.InteractionStartedAtUtc!.Value.Ticks == start.Ticks, $"[{form}] start stored as {interaction.InteractionStartedAtUtc:O}, expected UTC {start:O}");
+            Assert.True(interaction.EndedAtUtc!.Value.Ticks == start.AddSeconds(40).Ticks, $"[{form}] end stored as {interaction.EndedAtUtc:O}");
+
+            var lines = await db.TicketInteractionMessages.AsNoTracking().Where(m => m.TicketInteractionId == interaction.TicketInteractionId).OrderBy(m => m.Sequence).ToListAsync();
+            Assert.Equal([start.AddSeconds(5).Ticks, start.AddSeconds(9).Ticks], lines.Select(m => m.SentAtUtc.Ticks));
+
+            // The API hands the Web exactly what is stored (no zone, no conversion); the Web adds +4 once.
+            var shown = await InteractionAsync(w, id);
+            Assert.Equal(start.Ticks, shown.StartedAtUtc.Ticks);
+            Assert.Equal(DateTimeKind.Unspecified, shown.StartedAtUtc.Kind);
         }
     }
 

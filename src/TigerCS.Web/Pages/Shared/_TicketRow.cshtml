@@ -30,5 +30,5 @@
             @TicketDisplay.AssignedToLabel(t.CurrentOwnerEmployeeId, t.CurrentOwnerName ?? Model.OwnerName, t.CurrentDepartmentId, Model.DepartmentName)
         }
     </td>
-    <td class="text-secondary text-mono">DubaiTime.Format(t.CreatedAtUtc, "MMM d, HH:mm")</td>
+    <td class="text-secondary text-mono">@TigerCS.Web.Models.TicketDisplay.ToUae(t.CreatedAtUtc).ToString("MMM d, HH:mm")</td>
 </tr>

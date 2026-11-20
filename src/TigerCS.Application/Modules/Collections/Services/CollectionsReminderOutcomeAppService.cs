@@ -157,7 +157,9 @@ public sealed class CollectionsReminderOutcomeAppService(
         }
 
         var now = clock.UtcNow;
-        var occurredAt = request.OccurredAtUtc?.ToUniversalTime() ?? now;
+        // Zoneless text is UTC (the contract) and an offset names the real instant. DateTime.ToUniversalTime() would read a zoneless value as the HOST's
+        // local time - four hours early on the UAE application server.
+        var occurredAt = TigerCS.Application.Modules.GenesysIntegration.Services.GenesysTimestamps.ToUtc(request.OccurredAtUtc) ?? now;
         if (deliveryStatus is { } status)
         {
             channelRow.Apply(status, occurredAt, request.ProviderMessageId, null);

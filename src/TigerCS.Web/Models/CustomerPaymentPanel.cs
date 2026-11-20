@@ -161,8 +161,8 @@ public sealed class CustomerPaymentPanel
 
     public static string ScheduleStatusCss(string status) => status switch { "Overdue" => "critical", "Due" => "pending", _ => "neutral" };
 
-    /// <summary>A UTC instant as Dubai time ("14 Oct 2026 12:00"), the zone every Collections date rule runs in. One shared conversion: <see cref="TigerCS.Web.Models.DubaiTime"/>.</summary>
-    public static string DubaiTime(DateTime utc) => TigerCS.Web.Models.DubaiTime.Format(utc, "d MMM yyyy HH:mm");
+    /// <summary>A UTC instant as Dubai time ("14 Oct 2026 12:00"), the zone every Collections date rule runs in. One shared conversion: <see cref="TicketDisplay.ToUae"/>.</summary>
+    public static string DubaiTime(DateTime utc) => TicketDisplay.UaeDateTime(utc);
 
     /// <summary>Plain words for the machine reasons the linking reports.</summary>
     public static string ReasonText(string reason) => reason switch
