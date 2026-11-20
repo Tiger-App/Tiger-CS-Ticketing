@@ -268,7 +268,7 @@ public sealed class GenesysServiceFixture
 
         HandlingHistory = new GenesysAgentHandlingHistory(WorkflowEvents, AgentResolution, Clock);
 
-        AnsweringAgents = new GenesysAnsweringAgentAssignmentService(AgentResolution, autoAssignment, Handoffs, UnitOfWork, Clock);
+        AnsweringAgents = new GenesysAnsweringAgentAssignmentService(AgentResolution, autoAssignment, Handoffs, UnitOfWork, Clock, sla.FirstHumanResponse, Audit);
 
         AgentHandoff = new GenesysAgentHandoffAppService(
             Options, Conversations, Handoffs, WorkflowEvents, Tickets, UnitOfWork, Audit, TimeProvider.System,
@@ -292,7 +292,9 @@ public sealed class GenesysServiceFixture
             RequestTypeClassification,
             HandlingHistory,
             HandlerRecorder,
-            DefaultClassification);
+            DefaultClassification,
+            Clock,
+            AnsweringAgents);
 
         StrictTicketQuery = new TicketQueryAppService(
             Tickets, DepartmentAssignments, new FakeTicketResolutionRepository(),

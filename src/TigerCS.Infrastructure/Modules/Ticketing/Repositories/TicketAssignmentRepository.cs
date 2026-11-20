@@ -19,6 +19,27 @@ public sealed class TicketAssignmentRepository(TigerCsDbContext dbContext) : ITi
             .OrderBy(a => a.AssignedAtUtc).ThenBy(a => a.TicketAssignmentId)
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyDictionary<long, Guid>> GetLastAssignedEmployeesAsync(IReadOnlyCollection<long> ticketIds, CancellationToken cancellationToken = default)
+    {
+        if (ticketIds.Count == 0)
+        {
+            return new Dictionary<long, Guid>();
+        }
+
+        var wanted = ticketIds.Distinct().ToList();
+        var rows = await dbContext.TicketAssignments.AsNoTracking()
+            .Where(a => wanted.Contains(a.TicketId))
+            .GroupBy(a => a.TicketId)
+            .Select(g => new { TicketId = g.Key, LastId = g.Max(a => a.TicketAssignmentId) })
+            .ToListAsync(cancellationToken);
+        var lastIds = rows.Select(r => r.LastId).ToList();
+        var employees = await dbContext.TicketAssignments.AsNoTracking()
+            .Where(a => lastIds.Contains(a.TicketAssignmentId))
+            .Select(a => new { a.TicketId, a.AssignedEmployeeId })
+            .ToListAsync(cancellationToken);
+        return employees.ToDictionary(e => e.TicketId, e => e.AssignedEmployeeId);
+    }
+
     public async Task AddAsync(TicketAssignment assignment, CancellationToken cancellationToken = default) =>
         await dbContext.TicketAssignments.AddAsync(assignment, cancellationToken);
 }

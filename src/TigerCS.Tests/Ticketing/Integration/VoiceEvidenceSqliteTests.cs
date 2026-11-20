@@ -1,0 +1,161 @@
+using Microsoft.EntityFrameworkCore;
+using TigerCS.Application.Modules.GenesysIntegration.Services;
+using TigerCS.Application.Modules.Ticketing.Services;
+using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.Ticketing;
+using TigerCS.Infrastructure.Modules.Ticketing.Repositories;
+using TigerCS.Tests.Ticketing.Dashboard;
+
+namespace TigerCS.Tests.Ticketing.Integration;
+
+/// <summary>
+/// The voice evidence as real SQL over the real schema (the same query shape runs on SQL Server): which tickets the voice reconciler even looks at, when a call's end was
+/// RECEIVED, whether a ticket is phone-only, and a flagged answering agent re-resolved against the CURRENT mapping.
+/// </summary>
+public sealed class VoiceEvidenceSqliteTests : IDisposable
+{
+    private readonly DashboardSqliteFixture _db = new(enforceForeignKeys: false);
+    private static DateTime Now => DashboardSqliteFixture.Now;
+
+    public void Dispose() => _db.Dispose();
+
+    private static TicketInteraction Call(Ticket ticket, byte channel, string conv, DateTime started) =>
+        TicketInteraction.CreateFromGenesys(
+            ticket.TicketId, channel, "+971500000000", conv, calledNumber: null, genesysQueueId: null, genesysQueueName: null, genesysAgentId: null, genesysAgentName: null,
+            interactionStartedAtUtc: started, direction: "Inbound", createdAtUtc: started, isOriginatingInteraction: true, genesysServiceRequestId: Guid.NewGuid().ToString("N")[..8]);
+
+    private (long Phone, long Digital, long Old, long Owned, long Flagged, long Live) Seed(Guid flaggedAgentUser, string flaggedGenesysId)
+    {
+        using var context = _db.CreateContext();
+        context.Departments.Add(new Department("Call Center", "CC"));
+        context.Users.Add(new TigerCS.Infrastructure.Identity.ApplicationUser
+        {
+            Id = flaggedAgentUser, UserName = "fixed@example.test", NormalizedUserName = "FIXED@EXAMPLE.TEST", Email = "fixed@example.test",
+            SecurityStamp = Guid.NewGuid().ToString(), GenesysUserId = flaggedGenesysId
+        });
+        context.SaveChanges();
+
+        var phone = _db.AddTicket(context, _db.CustomerServiceId);
+        var phoneCall = Call(phone, WellKnownChannels.Phone, "v-recent", Now.AddMinutes(-30));
+        phoneCall.End(Now.AddMinutes(-20), "CustomerDisconnect", receivedAtUtc: Now.AddMinutes(-10));
+        context.TicketInteractions.Add(phoneCall);
+
+        var digital = _db.AddTicket(context, _db.CustomerServiceId);
+        var chat = Call(digital, WellKnownChannels.Website, "d-recent", Now.AddMinutes(-30));
+        chat.End(Now.AddMinutes(-20), "CustomerDisconnect", receivedAtUtc: Now.AddMinutes(-10));
+        context.TicketInteractions.Add(chat);
+
+        var old = _db.AddTicket(context, _db.CustomerServiceId, createdAtUtc: Now.AddDays(-9));
+        var oldCall = Call(old, WellKnownChannels.Phone, "v-old", Now.AddDays(-9));
+        oldCall.End(Now.AddDays(-9).AddMinutes(5), "CustomerDisconnect", receivedAtUtc: Now.AddDays(-9).AddMinutes(5));
+        context.TicketInteractions.Add(oldCall);
+
+        var owned = _db.AddTicket(context, _db.CustomerServiceId, owner: Guid.NewGuid());
+        var ownedCall = Call(owned, WellKnownChannels.Phone, "v-owned", Now.AddMinutes(-30));
+        ownedCall.End(Now.AddMinutes(-20), "CustomerDisconnect", receivedAtUtc: Now.AddMinutes(-10));
+        context.TicketInteractions.Add(ownedCall);
+
+        // An old call whose answering agent was flagged (unmapped then): it must stay a candidate however old it is.
+        var flagged = _db.AddTicket(context, _db.CustomerServiceId, createdAtUtc: Now.AddDays(-9));
+        var flaggedCall = Call(flagged, WellKnownChannels.Phone, "v-flagged", Now.AddDays(-9));
+        flaggedCall.End(Now.AddDays(-9).AddMinutes(5), "CustomerDisconnect", receivedAtUtc: Now.AddDays(-9).AddMinutes(5));
+        context.TicketInteractions.Add(flaggedCall);
+
+        // A call that has not ended at all.
+        var live = _db.AddTicket(context, _db.CustomerServiceId);
+        context.TicketInteractions.Add(Call(live, WellKnownChannels.Phone, "v-live", Now.AddMinutes(-3)));
+        context.SaveChanges();
+
+        var connected = Now.AddDays(-9).AddMinutes(1);
+        context.TicketWorkflowEvents.Add(new TicketWorkflowEvent(
+            flagged.TicketId, WorkflowEventType.ManualAssignmentRequired, Now.AddDays(-9).AddMinutes(2), actorEmployeeId: null, ticketApprovalId: null,
+            $"Answered by Genesys agent {flaggedGenesysId} — not mapped. Left in the Call Center queue for manual assignment. [GenesysUserId={flaggedGenesysId};Issue=NotMapped;ConnectedAtUtc={connected:O}]",
+            Guid.NewGuid()));
+        context.SaveChanges();
+        return (phone.TicketId, digital.TicketId, old.TicketId, owned.TicketId, flagged.TicketId, live.TicketId);
+    }
+
+    [Fact]
+    public async Task TheVoiceCandidateQuery_ReturnsOnlyRecentUnownedPhoneCalls_PlusAnyFlaggedAnswer_HoweverOld()
+    {
+        var fixedUser = Guid.NewGuid();
+        var ids = Seed(fixedUser, "g-now-mapped");
+
+        using var read = _db.CreateContext();
+        var candidates = await new TicketUnassignedWorkRepository(read).ListVoiceCandidatesAsync(Now.AddHours(-24), 0, 100);
+
+        Assert.Equal(new[] { ids.Phone, ids.Flagged }.Order(), candidates.Select(c => c.TicketId).Order());
+        Assert.DoesNotContain(candidates, c => c.TicketId == ids.Digital);                    // never a digital ticket
+        Assert.DoesNotContain(candidates, c => c.TicketId == ids.Old);                        // never a legacy backlog
+        Assert.DoesNotContain(candidates, c => c.TicketId == ids.Owned);                      // never an owned ticket
+        Assert.DoesNotContain(candidates, c => c.TicketId == ids.Live);                       // a call still in progress is not a candidate
+    }
+
+    [Fact]
+    public async Task TheEvidence_CarriesPhoneOnly_AndTheReceiptTimeOfTheEnd_NotTheSendersEventTime()
+    {
+        var ids = Seed(Guid.NewGuid(), "g-x");
+
+        using var read = _db.CreateContext();
+        var repo = new TicketUnassignedWorkRepository(read);
+        var phone = await repo.GetEvidenceAsync(ids.Phone);
+        var chat = await repo.GetEvidenceAsync(ids.Digital);
+        var live = await repo.GetEvidenceAsync(ids.Live);
+
+        Assert.True(phone!.GenesysIsPhoneOnly);
+        Assert.Equal(Now.AddMinutes(-10), phone.VoiceEndReceivedAtUtc);                      // received, not the (earlier) reported end
+        Assert.False(chat!.GenesysIsPhoneOnly);
+        Assert.Null(chat.VoiceEndReceivedAtUtc);
+        Assert.True(live!.GenesysIsPhoneOnly);
+        Assert.Null(live.VoiceEndReceivedAtUtc);                                              // not ended: no window to measure
+    }
+
+    [Fact]
+    public async Task AFlaggedAnswer_IsResolvedAgainstTheCurrentMapping_SoACorrectedMappingIsNoticed()
+    {
+        var fixedUser = Guid.NewGuid();
+        var ids = Seed(fixedUser, "g-now-mapped");
+        using (var context = _db.CreateContext())
+        {
+            // The flag was written for an id that was unmapped at the time; a later flag for another id supersedes nothing about this ticket's latest one.
+            context.TicketWorkflowEvents.Add(new TicketWorkflowEvent(
+                ids.Flagged, WorkflowEventType.ManualAssignmentRequired, Now.AddDays(-8), actorEmployeeId: null, ticketApprovalId: null,
+                "Answered by Genesys agent g-still-unmapped — not mapped. [GenesysUserId=g-still-unmapped;Issue=NotMapped]", Guid.NewGuid()));
+            context.SaveChanges();
+        }
+
+        using var read = _db.CreateContext();
+        var latestUnmapped = await new TicketUnassignedWorkRepository(read).GetEvidenceAsync(ids.Flagged);
+
+        Assert.Equal("g-still-unmapped", latestUnmapped!.FlaggedAnsweringGenesysUserId);     // the LATEST flag wins
+        Assert.Null(latestUnmapped.FlaggedAnsweringEmployeeId);                               // nobody maps to it yet
+        Assert.True(latestUnmapped.HumanAnswered);
+
+        using (var context = _db.CreateContext())
+        {
+            context.Database.ExecuteSqlInterpolated($"DELETE FROM TicketWorkflowEvents WHERE TicketId = {ids.Flagged} AND Note LIKE '%g-still-unmapped%'");
+        }
+
+        using var again = _db.CreateContext();
+        var corrected = await new TicketUnassignedWorkRepository(again).GetEvidenceAsync(ids.Flagged);
+        Assert.Equal("g-now-mapped", corrected!.FlaggedAnsweringGenesysUserId);
+        Assert.Equal(fixedUser, corrected.FlaggedAnsweringEmployeeId);                        // the mapping that exists NOW
+        Assert.Equal(Now.AddDays(-9).AddMinutes(1), corrected.FlaggedAnsweringConnectedAtUtc);   // the real connect time rode in the flag
+        Assert.Equal(VoiceReconcileAction.AssignAnsweringAgent,
+            VoiceCallClassifier.Classify(corrected, Now, new VoiceCallReconciliationOptions()).Action);
+    }
+
+    [Fact]
+    public void TheFlagNote_RoundTrips_AndGarbageIsIgnored()
+    {
+        var parsed = FlaggedAnswer.TryParse("Answered by Genesys agent g-1 — x. [GenesysUserId=g-1;Issue=NotMapped;ConnectedAtUtc=2026-11-20T08:00:00.0000000Z]");
+
+        Assert.Equal("g-1", parsed!.GenesysUserId);
+        Assert.Equal("NotMapped", parsed.Issue);
+        Assert.Equal(new DateTime(2026, 11, 20, 8, 0, 0, DateTimeKind.Utc), parsed.ConnectedAtUtc);
+        Assert.Null(FlaggedAnswer.TryParse(null));
+        Assert.Null(FlaggedAnswer.TryParse("no marker here"));
+        Assert.Null(FlaggedAnswer.TryParse("[Issue=NotMapped]"));
+        Assert.Null(FlaggedAnswer.TryParse("[GenesysUserId=;Issue=NotMapped]"));
+    }
+}

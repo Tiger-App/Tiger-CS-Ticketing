@@ -158,9 +158,10 @@ public sealed class CustomerProfileAuditSqlServerTests : IDisposable
         Assert.Equal(ids[0], Scalar<Guid>("SELECT CustomerProfileId FROM CustomerProfileOverrides WHERE CustomerKey = N'crm:101'"));
         Assert.Equal(1, Scalar<int>($"SELECT COUNT(*) FROM __EFMigrationsHistory WHERE MigrationId = N'{Migration}'"));
 
-        // The database the script produced is exactly the one EF expects: nothing left to migrate, and the model works against it.
+        // The database the script produced is exactly the one EF expects: nothing left to migrate except the migrations that came AFTER this one
+        // (AddAssignmentHistoryPreviousDepartment and AddInteractionEndReceivedAt, each deployed by its own script), and the model works against it.
         using var context = CreateContext();
-        Assert.Empty(context.Database.GetPendingMigrations());
+        Assert.Equal(["20261119120249_AddAssignmentHistoryPreviousDepartment", "20261120074059_AddInteractionEndReceivedAt"], context.Database.GetPendingMigrations());
         context.Database.Migrate();
         Assert.Equal(2, context.CustomerProfileOverrides.Count());
         var customer = context.CustomerProfileOverrides.Single(o => o.CustomerKey == "crm:101");

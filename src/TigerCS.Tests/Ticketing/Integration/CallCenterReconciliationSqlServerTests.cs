@@ -147,20 +147,22 @@ public sealed class CallCenterReconciliationSqlServerTests : IDisposable
         var eligible = await ListEligibleIdsAsync();
         Assert.Equal([manualStuck, flaggedStuck], eligible.Order().ToArray());
 
-        foreach (var id in eligible) Assert.True((await ReconcileAsync(id)).Outcome is ReconcileOutcome.AssignedRoundRobin);
+        // A ticket entered by hand (no Genesys conversation) is dealt by the Call Center rotation exactly as before...
+        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, (await ReconcileAsync(manualStuck)).Outcome);
+        // ...a Genesys-handled ticket flagged for a person is only QUEUED in the Call Center: nobody is chosen for it.
+        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, (await ReconcileAsync(flaggedStuck)).Outcome);
 
         using var read = CreateContext();
-        foreach (var id in new[] { manualStuck, flaggedStuck })
-        {
-            var t = read.Tickets.AsNoTracking().Single(x => x.TicketId == id);
-            Assert.Equal(seed.CallCenterId, t.CurrentDepartmentId);
-            Assert.Contains(t.CurrentOwnerEmployeeId!.Value, seed.CsAgents);
-            Assert.NotEqual(seed.DepartmentEmployee, t.CurrentOwnerEmployeeId);              // restricted to CS Agents
-            Assert.Equal(1, read.TicketAssignments.Count(a => a.TicketId == id && a.IsCurrent));
-        }
-        Assert.NotEqual(
-            read.Tickets.Single(x => x.TicketId == manualStuck).CurrentOwnerEmployeeId,
-            read.Tickets.Single(x => x.TicketId == flaggedStuck).CurrentOwnerEmployeeId);   // Round Robin alternates
+        var manual = read.Tickets.AsNoTracking().Single(x => x.TicketId == manualStuck);
+        Assert.Equal(seed.CallCenterId, manual.CurrentDepartmentId);
+        Assert.Contains(manual.CurrentOwnerEmployeeId!.Value, seed.CsAgents);
+        Assert.NotEqual(seed.DepartmentEmployee, manual.CurrentOwnerEmployeeId);              // restricted to CS Agents
+        Assert.Equal(1, read.TicketAssignments.Count(a => a.TicketId == manualStuck && a.IsCurrent));
+
+        var flagged = read.Tickets.AsNoTracking().Single(x => x.TicketId == flaggedStuck);
+        Assert.Equal(seed.CallCenterId, flagged.CurrentDepartmentId);                          // queue routing
+        Assert.Null(flagged.CurrentOwnerEmployeeId);                                           // no Round Robin for a Genesys ticket
+        Assert.Equal(0, read.TicketAssignments.Count(a => a.TicketId == flaggedStuck));
 
         Assert.Equal(before, SnapshotAssignments(preOwned.Append(ownedElsewhere)));          // owners, departments and assignment rows byte-for-byte unchanged
         foreach (var id in new[] { activeAi, endedAi, closed, transferredOut })

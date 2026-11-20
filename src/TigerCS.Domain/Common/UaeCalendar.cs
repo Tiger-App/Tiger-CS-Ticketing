@@ -79,7 +79,12 @@ public static class UaeCalendar
         return (DayStartUtc(first), DayStartUtc(first.AddMonths(1)));
     }
 
-    private static DateTime AsUtc(DateTime value) => value.Kind switch
+    /// <summary>
+    /// The instant a stored / API-supplied value denotes, as <see cref="DateTimeKind.Utc"/>. <c>Utc</c> is kept; <c>Local</c> names a real instant and is converted to it (never
+    /// relabelled: relabelling a local wall-clock as UTC is how an extra four hours appear); <c>Unspecified</c> — what EF Core and the API's JSON hand over for the
+    /// <c>…Utc</c> columns — is UTC by this system's convention.
+    /// </summary>
+    public static DateTime AsUtc(DateTime value) => value.Kind switch
     {
         DateTimeKind.Utc => value,
         DateTimeKind.Local => value.ToUniversalTime(),

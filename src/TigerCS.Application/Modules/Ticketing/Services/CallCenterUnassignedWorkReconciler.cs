@@ -197,6 +197,17 @@ public sealed class CallCenterUnassignedWorkReconciler(
             Guid? assigned = null;
             var outcome = ReconcileOutcome.NoEligibleAgent;
 
+            if (classification.Action == UnassignedTicketAction.RouteToCallCenterQueue && evidence.AnsweringEmployeeId is null && !evidence.PhonePickupByUnmappedAgent)
+            {
+                // Genesys-handled and needs a person: into the Call Center queue (an explicit workflow department is kept), owner unchanged, nobody chosen.
+                await autoAssignment.RouteExistingTicketToCallCenterAsync(
+                    ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to the Call Center queue", cancellationToken,
+                    requiredRole: null, dealToAgent: false, voiceOwnership: true);
+                await unitOfWork.SaveChangesAsync(cancellationToken);
+                await transaction.CommitAsync(cancellationToken);
+                return new ReconcileResult(ticketId, classification.Class, ReconcileOutcome.FlaggedForManualAssignment);
+            }
+
             // BUSINESS RULE: the human who actually received the interaction owns the ticket. When that person is known they get it; when they cannot
             // take it the ticket is flagged in the Call Center queue - never silently dealt to somebody else.
             AnsweringAgent? actual = null;
@@ -214,7 +225,7 @@ public sealed class CallCenterUnassignedWorkReconciler(
             {
                 var answer = await autoAssignment.ApplyAnsweringAgentAsync(
                     ticket, actual, "Reconciler", now, correlationId,
-                    reportedByEmployeeId: null, routeToCallCenterIfAgentUnavailable: true, cancellationToken);
+                    reportedByEmployeeId: null, routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: evidence.HasGenesysInteraction);
                 if (answer.Outcome == AnswerAssignmentOutcome.AssignedToAnsweringAgent)
                 {
                     assigned = answer.AssignedEmployeeId;
@@ -241,9 +252,10 @@ public sealed class CallCenterUnassignedWorkReconciler(
                 if (ticket.CurrentDepartmentId != callCenter.DepartmentId)
                 {
                     await autoAssignment.RouteExistingTicketToCallCenterAsync(
-                        ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to Call Center", cancellationToken, requiredRole);
+                        ticket, now, correlationId, $"Reconciler: {classification.Class} - routed to Call Center", cancellationToken, requiredRole,
+                        dealToAgent: !evidence.HasGenesysInteraction, voiceOwnership: evidence.HasGenesysInteraction);
                 }
-                else
+                else if (!evidence.HasGenesysInteraction)
                 {
                     await autoAssignment.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken, requiredRole);
                 }

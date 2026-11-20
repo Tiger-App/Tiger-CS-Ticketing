@@ -338,6 +338,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<TicketAutoAssignmentService>();
         services.AddScoped<ITicketUnassignedWorkRepository, TicketUnassignedWorkRepository>();
         services.AddScoped<CallCenterUnassignedWorkReconciler>();
+        services.AddScoped<VoiceCallReconciler>();
         services.AddScoped<CsAgentBackfillService>();
         services.AddScoped<TicketRequestTypeRoutingService>();
 

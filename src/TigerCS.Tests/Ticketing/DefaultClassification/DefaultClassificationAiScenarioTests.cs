@@ -16,7 +16,8 @@ namespace TigerCS.Tests.Ticketing.DefaultClassification;
 /// <summary>
 /// AI-created and AI-handled tickets: a valid department without a category / request type is General / General WITHIN that department; no
 /// valid department is Customer Services / General / General; valid compatible AI classifications are kept; AI-resolved and AI-closed tickets
-/// are classified too but get no CS Agent; human-handled tickets follow the existing ownership rules.
+/// are classified too but get no CS Agent; human-handled tickets wait in the Call Center queue, still owned by the AI Agent, and are given to nobody
+/// until a person accepts them.
 /// </summary>
 public class DefaultClassificationAiScenarioTests
 {
@@ -300,21 +301,31 @@ public class DefaultClassificationAiScenarioTests
     }
 
     [Fact]
-    public async Task AiHandledTickets_DoNotAdvanceTheRotation()
+    public async Task AiHandledTickets_AreNeverAssigned_AndTheRotationNeverAdvances_EvenForTheHumanTicketThatFollows()
     {
         var w = Build(callCenterFirst: true, agents: 2);
-        await IngestAsync(w, "conv-ai-1", w.Leasing.DepartmentId, humanFollowUp: false);
-        await IngestAsync(w, "conv-ai-2", departmentId: null, humanFollowUp: false);
+        var ai1 = await IngestAsync(w, "conv-ai-1", w.Leasing.DepartmentId, humanFollowUp: false);
+        var ai2 = await IngestAsync(w, "conv-ai-2", departmentId: null, humanFollowUp: false);
+        Assert.All(new[] { ai1, ai2 }, t =>
+        {
+            Assert.Null(t.CurrentOwnerEmployeeId);
+            Assert.Equal(ServiceAccount, t.AiAgentOwnerEmployeeId);
+        });
 
         var human = await IngestAsync(w, "conv-human", w.Leasing.DepartmentId, humanFollowUp: true);
 
-        Assert.Equal(w.Agents[0], human.CurrentOwnerEmployeeId);
+        // Human work waits in the Call Center queue for a person to accept it: nobody is dealt it and the rotation cursor never moves.
+        Assert.Equal(w.F.CallCenter!.DepartmentId, human.CurrentDepartmentId);
+        Assert.Null(human.CurrentOwnerEmployeeId);
+        Assert.Equal(ServiceAccount, human.AiAgentOwnerEmployeeId);
+        Assert.Empty(w.F.TicketAssignments.Added);
+        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
     }
 
     // ---- 6. human-handled: existing CS Agent ownership rules ----
 
     [Fact]
-    public async Task HumanHandledGeneralTickets_GoCallCenterFirst_GetTheNextCsAgent_NeverADepartmentEmployee()
+    public async Task HumanHandledGeneralTickets_GoCallCenterFirst_WaitForAPersonToAccept_NobodyIsDealt_NeverADepartmentEmployee()
     {
         var w = Build(callCenterFirst: true, agents: 2);
         var leasingEmployee = Guid.NewGuid();
@@ -327,10 +338,17 @@ public class DefaultClassificationAiScenarioTests
         Assert.Equal(w.F.CallCenter!.DepartmentId, first.CurrentDepartmentId);
         Assert.Equal(w.Leasing.DepartmentId, first.OriginatingDepartmentId);
         Assert.Equal(w.LeasingGeneral.CategoryId, first.CategoryId);
-        Assert.Equal(w.Agents[0], first.CurrentOwnerEmployeeId);
+        Assert.Equal(w.F.CallCenter.DepartmentId, second.CurrentDepartmentId);
         Assert.Equal(w.CsGeneral.CategoryId, second.CategoryId);
-        Assert.Equal(w.Agents[1], second.CurrentOwnerEmployeeId);
-        Assert.NotEqual(leasingEmployee, first.CurrentOwnerEmployeeId);
+
+        // Neither the Call Center's next agent (no Round Robin) nor the Leasing employee the rule names is given either ticket; the AI Agent still owns both.
+        Assert.All(new[] { first, second }, t =>
+        {
+            Assert.Null(t.CurrentOwnerEmployeeId);
+            Assert.Equal(ServiceAccount, t.AiAgentOwnerEmployeeId);
+        });
+        Assert.Empty(w.F.TicketAssignments.Added);
+        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
     }
 
     // ---- 7. no duplicates, no overwriting ----

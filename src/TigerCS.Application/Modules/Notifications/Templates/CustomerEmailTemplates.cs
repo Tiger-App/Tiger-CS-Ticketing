@@ -280,15 +280,9 @@ public static class CustomerEmailTemplates
         }
     }
 
-    /// <summary>The UAE has no daylight saving: local time is always UTC+4.</summary>
-    private static readonly TimeSpan UaeOffset = TimeSpan.FromHours(4);
-
-    /// <summary>Every date in a customer email is UAE time (UTC+4), whatever the host's own zone.</summary>
-    internal static string FormatDate(DateTime utc)
-    {
-        var instant = utc.Kind == DateTimeKind.Local ? utc.ToUniversalTime() : DateTime.SpecifyKind(utc, DateTimeKind.Utc);
-        return instant.Add(UaeOffset).ToString("dd MMMM yyyy, HH:mm 'GST (UTC+4)'", CultureInfo.InvariantCulture);
-    }
+    /// <summary>Every date in a customer email is UAE time (UTC+4), whatever the host's own zone — via the one shared <see cref="TigerCS.Domain.Common.UaeCalendar"/> conversion.</summary>
+    internal static string FormatDate(DateTime utc) =>
+        TigerCS.Domain.Common.UaeCalendar.ToUae(utc).ToString("dd MMMM yyyy, HH:mm 'GST (UTC+4)'", CultureInfo.InvariantCulture);
 
     private static CustomerEmailContent Render(
         CustomerEmailTicketModel model,

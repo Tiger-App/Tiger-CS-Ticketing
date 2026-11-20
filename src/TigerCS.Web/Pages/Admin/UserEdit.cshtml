@@ -153,7 +153,7 @@
                             @await Html.PartialAsync("_StatusBadge", u.IsActive)
                             @if (!u.IsActive && u.DeactivatedAtUtc is { } deactivated)
                             {
-                                <span>since @deactivated.ToUae().ToString("MMM d, yyyy")</span>
+                                <span>since @TigerCS.Web.Models.TicketDisplay.ToUae(deactivated).ToString("MMM d, yyyy")</span>
                             }
                             @if (u.IsLockedOut)
                             {

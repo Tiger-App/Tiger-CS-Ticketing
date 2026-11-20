@@ -112,13 +112,17 @@ public sealed class GenesysInquiryIngestionAppService(
     GenesysRequestTypeClassificationAppService classificationAppService,
     GenesysAgentHandlingHistory handlingHistory,
     GenesysInteractionHandlerRecorder? handlerRecorder = null,
-    DefaultClassificationService? defaultClassification = null)
+    DefaultClassificationService? defaultClassification = null,
+    TimeProvider? timeProvider = null,
+    GenesysAnsweringAgentAssignmentService? answeringAgentAssignment = null)
 {
     public async Task<GenesysIngestionResult> IngestAsync(
         Guid callerEmployeeId, GenesysInquiryDto inquiry, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(inquiry);
-        inquiry = GenesysTimestamps.Normalize(inquiry);   // StartedAtUtc is UTC from here on, whatever zone the text carried
+        // StartedAtUtc is UTC from here on, whatever zone the text carried - and never later than the moment this request arrived.
+        var timestamps = new GenesysTimestampContext((timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime, options.FutureTimestampTolerance);
+        inquiry = GenesysTimestamps.Normalize(inquiry, timestamps);
 
         if (!options.Enabled)
         {
@@ -354,6 +358,7 @@ public sealed class GenesysInquiryIngestionAppService(
                 RequiresHumanFollowUp: humanSignal != GenesysHumanSignal.None));
 
         TicketCreationResult creation;
+        AnsweringAgent? answering = null;
         try
         {
             // A call picked up by a human before the ticket exists names the agent who ANSWERED it: that agent owns the ticket (directly, in
@@ -361,7 +366,6 @@ public sealed class GenesysInquiryIngestionAppService(
             // (chat, WhatsApp, Instagram, Facebook, social) a top-level agentId is only who is offered/assigned/queued - never proof that the
             // agent accepted - so it is NOT an answer, even beside humanFollowUpRequired: such a ticket goes to the Call Center and Round Robin,
             // and the agent only takes it when a later update reports them CONNECTED (routing.agentId), which replaces that automatic pick.
-            AnsweringAgent? answering = null;
             if (options.AssignOnAnswer
                 && NullIfBlank(inquiry.AgentId) is { } answeringAgentId
                 && inquiry.Channel == GenesysChannel.Phone
@@ -414,6 +418,17 @@ public sealed class GenesysInquiryIngestionAppService(
             }
         }
 
+        // VOICE first response: a call a mapped person answered at pickup satisfies the first-response SLA at the call's ACTUAL connect time (the inquiry's
+        // connectedAtUtc), not at transcript delivery and not at receipt time (the audited last resort when Genesys sent no connect time).
+        if (answering is not null && agent is { IsResolved: true } && answeringAgentAssignment is not null
+            && await conversationRepository.GetByConversationAndTicketAsync(conversationId, creation.Response.TicketId, cancellationToken) is { } answeredInteraction
+            && await ticketRepository.GetByIdAsync(creation.Response.TicketId, cancellationToken) is { } answeredTicket)
+        {
+            await answeringAgentAssignment.TryRecordVoiceFirstResponseAsync(
+                answeredTicket, answeredInteraction, GenesysAnsweringAgentAssignmentService.ToAnsweringAgent(inquiry.AgentId!, agent),
+                inquiry.ConnectedAtUtc, (timeProvider ?? TimeProvider.System).GetUtcNow().UtcDateTime, Guid.NewGuid(), cancellationToken);
+        }
+
         // The integration-level audit entry, written after the ticket's own
         // transaction has committed. The ticket's essential "Create" audit is
         // written INSIDE that transaction by ticket creation itself and is
@@ -448,6 +463,15 @@ public sealed class GenesysInquiryIngestionAppService(
                 + $"RequestTypeRejected={requestTypeRejected ?? "(none)"}",
             correlationId: Guid.NewGuid(),
             cancellationToken);
+
+        if (timestamps.Describe() is { } timestampAnomaly)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.TimestampAnomaly, "Ticket", creation.Response.TicketId.ToString(),
+                beforeValue: null, afterValue: $"TicketId={creation.Response.TicketId};ConversationId={conversationId};{timestampAnomaly}",
+                correlationId: Guid.NewGuid(), cancellationToken);
+        }
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
 
         if (configurationError is not null)
@@ -790,6 +814,18 @@ public static class GenesysAuditActions
     /// flow: the event is recorded here as evidence and the ticket (status, owner, department, SLA, closure date and reason) is not touched.
     /// </summary>
     public const string EventIgnoredOnClosedTicket = "GenesysEventIgnoredOnClosedTicket";
+
+    /// <summary>
+    /// An instant Genesys sent lay in the future of the moment TigerCS received it - impossible, almost always a local wall-clock sent as UTC. It was rejected
+    /// (start time), limited to the receipt time (connect / end / handoff time) or only reported (transcript line); the value as sent and its wire form are recorded.
+    /// </summary>
+    public const string TimestampAnomaly = "GenesysTimestampAnomaly";
+
+    /// <summary>A voice call was answered by a mapped person but Genesys sent no connect time, so the first response was recorded at the moment TigerCS received the event (flagged, never silent).</summary>
+    public const string VoiceFirstResponseConnectTimeMissing = "GenesysVoiceFirstResponseConnectTimeMissing";
+
+    /// <summary>A voice call ended, nobody answered it and the reconciliation window passed: the ticket was concluded as AI-failed / unanswered and dealt to an agent by Round Robin.</summary>
+    public const string VoiceNoAnswerConcluded = "GenesysVoiceNoAnswerConcluded";
 
     /// <summary>A Genesys agent was resolved to a Ticketing user and recorded as the handler of an interaction.</summary>
     public const string InteractionHandlerRecorded = "GenesysInteractionHandlerRecorded";

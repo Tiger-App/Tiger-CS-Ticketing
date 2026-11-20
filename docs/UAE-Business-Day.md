@@ -13,6 +13,27 @@ One helper owns the rule: `TigerCS.Domain.Common.UaeCalendar` (`DayStartUtc`, `D
 `ToUae`). It always uses Asia/Dubai (Windows id `Arabian Standard Time`, else a fixed +04:00) — never the server's own zone.
 SQL still compares the **UTC column** against UTC instants, so existing indexes stay usable.
 
+## The timezone standard (system-wide)
+
+| Layer | Zone |
+|---|---|
+| External integration timestamps (Genesys, CRM, Queueing, PACT instants) | UTC |
+| Database persistence | UTC |
+| Backend timestamp calculations (SLA durations, ageing, due times) | UTC |
+| Every user-facing timestamp (screens, emails, exports) | UAE time (UTC+4) |
+| Business-day filters, daily and monthly reports | UAE calendar boundaries |
+
+There is **one** implementation of the UAE rules, `TigerCS.Domain.Common.UaeCalendar`. `TicketDisplay.ToUae` / `AsUtc` (the UI helper from the Genesys hotfix)
+and the customer-email date formatting are thin delegates to it; nothing else adds four hours by hand. Configured Collections / SLA / job-schedule zones
+(`Collections:TimeZoneId`, the SLA business calendar's `TimeZone`, Hangfire cron zones) are separate, explicitly configured business calendars and are unchanged.
+
+**SLA durations are unchanged.** Deadlines, breach times and elapsed/overdue durations are computed from UTC instants exactly as before; only how a
+timestamp is *displayed* (UAE) and where a *day* starts for a filter/report changed.
+
+## No migration, no configuration change
+
+No schema change, no data rewrite, no new or changed setting, no new environment variable. The release is code-only and can be rolled back by redeploying the previous build.
+
 ## What changed, screen by screen
 
 | Area | Before | After |

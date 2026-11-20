@@ -275,6 +275,11 @@ public sealed class TicketAssignmentAppService(
             await RecordCollectionsAssignmentAsync(
                 ticket, previousOwnerEmployeeId, request.AssignedEmployeeId, TicketAssignmentKind.Manual, callerEmployeeId, now, request.Reason, cancellationToken);
         }
+        else if (previousOwnerEmployeeId != request.AssignedEmployeeId)
+        {
+            await RecordGenesysManualAssignmentAsync(
+                ticket, previousOwnerEmployeeId, request.AssignedEmployeeId, callerEmployeeId, now, request.Reason, cancellationToken);
+        }
 
         // Ticket transfer tracking: only a REassignment is a hand-over. Taking a ticket out of the department queue
         // (no previous owner) is the ordinary first assignment, and giving it to its current owner again changes nothing.
@@ -673,6 +678,7 @@ public sealed class TicketAssignmentAppService(
                 await RecordCollectionsAssignmentAsync(
                     ticket, previousOwnerEmployeeId, explicitAssignee, TicketAssignmentKind.Manual, callerEmployeeId, now, request.Reason, cancellationToken);
             }
+
         }
         else if (collectionsRouting is not null
             && (await collectionsRouting.RouteAsync(
@@ -730,6 +736,15 @@ public sealed class TicketAssignmentAppService(
             }
         }
 
+        // Assignment History for a Genesys-handled ticket: one entry for the department transfer, carrying the previous department and the owner before and
+        // after (a Collections ticket records its own richer entry above; a ticket Genesys never handled writes nothing new).
+        var isCollectionsTarget = collectionsTeam is not null && await collectionsTeam.IsCollectionsDepartmentAsync(request.TargetDepartmentId, cancellationToken);
+        if (!isCollectionsTarget)
+        {
+            await RecordGenesysDepartmentTransferAsync(
+                ticket, previousOwnerEmployeeId, previousDepartmentId, callerEmployeeId, now, request.Reason, cancellationToken);
+        }
+
         // Ticket transfer tracking: one typed event per transfer — who moved it, to which department and (when one took
         // it, explicitly or by the target department's rule) which employee, why, and when. Same transaction and
         // correlation id as the Transfer/Assign audit entries above.
@@ -757,6 +772,57 @@ public sealed class TicketAssignmentAppService(
 
         await transaction.CommitAsync(cancellationToken);
         return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
+    }
+
+    /// <summary>A person's department transfer of a ticket the Genesys integration had been handling: previous / new department, owner before and after, who and why.</summary>
+    private async Task RecordGenesysDepartmentTransferAsync(
+        Ticket ticket, Guid? previousOwnerEmployeeId, int previousDepartmentId, Guid changedBy, DateTime nowUtc, string? reason, CancellationToken cancellationToken)
+    {
+        if (assignmentHistory is null)
+        {
+            return;
+        }
+
+        var genesys = (await assignmentHistory.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Where(h => h.Source is not null).ToList();
+        if (genesys.Count == 0)
+        {
+            return;
+        }
+
+        var before = previousOwnerEmployeeId ?? ticket.AiAgentOwnerEmployeeId ?? genesys[^1].NewEmployeeId;
+        var after = ticket.CurrentOwnerEmployeeId ?? before;
+        await assignmentHistory.AddAsync(
+            TicketAssignmentHistoryEntry.ForGenesys(
+                ticket.TicketId, ticket.CurrentDepartmentId, before, after, TicketAssignmentSource.GenesysDepartmentTransfer, changedBy, nowUtc,
+                sourceEventAtUtc: null, genesys[^1].GenesysConversationId,
+                string.IsNullOrWhiteSpace(reason) ? "Department transfer" : $"Department transfer: {reason}", TicketAssignmentKind.Manual, previousDepartmentId),
+            cancellationToken);
+    }
+
+    /// <summary>
+    /// A person assigned or reassigned a ticket the Genesys integration had been handling: Assignment History continues the story Genesys started instead of
+    /// stopping at "Genesys Integration". Only tickets that already have a Genesys history entry; every other ticket is untouched.
+    /// </summary>
+    private async Task RecordGenesysManualAssignmentAsync(
+        Ticket ticket, Guid? previousEmployeeId, Guid newEmployeeId, Guid changedBy, DateTime nowUtc, string? reason, CancellationToken cancellationToken)
+    {
+        if (assignmentHistory is null)
+        {
+            return;
+        }
+
+        var genesys = (await assignmentHistory.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Where(h => h.Source is not null).ToList();
+        if (genesys.Count == 0)
+        {
+            return;
+        }
+
+        await assignmentHistory.AddAsync(
+            TicketAssignmentHistoryEntry.ForGenesys(
+                ticket.TicketId, ticket.CurrentDepartmentId, previousEmployeeId ?? genesys[^1].NewEmployeeId, newEmployeeId,
+                TicketAssignmentSource.GenesysManualAssignment, changedBy, nowUtc, sourceEventAtUtc: null, genesys[^1].GenesysConversationId,
+                string.IsNullOrWhiteSpace(reason) ? "Assigned manually" : reason, TicketAssignmentKind.Manual),
+            cancellationToken);
     }
 
     /// <summary>Writes one Collections assignment-history entry. The tower is looked up best-effort for context only: a failure there never blocks the assignment.</summary>

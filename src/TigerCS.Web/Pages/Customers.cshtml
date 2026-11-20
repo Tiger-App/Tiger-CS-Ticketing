@@ -232,9 +232,9 @@
                                 <td class="col-num"><span class="count-pill">@row.TotalTickets</span></td>
                                 <td>
                                     <a class="ticket-id-link" href="/Tickets/@row.LastTicketId">@row.LastTicketNumber</a>
-                                    <span class="cell-sub">@TicketDisplay.TicketStatusLabel(row.LastTicketStatus) · @row.LastTicketCreatedAtUtc.ToUae().ToString("MMM d, yyyy")</span>
+                                    <span class="cell-sub">@TicketDisplay.TicketStatusLabel(row.LastTicketStatus) · @TigerCS.Web.Models.TicketDisplay.ToUae(row.LastTicketCreatedAtUtc).ToString("MMM d, yyyy")</span>
                                 </td>
-                                <td class="text-secondary" title="@(row.LastInteractionAtUtc?.ToUae().ToString("MMM d, yyyy HH:mm"))">
+                                <td class="text-secondary" title="@(row.LastInteractionAtUtc is { } lastInteractionUtc ? TigerCS.Web.Models.TicketDisplay.ToUae(lastInteractionUtc).ToString("MMM d, yyyy HH:mm") : null)">
                                     @(row.LastInteractionAtUtc is { } lastInteraction ? TicketDisplay.AgoLabel(lastInteraction, nowUtc) : "—")
                                 </td>
                                 @if (Model.CanEdit)

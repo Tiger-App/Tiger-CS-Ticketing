@@ -79,6 +79,8 @@ public sealed record TicketListRequestDto(
 /// <param name="CreatedAtUtc">When the ticket was created, in UTC.</param>
 /// <param name="CurrentOwnerName">The owner's full display name from the employee directory (Employees / AspNetUsers); null when unassigned or - a data problem to investigate - when the employee row cannot be found. Never a raw id.</param>
 /// <param name="IsAiVirtualAgent">Display only: the ticket is unowned and its Genesys conversation is still live AI with activity inside the last 6 hours (<c>AiVirtualAgentRule</c>). Not an assignment.</param>
+/// <param name="LastResponsibleEmployeeId">Closed tickets only: the employee on the last assignment, else the AI Agent that owned it - history, never an assignment.</param>
+/// <param name="LastResponsibleName">That employee's display name.</param>
 public sealed record TicketSummaryDto(
     long TicketId,
     string TicketNumber,
@@ -91,7 +93,9 @@ public sealed record TicketSummaryDto(
     string RequestSummary,
     DateTime CreatedAtUtc,
     string? CurrentOwnerName = null,
-    bool IsAiVirtualAgent = false);
+    bool IsAiVirtualAgent = false,
+    Guid? LastResponsibleEmployeeId = null,
+    string? LastResponsibleName = null);
 
 /// <summary>One page of the ticket queue.</summary>
 /// <param name="Items">This page's tickets.</param>
@@ -168,7 +172,7 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="IsReopenEligible">Whether FR-RES-04's lifecycle rule currently allows Reopen — Closed, closed as Resolved, and within the ISSUE-011 window measured from closure. Lifecycle only, never a permission statement: the Reopen endpoint separately enforces TicketRoleSets.Reopen AND the caller's access to the ticket. Populated on detail reads; false on write responses.</param>
 /// <param name="ClosedAtUtc">When the ticket reached Closed, in UTC, read from lifecycle history — the moment the reopen window is measured from. Null while the ticket is not closed. Populated on detail reads.</param>
 /// <param name="CurrentOwnerName">The owner's full display name from the employee directory; null when unassigned or when the employee row cannot be found. Never a raw id.</param>
-/// <param name="LastResponsibleEmployeeId">Closed Queueing System tickets only: the employee on the ticket's last assignment. Display only - a closed ticket has no owner and this creates no assignment.</param>
+/// <param name="LastResponsibleEmployeeId">Closed tickets only (every channel): the employee on the ticket's last assignment, else the AI Agent that owned it. Display / reporting only - a closed ticket has no owner and this creates no assignment and changes nothing.</param>
 /// <param name="LastResponsibleName">That employee's display name.</param>
 /// <param name="IsAiVirtualAgent">Display only: unowned, Open/In Progress, Genesys conversation still live AI with activity in the last 6 hours. Not an assignment.</param>
 public sealed record TicketDetailDto(

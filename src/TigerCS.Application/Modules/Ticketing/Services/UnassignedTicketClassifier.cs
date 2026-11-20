@@ -67,6 +67,12 @@ public enum UnassignedTicketAction
     /// <summary>Move to the Call Center if needed and deal to the next eligible agent by Round Robin.</summary>
     RoundRobinCallCenter,
 
+    /// <summary>
+    /// A Genesys-handled ticket that needs a person: move it into the Call Center queue (unless an explicit workflow department is kept) and leave it there with its
+    /// owner - the AI Agent - unchanged. <b>No Round Robin, nobody is chosen</b>: a person gets it only on a real acceptance, or from an authorised assignment.
+    /// </summary>
+    RouteToCallCenterQueue,
+
     /// <summary>Deal to the next eligible employee of the ticket's CURRENT department by that department's Round Robin (a transfer that found nobody).</summary>
     RoundRobinDepartment,
 }
@@ -105,7 +111,24 @@ public sealed record UnassignedTicketEvidence(
     // a live chat / messaging / any other-channel conversation keeps the ticket protected. Default false = protected (safe for older callers).
     bool LiveGenesysIsPhoneOnly = false,
     // A department transfer into the CURRENT department left the ticket unassigned and no assignment has been made since (safe default false).
-    bool AwaitingDepartmentAssignment = false);
+    bool AwaitingDepartmentAssignment = false,
+    // VOICE: every Genesys interaction of the ticket is a Phone call. Only such a ticket follows the voice ownership rules (AI Agent keeps it, no Round Robin
+    // while a human may still answer, no fallback agent); a ticket with any digital interaction keeps the previous behaviour (safe default false).
+    bool GenesysIsPhoneOnly = false,
+    // VOICE: when TigerCS RECEIVED the end of the call (EndReceivedAtUtc, else the reported end time) - the latest of them - once every Genesys interaction has
+    // ended. The anchor of the no-answer reconciliation window. Null while any interaction is still live (or for a non-voice ticket).
+    DateTime? VoiceEndReceivedAtUtc = null,
+    // VOICE: a human DID answer (a connect event named an agent) but that agent could not be given the ticket (unmapped Genesys id, not a CS Agent ...): the
+    // Genesys id from the ManualAssignmentRequired flag, when it connected, and the employee that id maps to NOW (null while still unmapped) - so a corrected
+    // mapping is reconciled without Round Robin.
+    string? FlaggedAnsweringGenesysUserId = null,
+    DateTime? FlaggedAnsweringConnectedAtUtc = null,
+    Guid? FlaggedAnsweringEmployeeId = null,
+    // VOICE: a person ANSWERED (a recorded handler, a human transcript line, a first human response, an agent-connected / call-transferred / handoff-started
+    // event, or a flagged answer). An agent merely ASSIGNED / offered the call (HandoffAssigned) is NOT an answer. Safe default false.
+    bool HumanAnswered = false,
+    // VOICE: when the recorded handler connected (Genesys' connected time), where recorded.
+    DateTime? AnsweringConnectedAtUtc = null);
 
 public sealed record UnassignedTicketClassification(UnassignedTicketClass Class, UnassignedTicketAction Action);
 
@@ -142,16 +165,21 @@ public static class UnassignedTicketClassifier
             return Of(UnassignedTicketClass.HumanAnsweredNotAssigned, UnassignedTicketAction.AssignToAnsweringAgent);
         }
 
+        // VOICE: a person answered but cannot be given the ticket: queued and flagged, never Round Robin. Other channels keep the previous behaviour.
         if (evidence.PhonePickupByUnmappedAgent)
         {
-            return Of(UnassignedTicketClass.HumanAnsweredAgentNotMapped, UnassignedTicketAction.RoundRobinCallCenter);
+            return Of(UnassignedTicketClass.HumanAnsweredAgentNotMapped,
+                evidence.HasGenesysInteraction ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter);
         }
 
         if (evidence.RequiresHumanFollowUp || evidence.OpenHandoff || evidence.HumanEvidence)
         {
+            // VOICE (phone-only): queue only, never a chosen person - the voice no-answer reconciler deals it once the call ended unanswered. Every other
+            // channel keeps the previous behaviour: Call Center first, then Round Robin.
+            var humanAction = evidence.HasGenesysInteraction ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter;
             return inCallCenter
-                ? Of(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, UnassignedTicketAction.RoundRobinCallCenter)
-                : Of(UnassignedTicketClass.HumanRequiredNotRouted, UnassignedTicketAction.RoundRobinCallCenter);
+                ? Of(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, evidence.HasGenesysInteraction ? UnassignedTicketAction.None : humanAction)
+                : Of(UnassignedTicketClass.HumanRequiredNotRouted, humanAction);
         }
 
         if (!evidence.HasGenesysInteraction)
@@ -169,8 +197,46 @@ public static class UnassignedTicketClassifier
         var stale = staleAiAfter is { } threshold && nowUtc - evidence.LastActivityUtc > threshold;
         if (!stale) return Of(UnassignedTicketClass.ActiveAiConversation);
 
-        return actOnStaleAi
+        // VOICE: a stale AI call is REPORTED (class StaleAiNoEndEvent) and the AI Agent keeps it - ownership of an AI voice ticket changes only on a real answer,
+        // an authorised assignment, or the no-answer reconciler's conclusion after the call ended. Other channels keep AssignStaleAi (previous behaviour).
+        return actOnStaleAi && !evidence.HasGenesysInteraction
             ? Of(UnassignedTicketClass.StaleAiNoEndEvent, UnassignedTicketAction.RoundRobinCallCenter)
             : Of(UnassignedTicketClass.StaleAiNoEndEvent);
+    }
+}
+
+/// <summary>
+/// The answering agent recorded in a <see cref="WorkflowEventType.ManualAssignmentRequired"/> note: <c>[GenesysUserId=&lt;id&gt;;Issue=&lt;issue&gt;;ConnectedAtUtc=&lt;ISO&gt;]</c>.
+/// Written by <see cref="TicketAutoAssignmentService"/> when the agent a call connected to cannot be given the ticket; read back by the evidence repository so a
+/// corrected Genesys-id mapping can be reconciled without Round Robin.
+/// </summary>
+public sealed record FlaggedAnswer(string GenesysUserId, string Issue, DateTime? ConnectedAtUtc)
+{
+    public static FlaggedAnswer? TryParse(string? note)
+    {
+        if (string.IsNullOrWhiteSpace(note))
+        {
+            return null;
+        }
+
+        var open = note.LastIndexOf("[GenesysUserId=", StringComparison.Ordinal);
+        var close = open < 0 ? -1 : note.IndexOf(']', open);
+        if (open < 0 || close < 0)
+        {
+            return null;
+        }
+
+        var parts = note[(open + 1)..close].Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Split('=', 2)).Where(kv => kv.Length == 2).ToDictionary(kv => kv[0], kv => kv[1], StringComparer.Ordinal);
+        if (!parts.TryGetValue("GenesysUserId", out var id) || string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        DateTime? connected = parts.TryGetValue("ConnectedAtUtc", out var raw)
+            && DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var at)
+            ? DateTime.SpecifyKind(at, DateTimeKind.Utc)
+            : null;
+        return new FlaggedAnswer(id.Trim(), parts.GetValueOrDefault("Issue") ?? string.Empty, connected);
     }
 }
