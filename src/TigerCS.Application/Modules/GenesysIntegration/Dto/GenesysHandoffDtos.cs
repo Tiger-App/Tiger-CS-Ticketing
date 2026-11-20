@@ -99,7 +99,10 @@ public enum GenesysHandoffOutcome
     AlreadyResolved,
 
     /// <summary>A stand-down named no reason. Pending customer work is never dropped without a recorded why.</summary>
-    ReasonRequired
+    ReasonRequired,
+
+    /// <summary>The ticket is Closed: closed is terminal, so human follow-up is never raised on it (nothing was written).</summary>
+    TicketClosed
 }
 
 public sealed record GenesysHandoffResult(

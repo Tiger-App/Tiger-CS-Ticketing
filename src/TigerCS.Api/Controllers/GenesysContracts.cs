@@ -39,6 +39,7 @@ namespace TigerCS.Api.Controllers;
 /// <param name="AgentId">The handling Genesys agent's <b>Genesys User ID</b> (the immutable id, not a name), where available. When supplied, it is resolved server-side to the mapped Ticketing user and that user is recorded as the interaction's handler; an unmapped id is recorded verbatim with no handler.</param>
 /// <param name="AgentName">The handling agent's display name, where available. Display only — never an identity key.</param>
 /// <param name="StartedAtUtc">When the interaction started, UTC.</param>
+/// <param name="ConnectedAtUtc">PHONE only: when the agent in <c>agentId</c> answered the call, UTC (Genesys' connected time). Satisfies the first-response SLA at that actual moment; falls back to the receipt time, audited, when absent.</param>
 /// <param name="DepartmentId">The department the customer explicitly selected (website chat). Wins over the queue mapping.</param>
 /// <param name="DepartmentCode">The same explicit selection as a TigerCS department code, for a caller that knows codes rather than ids.</param>
 /// <param name="TowerName">The tower/project the customer typed into the chat form, where collected.</param>
@@ -62,7 +63,7 @@ public sealed record GenesysInquiryRequest(
     string? QueueName = null,
     string? AgentId = null,
     string? AgentName = null,
-    DateTime? StartedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? StartedAtUtc = null,
     int? DepartmentId = null,
     string? DepartmentCode = null,
     string? TowerName = null,
@@ -70,7 +71,8 @@ public sealed record GenesysInquiryRequest(
     string? Subject = null,
     GenesysRequestTypePart? RequestType = null,
     string? ServiceRequestId = null,
-    [property: JsonConverter(typeof(LenientNullableBoolConverter))] bool? HumanFollowUpRequired = null);
+    [property: JsonConverter(typeof(LenientNullableBoolConverter))] bool? HumanFollowUpRequired = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? ConnectedAtUtc = null);
 
 /// <summary>
 /// The request type the bot identified. Send <c>requestTypeId</c> (preferred) or
@@ -157,7 +159,7 @@ public sealed class GenesysRequestTypePartConverter : JsonConverter<GenesysReque
 /// <param name="Transcript">The conversation's messages, in order. Absent/empty for a voice call.</param>
 public sealed record GenesysConversationEndRequest(
     string ConversationId,
-    DateTime? EndedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? EndedAtUtc = null,
     string? EndReason = null,
     string? AgentId = null,
     string? AgentName = null,
@@ -172,7 +174,7 @@ public sealed record GenesysConversationEndRequest(
 /// <param name="ExternalMessageId">Genesys' own message id, where available.</param>
 public sealed record GenesysTranscriptMessageRequest(
     string Sender,
-    DateTime SentAtUtc,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime SentAtUtc,
     string Body,
     string? SenderName = null,
     string? SenderId = null,
@@ -279,7 +281,7 @@ public sealed record GenesysTicketUpdateRequest(
     string? AgentName = null,
     GenesysConversationEndPart? Ended = null,
     GenesysHandoffPart? Handoff = null,
-    DateTime? StartedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? StartedAtUtc = null,
     GenesysRoutingPart? Routing = null,
     GenesysCustomerConfirmationPart? CustomerConfirmation = null,
     [property: JsonConverter(typeof(LenientNullableBoolConverter))] bool? AwaitingCustomerReply = null,
@@ -349,7 +351,7 @@ public sealed class LenientNullableBoolConverter : JsonConverter<bool?>
 /// <param name="Note">What the customer said, or the flow's note. Display only.</param>
 public sealed record GenesysCustomerConfirmationPart(
     bool? ConfirmedResolved = null,
-    DateTime? ConfirmedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? ConfirmedAtUtc = null,
     string? Note = null);
 
 /// <summary>
@@ -369,14 +371,14 @@ public sealed record GenesysRoutingPart(
     string? QueueName = null,
     string? AgentId = null,
     string? AgentName = null,
-    DateTime? ConnectedAtUtc = null);
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? ConnectedAtUtc = null);
 
 /// <summary>The conversation has finished — for any reason: the agent ended it, the customer closed the browser, the connection dropped, Genesys timed it out.</summary>
 /// <param name="EndedAtUtc">When it ended. Defaults to now.</param>
 /// <param name="EndReason">Why, as reported (e.g. "AgentDisconnect", "CustomerDisconnect", "Timeout"). Free text — no vocabulary is confirmed.</param>
 /// <param name="Transcript">The conversation in order, as far as available. Resending an already-stored transcript stores nothing twice.</param>
 public sealed record GenesysConversationEndPart(
-    DateTime? EndedAtUtc = null,
+    [property: JsonConverter(typeof(GenesysUtcDateTimeConverter))] DateTime? EndedAtUtc = null,
     string? EndReason = null,
     IReadOnlyList<GenesysTranscriptMessageRequest>? Transcript = null);
 
@@ -581,7 +583,8 @@ internal static class GenesysContractMapper
             Absent(request.Subject),
             Map(request.RequestType),
             Absent(request.ServiceRequestId)?.Trim(),
-            request.HumanFollowUpRequired);
+            request.HumanFollowUpRequired,
+            request.ConnectedAtUtc);
         return true;
     }
 

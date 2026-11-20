@@ -78,7 +78,9 @@ public sealed class GenesysConversationEndAppService(
         Guid callerEmployeeId, GenesysConversationEndDto request, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
-        request = GenesysTimestamps.Normalize(request);   // end time and every transcript line are UTC from here on
+        // End time and every transcript line are UTC from here on; an end time in the future of its own receipt is limited to the receipt.
+        var timestamps = new GenesysTimestampContext(timeProvider.GetUtcNow().UtcDateTime, options.FutureTimestampTolerance);
+        request = GenesysTimestamps.Normalize(request, timestamps);
 
         if (!options.Enabled)
         {
@@ -103,6 +105,14 @@ public sealed class GenesysConversationEndAppService(
 
         var ticket = await ticketRepository.GetByIdAsync(interaction.TicketId, cancellationToken);
 
+        if (timestamps.Describe() is { } timestampAnomaly)
+        {
+            await auditWriter.WriteAsync(
+                callerEmployeeId, GenesysAuditActions.TimestampAnomaly, "Ticket", interaction.TicketId.ToString(),
+                beforeValue: null, afterValue: $"TicketId={interaction.TicketId};ConversationId={conversationId};{timestampAnomaly}",
+                Guid.NewGuid(), cancellationToken);
+        }
+
         // Validate the whole transcript before writing any of it.
         if (!TryNormalizeTranscript(request.Transcript, out var messages, out var transcriptError))
         {
@@ -121,7 +131,7 @@ public sealed class GenesysConversationEndAppService(
         // would stay permanently incomplete.
         if (!alreadyEnded)
         {
-            interaction.End(endedAtUtc, request.EndReason);
+            interaction.End(endedAtUtc, request.EndReason, timeProvider.GetUtcNow().UtcDateTime);
         }
 
         interaction.RecordAgentIfAbsent(request.AgentId, request.AgentName);
@@ -136,7 +146,10 @@ public sealed class GenesysConversationEndAppService(
         // the end event in one call.
         var transcript = stored.Concat(pendingMessages).ToList();
 
-        var autoRaisedHandoff = options.AutoRaiseHandoffOnConversationEnd
+        // VOICE: the end of a call is NOT evidence that nobody answered it - the answering agent (routing.agentId) can still arrive after "ended". No handoff
+        // work item (a sticky human-follow-up fact) is raised from the end event alone; the voice no-answer reconciler concludes it, once, after the configured
+        // reconciliation window (VoiceNoAnswerReconciler). Every other channel keeps the previous behaviour.
+        var autoRaisedHandoff = options.AutoRaiseHandoffOnConversationEnd && interaction.ChannelId != WellKnownChannels.Phone
             ? await TryAutoRaiseHandoffAsync(callerEmployeeId, interaction, ticket, transcript, endedAtUtc, cancellationToken)
             : null;
 

@@ -108,8 +108,8 @@ public sealed class GenesysOptions
     /// ACCEPTED an interaction are <c>routing.agentId</c> (connected) and a phone pickup. A <c>HumanAgent</c> transcript line is not an
     /// acceptance event; it is proof that somebody did accept, which can arrive long afterwards (often with the end of the conversation). With
     /// this on, such a line still assigns the ticket to the mapped sender as a safety net - at the time TigerCS RECEIVED it, never back-dated, and
-    /// labelled <c>AcceptanceEvent=false</c> in the audit. Set it to <c>false</c> to assign only on a real acceptance event (the ticket then follows
-    /// the ordinary human-follow-up route until Genesys reports the connect).
+    /// labelled <c>AcceptanceEvent=false</c> in the audit. Set it to <c>false</c> to assign only on a real acceptance event: a transcript line alone then
+    /// neither moves nor assigns the ticket (it is still stored, and the sender still recorded as a handler) until Genesys reports the connect.
     /// </summary>
     public bool AssignOnTranscriptEvidence { get; set; } = true;
 
@@ -122,6 +122,21 @@ public sealed class GenesysOptions
     /// Set <c>false</c> to accept the GUID form only.
     /// </summary>
     public bool AllowEmailSenderIdFallback { get; set; } = true;
+
+    /// <summary>The default for <see cref="FutureTimestampToleranceMinutes"/>.</summary>
+    public const int DefaultFutureTimestampToleranceMinutes = 5;
+
+    /// <summary>
+    /// <b>How far into the future a Genesys-sent instant may lie</b> (<c>Genesys:FutureTimestampToleranceMinutes</c>, default 5) before it is
+    /// treated as impossible: an event cannot be later than the moment TigerCS received it, so a larger lead is clock skew at most and a sender
+    /// writing its local wall-clock as UTC at worst (a conversation "started" four hours ahead of its own ticket). A start time beyond the
+    /// tolerance is NOT stored (the interaction shows when TigerCS recorded it); an end / connect / handoff time is limited to the receipt time;
+    /// every such value is audited with the raw text's wire form. Nothing is converted by a fixed offset.
+    /// </summary>
+    public int FutureTimestampToleranceMinutes { get; set; } = DefaultFutureTimestampToleranceMinutes;
+
+    /// <summary>The tolerance as a span (never negative).</summary>
+    public TimeSpan FutureTimestampTolerance => TimeSpan.FromMinutes(Math.Max(0, FutureTimestampToleranceMinutes));
 
     /// <summary>
     /// The code of the department that acts as the <b>safe classification queue</b> (<c>Genesys:ClassificationDepartmentCode</c>, e.g. the

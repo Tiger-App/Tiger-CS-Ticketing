@@ -107,7 +107,7 @@ production environment until that's actually authorized.
 
 ### Secrets inventory — what is never committed
 
-Every committed `appsettings*.json` (in `src/` and in the `publish/` output)
+Every committed `appsettings*.json` (in `src/`)
 carries **empty placeholders** for these values. Each real environment must
 supply them through user-secrets (Development) or environment variables
 (UAT / Production, `__` separator):
@@ -122,9 +122,9 @@ supply them through user-secrets (Development) or environment variables
 | `EmailNotifications:Password` | `EmailNotifications__Password` | Microsoft 365 SMTP mailbox password (§3d) |
 | `DevAdmin:Password` | `DevAdmin__Password` | Development-only seeded administrator (§3) |
 
-`publish/` is committed build output whose binaries are only as current as
-the last `dotnet publish`; regenerate it from `src/` before any deployment
-and never edit the values above inside it.
+`publish/` is **not** committed any more (it is git-ignored; a stale tracked copy was removed in PR #292).
+Build deployable output only with `tools/deploy/Publish-TigerCS.ps1` / `tools/build-release.sh` from a clean, approved commit,
+and never put the values above in any file inside it. `tools/check-repo-hygiene.sh` (CI) fails the build if build output, binaries or a non-empty secret setting is tracked.
 
 ## 3a. Configure CRM Buyer Lookup (`Crm:BaseUrl` / `Crm:SecretKey`)
 

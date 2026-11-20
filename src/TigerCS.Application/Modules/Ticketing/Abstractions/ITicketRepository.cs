@@ -25,7 +25,7 @@ public enum TicketSortBy
 /// <item><see cref="ActiveOnly"/> — any active status (Open/InProgress/PendingCustomer, plus the legacy PendingThirdParty, which is still unfinished work).</item>
 /// <item><see cref="InDepartmentQueue"/> — active, with no current owner (it sits in its department's queue).</item>
 /// <item><see cref="SlaBreached"/> — active, SlaState Breached.</item>
-/// <item><see cref="DueToday"/> — active, current SLA period's unbreached resolution deadline falls on <see cref="NowUtc"/>'s UTC calendar day.</item>
+/// <item><see cref="DueToday"/> — active, current SLA period's unbreached resolution deadline falls on <see cref="NowUtc"/>'s UAE calendar day.</item>
 /// <item><see cref="BacklogAge"/> — active, aged (from CreatedAtUtc to <see cref="NowUtc"/>) into that bucket.</item>
 /// <item><see cref="PendingApprovalFor"/> — carries a current Pending approval this caller is authorized to action.</item>
 /// <item><see cref="CreatedFromUtc"/>/<see cref="CreatedToUtc"/> — created within [from, to).</item>
@@ -158,7 +158,7 @@ public sealed record CustomerHistoryQueryResult(
 /// <param name="VisibleDepartmentIds">Null = no restriction (cross-department view role); otherwise the caller's own departments.</param>
 /// <param name="CallerEmployeeId">For the My Tickets count.</param>
 /// <param name="NowUtc">The evaluation instant — passed in so the query is deterministic under test.</param>
-/// <param name="ResolvedTodayStartUtc">Start of "today" for the Resolved Today count, in UTC.</param>
+/// <param name="ResolvedTodayStartUtc">The UTC instant at which "today" (the UAE calendar day) began, for the Resolved Today count.</param>
 /// <param name="AtRiskWindow">How far ahead of a pending SLA deadline counts as "at risk".</param>
 /// <param name="AttentionLimit">Maximum attention rows to return.</param>
 /// <param name="AgentScopeEmployeeId">Set only for a restricted CS Agent: every count and attention row is limited to tickets assigned to, or handled on Genesys by, that employee (plus <paramref name="VisibleDepartmentIds"/>, empty for a CS Agent).</param>

@@ -249,10 +249,10 @@ public sealed class CustomerLocationSqliteTests : IDisposable
         var inRange = new DateOnly(2026, 9, 5);
         using (var context = _db.CreateContext())
         {
-            CrmCustomer(context, 1, "+971501234567", createdAtUtc: new DateTime(2026, 9, 5, 10, 0, 0, DateTimeKind.Utc));
-            CrmCustomer(context, 2, "+447911123456", createdAtUtc: new DateTime(2026, 9, 5, 23, 59, 0, DateTimeKind.Utc));   // last minute of the last day
-            CrmCustomer(context, 3, "+971501234568", createdAtUtc: new DateTime(2026, 9, 6, 0, 0, 0, DateTimeKind.Utc));    // day after: out
-            CrmCustomer(context, 4, "+971501234569", createdAtUtc: new DateTime(2026, 9, 4, 23, 59, 0, DateTimeKind.Utc));  // day before the range: out
+            CrmCustomer(context, 1, "+971501234567", createdAtUtc: new DateTime(2026, 9, 5, 10, 0, 0, DateTimeKind.Utc));   // 14:00 UAE
+            CrmCustomer(context, 2, "+447911123456", createdAtUtc: new DateTime(2026, 9, 5, 19, 59, 0, DateTimeKind.Utc));   // 23:59 UAE: last minute of the last UAE day
+            CrmCustomer(context, 3, "+971501234568", createdAtUtc: new DateTime(2026, 9, 5, 20, 0, 0, DateTimeKind.Utc));    // 00:00 UAE on the 6th: day after, out
+            CrmCustomer(context, 4, "+971501234569", createdAtUtc: new DateTime(2026, 9, 4, 19, 59, 0, DateTimeKind.Utc));  // 23:59 UAE on the 4th: day before the range, out
             CrmCustomer(context, 5, "+971501234570", createdAtUtc: new DateTime(2026, 9, 5, 9, 0, 0, DateTimeKind.Utc), departmentId: _db.CollectionsId);
         }
 

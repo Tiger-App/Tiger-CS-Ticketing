@@ -935,7 +935,13 @@ public class Ticket
     }
 
     /// <summary>MVP-API-Contracts.md §3.6 — moves CurrentDepartmentId, leaves OriginatingDepartmentId untouched (write-once, MVP-ERD.md §2.3), and clears the current owner: the receiving department must explicitly claim/assign it.</summary>
-    public void TransferToDepartment(int targetDepartmentId, bool preserveOwner = false)
+    /// <param name="targetDepartmentId">The receiving department.</param>
+    /// <param name="preserveOwner">Keep the carried-over human owner on the row until the caller has run the destination's assignment.</param>
+    /// <param name="keepAiAgentOwner">
+    /// System queue routing of an AI-handled ticket (human follow-up needed): the department changes, the AI Agent stays the recorded owner until a person
+    /// actually accepts or is assigned. Never set by a person's transfer, which hands the ticket to human work.
+    /// </param>
+    public void TransferToDepartment(int targetDepartmentId, bool preserveOwner = false, bool keepAiAgentOwner = false)
     {
         EnsureNotClosed();
 
@@ -945,7 +951,10 @@ public class Ticket
         }
 
         CurrentDepartmentId = targetDepartmentId;
-        AiAgentOwnerEmployeeId = null;   // a department queue is human work; the AI Agent no longer owns it
+        if (!keepAiAgentOwner)
+        {
+            AiAgentOwnerEmployeeId = null;   // a person's transfer is human work; the AI Agent no longer owns it
+        }
 
         // preserveOwner keeps the carried-over owner on the row until the caller has run the destination's assignment (a department transfer
         // then supersedes / replaces it - see TicketAssignmentAppService.TransferAsync; classification routing still keeps the agent).

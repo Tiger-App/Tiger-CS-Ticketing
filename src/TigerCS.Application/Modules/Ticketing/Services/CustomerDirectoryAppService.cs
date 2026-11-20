@@ -1,5 +1,6 @@
 using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
+using TigerCS.Domain.Common;
 using TigerCS.Domain.Modules.Ticketing;
 
 namespace TigerCS.Application.Modules.Ticketing.Services;
@@ -92,8 +93,8 @@ public sealed class CustomerDirectoryAppService(
             || request.ChannelId is not null || request.RequestTypeId is not null || ticketStatus is not null || request.PriorityId is not null;
         var ticketFilter = hasTicketFilter
             ? new CustomerDirectoryTicketFilter(
-                request.DateFrom?.ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
-                request.DateTo?.AddDays(1).ToDateTime(TimeOnly.MinValue, DateTimeKind.Utc),
+                UaeCalendar.DayStartUtcOrNull(request.DateFrom),
+                UaeCalendar.DayEndUtcOrNull(request.DateTo),
                 request.DepartmentId,
                 request.OwnerEmployeeId,
                 request.ChannelId,

@@ -48,7 +48,7 @@ public class DashboardController(DashboardAppService dashboardAppService) : Cont
     /// numbers, never someone else's. KPIs, Open Backlog Ageing and the
     /// Recent/Critical list are current-state (all active tickets in scope,
     /// whatever their age); the volume breakdowns cover tickets created in
-    /// the date range, which defaults to the last 30 UTC calendar days. The
+    /// the date range, which defaults to the last 30 UAE calendar days. The
     /// response echoes the filters as applied and the picker options
     /// (departments, agents, channels, request types, statuses, priorities)
     /// drawn from the existing master data within the caller's scope.

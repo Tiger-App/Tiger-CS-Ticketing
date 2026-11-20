@@ -40,11 +40,11 @@
                 <span><strong>@v.TicketCount</strong> @(v.TicketCount == 1 ? "ticket" : "tickets") on this version</span>
                 @if (v.PublishedAtUtc is { } p)
                 {
-                    <span>Published @p.ToLocalTime().ToString("MMM d, yyyy") by @(v.PublishedByName ?? "System")</span>
+                    <span>Published @TigerCS.Web.Models.TicketDisplay.ToUae(p).ToString("MMM d, yyyy") by @(v.PublishedByName ?? "System")</span>
                 }
                 else
                 {
-                    <span>Created @v.CreatedAtUtc.ToLocalTime().ToString("MMM d, yyyy") by @(v.CreatedByName ?? "System")</span>
+                    <span>Created @TigerCS.Web.Models.TicketDisplay.ToUae(v.CreatedAtUtc).ToString("MMM d, yyyy") by @(v.CreatedByName ?? "System")</span>
                 }
             </div>
         </div>
@@ -284,10 +284,10 @@
                         }
                         <div class="facts-row"><dt>Pending Customer</dt><dd>@(v.AllowsPendingCustomer ? "Available" : "Not available")</dd></div>
                         <div class="facts-row"><dt>Approval stage</dt><dd>@(v.RequiresApproval ? "Yes" : "No")</dd></div>
-                        <div class="facts-row"><dt>Created</dt><dd>@v.CreatedAtUtc.ToLocalTime().ToString("MMM d, yyyy") by @(v.CreatedByName ?? "System")</dd></div>
+                        <div class="facts-row"><dt>Created</dt><dd>@TigerCS.Web.Models.TicketDisplay.ToUae(v.CreatedAtUtc).ToString("MMM d, yyyy") by @(v.CreatedByName ?? "System")</dd></div>
                         @if (v.PublishedAtUtc is { } pubAt)
                         {
-                            <div class="facts-row"><dt>Published</dt><dd>@pubAt.ToLocalTime().ToString("MMM d, yyyy") by @(v.PublishedByName ?? "System")</dd></div>
+                            <div class="facts-row"><dt>Published</dt><dd>@TigerCS.Web.Models.TicketDisplay.ToUae(pubAt).ToString("MMM d, yyyy") by @(v.PublishedByName ?? "System")</dd></div>
                         }
                     </dl>
                 </section>

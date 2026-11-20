@@ -204,7 +204,7 @@ public class OriginalHumanAgentOwnershipTests
     }
 
     [Fact]
-    public async Task IntegrationCreatedTicket_NeedingAPerson_GetsItsOriginalAgentFromTheFirstEligibleAgentAssigned()
+    public async Task IntegrationCreatedTicket_NeedingAPerson_WaitsInTheCallCenterQueue_AndItsOriginalAgentIsTheFirstEligibleAgentWhoAccepts()
     {
         var env = new Env();
         var agents = env.AddCallCenterAgents(2);
@@ -212,9 +212,19 @@ public class OriginalHumanAgentOwnershipTests
 
         var ticket = await env.CreateAsync(integrationAccount, new GenesysInteractionContextDto("conv-1", RequiresHumanFollowUp: true), roles: null);
 
+        // The AI asked for a person: the ticket is in the Call Center queue, flagged, with NOBODY chosen - no Round Robin, no Original Human Agent yet.
+        Assert.Equal(env.CallCenter.DepartmentId, ticket.CurrentDepartmentId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.OriginalHumanAgentId);
         Assert.NotEqual(integrationAccount, ticket.OriginalHumanAgentId); // the integration account is never the Original Human Agent
-        Assert.Equal(agents[0], ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(agents[0], ticket.OriginalHumanAgentId);
+        Assert.DoesNotContain(env.Assignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.Empty(env.Rotation.Rows);   // the rotation cursor did not move
+
+        // A person who actually accepts it becomes the Original Human Agent (the second agent is not preferred by any rotation).
+        var accepted = await env.AutoAssignment.AssignConfirmedHandlerAsync(ticket, agents[1], AutoAssignmentTrigger.CallCenterIntake, Now, Guid.NewGuid());
+        Assert.Equal(agents[1], accepted!.AssignedEmployeeId);
+        Assert.Equal(agents[1], ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(agents[1], ticket.OriginalHumanAgentId);
     }
 
     [Fact]

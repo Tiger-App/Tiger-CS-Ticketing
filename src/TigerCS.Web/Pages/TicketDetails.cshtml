@@ -757,7 +757,7 @@ else
                     <div>
                         Priority downgrade pending approval: @TicketDisplay.PriorityLabel(pendingDowngrade.CurrentPriorityId) &rarr; @TicketDisplay.PriorityLabel(pendingDowngrade.RequestedPriorityId).
                         The priority and SLA are unchanged until a Department Head approves. Reason: @pendingDowngrade.Reason
-                        (expires @pendingDowngrade.ExpiresAtUtc.ToString("yyyy-MM-dd HH:mm") UTC).
+                        (expires @TicketDisplay.ToUae(pendingDowngrade.ExpiresAtUtc).ToString("yyyy-MM-dd HH:mm", System.Globalization.CultureInfo.InvariantCulture) Dubai).
                         @if (Model.CanDecideDowngrade)
                         {
                             <form method="post" asp-page-handler="ApproveDowngrade" class="action-form">

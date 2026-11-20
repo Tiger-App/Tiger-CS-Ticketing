@@ -352,7 +352,8 @@ public sealed class TicketDetailsModel(
             .ToList() ?? [];
         var reopenApproved = approvals?.Approvals.Any(a => a.ApprovalType == reopenApproval && a.IsCurrent && a.Status == "Approved") ?? false;
 
-        var handling = Interactions.LastOrDefault(i => i.HandlingState is not null)?.HandlingState;
+        var handlingInteraction = Interactions.LastOrDefault(i => i.HandlingState is not null);
+        var handling = handlingInteraction?.HandlingState;
 
         return TicketNextAction.Build(new TicketGuidanceFacts(
             TicketStatus: t.TicketStatus,
@@ -367,6 +368,8 @@ public sealed class TicketDetailsModel(
             HandoffState: t.HandoffState,
             HandoffRequestedAtUtc: t.HandoffRequestedAtUtc,
             HandlingState: handling,
+            HumanAccepted: handlingInteraction?.HumanAccepted ?? false,
+            HumanResponded: handlingInteraction?.HumanResponded ?? false,
             SlaBreached: slaBreached,
             SlaBreachText: slaText,
             FirstResponsePending: firstResponsePending,

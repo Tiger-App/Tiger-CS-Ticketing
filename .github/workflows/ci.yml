@@ -27,6 +27,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Repository hygiene (no tracked build output, binaries or secrets)
+        working-directory: .
+        run: bash tools/check-repo-hygiene.sh
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
@@ -57,6 +61,16 @@ jobs:
           skipped=$(grep -ho 'Not executed: TIGERCS_TEST_SQL_SERVER' $(find . -name results.trx) | wc -l)
           echo "SQL Server tests skipped: $skipped"
           test "$skipped" -eq 0
+
+      - name: Timestamps and UAE business days on a UAE-hosted machine (TZ=Asia/Dubai)
+        # The production application server runs in UAE time; a hosted runner runs in UTC, which HIDES any bug that depends on the host zone. Run again with the process zone
+        # set to Asia/Dubai: (1) Genesys inbound timestamps (ticket TG-REG-20261119-0027: an offset-bearing UTC string was read into the host's local zone and persisted four
+        # hours late) and (2) the UAE business-day boundaries, filters, reports and display (UaeCalendar). Same tests, other zone; nothing may depend on the machine's zone.
+        env:
+          TZ: Asia/Dubai
+        run: >
+          dotnet test TigerCS.slnx --no-build --configuration Release
+          --filter "FullyQualifiedName~GenesysWireTimestampTests|FullyQualifiedName~GenesysTimelineAndOwnershipTimingTests|FullyQualifiedName~UaeCalendarTests|FullyQualifiedName~UaeBusinessDay|FullyQualifiedName~TeamPerformanceReportTests|FullyQualifiedName~DashboardOverviewTests|FullyQualifiedName~DashboardAppServiceTests|FullyQualifiedName~TeamPerformanceRenderTests"
 
   campaign-ui-scripts:
     runs-on: ubuntu-latest

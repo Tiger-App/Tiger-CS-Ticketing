@@ -323,14 +323,14 @@ internal static class TicketQueryFilters
 
     /// <summary>
     /// Tickets whose current SLA period's resolution deadline falls within
-    /// the UTC calendar day starting at <paramref name="dayStartUtc"/> and
+    /// the UAE calendar day that begins at the UTC instant <paramref name="dayStartUtc"/> (00:00 UAE, i.e. 20:00Z the evening before) and
     /// has not already breached. The resolution clock is the ticket's
     /// applicable due date (the same deadline the attention/recent lists
     /// show); a breached clock is "SLA Breached", not "due today".
     /// </summary>
-    public static IQueryable<Ticket> DueOnUtcDay(this IQueryable<Ticket> tickets, TigerCsDbContext dbContext, DateTime dayStartUtc)
+    public static IQueryable<Ticket> DueOnUaeDay(this IQueryable<Ticket> tickets, TigerCsDbContext dbContext, DateTime dayStartUtc)
     {
-        var dayEndUtc = dayStartUtc.AddDays(1);
+        var dayEndUtc = dayStartUtc.AddDays(1); // the UAE has no daylight saving: a UAE day is always 24 hours
         return tickets.Where(t => CurrentSlaPeriods(dbContext).Any(s =>
             s.TicketId == t.TicketId
             && !s.ResolutionBreached

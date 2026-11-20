@@ -90,7 +90,9 @@ public sealed record TicketGuidanceFacts(
     IReadOnlyList<RequiredApprovalFact> RequiredApprovals,
     bool ReopenApproved,
     DateTime NowUtc,
-    ClassifyNotice? ClassifyNotice = null);
+    ClassifyNotice? ClassifyNotice = null,
+    bool HumanAccepted = false,
+    bool HumanResponded = false);
 
 /// <summary>
 /// Chooses the single most useful "next step" for the person opening a ticket, plus any
@@ -243,6 +245,35 @@ public static class TicketNextAction
             return (AttentionLevel.Info, "AI is handling this customer",
                 "No person is in the conversation. Step in only if the customer asks for one or the AI hands over.",
                 new GuidanceTarget("conversation", "Read the conversation"));
+        }
+
+        // ---- The AI is no longer the participant, but no person has taken over ----
+        // "AiEnded" / "HumanFollowUp" come from the conversation; an employee being ASSIGNED is not acceptance and not a reply, so it is worded as follow-up
+        // still to be done - never as "AI is handling" (the conversation is over) and never as "{owner} is handling" (they have not started).
+        if (f.HandlingState is "HumanFollowUp" or "AiEnded" && !f.HumanAccepted && !f.HumanResponded)
+        {
+            var followUp = f.HandlingState == "HumanFollowUp";
+            if (!f.HasOwner)
+            {
+                var headline = followUp ? "Human follow-up required" : "The AI conversation has ended";
+                var detail = followUp
+                    ? $"The AI conversation needs a person and nobody has been assigned. It is waiting in the {f.DepartmentName} queue."
+                    : "The AI finished the conversation and no human follow-up was requested. Assign it only if the customer still needs help.";
+                return f.CanAssign
+                    ? (followUp ? AttentionLevel.Urgent : AttentionLevel.Info, headline, detail, new GuidanceTarget("assign", "Assign"))
+                    : (followUp ? AttentionLevel.Urgent : AttentionLevel.Info, headline, detail, null);
+            }
+
+            if (f.ViewerIsOwner)
+            {
+                return (AttentionLevel.Attention, "This ticket is assigned to you for human follow-up",
+                    "The AI conversation has ended. You have not replied to the customer yet — read the conversation, then contact them.",
+                    new GuidanceTarget("conversation", "Read the conversation"));
+            }
+
+            var assignee = f.OwnerName ?? "An employee";
+            return (AttentionLevel.Info, $"{assignee} is assigned for human follow-up",
+                "The AI conversation has ended. They have been assigned but have not yet accepted the interaction or replied to the customer.", null);
         }
 
         if (!f.HasOwner)

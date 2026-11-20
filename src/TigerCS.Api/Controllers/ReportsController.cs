@@ -29,7 +29,7 @@ public class ReportsController(TeamPerformanceAppService teamPerformanceAppServi
     /// their roles and department memberships, read from the database. Every
     /// filter is optional: <c>role</c> is an Identity role name,
     /// <c>departmentId</c> any department the employee is a member of. The
-    /// period is UTC calendar days, inclusive, defaulting to the last 30
+    /// period is UAE calendar days, inclusive, defaulting to the last 30
     /// days; Currently Assigned is current-state and ignores it. Employees
     /// with no activity in the period are included with zeros.
     /// </remarks>

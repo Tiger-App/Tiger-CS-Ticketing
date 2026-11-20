@@ -43,11 +43,12 @@ case, described below: they use the date range as a *closure* date.
 | My Tickets | Active tickets whose `CurrentOwnerEmployeeId` is the signed-in user. |
 | In Department Queue | Active tickets with no `CurrentOwnerEmployeeId` (queued to their responsible department). |
 | SLA Breached | Active tickets whose `SlaState` is `Breached`. |
-| Due Today | Active tickets whose current SLA period (`PeriodEndAtUtc IS NULL`) has an unbreached `ResolutionDueAtUtc` within today's UTC calendar day. |
+| Due Today | Active tickets whose current SLA period (`PeriodEndAtUtc IS NULL`) has an unbreached `ResolutionDueAtUtc` within today's UAE calendar day. |
 | Pending Approval | Tickets with a `Pending` approval the caller may action. |
 
-"Today" is the UTC calendar day — the convention the previous dashboard
-already used; no separate timezone strategy was introduced.
+"Today" and every date filter are UAE (Asia/Dubai, UTC+4) calendar days. Timestamps stay UTC in the database; a UAE day
+[00:00, 24:00) is converted to the UTC instants [previous day 20:00Z, day 20:00Z) by `TigerCS.Domain.Common.UaeCalendar`
+before it reaches SQL. See `docs/UAE-Business-Day.md`.
 
 ## Closure KPIs
 

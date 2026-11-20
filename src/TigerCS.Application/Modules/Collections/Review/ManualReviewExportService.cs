@@ -60,7 +60,7 @@ public sealed class ManualReviewExportService(
             logger.LogError("Review export could not be audited ({ExceptionType}); the file was not released.", ex.GetType().Name);
             return CollectionsResult<ReviewExportDto>.Fail(CollectionsOutcome.FinanceUnavailable, "The export could not be recorded in the audit trail, so no file was released. Try again.");
         }
-        return CollectionsResult<ReviewExportDto>.Ok(new($"collections-{filter?.ReminderType}-manual-review-{clock.UtcNow:yyyyMMdd-HHmm}.csv", csv, rows.Count, ready, hash));
+        return CollectionsResult<ReviewExportDto>.Ok(new($"collections-{filter?.ReminderType}-manual-review-{TigerCS.Domain.Common.UaeCalendar.ToUae(clock.UtcNow):yyyyMMdd-HHmm}.csv", csv, rows.Count, ready, hash));
     }
 
     private static string Write(IReadOnlyList<ReviewRecordDto> rows, ReviewRunDto run)
@@ -75,7 +75,7 @@ public sealed class ManualReviewExportService(
                 r.CustomerName, r.Phone, r.Email, r.ProjectCode, tower, r.UnitCode, CampaignReminderTypes.StageName(Enum.Parse<CampaignReminderType>(r.ReminderType)),
                 r.RemainingAmount?.ToString("0.00", CultureInfo.InvariantCulture) ?? "", r.Currency, r.DueDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "", r.ValidationStatus,
                 string.Join("; ", r.Reasons.Select(x => x.Explanation)),
-                r.PreviousDispatchStatus is null ? "" : $"{r.PreviousDispatchStatus} {r.PreviousDispatchAtUtc:yyyy-MM-dd}", run.AsOfDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                r.PreviousDispatchStatus is null ? "" : $"{r.PreviousDispatchStatus} {(r.PreviousDispatchAtUtc is { } prev ? TigerCS.Domain.Common.UaeCalendar.ToUaeDate(prev).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "")}", run.AsOfDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
             ];
             // A review file is opened in a spreadsheet: every cell is neutralized, including the phone.
             text.Append(string.Join(',', cells.Select(v => CollectionsCampaignCsv.Cell(v, review: true, isPhone: false)))).Append("\r\n");

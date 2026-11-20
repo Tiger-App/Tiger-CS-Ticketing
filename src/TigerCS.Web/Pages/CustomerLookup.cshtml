@@ -213,7 +213,7 @@
                                                     <td>@(string.IsNullOrWhiteSpace(row.UnitNumber) ? "—" : row.UnitNumber)</td>
                                                     <td><span class="badge badge-status-@TicketDisplay.TicketStatusCssKey(row.TicketStatus)"><span class="badge-dot"></span>@TicketDisplay.TicketStatusLabel(row.TicketStatus)</span></td>
                                                     <td><span class="badge badge-priority-@TicketDisplay.PriorityCssKey(row.PriorityId)">@TicketDisplay.PriorityLabel(row.PriorityId)</span></td>
-                                                    <td>@row.CreatedAtUtc.ToLocalTime().ToString("MMM d, yyyy")</td>
+                                                    <td>@TigerCS.Web.Models.TicketDisplay.ToUae(row.CreatedAtUtc).ToString("MMM d, yyyy")</td>
                                                     <td>
                                                         <a class="btn btn-sm" href="/Tickets/@row.TicketId">@(isFinished ? "View" : "Open")</a>
                                                         @if (row.IsReopenEligible && Model.ViewerCanReopen)

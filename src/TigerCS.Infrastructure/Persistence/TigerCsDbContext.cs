@@ -205,14 +205,37 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
     // path cannot forget it. SLA reporting needs the moment to tell "held at the deadline" from "released before it".
     public override int SaveChanges(bool acceptAllChangesOnSuccess)
     {
+        NormalizeLocalDateTimesToUtc();
         StampSupersededAssignments();
         return base.SaveChanges(acceptAllChangesOnSuccess);
     }
 
     public override Task<int> SaveChangesAsync(bool acceptAllChangesOnSuccess, CancellationToken cancellationToken = default)
     {
+        NormalizeLocalDateTimesToUtc();
         StampSupersededAssignments();
         return base.SaveChangesAsync(acceptAllChangesOnSuccess, cancellationToken);
+    }
+
+    /// <summary>
+    /// <b>No server-local time is ever written to the database.</b> EF Core persists a <c>datetime2</c> by its raw ticks, so a <see cref="DateTimeKind.Local"/> value
+    /// would be stored as the host's wall-clock time in a column whose reader (and the UI's single UTC-to-Asia/Dubai conversion) assumes UTC - exactly how an offset-bearing
+    /// Genesys timestamp became four hours too late on the UAE host (ticket 1878). A Local value names a real instant, so it is converted to that instant in UTC;
+    /// <see cref="DateTimeKind.Utc"/> and <see cref="DateTimeKind.Unspecified"/> (already UTC by this model's convention) are untouched.
+    /// </summary>
+    private void NormalizeLocalDateTimesToUtc()
+    {
+        foreach (var entry in ChangeTracker.Entries().Where(e => e.State is EntityState.Added or EntityState.Modified))
+        {
+            foreach (var property in entry.Properties)
+            {
+                var clr = property.Metadata.ClrType;
+                if ((clr == typeof(DateTime) || clr == typeof(DateTime?)) && property.CurrentValue is DateTime { Kind: DateTimeKind.Local } local)
+                {
+                    property.CurrentValue = local.ToUniversalTime();
+                }
+            }
+        }
     }
 
     private void StampSupersededAssignments()

@@ -43,6 +43,23 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
         return await BuildAsync(tickets, cancellationToken);
     }
 
+    public async Task<IReadOnlyList<UnassignedTicketEvidence>> ListVoiceCandidatesAsync(DateTime endedSinceUtc, long afterTicketId, int limit, CancellationToken cancellationToken = default)
+    {
+        // Narrow on purpose (the voice reconciler runs every minute): an Open, unowned ticket with a Genesys PHONE interaction that ended inside the look-back window,
+        // or whose answering agent was flagged (a corrected mapping must be noticed however old the call is). Everything else is never read.
+        var tickets = await db.Tickets.AsNoTracking()
+            .Where(t => t.TicketId > afterTicketId && t.TicketStatus == TicketStatus.Open && t.CurrentOwnerEmployeeId == null
+                && (t.IntegrationSource == null || t.IntegrationSource != TicketIntegrationSources.QueueingSystem)
+                && db.TicketInteractions.Any(i => i.TicketId == t.TicketId && i.Source == InteractionContextSource.Genesys && i.ChannelId == WellKnownChannels.Phone
+                    && ((i.EndedAtUtc != null && (i.EndReceivedAtUtc ?? i.EndedAtUtc) >= endedSinceUtc)
+                        || db.TicketWorkflowEvents.Any(e => e.TicketId == t.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired))))
+            .OrderBy(t => t.TicketId)
+            .Take(limit)
+            .Select(t => new TicketRow(t.TicketId, t.TicketNumber, t.TicketStatus, t.CurrentOwnerEmployeeId, t.CurrentDepartmentId, t.OriginatingDepartmentId, t.CreatedAtUtc, t.FirstHumanResponseAtUtc))
+            .ToListAsync(cancellationToken);
+        return await BuildAsync(tickets, cancellationToken);
+    }
+
     public async Task<UnassignedTicketEvidence?> GetEvidenceAsync(long ticketId, CancellationToken cancellationToken = default)
     {
         var tickets = await db.Tickets.AsNoTracking()
@@ -94,7 +111,7 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
             .Select(i => new
             {
                 i.TicketId, i.TicketInteractionId, i.Source, i.ChannelId, i.EndedAtUtc, i.InactivityClosedAtUtc, i.RequiresHumanFollowUp,
-                i.HandledByUserId, i.GenesysAgentId, i.GenesysAgentUserId, i.CreatedAtUtc, i.InteractionStartedAtUtc,
+                i.HandledByUserId, i.GenesysAgentId, i.GenesysAgentUserId, i.CreatedAtUtc, i.InteractionStartedAtUtc, i.EndReceivedAtUtc,
                 i.LastCustomerInteractionAtUtc, i.AwaitingCustomerReplySinceUtc,
             }).ToListAsync(ct)).ToLookup(i => i.TicketId);
 
@@ -123,7 +140,7 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
 
         var events = (await db.TicketWorkflowEvents.AsNoTracking()
             .Where(e => ids.Contains(e.TicketId))
-            .Select(e => new { e.TicketId, e.EventType, e.OccurredAtUtc, e.FromDepartmentId, e.ToDepartmentId, e.CorrelationId })
+            .Select(e => new { e.TicketId, e.EventType, e.OccurredAtUtc, e.FromDepartmentId, e.ToDepartmentId, e.CorrelationId, e.Note })
             .ToListAsync(ct)).ToLookup(e => e.TicketId);
 
         // Transfers whose automation ran and found nobody: the "AutoAssign ... DepartmentQueue ... Trigger=DepartmentTransfer" audit entry shares the
@@ -144,6 +161,17 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
         var released = (await db.AuditEntries.AsNoTracking()
             .Where(a => a.Action == "Unassign" && a.EntityType == "Ticket" && a.ActorEmployeeId != null && idText.Contains(a.EntityId!))
             .Select(a => a.EntityId!).Distinct().ToListAsync(ct)).ToHashSet(StringComparer.Ordinal);
+
+        // VOICE: the Genesys ids of agents whose answer was FLAGGED (ManualAssignmentRequired: unmapped / ineligible), resolved against the CURRENT mapping so a
+        // corrected mapping is noticed. The marker text is written by TicketAutoAssignmentService ("[GenesysUserId=<id>;Issue=<issue>;ConnectedAtUtc=<o>]").
+        var flaggedIds = events.SelectMany(g => g)
+            .Where(e => e.EventType == WorkflowEventType.ManualAssignmentRequired)
+            .Select(e => FlaggedAnswer.TryParse(e.Note))
+            .Where(f => f is not null).Select(f => f!.GenesysUserId).Distinct().ToList();
+        var flaggedUsers = flaggedIds.Count == 0
+            ? new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase)
+            : (await db.Users.AsNoTracking().Where(u => u.GenesysUserId != null && flaggedIds.Contains(u.GenesysUserId)).Select(u => new { u.GenesysUserId, u.Id }).ToListAsync(ct))
+                .ToDictionary(u => u.GenesysUserId!, u => u.Id, StringComparer.OrdinalIgnoreCase);
 
         var result = new List<UnassignedTicketEvidence>(tickets.Count);
         foreach (var t in tickets)
@@ -199,6 +227,17 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
                 && failedTransferAutomation.Contains(lastTransferIn.CorrelationId)
                 && (!lastAssignedAt.TryGetValue(t.TicketId, out var assignedAt) || assignedAt < lastTransferIn.OccurredAtUtc);
 
+            var phoneOnly = genesys.Count > 0 && genesys.All(i => i.ChannelId == WellKnownChannels.Phone);
+            DateTime? voiceEndReceived = phoneOnly && live.Count == 0
+                ? genesys.Max(i => i.EndReceivedAtUtc ?? i.EndedAtUtc ?? i.InactivityClosedAtUtc)
+                : null;
+
+            // The latest flagged answer (a later one supersedes an earlier flag for the same ticket).
+            var flagged = te.Where(e => e.EventType == WorkflowEventType.ManualAssignmentRequired)
+                .OrderByDescending(e => e.OccurredAtUtc)
+                .Select(e => (Parsed: FlaggedAnswer.TryParse(e.Note), e.OccurredAtUtc))
+                .FirstOrDefault(x => x.Parsed is not null);
+
             result.Add(new UnassignedTicketEvidence(
                 t.TicketId, t.TicketNumber, t.Status, t.Owner, t.CurrentDepartmentId, t.OriginatingDepartmentId, t.CreatedAtUtc,
                 PendingApproval: pendingApproval.Contains(t.TicketId),
@@ -217,7 +256,19 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
                 LeftCallCenter: left,
                 ReleasedByPerson: released.Contains(t.TicketId.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                 LiveGenesysIsPhoneOnly: live.Count > 0 && live.All(i => i.ChannelId == WellKnownChannels.Phone),
-                AwaitingDepartmentAssignment: awaitingDepartmentAssignment));
+                AwaitingDepartmentAssignment: awaitingDepartmentAssignment,
+                GenesysIsPhoneOnly: phoneOnly,
+                VoiceEndReceivedAtUtc: voiceEndReceived,
+                FlaggedAnsweringGenesysUserId: flagged.Parsed?.GenesysUserId,
+                FlaggedAnsweringConnectedAtUtc: flagged.Parsed?.ConnectedAtUtc,
+                HumanAnswered: t.FirstHumanResponseAtUtc != null
+                    || answeringId is not null
+                    || ti.Any(i => i.HandledByUserId != null)
+                    || tm.Any(m => m.Sender == InteractionMessageSender.HumanAgent)
+                    || te.Any(e => e.EventType is WorkflowEventType.GenesysAgentConnected or WorkflowEventType.GenesysCallTransferred or WorkflowEventType.HandoffStarted)
+                    || flagged.Parsed is not null,
+                AnsweringConnectedAtUtc: th.FirstOrDefault()?.ConnectedAtUtc,
+                FlaggedAnsweringEmployeeId: flagged.Parsed is { } fp && flaggedUsers.TryGetValue(fp.GenesysUserId, out var flaggedEmployee) ? flaggedEmployee : null));
         }
 
         return result;

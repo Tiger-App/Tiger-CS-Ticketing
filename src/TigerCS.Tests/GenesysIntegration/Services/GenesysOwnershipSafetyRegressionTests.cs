@@ -79,17 +79,26 @@ public class GenesysOwnershipSafetyRegressionTests
         var w = NewWorld();
         var call = await AiCallAsync(w, "conv-oha-unmapped");
 
-        // An id that maps to nobody is flagged and the ticket is dealt to an eligible CS Agent by the shared rotation (existing rule);
-        // that eligible agent - never the unmapped id - is the first Original Human Agent.
+        // An id that maps to nobody is flagged: the ticket sits in the Call Center queue with the AI Agent as owner and NO person (no Round Robin
+        // fallback), so nobody - least of all the unmapped id - becomes the Original Human Agent.
         await ConnectAsync(w, call, "g-not-in-tigercs", T0.AddMinutes(1));
-        var original = w.Ticket(call.TicketId).OriginalHumanAgentId;
-        Assert.Contains(original, w.Agents.Select(a => (Guid?)a.Id));
+        Assert.Null(w.Ticket(call.TicketId).OriginalHumanAgentId);
+        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(AiAgent, w.Ticket(call.TicketId).AiAgentOwnerEmployeeId);
+        Assert.Equal(0, w.OriginalAgentAudits(call.TicketId));
+        Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == call.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
 
-        var next = w.Agents.First(a => a.Id != original);
-        await ConnectAsync(w, call, next.GenesysId, T0.AddMinutes(2));
+        // The first mapped, eligible agent to be reported connected takes it directly and is the first Original Human Agent.
+        var original = w.Agents[0];
+        await ConnectAsync(w, call, original.GenesysId, T0.AddMinutes(2));
+        Assert.Equal(original.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(original.Id, w.Ticket(call.TicketId).OriginalHumanAgentId);
+
+        var next = w.Agents.First(a => a.Id != original.Id);
+        await ConnectAsync(w, call, next.GenesysId, T0.AddMinutes(3));
 
         Assert.Equal(next.Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
-        Assert.Equal(original, w.Ticket(call.TicketId).OriginalHumanAgentId);               // write-once
+        Assert.Equal(original.Id, w.Ticket(call.TicketId).OriginalHumanAgentId);            // write-once
     }
 
     [Fact]

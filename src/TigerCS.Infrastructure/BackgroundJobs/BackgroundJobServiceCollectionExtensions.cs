@@ -47,6 +47,13 @@ public static class BackgroundJobServiceCollectionExtensions
         services.Configure<StalePhoneAssignmentOptions>(configuration.GetSection(StalePhoneAssignmentOptions.SectionName));
         services.AddScoped<StalePhoneAssignmentJob>();
         services.AddHostedService<StalePhoneAssignmentHostedService>();
+        // VOICE call reconciliation: concludes "the call ended and nobody answered" only after a configured window (the answering agent can arrive after
+        // "ended"), then deals the ticket by the existing workflow and Round Robin; also reconciles an answering agent whose Genesys id mapping was corrected.
+        // Its own section, switch and interval - independent of Hangfire. ON by default (it replaces the Round Robin that used to run at the end event).
+        services.Configure<TigerCS.Application.Modules.GenesysIntegration.Services.VoiceCallReconciliationOptions>(
+            configuration.GetSection(TigerCS.Application.Modules.GenesysIntegration.Services.VoiceCallReconciliationOptions.SectionName));
+        services.AddScoped<VoiceCallReconciliationJob>();
+        services.AddHostedService<VoiceCallReconciliationHostedService>();
 
         // Tells the Collections pages whether the scheduled snapshot refresh really exists in this process (informational; registered whether or not Hangfire runs).
         services.AddSingleton<TigerCS.Application.Modules.Collections.Abstractions.ISnapshotSchedule>(sp =>

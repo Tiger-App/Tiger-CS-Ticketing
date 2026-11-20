@@ -146,8 +146,8 @@ public sealed record CustomerIdentity(
 /// <param name="Page">1-based page number.</param>
 /// <param name="PageSize">Rows per page (1–100; defaults to 25 otherwise).</param>
 /// <param name="Location">"within-uae", "outside-uae" or "unknown" (<see cref="CustomerLocationKeys"/>) — how the Dashboard's Customers by Location counts open their list.</param>
-/// <param name="DateFrom">Dashboard filter: first UTC day of the ticket creation range (inclusive). With the filters below, selects customers with at least one visible ticket matching all of them; <paramref name="DepartmentId"/> doubles as the department filter.</param>
-/// <param name="DateTo">Dashboard filter: last UTC day of the ticket creation range (inclusive).</param>
+/// <param name="DateFrom">Dashboard filter: first UAE day of the ticket creation range (inclusive). With the filters below, selects customers with at least one visible ticket matching all of them; <paramref name="DepartmentId"/> doubles as the department filter.</param>
+/// <param name="DateTo">Dashboard filter: last UAE day of the ticket creation range (inclusive).</param>
 /// <param name="OwnerEmployeeId">Dashboard filter: ticket's current owner.</param>
 /// <param name="ChannelId">Dashboard filter: ticket's originating channel.</param>
 /// <param name="RequestTypeId">Dashboard filter: ticket's request type.</param>
