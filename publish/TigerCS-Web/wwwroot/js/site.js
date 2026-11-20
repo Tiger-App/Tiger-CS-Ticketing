@@ -34,6 +34,27 @@
     });
   });
 
+  // Tickets filters: the Assigned To options follow the selected Department. Each option carries the
+  // departments it belongs to (data-departments); options outside the selection are hidden and disabled,
+  // and a selection that is no longer eligible falls back to "Anyone". The server applies the same rule.
+  document.querySelectorAll("select[data-filters-department]").forEach(function (department) {
+    var assignee = document.getElementById(department.getAttribute("data-filters-department"));
+    if (!assignee) return;
+    function sync() {
+      var selected = department.value;
+      Array.prototype.forEach.call(assignee.options, function (option) {
+        var scope = option.getAttribute("data-departments");
+        if (scope === null) return;
+        var eligible = !selected || scope.split(",").indexOf(selected) !== -1;
+        option.hidden = !eligible;
+        option.disabled = !eligible;
+        if (!eligible && option.selected) assignee.value = "";
+      });
+    }
+    department.addEventListener("change", sync);
+    sync();
+  });
+
   // Filter forms: auto-submit on select/checkbox change, so a mouse/keyboard
   // user doesn't need to also press the Apply button. The button still works
   // (and is the only way to apply filters) without this script. Applies to
@@ -436,6 +457,11 @@
   document.addEventListener("submit", function (event) {
     var form = event.target;
     if (!(form instanceof HTMLFormElement)) return;
+
+    // A form's own handler (a validation message, or a fetch-based save) runs first and may already have cancelled this
+    // submit. Nothing is being sent then, so the form must stay usable: marking it "submitting" here would disable its
+    // button for good and make every later attempt - after the user fixed what the message asked for - silently do nothing.
+    if (event.defaultPrevented) return;
 
     if (form.hasAttribute("data-submitting")) {
       event.preventDefault();

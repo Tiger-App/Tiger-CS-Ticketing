@@ -2,6 +2,10 @@
 workspace:
   id: 080b2bb5-fbda-4d2e-8aee-30542321354f
 
+cloudResources:
+  collections:
+    ../postman/collections/TigerCS - Queueing System - Receiving API: 9e0226ce-54a5-431c-b7b5-e60d12c2ce76
+
 # All resources in the `postman/` folder are automatically registered in Local View.
 # Point to additional files outside the `postman/` folder to register them individually. Example:
 #localResources:

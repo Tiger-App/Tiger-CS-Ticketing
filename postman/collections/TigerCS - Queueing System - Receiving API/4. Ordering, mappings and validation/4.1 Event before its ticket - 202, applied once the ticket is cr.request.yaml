@@ -1,0 +1,40 @@
+$kind: http-request
+name: 4.1 Event before its ticket -> 202, applied once the ticket is created
+url: "{{baseUrl}}/api/integrations/queueing/events"
+method: POST
+headers:
+  Content-Type: application/json
+  X-Queueing-Api-Key: "{{apiKey}}"
+body:
+  type: json
+  content: |-
+    {
+      "EventId": "{{eventId}}",
+      "EventType": "TicketAssigned",
+      "ExternalTicketId": "{{externalTicketId}}",
+      "EventSequence": {{sequence}},
+      "AssignedUserId": "{{queueUserA}}",
+      "CounterId": "counter-3",
+      "OccurredAtUtc": "{{occurredAtUtc}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      // A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.
+      if (!pm.collectionVariables.get('redeliver')) {
+        pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));
+        pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());
+      }
+      pm.collectionVariables.unset('redeliver');
+      pm.collectionVariables.set('sequence', '2');
+      pm.collectionVariables.set('externalTicketId', 'QT-' + Date.now());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('HTTP 202', () => pm.response.to.have.status(202));
+      const b = pm.response.json();
+      pm.test('status = Pending', () => pm.expect(b.status).to.eql('Pending'));
+      pm.test('outcome = AWAITING_TICKET_CREATED', () => pm.expect(b.outcome).to.eql('AWAITING_TICKET_CREATED'));
+      pm.test('retryable', () => pm.expect(b.retryable).to.eql(true));
+    language: text/javascript
+order: 1000

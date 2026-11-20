@@ -1,0 +1,41 @@
+$kind: http-request
+name: 4.4 Unmapped company -> 202 COMPANY_NOT_MAPPED, no ticket (a department is never guessed)
+url: "{{baseUrl}}/api/integrations/queueing/events"
+method: POST
+headers:
+  Content-Type: application/json
+  X-Queueing-Api-Key: "{{apiKey}}"
+body:
+  type: json
+  content: |-
+    {
+      "EventId": "{{eventId}}",
+      "EventType": "TicketCreated",
+      "ExternalTicketId": "{{externalTicketId}}",
+      "EventSequence": {{sequence}},
+      "QueueNumber": "A-020",
+      "CompanyId": "company-not-mapped",
+      "TicketTypeId": "{{ticketTypeId}}",
+      "CustomerPhone": "{{customerPhone}}",
+      "OccurredAtUtc": "{{occurredAtUtc}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      // A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.
+      if (!pm.collectionVariables.get('redeliver')) {
+        pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));
+        pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());
+      }
+      pm.collectionVariables.unset('redeliver');
+      pm.collectionVariables.set('sequence', '1');
+      pm.collectionVariables.set('externalTicketId', 'QT-' + Date.now());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('HTTP 202', () => pm.response.to.have.status(202));
+      const b = pm.response.json();
+      pm.test('status = Pending', () => pm.expect(b.status).to.eql('Pending'));
+      pm.test('outcome = COMPANY_NOT_MAPPED', () => pm.expect(b.outcome).to.eql('COMPANY_NOT_MAPPED'));
+    language: text/javascript
+order: 4000

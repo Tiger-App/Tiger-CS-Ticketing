@@ -473,6 +473,14 @@
             </list>
             </summary>
         </member>
+        <member name="M:TigerCS.Domain.Modules.Collections.CollectionsContactLinker.LinkForCampaign(TigerCS.Domain.Modules.Collections.SourceContact,TigerCS.Domain.Modules.Collections.SourceContact,TigerCS.Domain.Modules.Collections.CrmLinkStatus)">
+            <summary>
+            The contact for a CAMPAIGN call (preview, review records, exports, Genesys send). CRM is the only source of the MOBILE NUMBER: the phone is the CRM customer's own mobile when exactly one
+            eligible CRM buyer holds the unit, and is otherwise empty (no CRM buyer, several buyers, ambiguous company, CRM unavailable). The PACT phone is never used, not even as a fallback, so a
+            missing or invalid PACT phone cannot hold a customer back and a PACT phone can never be called. Name and e-mail keep the <see cref="M:TigerCS.Domain.Modules.Collections.CollectionsContactLinker.Link(TigerCS.Domain.Modules.Collections.SourceContact,TigerCS.Domain.Modules.Collections.SourceContact,TigerCS.Domain.Modules.Collections.CrmLinkStatus)"/> rules. An empty phone becomes NoValidContact
+            (Needs review) in the caller; CRM's value is validated here, so an invalid CRM mobile is empty too.
+            </summary>
+        </member>
         <member name="M:TigerCS.Domain.Modules.Collections.CollectionsContactLinker.Flags(TigerCS.Domain.Modules.Collections.LinkedContact,System.Boolean)">
             <summary>The review flags a linking raises (CrmCustomerAmbiguous, CrmCompanyAmbiguous) and NoValidContact when the linked contact has neither phone nor e-mail.</summary>
         </member>
@@ -1021,6 +1029,12 @@
         <member name="F:TigerCS.Domain.Modules.Collections.ReconDifferenceKinds.DueDateMismatch">
             <summary>Same voucher on both sides with different due dates; when the two dates fall in different months the instalment is Due on one side and Overdue on the other.</summary>
         </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.ReconInstalmentDiff.Difference">
+            <summary>Snapshot minus PACT (both rounded to two decimals); null when the instalment exists on one side only.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.ReconUnitDiff.TotalDifference">
+            <summary>Snapshot total minus PACT total for the unit.</summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Collections.ReconComparison">
             <summary>Outcome of comparing the two sides for ONE company. <c>Matches</c> is true only when every unit agrees within the tolerance.</summary>
         </member>
@@ -1033,6 +1047,12 @@
             Both sides are first reduced by the SAME validity rules the snapshot applies when it publishes (remaining amount &gt; 0 at 4 decimals, a real unit id and code,
             no '*' cancelled units, a customer id), restricted to the same due-date window, so a difference is a real difference and not a rule mismatch.
             Due / Overdue are measured against the Dubai month of <c>today</c>, exactly as the pages do (Overdue = due before its first day, Due = inside it).
+            <para>
+            Amounts are first rounded to two decimals (decimal arithmetic, <see cref="F:System.MidpointRounding.AwayFromZero"/>); PACT is the authoritative side. Business rule: for the same instalment (unit, voucher and
+            due day) a difference of up to <see cref="F:TigerCS.Domain.Modules.Collections.FinancialReconciler.DefaultTolerance"/> (AED 2.00, inclusive) counts as financially equivalent; anything larger is a mismatch, reported with both amounts and the difference.
+            The tolerance is a single allowance, never accumulated: it applies to each instalment on its own, and the unit's total difference must ALSO stay within the same single allowance, so many small
+            differences cannot add up to a larger discrepancy that goes unseen. A missing or extra instalment, a different due date or a different unit identity is never tolerated.
+            </para>
             </summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Collections.UnpaidInstalmentFact">
@@ -1295,8 +1315,11 @@
         <member name="F:TigerCS.Domain.Modules.Collections.Review.AmountPrecision.FloatingPointNoise">
             <summary>A floating-point source value within tolerance of a fils amount; normalized to that amount.</summary>
         </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.Review.AmountPrecision.Rounded">
+            <summary>More than two decimals on a valid positive balance: rounded to fils (half away from zero) by the business rule. The original value is kept alongside.</summary>
+        </member>
         <member name="F:TigerCS.Domain.Modules.Collections.Review.AmountPrecision.Unresolved">
-            <summary>More than two decimals that cannot be explained as floating-point noise: the source must be corrected.</summary>
+            <summary>No fils amount can honestly stand for the value: a positive balance that rounds to zero (below 0.005), or a negative one. It stays blocked and is never rounded or treated as paid.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Collections.Review.MoneyResult">
             <param name="Value">The amount in fils precision, or null when the precision is Unresolved.</param>
@@ -1319,10 +1342,10 @@
         </member>
         <member name="T:TigerCS.Domain.Modules.Collections.Review.MoneyNormalizer">
             <summary>
-            Monetary values are decimal throughout. Two-decimal rounding is applied only where it provably loses nothing:
-            a decimal source with more than two places is <b>unresolved</b> (never rounded to look clean), and a
-            floating-point source is snapped to fils only when it lies within the float tolerance of one — which is
-            representation noise, not money. A remainder that snaps to zero is a settled instalment.
+            Monetary values are decimal throughout. A valid positive remaining amount with more than two decimals is rounded to fils with
+            <see cref="F:System.MidpointRounding.AwayFromZero"/> (business decision: extra decimals alone are not a reason to hold a customer); the original value is always kept (<see cref="P:TigerCS.Domain.Modules.Collections.Review.MoneyResult.Raw"/>) for
+            traceability, and Paid / Unpaid is decided from the amount BEFORE rounding. A floating-point source within the float tolerance of a fils amount is representation noise and is snapped to it; a
+            remainder that snaps to zero is a settled instalment. A positive balance that would round to zero (below 0.005) or a negative one is <b>unresolved</b>: blocked, never rounded away into "paid".
             </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Collections.Review.MoneyNormalizer.Format(System.Decimal)">
@@ -1459,6 +1482,12 @@
         <member name="F:TigerCS.Domain.Modules.Collections.Review.DispatchItemStatus.Released">
             <summary>The dispatch stopped before upload; the record is free to be approved again.</summary>
         </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem.ProjectName">
+            <summary>The unit's project as the review record held it at approval (Manual contact list <c>ProjectName</c>). Empty on items approved before this column existed.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem.TowerName">
+            <summary>The unit's real tower name at approval (Manual contact list <c>TowerName</c>); empty when the tower has none. Empty on items approved before this column existed.</summary>
+        </member>
         <member name="P:TigerCS.Domain.Modules.Collections.Review.CollectionsDispatchItem.BatchPosition">
             <summary>Position inside the batch request, used to match the contact ids Genesys returns.</summary>
         </member>
@@ -1520,6 +1549,19 @@
         <member name="P:TigerCS.Domain.Modules.Collections.Review.CollectionsGenesysSyncState.Outcome">
             <summary>Completed, or Failed (the figures below are then those of the last completed sync, if any).</summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.Collections.Review.CollectionsExceptionInclusion">
+            <summary>
+            A manual inclusion of ONE GULF_CUSTOMERS unit in ONE Manual campaign (<see cref="P:TigerCS.Domain.Modules.Collections.Review.CollectionsExceptionInclusion.CampaignKey"/> = Manual, the Dubai business date and the campaign type). It never changes the unit's
+            financial data and never overrides a permanent special case; it only lifts the GULF_CUSTOMERS restriction for that campaign, while every other safety check stays in force. It expires
+            by construction (the key carries the date) and can be removed before sending (<see cref="P:TigerCS.Domain.Modules.Collections.Review.CollectionsExceptionInclusion.RemovedAtUtc"/> set; the row is kept as the audit of who included it and when).
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.CollectionsExceptionInclusion.CampaignKey">
+            <summary><c>Manual:yyyy-MM-dd:{ReminderType}</c>.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Collections.Review.CollectionsExceptionInclusion.UnitCode">
+            <summary>The normalized unit code (trimmed, upper case).</summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Collections.Review.ReviewReasons">
             <summary>
             The single catalogue of validation reasons: stable codes (filterable) with the plain-language explanation shown to
@@ -1535,8 +1577,8 @@
         </member>
         <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.ManualReminderTypeOverlap">
             <summary>
-            Markers stored on an outside-schedule record. They change nothing in Auto mode (the record is outside the schedule either way); in Manual mode they hold the record back
-            because sending it on the manual date would call the same unit twice, or the same number for two units, on that day.
+            No longer produced: campaign types are independent, so a unit that qualifies for several reminder types on one day is eligible in each of them. Kept only so review data stored
+            before that decision still reads; a refresh clears it.
             </summary>
         </member>
         <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.ManualSharedPhone">
@@ -1545,8 +1587,23 @@
         <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.SharedPhoneMultipleUnits">
             <summary>No longer produced (each unit is its own call, whatever its number); kept so review data stored before that decision still reads. A refresh clears it.</summary>
         </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.ReminderTypeOverlap">
+            <summary>No longer produced (campaign types are independent); kept so review data stored before that decision still reads. A refresh clears it.</summary>
+        </member>
         <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.ContactedToday">
             <summary>Manual only (derived when listing, never stored): the customer was already added to a Genesys dispatch today (the contact-frequency limit).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.SpecialCaseExcluded">
+            <summary>The unit is in the permanent special-cases list (<c>SpecialCaseUnitCodes</c>): never part of a normal campaign, whatever the date or any manual inclusion.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.GulfCustomerExcluded">
+            <summary>The unit is in GULF_CUSTOMERS / CHEQUES: excluded except for a Manual campaign on the 14th (Dubai) or when it was included manually for that campaign.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.ManuallyIncluded">
+            <summary>Warning (shown, never blocking): a GULF_CUSTOMERS unit is eligible for this Manual campaign because an authorized person included it.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Collections.Review.ReviewReasons.GulfInclusionDay">
+            <summary>Warning (shown, never blocking): a GULF_CUSTOMERS unit is eligible for this Manual campaign because today is its monthly inclusion day.</summary>
         </member>
         <member name="F:TigerCS.Domain.Modules.Collections.TowerAssignments.TowerAssignmentStatus.Draft">
             <summary>Saved but not in force: automatic routing ignores it.</summary>
@@ -2174,6 +2231,29 @@
             depending on Infrastructure/EF Core directly.
             </summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.CollectionsAccess">
+             <summary>
+             The one rule for who may enter the Collections module, shared by the Api (endpoint authorization), the Web (page gate and
+             navigation) and Administration (what the Edit User page shows), so they cannot drift apart.
+            
+             <list type="bullet">
+               <item><description>System Administrator and CS Manager: always allowed. An override cannot take it away - the role is the entitlement.</description></item>
+               <item><description>Anyone else: allowed only through an explicit <c>Collections.Access</c> grant, and never when it is explicitly denied.</description></item>
+               <item><description>No role other than the two above carries the permission, so everyone else is denied by default.</description></item>
+             </list>
+            
+             It is independent of department membership: belonging to, or being assigned tickets of, the Collections department neither grants
+             nor removes module access. The granular permissions (<see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsView"/>, <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsEdit"/>,
+             <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsSend"/>, <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CampaignsView"/>, <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CampaignsExport"/>) are
+             evaluated separately, exactly as before, inside the module.
+             </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.CollectionsAccess.AlwaysAllowedRoles">
+            <summary>The roles that always hold module access, whatever the user-level overrides say.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.CollectionsAccess.IsAllowed(System.Collections.Generic.IEnumerable{System.String},System.Collections.Generic.IReadOnlyDictionary{System.String,TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionEffect})">
+            <summary>True when the employee, with these roles and overrides, may use the Collections module.</summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionSource">
             <summary>Why a permission is (not) effective for a user - what the Manage Permissions screen shows.</summary>
         </member>
@@ -2218,6 +2298,18 @@
             <param name="Action">What the permission controls.</param>
             <param name="Name">Short display name.</param>
             <param name="Description">One-line explanation shown beside the toggle.</param>
+            <param name="IsModuleGate">
+            A module gate decides whether the employee may enter a whole module at all (today: Collections). Unlike every other permission
+            - which only ever <i>adds to</i> or <i>removes from</i> what the role policies allow - a gate is enforced on its own terms: it is
+            effective only when a role baseline carries it or an administrator granted it, so "no grant" means "no access". See
+            <see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.CollectionsAccess"/>.
+            </param>
+            <param name="EnforceEffective">
+            Evaluated on its own terms, like a module gate but for a single action rather than a whole module: the endpoint is open only to
+            callers whose role baseline carries the permission or who were explicitly granted it, and an explicit denial always refuses. Ordinary
+            permissions only adjust what the role policies already allow, which cannot express "managers and administrators, anyone else by grant"
+            on an endpoint every signed-in employee may otherwise reach (today: <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CustomersEdit"/>).
+            </param>
             <param name="IsReserved">
             A reserved ("administrator-only") permission can never be <i>granted</i>
             to a user whose roles do not already carry it. These are the permissions
@@ -2226,7 +2318,7 @@
             can still be <i>denied</i>.
             </param>
         </member>
-        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.#ctor(System.String,System.String,TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction,System.String,System.String,System.Boolean)">
+        <member name="M:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.#ctor(System.String,System.String,TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction,System.String,System.String,System.Boolean,System.Boolean,System.Boolean)">
             <summary>
             One grantable permission: a module (the grouping shown in the UI), the
             action, and the stable key persisted in <c>UserPermissionOverrides</c> and
@@ -2239,6 +2331,18 @@
             <param name="Action">What the permission controls.</param>
             <param name="Name">Short display name.</param>
             <param name="Description">One-line explanation shown beside the toggle.</param>
+            <param name="IsModuleGate">
+            A module gate decides whether the employee may enter a whole module at all (today: Collections). Unlike every other permission
+            - which only ever <i>adds to</i> or <i>removes from</i> what the role policies allow - a gate is enforced on its own terms: it is
+            effective only when a role baseline carries it or an administrator granted it, so "no grant" means "no access". See
+            <see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.CollectionsAccess"/>.
+            </param>
+            <param name="EnforceEffective">
+            Evaluated on its own terms, like a module gate but for a single action rather than a whole module: the endpoint is open only to
+            callers whose role baseline carries the permission or who were explicitly granted it, and an explicit denial always refuses. Ordinary
+            permissions only adjust what the role policies already allow, which cannot express "managers and administrators, anyone else by grant"
+            on an endpoint every signed-in employee may otherwise reach (today: <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CustomersEdit"/>).
+            </param>
             <param name="IsReserved">
             A reserved ("administrator-only") permission can never be <i>granted</i>
             to a user whose roles do not already carry it. These are the permissions
@@ -2271,6 +2375,22 @@
             can still be <i>denied</i>.
             </summary>
         </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsModuleGate">
+            <summary>
+            A module gate decides whether the employee may enter a whole module at all (today: Collections). Unlike every other permission
+            - which only ever <i>adds to</i> or <i>removes from</i> what the role policies allow - a gate is enforced on its own terms: it is
+            effective only when a role baseline carries it or an administrator granted it, so "no grant" means "no access". See
+            <see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.CollectionsAccess"/>.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.EnforceEffective">
+            <summary>
+            Evaluated on its own terms, like a module gate but for a single action rather than a whole module: the endpoint is open only to
+            callers whose role baseline carries the permission or who were explicitly granted it, and an explicit denial always refuses. Ordinary
+            permissions only adjust what the role policies already allow, which cannot express "managers and administrators, anyone else by grant"
+            on an endpoint every signed-in employee may otherwise reach (today: <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CustomersEdit"/>).
+            </summary>
+        </member>
         <member name="P:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionDefinition.IsMutating">
             <summary>True for permissions that change data (everything except <see cref="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionAction.View"/>); a read-only caller is never granted these.</summary>
         </member>
@@ -2285,6 +2405,12 @@
             code change and needs no migration, because only the <i>overrides</i> are
             stored.
             </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CustomersEdit">
+            <summary>Edit a customer's phone number, project and unit from the Customers directory. Enforced on its own terms: System Administrator and CS Manager, or an explicit grant.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.Permissions.CollectionsAccess">
+            <summary>Module gate: may the employee use the Collections module (its pages and module-only endpoints) at all. Separate from the granular View / Edit / Send and Campaigns permissions, which still decide what they may do inside it.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.Permissions.PermissionCatalog">
             <summary>The complete, ordered permission catalog.</summary>
@@ -2360,6 +2486,14 @@
             The "exactly one primary row per EmployeeId" invariant is app-enforced
             (see DepartmentAssignmentService) and backed by a filtered unique index
             on (EmployeeId) WHERE IsPrimary = 1.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.IdentityAndAccess.UserTransferDepartment">
+            <summary>
+            One department an employee is explicitly authorised to TRANSFER tickets to. It is deliberately separate from
+            <see cref="T:TigerCS.Domain.Modules.IdentityAndAccess.UserDepartmentAssignment"/> (the departments the employee belongs to, i.e. can view) and from the reassignment permission
+            (<c>Tickets.Assign</c>): being able to see a department never lets an employee send tickets there, and the reverse. At most one row per
+            (employee, department). An employee with no rows keeps the role-based behaviour that existed before this list was introduced.
             </summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Notifications.Notification">
@@ -2490,6 +2624,114 @@
             an expected outcome (most phone-only tickets have no email) never
             inflates the dead-letter count operators are alerted on.
             </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Received">
+            <summary>Received and recorded; processing has not completed (in flight, or interrupted - a redelivery or the retry sweep finishes it).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Processed">
+            <summary>Applied to the ticket.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Unresolved">
+            <summary>
+            Could not be applied YET - the ticket does not exist yet (out of order), or a mapping / configuration it needs is missing. The event is
+            kept, nothing was changed, and it is retried (<see cref="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.NextRetryAtUtc"/>) until it applies or runs out of attempts.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Superseded">
+            <summary>Older than the ticket's applied state: recorded for the audit trail, deliberately not applied.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Rejected">
+            <summary>Valid but not applicable (e.g. a state change after the ticket is closed). Recorded, never retried.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Failed">
+            <summary>An <see cref="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Unresolved"/> event that exhausted its attempts. Needs a person; redelivering the same EventId starts it again.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent">
+            <summary>
+            One row per event the Queueing System ever delivered - the inbox. <c>(Source, EventId)</c> is unique at the database, so a duplicate or two
+            concurrent deliveries of the same event are one row, and the stored outcome is what every redelivery is answered with. The payload is kept
+            verbatim so an unresolved event can be retried exactly as it arrived.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.Payload">
+            <summary>
+            The event as received (canonical JSON), kept so an unresolved event can be retried exactly as sent. Null once it has been purged: a successfully
+            processed event's payload is erased after the retention period (<see cref="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.PayloadPurgedAtUtc"/>); the row, its identifiers and
+            <see cref="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.PayloadHash"/> stay, so idempotency and the audit trail never depend on the payload.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.PayloadHash">
+            <summary>SHA-256 (lower-case hex) of the canonical payload. Written once at receipt and never erased: a redelivery of the same EventId is compared by hash, so a purged payload still detects an EventId reused with different content.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.OutcomeCode">
+            <summary>A stable machine-readable code for why the event is not <see cref="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Processed"/> (see <c>QueueingOutcomeCodes</c>), or the success outcome.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.HasSamePayloadAs(System.String)">
+            <summary>True when <paramref name="canonicalPayload"/> is the content this EventId was first received with (compared by hash, so it works after a purge).</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.PurgePayload(System.DateTime)">
+            <summary>
+            Erases the payload of a <b>successfully processed</b> event (the retention rule). Everything that gives the event its identity - the ids, sequence, type,
+            timestamps, outcome, ticket link and <see cref="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.PayloadHash"/> - is kept. Refused for every other status: an unresolved event is still waiting to be retried
+            from its payload and must never be purged. Returns false when there was nothing to purge.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.MarkUnresolved(System.String,System.String,System.Nullable{System.Int64},System.DateTime,System.DateTime,System.Int32)">
+            <summary>Unresolved, with the next retry; after <paramref name="maxAttempts"/> it becomes <see cref="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventStatus.Failed"/> and stops being retried.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.Reopen">
+            <summary>A redelivery of a Failed event starts a fresh retry cycle.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingOutcomeCodes">
+            <summary>Stable outcome codes recorded on <see cref="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent.OutcomeCode"/> and returned to the Queueing System.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventType">
+            <summary>The events the Queueing System sends. Stable wire names (the enum member names) - they are stored on <see cref="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingEvent"/>.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventTypes.IsStateChange(TigerCS.Domain.Modules.QueueingIntegration.QueueingEventType)">
+            <summary>Events that move the queue ticket between states and therefore take part in sequence ordering ("the newest state wins").</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.QueueingIntegration.QueueingEventTypes.IsAdditive(TigerCS.Domain.Modules.QueueingIntegration.QueueingEventType)">
+            <summary>Events that only add a record (a comment, a recall). They never overwrite state, so a late one is still recorded.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingCompanyMapping">
+            <summary>Queueing System company id -> TigerCS department. One company routes to exactly one department; a re-point is an edit.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketTypeMapping">
+            <summary>(company, queue ticket type) -> TigerCS request type. The request type decides category, workflow and SLA through the existing request-type routing.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingUserMapping">
+            <summary>Queueing System employee id -> TigerCS employee. The queue's own id is the key; the TigerCS employee id is what an assignment is written against.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketState">
+            <summary>The Queueing System's view of where a queue ticket is. Mirrors the queue's own lifecycle; the TigerCS status is derived from it, never the other way round.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketState.Waiting">
+            <summary>Waiting in the queue: no employee is serving it (newly created, or returned to the waiting queue).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketState.Assigned">
+            <summary>Called/assigned to an employee at a counter.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink">
+            <summary>
+            The queue-specific state of a queue-originated TigerCS ticket (one row per ticket). The ticket's identity - its external id, queue number and
+            source - lives on the <see cref="T:TigerCS.Domain.Modules.Ticketing.Ticket"/> itself, written in the same transaction as the ticket; this row holds what only
+            the integration needs: how far the event stream has been applied. <see cref="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink.LastAppliedSequence"/> is the ordering guard - an event whose
+            sequence is not greater than it can never overwrite the ticket - and <see cref="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink.RowVersion"/> turns two concurrent applications of events for the
+            same ticket into one winner and one retry.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink.LastAppliedSequence">
+            <summary>The highest <c>EventSequence</c> of a state-changing event applied to the ticket.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink.LastAppliedOccurredAtUtc">
+            <summary>The original (Queueing System) time of the last applied state-changing event.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink.AssignedExternalUserId">
+            <summary>The Queueing System's id of the employee currently serving the ticket, when it is assigned.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.QueueingIntegration.QueueingTicketLink.IsStale(System.Int64)">
+            <summary>True when a state-changing event with this sequence is older than (or the same as) what was already applied.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.SlaAndEscalation.AppliedSlaPolicy">
             <summary>
@@ -3524,6 +3766,103 @@
         <member name="P:TigerCS.Domain.Modules.Ticketing.CustomerContactDetail.PhoneKey">
             <summary>The canonical (digits-only) phone number — unique.</summary>
         </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.CustomerLocation">
+            <summary>
+            Where a customer is, judged ONLY from their phone number's country code — never from nationality, a CRM country
+            field or anything else. The three values are mutually exclusive: a customer is in exactly one of them.
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerLocation.Unknown">
+            <summary>Missing, invalid, ambiguous (national form with no country code) or conflicting phone evidence. Not guessed.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerLocation.WithinUae">
+            <summary>A valid UAE number: country code +971.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerLocation.OutsideUae">
+            <summary>A valid international number carrying any other country code.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason">
+             <summary>
+             The one rule that places a single phone number in a <see cref="T:TigerCS.Domain.Modules.Ticketing.CustomerLocation"/>. The Customers directory
+             (<c>CustomerDirectoryRepository</c>) mirrors it in SQL with chained <c>REPLACE()</c> — a database cannot run C# — and a
+             test asserts the two agree on a table of samples, so this class is the authority and the SQL the translation.
+            
+             <para>
+             A number is first reduced the way <see cref="T:TigerCS.Domain.Modules.Ticketing.CustomerPhoneNumber"/> reduces it: the separators in
+             <see cref="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneNumber.SeparatorCharacters"/> are dropped. Anything left that is not a digit (a letter, "ext")
+             makes the number invalid. Then:
+             </para>
+             <list type="bullet">
+             <item>Written internationally — a leading "+" or "00" — the rest is the E.164 number: 8–15 digits, not starting with 0.
+             "971" followed by exactly 9 digits is UAE; any other "971…" is an invalid UAE number (<see cref="F:TigerCS.Domain.Modules.Ticketing.CustomerLocation.Unknown"/>);
+             every other valid number is Outside UAE.</item>
+             <item>Written without either marker, only "971" + 9 digits is placed (UAE) — the existing rule that "971501234567" and
+             "+971501234567" are one customer. A national form ("0501234567") or a bare foreign number states no country, so it is
+             <see cref="F:TigerCS.Domain.Modules.Ticketing.CustomerLocation.Unknown"/>: no country is ever guessed.</item>
+             </list>
+             </summary>
+             <summary>Why a phone number (or a customer's phones) is not placed in a location.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.None">
+            <summary>Placed: there is nothing to explain.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.Missing">
+            <summary>No phone number is recorded (or it is only separators).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.InvalidCharacters">
+            <summary>The number contains letters or symbols other than the separators (" ", "-", "(", ")", ".", "/", "+").</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.InternationalWrongLength">
+            <summary>Written with "+" or "00" but not 8–15 digits.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.InternationalLeadingZero">
+            <summary>Written with "+" or "00" and a country code starting with 0.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.UaeWrongLength">
+            <summary>Starts with 971 (+971 / 00971 / 971) but is not followed by exactly 9 digits.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.UaeLocalFormat">
+            <summary>A UAE-style local number (05x mobile / 0[2346 79] landline) with no country code. Looks UAE, states no country: not assumed.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.NationalFormatNoCountryCode">
+            <summary>Starts with a single 0 (national format) and is not a UAE-style local number: the country is not stated.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.NoCountryCode">
+            <summary>Digits with no "+", "00" or 971 prefix: the country is not stated.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.ConflictingCountries">
+            <summary>The customer's tickets carry both a UAE and a foreign number: ambiguous, so not placed.</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.PhoneLocationDiagnosis">
+            <summary>A phone's location and, when Unknown, the reason.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.PhoneLocationDiagnosis.#ctor(TigerCS.Domain.Modules.Ticketing.CustomerLocation,TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason)">
+            <summary>A phone's location and, when Unknown, the reason.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocation.UaeCountryCode">
+            <summary>The UAE's calling code.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocation.UaeNationalNumberLength">
+            <summary>The digits after "971" in a UAE number (area/mobile prefix + subscriber number).</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocation.MinInternationalDigits">
+            <summary>E.164 allows at most 15 digits and, in practice, no fewer than 8 including the country code.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocation.Diagnose(System.String)">
+            <summary>
+            The one rule, with its reason: where <paramref name="phoneNumber"/> sits and — when it sits nowhere — exactly why. <see cref="M:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocation.Classify(System.String)"/> is this
+            method's <see cref="P:TigerCS.Domain.Modules.Ticketing.PhoneLocationDiagnosis.Location"/>, so the Dashboard, the Customers directory and the Unknown explanations can never disagree.
+            Nothing is guessed and nothing is rewritten: a local number such as "0501234567" is reported as <see cref="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocationReason.UaeLocalFormat"/>
+            (it looks UAE but states no country) and stays Unknown.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocation.Resolve(System.Collections.Generic.IEnumerable{TigerCS.Domain.Modules.Ticketing.CustomerLocation})">
+            <summary>
+            A customer's location from every phone their tickets carry: all located numbers must agree. One UAE and one foreign number
+            is ambiguous, so the customer is <see cref="F:TigerCS.Domain.Modules.Ticketing.CustomerLocation.Unknown"/> — never counted twice, never counted in a guessed place.
+            Numbers that themselves classify Unknown are ignored: they add no evidence either way.
+            </summary>
+        </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.CustomerLookupSource">
             <summary>The external customer directories <c>CustomerLookupAppService</c> can search — CRM, PACT, Tasleeh.</summary>
         </member>
@@ -3644,6 +3983,85 @@
             the rest of the string is passed through as typed. Applied to the
             PACT request path only; CRM and persistence keep the number exactly
             as entered.
+            </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.CustomerProfileEntry">
+            <summary>
+            The rules for what may be typed into the Customers directory's Edit form. Pure, so the Api, the Web and the tests share one answer.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.CustomerProfileEntry.TryNormalizePhone(System.String,System.String@,System.String@)">
+             <summary>
+             Normalizes a phone number typed by a person to its international form (<c>+971501234567</c>) or says why it cannot be saved.
+            
+             <para>
+             The separators <see cref="F:TigerCS.Domain.Modules.Ticketing.CustomerPhoneNumber.SeparatorCharacters"/> are dropped; anything else that is not a digit (a letter,
+             "ext") is refused. The number must state its country: a leading "+" or "00" ("00971..." becomes "+971..."), or "971" followed
+             by the nine digits of a UAE number. No country is ever guessed, so a national form ("0501234567") is refused with a message that
+             says how to write it, exactly as <see cref="T:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocation"/> places such a number in Unknown. Validity itself is
+             delegated to <see cref="M:TigerCS.Domain.Modules.Ticketing.CustomerPhoneLocation.Classify(System.String)"/> (8-15 digits, not starting 0, a UAE number is "971" + 9 digits), so what is
+             accepted here is exactly what the directory can place.
+             </para>
+             </summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.CustomerFieldText">
+            <summary>
+            Placeholder text a source system writes for "no value" (<c>NOT_REGISTERED</c>, <c>UNKNOWN</c>, <c>N/A</c>...). A project, unit or phone
+            that is only a placeholder is missing data and must be shown as missing, never printed. (Names have their own, wider rule in
+            <c>CustomerNameResolver</c>.)
+            </summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.CustomerFieldText.NotProvided">
+            <summary>What the Customers pages print for a missing project, unit or phone.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.CustomerFieldText.Clean(System.String)">
+            <summary>The trimmed value, or null when it is blank or only a placeholder ("NOT_REGISTERED", "not registered", "N/A", "n.a." all collapse to the same key).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride">
+             <summary>
+             The phone number, project and unit an authorised user entered by hand for a customer of the Customers directory, held by Tiger
+             Ticketing only.
+            
+             <para>
+             TigerCS has no customer table: a customer is derived from the tickets that name them (see <c>CustomerIdentity</c>), and the phone,
+             project and unit the directory shows are read from the latest ticket. This row is the correction layered on top. It is keyed by the
+             customer's directory identity - the same <c>CrmBuyerCustomerId</c> / <c>ExternalSource + ExternalCustomerId</c> / canonical
+             intake phone the directory groups by - so editing a customer can never split or merge customers, and a customer keeps their tickets,
+             history and verification whatever is entered here. The identity columns are stored as components, not just as the key string, so a
+             query can join on them without building text.
+             </para>
+            
+             <para>
+             Each of <see cref="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.PhoneNumber"/>, <see cref="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.ProjectName"/> and <see cref="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.UnitNumber"/> is independent: null means "no override,
+             show what the tickets say". It is local only - nothing is written to Tiger CRM, PACT or Tasleeh, and no ticket is touched.
+             <see cref="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.PhoneLocation"/> is the phone's place (<see cref="T:TigerCS.Domain.Modules.Ticketing.CustomerLocation"/>) worked out once, at save time, by the same rule the
+             directory applies to ticket phones, so the dashboard's Customers by Location can follow an edit without a database translation of
+             that rule.
+             </para>
+             </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.CustomerKey">
+            <summary>The directory key (<c>crm:{id}</c>, <c>ext:{source}:{id}</c>, <c>phone:{digits}</c>) - unique, one row per customer.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.IdentityKind">
+            <summary>The identity kind (1 Tiger CRM, 2 PACT / Tasleeh, 3 phone only) and its components, exactly as the directory groups tickets.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.IdentityPhone">
+            <summary>The canonical phone of a phone-only customer's identity (not the edited number below).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.PhoneNumber">
+            <summary>The edited number, normalized (<c>+971501234567</c>), or null when the phone is not overridden.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.PhoneLocation">
+            <summary>The place of <see cref="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.PhoneNumber"/>; null when the phone is not overridden.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.IsEmpty">
+            <summary>True when nothing is overridden any more - the row carries no information and is deleted by the service.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.CustomerProfileOverride.Set(System.String,System.String,System.String,System.Guid,System.DateTime)">
+            <summary>
+            Replaces the three overrides. A null value clears that override (the customer shows what their tickets say again). Values are
+            expected to be already validated and normalized by the application service; only the column limits are guarded here.
             </summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.DepartmentAssignmentRotation">
@@ -3907,6 +4325,22 @@
              </para>
              </summary>
         </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.AiAgentOwnerEmployeeId">
+            <summary>
+            <b>The AI Agent as the ticket's actual assigned owner</b> (the Genesys integration account that handled the conversation first). Persisted
+            on the ticket, so reports and screens read the owner instead of inferring it. Deliberately a SEPARATE field from
+            <see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.CurrentOwnerEmployeeId"/>, which stays "the human who owns the ticket": Round Robin, Take Ownership, the reconciler, the AI
+            auto-close, the inactivity closer, visibility and every dashboard bucket keep seeing an AI-handled ticket as having no human owner, exactly as
+            before. Set only while no human owns the ticket; cleared the moment a person is assigned or the ticket is moved to a department's queue
+            (<see cref="M:TigerCS.Domain.Modules.Ticketing.Ticket.AssignTo(System.Guid)"/>, <see cref="M:TigerCS.Domain.Modules.Ticketing.Ticket.TransferToDepartment(System.Int32,System.Boolean)"/>). Kept on closure, so a ticket the AI handled and closed still says so.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.AssignedOwnerEmployeeId">
+            <summary>The ticket's assigned owner whoever it is: the human owner, else the AI Agent, else nobody.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.IsOwnedByAiAgent">
+            <summary>True while the AI Agent is the assigned owner and no human is.</summary>
+        </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.CreatedByEmployeeId">
             <summary>
             The employee who created the ticket (the account that called ticket creation — for a Genesys inquiry that is the integration
@@ -3916,6 +4350,38 @@
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.RecordCreator(System.Guid)">
             <summary>Records who created the ticket. Write-once: a second, different creator is ignored (returns false).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.OriginalHumanAgentId">
+            <summary>
+            The first eligible Human Agent who owned the ticket: the agent who created it manually, or — for a ticket created by Genesys AI / a
+            system integration, which starts with null — the first Call Center CS Agent who accepted or was assigned it. <b>Write-once</b>: department
+            transfers, reassignment, repeated customer calls and background jobs never change it. It is what a ticket returning to the Call Center
+            is routed back to. Distinct from <see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.CreatedByEmployeeId"/> (for a Genesys ticket that is the integration account, not a person)
+            and from <see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.CurrentOwnerEmployeeId"/> (which moves with every assignment).
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.OriginalAgentWorkflowEnabled">
+            <summary>
+            The deployment cutoff for the Original Human Agent workflow. <b>True only for a ticket created after the feature was deployed</b> - it is set once, by
+            the ticket creation service, and never by a migration, a backfill or a job; the column defaults to false, so every ticket that already existed is a
+            legacy ticket and keeps its previous routing and assignment behaviour forever, even when it is transferred again. It is deliberately separate from
+            <see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.OriginalHumanAgentId"/>, which is also NULL on a new AI-created ticket until the first eligible agent takes it.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.EnableOriginalAgentWorkflow">
+            <summary>Marks a ticket created from now on as following the Original Human Agent workflow. Idempotent; called only at creation.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.ActiveOriginalHumanAgentId">
+            <summary>
+            The Original Human Agent for routing purposes: <see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.OriginalHumanAgentId"/> on a ticket that follows the workflow, and always null on a legacy
+            ticket (whatever its column holds). Every routing decision reads this, never the raw column.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.RecordOriginalHumanAgent(System.Guid)">
+            <summary>
+            Records the Original Human Agent. Write-once: returns false and changes nothing when one is already recorded, and always false for a legacy ticket
+            (<see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.OriginalAgentWorkflowEnabled"/> false), whose original agent is never inferred.
+            </summary>
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.CategoryId">
              <summary>
@@ -4078,6 +4544,30 @@
         </member>
         <member name="F:TigerCS.Domain.Modules.Ticketing.Ticket.ExternalCustomerNameMaxLength">
             <summary>Column widths for the external snapshot — the same limits <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketInteraction"/> holds externally-supplied customer text to.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.IntegrationSource">
+            <summary>
+            The external system that owns this ticket's lifecycle (<see cref="T:TigerCS.Domain.Modules.Ticketing.TicketIntegrationSources"/>), or null for every ordinary TigerCS
+            ticket - including Genesys tickets, which TigerCS itself drives. Write-once, set only by the creation that an integration performs.
+            </summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.ExternalTicketId">
+            <summary>The source system's own id for this ticket. Unique per <see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.IntegrationSource"/> (a filtered unique index), which is what makes "one external ticket, one TigerCS ticket" a database fact.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.ExternalReference">
+            <summary>The human-facing reference the source system showed the customer (the queue number). Display/traceability only - never an identity.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.IsQueueManaged">
+            <summary>True when an external system (the Queueing System) is the source of truth for this ticket's lifecycle.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.SuppressesCustomerNotifications">
+            <summary>
+            True when TigerCS must not email the customer about this ticket: the Queueing System already tells the customer about their queue ticket,
+            so a TigerCS acknowledgement, assignment, resolution or closure email would be a duplicate. Read by ticket creation and by every customer email handler.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.RecordExternalOrigin(System.String,System.String,System.String)">
+            <summary>Records the originating external system and its ids. Creation-time only and write-once: a second call is refused.</summary>
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.Ticket.RowVersion">
             <summary>
@@ -4349,6 +4839,12 @@
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.AssignTo(System.Guid)">
             <summary>MVP-API-Contracts.md §3.5 / §2.12 — sets the current owner and appends a superseding <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketAssignment"/> row is the caller's job (this method only updates the ticket's own denormalized pointer).</summary>
         </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.AssignToAiAgent(System.Guid)">
+            <summary>
+            The AI Agent handled the conversation first and is the ticket's assigned owner until a person takes over. Refused (returns false, nothing
+            changes) when a person already owns the ticket or the AI already does; a Closed ticket throws like every other mutator.
+            </summary>
+        </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.ReleaseOwner">
             <summary>
             Clears the current owner without moving the ticket: it returns to its department's queue. Used only to release an AUTOMATIC
@@ -4428,6 +4924,14 @@
              </para>
              </summary>
         </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.ReturnToQueue">
+            <summary>
+            The external system that owns the ticket (the Queueing System) returned it to the waiting queue: the owner is released and the ticket goes back to
+            <see cref="F:TigerCS.Domain.Modules.Ticketing.TicketStatus.Open"/>. <b>Only for a queue-managed ticket</b> - a generic InProgress -&gt; Open transition does not exist in
+            <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketStatusTransitions"/> and none is added there, so no other workflow can reach it. Allowed from Open (no status change) and InProgress;
+            a Resolved / Closed ticket is refused. Returns the status held before, so the caller writes the history row.
+            </summary>
+        </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.StartInProgressAtCreation">
             <summary>
             Call Center tickets are worked from the moment they exist: a ticket that originates in the Call Center department starts
@@ -4443,6 +4947,14 @@
             when the document was sent, <see cref="F:TigerCS.Domain.Modules.Ticketing.ResolutionOutcome.Cancelled"/> when it could not be delivered (never "Resolved":
             nothing was fixed). Returns the status held before so the caller writes the history rows. A human owner does not block it:
             the request that ends the workflow is the customer's own document request, not an inactivity guess.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.CloseByExternalSystem(TigerCS.Domain.Modules.Ticketing.ResolutionOutcome)">
+            <summary>
+            The external system that owns the ticket (the Queueing System) reports it finished: Resolved -> Closed in one step with the given
+            <paramref name="outcome"/> - <see cref="F:TigerCS.Domain.Modules.Ticketing.ResolutionOutcome.Resolved"/> when the customer was served, <see cref="F:TigerCS.Domain.Modules.Ticketing.ResolutionOutcome.Cancelled"/> when the
+            queue ticket was cancelled (nothing was fixed, so never "Resolved"). Same preconditions and transition as <see cref="M:TigerCS.Domain.Modules.Ticketing.Ticket.CloseForDocumentDelivery(TigerCS.Domain.Modules.Ticketing.ResolutionOutcome)"/>; a
+            human owner does not block it, because the owner is exactly who the external system says finished. Returns the status held before.
             </summary>
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.Ticket.CloseForAiCompletion">
@@ -5087,14 +5599,35 @@
             <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketAssignment.AssignedEmployeeId"/>.
             </summary>
         </member>
-        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketAssignment.MarkSuperseded">
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketAssignment.SupersededAtUtc">
+            <summary>
+            When this assignment stopped being current — replaced by a later one, or released (returned to a queue, closed). Null while it is
+            current, and null on rows superseded before this column existed (their end time is not recorded; when a later assignment exists it
+            is that assignment's <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketAssignment.AssignedAtUtc"/>). Stamped by the DbContext at save for every supersede, so no call site can forget it.
+            SLA reporting uses it to tell who held a ticket at a given moment, in particular that nobody did after a release.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketAssignment.MarkSuperseded(System.Nullable{System.DateTime})">
             <summary>Flipped when a later assignment supersedes this one — append-only, this row is never deleted (MVP-ERD.md §2.12).</summary>
+            <param name="atUtc">When it ended, if the caller knows; otherwise the DbContext stamps the save time.</param>
         </member>
         <member name="F:TigerCS.Domain.Modules.Ticketing.TicketAssignmentKind.Automatic">
             <summary>The system chose the assignee (Collections tower routing).</summary>
         </member>
         <member name="F:TigerCS.Domain.Modules.Ticketing.TicketAssignmentKind.Manual">
             <summary>A person chose the assignee (assign / reassign).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.TicketAssignmentSource">
+            <summary>Where a history entry came from, when it is a Genesys-driven assignment. Null on entries written by Collections routing and by people.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketAssignmentSource.GenesysAiAgent">
+            <summary>The AI Agent (the Genesys integration service account) handled the conversation first. History only: the ticket keeps no owner.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketAssignmentSource.GenesysDirectCall">
+            <summary>A human agent answered a call directly, with no previous assignee.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketAssignmentSource.GenesysCallTransfer">
+            <summary>Genesys connected a different human agent: a call transfer (AI to human, or human to human).</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.TicketAssignmentHistoryEntry">
             <summary>
@@ -5105,6 +5638,15 @@
         </member>
         <member name="P:TigerCS.Domain.Modules.Ticketing.TicketAssignmentHistoryEntry.ChangedByEmployeeId">
             <summary>Null when the system acted.</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketAssignmentHistoryEntry.Source">
+            <summary>Set only for Genesys-driven entries (see <see cref="T:TigerCS.Domain.Modules.Ticketing.TicketAssignmentSource"/>).</summary>
+        </member>
+        <member name="P:TigerCS.Domain.Modules.Ticketing.TicketAssignmentHistoryEntry.SourceEventAtUtc">
+            <summary>When the Genesys event happened as Genesys reports it (connected time); used to ignore older, out-of-order events. Not the arrival time, which is <see cref="P:TigerCS.Domain.Modules.Ticketing.TicketAssignmentHistoryEntry.ChangedAtUtc"/>.</summary>
+        </member>
+        <member name="M:TigerCS.Domain.Modules.Ticketing.TicketAssignmentHistoryEntry.ForGenesys(System.Int64,System.Int32,System.Nullable{System.Guid},System.Guid,TigerCS.Domain.Modules.Ticketing.TicketAssignmentSource,System.Nullable{System.Guid},System.DateTime,System.Nullable{System.DateTime},System.String,System.String)">
+            <summary>A Genesys-driven entry. <paramref name="previousEmployeeId"/> is the AI Agent account for an AI-to-human transfer.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.TicketCollectionsUnit">
             <summary>
@@ -5264,6 +5806,12 @@
         </member>
         <member name="M:TigerCS.Domain.Modules.Ticketing.PriorityDowngradeRequiresApprovalException.#ctor(System.Int64,System.Byte,System.Byte)">
             <summary>MVP-API-Contracts.md section 3.4: a priority decrease without an approved downgrade request is refused (downgrade-requires-approval).</summary>
+        </member>
+        <member name="T:TigerCS.Domain.Modules.Ticketing.TicketIntegrationSources">
+            <summary>The external systems that can own a ticket's lifecycle. Stable codes: they are stored on <see cref="P:TigerCS.Domain.Modules.Ticketing.Ticket.IntegrationSource"/>.</summary>
+        </member>
+        <member name="F:TigerCS.Domain.Modules.Ticketing.TicketIntegrationSources.QueueingSystem">
+            <summary>The Queueing System (QR-code queue tickets). It is the source of truth for the lifecycle of the tickets it originates.</summary>
         </member>
         <member name="T:TigerCS.Domain.Modules.Ticketing.TicketInteraction">
              <summary>

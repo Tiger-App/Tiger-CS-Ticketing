@@ -1,0 +1,37 @@
+$kind: http-request
+name: 4.6 TicketCreated without CustomerPhone -> 400 (mandatory)
+url: "{{baseUrl}}/api/integrations/queueing/events"
+method: POST
+headers:
+  Content-Type: application/json
+  X-Queueing-Api-Key: "{{apiKey}}"
+body:
+  type: json
+  content: |-
+    {
+      "EventId": "{{eventId}}",
+      "EventType": "TicketCreated",
+      "ExternalTicketId": "QT-no-phone",
+      "EventSequence": {{sequence}},
+      "QueueNumber": "A-021",
+      "CompanyId": "{{companyId}}",
+      "TicketTypeId": "{{ticketTypeId}}",
+      "OccurredAtUtc": "{{occurredAtUtc}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      // A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.
+      if (!pm.collectionVariables.get('redeliver')) {
+        pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));
+        pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());
+      }
+      pm.collectionVariables.unset('redeliver');
+      pm.collectionVariables.set('sequence', '1');
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('HTTP 400', () => pm.response.to.have.status(400));
+      pm.test('names CustomerPhone', () => pm.expect(Object.keys(pm.response.json().errors)).to.include('CustomerPhone'));
+    language: text/javascript
+order: 6000

@@ -1,0 +1,38 @@
+$kind: http-request
+name: 4.3 Unmapped employee -> 202 USER_NOT_MAPPED, ticket not assigned
+url: "{{baseUrl}}/api/integrations/queueing/events"
+method: POST
+headers:
+  Content-Type: application/json
+  X-Queueing-Api-Key: "{{apiKey}}"
+body:
+  type: json
+  content: |-
+    {
+      "EventId": "{{eventId}}",
+      "EventType": "TicketReassigned",
+      "ExternalTicketId": "{{externalTicketId}}",
+      "EventSequence": {{sequence}},
+      "AssignedUserId": "queue-user-not-mapped",
+      "CounterId": "counter-3",
+      "OccurredAtUtc": "{{occurredAtUtc}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      // A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.
+      if (!pm.collectionVariables.get('redeliver')) {
+        pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));
+        pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());
+      }
+      pm.collectionVariables.unset('redeliver');
+      pm.collectionVariables.set('sequence', '3');
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('HTTP 202', () => pm.response.to.have.status(202));
+      const b = pm.response.json();
+      pm.test('status = Pending', () => pm.expect(b.status).to.eql('Pending'));
+      pm.test('outcome = USER_NOT_MAPPED', () => pm.expect(b.outcome).to.eql('USER_NOT_MAPPED'));
+    language: text/javascript
+order: 3000

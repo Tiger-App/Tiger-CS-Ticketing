@@ -215,7 +215,7 @@
         <member name="T:TigerCS.Api.Controllers.AdminUsersController">
             <summary>User administration — System Administrator only. Users are deactivated, never deleted.</summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.AdminUsersController.#ctor(TigerCS.Application.Modules.Administration.Services.AdminUserAppService,TigerCS.Application.Modules.Administration.Services.AdminUserPermissionAppService)">
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.#ctor(TigerCS.Application.Modules.Administration.Services.AdminUserAppService,TigerCS.Application.Modules.Administration.Services.AdminUserPermissionAppService,TigerCS.Application.Modules.Administration.Services.AdminUserTransferDepartmentAppService)">
             <summary>User administration — System Administrator only. Users are deactivated, never deleted.</summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.AdminUsersController.List(System.String,System.Boolean,System.Int32,System.Int32,System.Threading.CancellationToken)">
@@ -242,6 +242,10 @@
         <member name="M:TigerCS.Api.Controllers.AdminUsersController.AddDepartment(System.Guid,TigerCS.Application.Modules.Administration.Dto.AddDepartmentMembershipRequestDto,System.Threading.CancellationToken)">
             <summary>Adds a department membership using the existing membership model.</summary>
         </member>
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.SetAccessibleDepartments(System.Guid,TigerCS.Application.Modules.Administration.Dto.SetAccessibleDepartmentsRequestDto,System.Threading.CancellationToken)">
+            <summary>Sets every department (besides the primary one) the user may access, in one call.</summary>
+            <remarks>The primary department is never changed or removed. Departments not listed are removed; listed ones not yet held are added (active departments only).</remarks>
+        </member>
         <member name="M:TigerCS.Api.Controllers.AdminUsersController.ResetPassword(System.Guid,TigerCS.Application.Modules.Administration.Dto.ResetUserPasswordRequestDto,System.Threading.CancellationToken)">
             <summary>Resets the user's password (the "forgot my password" path, taken on the user's behalf).</summary>
             <remarks>
@@ -260,6 +264,12 @@
         </member>
         <member name="M:TigerCS.Api.Controllers.AdminUsersController.RemoveDepartment(System.Guid,System.Int32,System.Threading.CancellationToken)">
             <summary>Ends a department membership; the primary membership cannot be removed while others remain.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.GetTransferDepartments(System.Guid,System.Threading.CancellationToken)">
+            <summary>The departments the employee is authorised to transfer tickets to (empty = no explicit list). Separate from department membership (view access).</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.AdminUsersController.SetTransferDepartments(System.Guid,TigerCS.Application.Modules.Administration.Dto.SetUserTransferDepartmentsRequestDto,System.Threading.CancellationToken)">
+            <summary>Replaces the employee's transfer-destination list. An empty list removes the restriction; membership is never changed by this call. Audited.</summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.AdminUsersController.GetPermissions(System.Guid,System.Threading.CancellationToken)">
             <summary>The employee's roles, role baseline, per-permission overrides, effective permissions and recent changes.</summary>
@@ -511,7 +521,7 @@
             server-side by the Web application as the signed-in user.
             </summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.#ctor(TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.ReviewRefreshService,TigerCS.Application.Modules.Collections.Review.DispatchService,TigerCS.Application.Modules.Collections.Review.DispatchAdminReportService,TigerCS.Application.Modules.Collections.Review.GenesysExportService,TigerCS.Application.Modules.Collections.Review.ManualReviewExportService,TigerCS.Application.Modules.Collections.Review.GenesysConnectionCheckService)">
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.#ctor(TigerCS.Application.Modules.Collections.Review.ReviewQueryService,TigerCS.Application.Modules.Collections.Review.ReviewRefreshService,TigerCS.Application.Modules.Collections.Review.DispatchService,TigerCS.Application.Modules.Collections.Review.DispatchAdminReportService,TigerCS.Application.Modules.Collections.Review.GenesysExportService,TigerCS.Application.Modules.Collections.Review.ManualReviewExportService,TigerCS.Application.Modules.Collections.Review.GenesysConnectionCheckService,TigerCS.Application.Modules.Collections.Exceptions.ExceptionInclusionService)">
             <summary>
             Collections review and approval: filtered stored records, explicit refresh jobs, approval of an exact list and upload to
             Genesys outbound contact lists. Reads never call the financial source; only the refresh job does. Internal routes called
@@ -541,7 +551,7 @@
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.ExportForGenesys(TigerCS.Application.Modules.Collections.Review.SelectionRequest,System.Threading.CancellationToken)">
             <summary>
-            "Export for Genesys": every customer matching the filters (Manual or Auto, any status, any day) as a CSV in the format of the chosen Genesys contact list (six columns, exactly the values an
+            "Export for Genesys": every customer matching the filters (Manual or Auto, any status, any day) as a CSV in the format of the chosen Genesys contact list (Manual: the eleven official Manual columns; Auto: the six Auto columns; exactly the values an
             upload would send). Download only: it uploads nothing, queues nothing and marks nobody as sent; it is written to the audit trail, and a repeat is noted, never blocked. Needs the send right.
             </summary>
         </member>
@@ -549,6 +559,18 @@
             <summary>
             The Manual "Export review CSV": every customer of the filtered Manual list with its status and reasons, for people to review. Not a Genesys file. Read only and audited; needs the send right.
             </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.ExceptionUnits(System.String,System.String,System.Int32[],System.Int32,System.Int32,System.Threading.CancellationToken)">
+            <summary>
+            "Manage Exceptions": the GULF_CUSTOMERS units of the current approval data for one campaign type (search by unit code, tower, customer) with their manual-inclusion state for today's Manual campaign.
+            Needs the send right.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.IncludeExceptionUnits(TigerCS.Application.Modules.Collections.Exceptions.ExceptionChangeRequest,System.Threading.CancellationToken)">
+            <summary>Includes the selected GULF_CUSTOMERS units in today's Manual campaign of the chosen type. Only those units, only this campaign; a permanent special case is refused. Audited.</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.RemoveExceptionUnits(TigerCS.Application.Modules.Collections.Exceptions.ExceptionChangeRequest,System.Threading.CancellationToken)">
+            <summary>Removes manual inclusions from today's Manual campaign of the chosen type (before sending). Audited.</summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.Confirm(TigerCS.Application.Modules.Collections.Review.ConfirmDispatchRequest,System.String,System.Threading.CancellationToken)">
             <summary>Approves the exact list (count and fingerprint must match) and queues the revalidation-and-upload job.</summary>
@@ -569,7 +591,7 @@
             <summary>One approved send: initiator, totals, per-batch Genesys results. "Uploaded" never means the customer was contacted.</summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.DispatchContacts(System.Guid,System.Threading.CancellationToken)">
-            <summary>The contacts of one send exactly as uploaded (the six Genesys contact-list columns) as a CSV file, for comparison with the Genesys list.</summary>
+            <summary>The contacts of one send exactly as uploaded (the six Auto or the eleven Manual contact-list columns) as a CSV file, for comparison with the Genesys list.</summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.CollectionsReviewController.RetryAdminEmail(System.Guid,System.Threading.CancellationToken)">
             <summary>Retries only the administrator report of a finished send. Never repeats the Genesys upload.</summary>
@@ -992,7 +1014,7 @@
             see.
             </summary>
         </member>
-        <member name="M:TigerCS.Api.Controllers.CustomersController.#ctor(TigerCS.Application.Modules.Ticketing.Services.CustomerDirectoryAppService)">
+        <member name="M:TigerCS.Api.Controllers.CustomersController.#ctor(TigerCS.Application.Modules.Ticketing.Services.CustomerDirectoryAppService,TigerCS.Application.Modules.Ticketing.Services.CustomerProfileEditAppService)">
             <summary>
             The Customers directory: the customers TigerCS already knows, derived from
             its own persisted tickets (never a CRM list call — no integrated system
@@ -1004,8 +1026,24 @@
         <member name="M:TigerCS.Api.Controllers.CustomersController.List(TigerCS.Application.Modules.Ticketing.Dto.CustomerDirectoryListRequestDto,System.Threading.CancellationToken)">
             <summary>Lists known customers, most recently active first — paginated, optionally searched and filtered.</summary>
         </member>
+        <member name="M:TigerCS.Api.Controllers.CustomersController.UnknownBreakdown(TigerCS.Application.Modules.Ticketing.Dto.CustomerDirectoryListRequestDto,System.Threading.CancellationToken)">
+            <summary>Read-only: the Unknown customers of the same query as the list and the Dashboard's Customers by Location card, counted by why they are Unknown.</summary>
+        </member>
         <member name="M:TigerCS.Api.Controllers.CustomersController.GetProfile(System.String,System.Threading.CancellationToken)">
             <summary>One customer's profile by directory key (<c>crm:{id}</c>, <c>ext:{source}:{externalCustomerId}</c>, <c>phone:{number}</c>).</summary>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.CustomersController.UpdateProfile(System.String,TigerCS.Application.Modules.Ticketing.Dto.UpdateCustomerProfileRequestDto,System.Threading.CancellationToken)">
+            <summary>
+            Corrects the phone number, project and unit a customer is shown with in the directory. Local to Tiger Ticketing: nothing is sent to
+            Tiger CRM, PACT or Tasleeh, no ticket changes, and the customer's identity, tickets and history are untouched. Blank clears that
+            edit (the tickets' own value is shown again). Needs <c>Customers.Edit</c>: System Administrator and CS Manager, or an explicit
+            grant. The phone is normalized to its international form; project and unit are entered together and checked against each other
+            where the known projects allow. Audited with the customer, the values before and after, and who changed them.
+            </summary>
+            <response code="200">Saved (or nothing to change); <c>changed</c> says which.</response>
+            <response code="400">The key, phone, project or unit is not valid; <c>errors</c> names the field.</response>
+            <response code="403">The caller may not edit customers.</response>
+            <response code="404">No customer with that key is visible to the caller.</response>
         </member>
         <member name="T:TigerCS.Api.Controllers.DashboardController">
             <summary>
@@ -1047,6 +1085,14 @@
             drawn from the existing master data within the caller's scope.
             </remarks>
             <response code="200">The dashboard overview. Counts cover only tickets the caller may view.</response>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.DashboardController.GetCustomersByLocation(TigerCS.Application.Modules.Ticketing.Dto.DashboardOverviewRequestDto,System.Threading.CancellationToken)">
+            <summary>Customers by Location: distinct customers within the UAE / outside the UAE / unknown, by phone country code, for the dashboard's range and filters.</summary>
+            <remarks>
+            Counted by the Customers directory's own query over the caller's own customer visibility, so the figures equal the list each count opens
+            (<c>/Customers?location=…</c>). Same optional filters as the overview; they only narrow. Never a CRM call.
+            </remarks>
+            <response code="200">The three mutually exclusive counts, their shares and the total of unique customers.</response>
         </member>
         <member name="M:TigerCS.Api.Controllers.DepartmentsController.List(System.Boolean,System.Threading.CancellationToken)">
             <summary>
@@ -3200,6 +3246,40 @@
             <summary>Submits the review: a 1–5 rating and an optional comment. Accepted once per ticket; a repeat never changes the stored review.</summary>
             <response code="200">The outcome — <c>Submitted</c>, <c>Invalid</c>, <c>Expired</c>, <c>AlreadySubmitted</c>, <c>InvalidRating</c> or <c>InvalidComment</c>.</response>
         </member>
+        <member name="T:TigerCS.Api.Controllers.QueueingIntegrationController">
+            <summary>
+            The receiving side of the Queueing System integration. The Queueing System posts every change to a QR-code queue ticket here; TigerCS mirrors it onto
+            one TigerCS ticket. <b>The Queueing System is the source of truth</b> for the lifecycle of those tickets.
+            </summary>
+            <remarks>
+            Authenticated with the Queueing System's own API key (<c>X-Queueing-Api-Key</c>), independent of staff sign-in: the key opens this endpoint only.
+            </remarks>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.QueueingIntegrationController.#ctor(TigerCS.Application.Modules.QueueingIntegration.Services.QueueingEventProcessor)">
+            <summary>
+            The receiving side of the Queueing System integration. The Queueing System posts every change to a QR-code queue ticket here; TigerCS mirrors it onto
+            one TigerCS ticket. <b>The Queueing System is the source of truth</b> for the lifecycle of those tickets.
+            </summary>
+            <remarks>
+            Authenticated with the Queueing System's own API key (<c>X-Queueing-Api-Key</c>), independent of staff sign-in: the key opens this endpoint only.
+            </remarks>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.QueueingIntegrationController.Receive(TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingEventRequest,System.Threading.CancellationToken)">
+            <summary>Receive one Queueing System event.</summary>
+            <remarks>
+            <b>Idempotent on <c>eventId</c></b> (a unique database index): a redelivery returns the original outcome and changes nothing. One TigerCS ticket per
+            <c>externalTicketId</c> (also a unique index). A state-changing event older than the ticket's applied state (<c>eventSequence</c>) is recorded and
+            never applied. An event that cannot be applied yet (its ticket was not created yet, a company / ticket type / employee mapping is missing) is stored
+            and retried by TigerCS: the answer is 202 and the Queueing System need not resend it.
+            </remarks>
+            <response code="200">Applied, already applied (a duplicate), superseded by a newer event, or rejected as not applicable - see <c>status</c>.</response>
+            <response code="201">The TigerCS ticket was created for this queue ticket.</response>
+            <response code="202">Stored, not applied yet - see <c>outcome</c> and <c>detail</c>. TigerCS retries it.</response>
+            <response code="400">The event failed validation (per-event required fields). Nothing was stored.</response>
+            <response code="401">Missing or invalid API key.</response>
+            <response code="409">The same <c>eventId</c> was already received with different content.</response>
+            <response code="503">The integration is switched off, or another request is changing the same ticket (safe to resend; <c>Retry-After</c> is set).</response>
+        </member>
         <member name="T:TigerCS.Api.Controllers.ReportsController">
             <summary>
             Management reports. Read-only, and restricted to the CS Manager tier
@@ -3221,14 +3301,15 @@
             </summary>
         </member>
         <member name="M:TigerCS.Api.Controllers.ReportsController.GetTeamPerformance(TigerCS.Application.Modules.Reporting.Dto.TeamPerformanceRequestDto,System.Threading.CancellationToken)">
-            <summary>The Team Performance report: one row per active CS Agent with Currently Assigned, Tickets Worked, Completed Follow-ups and SLA Breaches, a totals row and the picker options.</summary>
+            <summary>The Team Performance report: one row per active employee in every department with Currently Assigned, Tickets Worked, Completed Follow-ups and SLA Breaches, a totals row and the picker options.</summary>
             <remarks>
-            Eligible employees are the active holders of the CS Agent role; the
-            agent type is "Call Center Agent" for members of the Call Center
-            department (code CC) and "CS Agent" otherwise. Every filter is
-            optional. The period is UTC calendar days, inclusive, defaulting to
-            the last 30 days; Currently Assigned is current-state and ignores it.
-            Employees with no activity in the period are included with zeros.
+            Every active employee is listed (service identities excepted) with
+            their roles and department memberships, read from the database. Every
+            filter is optional: <c>role</c> is an Identity role name,
+            <c>departmentId</c> any department the employee is a member of. The
+            period is UTC calendar days, inclusive, defaulting to the last 30
+            days; Currently Assigned is current-state and ignores it. Employees
+            with no activity in the period are included with zeros.
             </remarks>
             <response code="200">The report.</response>
             <response code="403">The caller is not a CS Manager, General Manager, Chairman/CEO or System Administrator.</response>
@@ -3243,7 +3324,27 @@
             </remarks>
             <response code="200">The records.</response>
             <response code="400">The metric is not one of the four counts.</response>
-            <response code="404">The employee is not on the report (not an active CS Agent).</response>
+            <response code="404">The employee is not on the report (inactive, or a service identity).</response>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.ReportsController.GetTeamPerformanceSlaDetails(TigerCS.Application.Modules.Reporting.Dto.TeamPerformanceSlaDetailsRequestDto,System.Threading.CancellationToken)">
+            <summary>The SLA evaluations behind one employee's SLA Breaches number: a summary (total / met / breached / pending / compliance %), the SLA rules in force, and one sorted page of evaluations.</summary>
+            <remarks>
+            Read-only: it restates what the SLA engine recorded and decides
+            nothing. The Breached evaluations are produced by the same predicate
+            the report's SLA Breaches count uses, so their number equals that
+            count for the same period. <c>role</c> and <c>departmentId</c> are the
+            report's filters: the employee must satisfy them, as a row on the
+            report would. <c>status</c> (Met, Breached or Pending; omitted = all)
+            narrows the list only — the summary always covers every status.
+            <c>slaType</c> (First Response or Resolution; omitted = both) also
+            narrows the list, and the status counts follow it; the summary and the
+            per-type breakdown always cover both clocks and add up to each other.
+            <c>sortBy</c> is one of event, ticket, department, type, created,
+            started, target, due, actual, status, breach, policy; <c>sortDir</c>
+            is asc or desc. <c>pageSize</c> is 1–100 (default 25).
+            </remarks>
+            <response code="200">The SLA details.</response>
+            <response code="404">The employee is not on the report (inactive, a service identity, or excluded by the role / department filter).</response>
         </member>
         <member name="T:TigerCS.Api.Controllers.RequestTypesController">
             <summary>The Request Type directory for operational users — what the New Ticket wizard's Request Type picker reads.</summary>
@@ -3468,6 +3569,24 @@
             <response code="404">No such ticket, or it is not visible to the caller.</response>
             <response code="409">rowVersion did not match — another request already modified this ticket. Reload it and retry.</response>
             <response code="422">The requested change is not valid for this ticket's current state.</response>
+        </member>
+        <member name="M:TigerCS.Api.Controllers.TicketsController.Reassign(System.Int64,TigerCS.Application.Modules.Ticketing.Dto.ReassignTicketRequestDto,System.Threading.CancellationToken)">
+            <summary>Assign, reassign or transfer a ticket — open to every user who can modify the ticket.</summary>
+            <remarks>
+            One operation for the Ticket Details "Assign / Reassign" dialog. Authority is ticket access, not role: any signed-in employee who can open and modify
+            the ticket under the normal visibility rules (own assigned ticket for a CS Agent / Department Employee, department scope for the rest) may assign it to
+            themselves or a colleague, hand it to another employee, or move it to another department. Read-only roles and service identities are refused. The
+            target department must be active and the employee an ACTIVE member of it. The same department with an employee = assign / reassign; another department =
+            transfer, with or without an employee. Status and SLA are never reset; assignment history, workflow events and audit entries are written in one transaction.
+            Genesys AI-to-human assignment is a separate path and is not affected.
+            </remarks>
+            <param name="ticketId">The ticket to assign.</param>
+            <param name="request">The target department, optional employee, optional comment and the ticket's current rowVersion.</param>
+            <response code="200">The updated ticket.</response>
+            <response code="403">The caller cannot modify this ticket (or holds a read-only role).</response>
+            <response code="404">No such ticket.</response>
+            <response code="409">rowVersion did not match — reload and retry.</response>
+            <response code="422">The change is not valid for this ticket's current state (closed, inactive department or employee, nothing to change…).</response>
         </member>
         <member name="M:TigerCS.Api.Controllers.TicketsController.RetryAssignment(System.Int64,System.Threading.CancellationToken)">
             <summary>Retry the automatic CS Agent assignment of an active ticket that has none (CS Manager / administrator).</summary>
@@ -4017,6 +4136,27 @@
             check. Today only Take Ownership: it is refused unless <c>TicketClaimPolicy</c> says the caller may take THIS ticket.
             </summary>
         </member>
+        <member name="T:TigerCS.Api.Integrations.QueueingApiKeyDefaults">
+            <summary>
+            The Queueing System's own authentication, deliberately independent of staff sign-in: a presented API key (header <c>X-Queueing-Api-Key</c>) is
+            hashed with SHA-256 and compared, in constant time, against the hashes configured under <c>QueueingIntegration:Authentication:ApiKeys</c>. Only
+            hashes are configured, so a leaked configuration file is not a leaked key, and several can be listed at once to rotate a key without downtime.
+            A key authenticates <b>only</b> the scheme named here, so it opens the one Queueing endpoint and nothing else: it cannot call any staff endpoint,
+            and a staff JWT cannot call this one.
+            </summary>
+        </member>
+        <member name="M:TigerCS.Api.Integrations.QueueingApiKeyDefaults.Hash(System.String)">
+            <summary>The SHA-256 of a key, lower-case hex - what is configured. Used by the documented one-liner and by tests.</summary>
+        </member>
+        <member name="T:TigerCS.Api.Integrations.QueueingApiKeyEntry">
+            <summary>One configured key: a label and the hash of the key. Never the key itself.</summary>
+        </member>
+        <member name="P:TigerCS.Api.Integrations.QueueingApiKeyEntry.KeyId">
+            <summary>A label for the key (who holds it) - appears in logs and as the caller's identity, never the key.</summary>
+        </member>
+        <member name="P:TigerCS.Api.Integrations.QueueingApiKeyEntry.Sha256">
+            <summary>Lower- or upper-case hex SHA-256 of the key.</summary>
+        </member>
         <member name="T:TigerCS.Api.OpenApi.OpenApiDocumentation">
              <summary>
              Registration and endpoint wiring for the API's Swagger/OpenAPI surface.
@@ -4130,6 +4270,9 @@
             user pastes into the Authorize box is the bare access token, with no
             "Bearer " prefix of their own.
             </summary>
+        </member>
+        <member name="F:TigerCS.Api.OpenApi.TigerCsOpenApiDocumentTransformer.QueueingApiKeySchemeName">
+            <summary>The Queueing System's API-key scheme (header <c>X-Queueing-Api-Key</c>), used only by <c>POST /api/integrations/queueing/events</c>.</summary>
         </member>
         <member name="T:TigerCS.Api.OpenApi.TigerCsOpenApiOperationTransformer">
              <summary>

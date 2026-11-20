@@ -180,6 +180,13 @@
         if (event.target.closest('[data-results-retry]')) { event.preventDefault(); autoReloads = 0; load(currentQuery(), false); }
         if (event.target.closest('[data-poll-resume]')) { event.preventDefault(); autoReloads = 0; load(currentQuery(), false); }
     });
+    // A summary card (lifted out of this box by collections-campaign-filters.js) asks for its results URL to be loaded like a pagination link.
+    window.addEventListener('campaign-results-navigate', event => {
+        const href = event.detail && event.detail.href; if (!href) return;
+        autoReloads = 0;
+        const q = new URL(href, location.origin).searchParams; q.delete('render'); q.delete('handler');
+        load(q, true);
+    });
     window.addEventListener('popstate', () => location.reload());
     window.addEventListener('pageshow', event => { if (event.persisted) setBusy(false); });
     window.addEventListener('pagehide', stopMonitor);   // leaving the page ends the loop

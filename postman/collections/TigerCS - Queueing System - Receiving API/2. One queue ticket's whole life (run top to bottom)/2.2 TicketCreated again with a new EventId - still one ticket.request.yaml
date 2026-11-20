@@ -1,0 +1,43 @@
+$kind: http-request
+name: 2.2 TicketCreated again with a new EventId -> still one ticket
+url: "{{baseUrl}}/api/integrations/queueing/events"
+method: POST
+headers:
+  Content-Type: application/json
+  X-Queueing-Api-Key: "{{apiKey}}"
+body:
+  type: json
+  content: |-
+    {
+      "EventId": "{{eventId}}",
+      "EventType": "TicketCreated",
+      "ExternalTicketId": "{{externalTicketId}}",
+      "EventSequence": {{sequence}},
+      "QueueNumber": "A-017",
+      "CompanyId": "{{companyId}}",
+      "TicketTypeId": "{{ticketTypeId}}",
+      "CustomerName": "Aisha Khan",
+      "CustomerPhone": "{{customerPhone}}",
+      "CustomerEmail": "aisha@example.test",
+      "OccurredAtUtc": "{{occurredAtUtc}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      // A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.
+      if (!pm.collectionVariables.get('redeliver')) {
+        pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));
+        pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());
+      }
+      pm.collectionVariables.unset('redeliver');
+      pm.collectionVariables.set('sequence', '1');
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+      const b = pm.response.json();
+      pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));
+      pm.test('outcome = TICKET_ALREADY_EXISTS', () => pm.expect(b.outcome).to.eql('TICKET_ALREADY_EXISTS'));
+      pm.test('same ticket', () => pm.expect(b.ticketId).to.eql(Number(pm.collectionVariables.get('ticketId'))));
+    language: text/javascript
+order: 2000
