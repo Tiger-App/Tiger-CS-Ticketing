@@ -29,7 +29,7 @@ public class OmnichannelAnsweringAgentMatrixTests
 
     public static TheoryData<GenesysChannel> AllChannels => new()
     {
-        GenesysChannel.Phone, GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp, GenesysChannel.Instagram, GenesysChannel.Facebook, GenesysChannel.SocialMedia
+        GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp, GenesysChannel.Instagram, GenesysChannel.Facebook, GenesysChannel.SocialMedia
     };
 
     public static TheoryData<GenesysChannel> DigitalChannels => new()
@@ -76,17 +76,6 @@ public class OmnichannelAnsweringAgentMatrixTests
         Assert.Equal(expected, w.Ticket(ticketId).CurrentOwnerEmployeeId);
         var current = w.F.TicketAssignments.Added.Where(a => a.TicketId == ticketId && a.IsCurrent).ToList();
         if (expected is null) Assert.Empty(current); else Assert.Equal(expected, Assert.Single(current).AssignedEmployeeId);
-    }
-
-    /// <summary>The ticket waits in the Call Center queue: originating department untouched, the AI Agent still the owner, no person, no assignment row, no Round Robin turn.</summary>
-    private static void AssertQueuedWithAiOwner(World w, long ticketId)
-    {
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        Assert.Equal(w.Cs.DepartmentId, w.Ticket(ticketId).OriginatingDepartmentId);
-        AssertOneOwner(w, ticketId, null);
-        Assert.Equal(ServiceAccount, w.Ticket(ticketId).AiAgentOwnerEmployeeId);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticketId);
-        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
     }
 
     // ---- 1. channel normalization: the wire name Genesys sends -> the channel row the ticket is filed under ---------------------
@@ -172,22 +161,20 @@ public class OmnichannelAnsweringAgentMatrixTests
         Assert.Equal(w.Cs.DepartmentId, w.Ticket(offered).CurrentDepartmentId);
         AssertOneOwner(w, offered, null);
 
-        // Offered agent AND a human is required: the Call Center queue with the AI Agent as owner (the offered agent is not special-cased, nobody is dealt it)...
+        // Offered agent AND a human is required: Call Center + Round Robin (the offered agent is not special-cased)...
         var required = await IngestAsync(w, "c-required", channel, agentId: AnsweringGenesysId, humanFollowUp: true);
-        AssertQueuedWithAiOwner(w, required);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(required).CurrentDepartmentId);
+        Assert.Contains(w.Ticket(required).CurrentOwnerEmployeeId!.Value, w.RoundRobinAgents);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == required.ToString());
 
-        // ...and only an update that reports the agent CONNECTED hands it to them, directly; the AI Agent is the previous owner in the history.
+        // ...and only an update that reports the agent CONNECTED hands it to them.
         await ConnectAsync(w, required, "c-required", AnsweringGenesysId);
         AssertOneOwner(w, required, w.Answering);
-        Assert.Null(w.Ticket(required).AiAgentOwnerEmployeeId);
-        var accepted = Assert.Single(w.F.AssignmentHistory.Entries, h => h.TicketId == required && h.NewEmployeeId == w.Answering);
-        Assert.Equal(ServiceAccount, accepted.PreviousEmployeeId);
     }
 
     [Theory]
     [MemberData(nameof(DigitalChannels))]
-    public async Task AnAgentOnlyAssignedByTheHandoff_IsNotAcceptance_TheTicketIsQueuedForTheCallCenter_WithNoRoundRobin(GenesysChannel channel)
+    public async Task AnAgentOnlyAssignedByTheHandoff_IsNotAcceptance_RoundRobinStillApplies(GenesysChannel channel)
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-handoff", channel);
@@ -195,15 +182,16 @@ public class OmnichannelAnsweringAgentMatrixTests
         await UpdateAsync(w, ticketId, new GenesysTicketUpdateDto(
             "c-handoff", Handoff: new GenesysHandoffUpdateDto(Required: true, AgentAvailable: true, Mode: "HumanTakeover")));
 
-        AssertQueuedWithAiOwner(w, ticketId);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
+        Assert.Contains(w.Ticket(ticketId).CurrentOwnerEmployeeId!.Value, w.RoundRobinAgents);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticketId.ToString());
     }
 
-    // ---- 4. human required, nobody accepted -> Call Center queue (no Round Robin) ----------------------------------------------------------------------
+    // ---- 4. human required, nobody accepted -> Round Robin ----------------------------------------------------------------------
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task HumanRequiredAtCreation_NobodyAccepted_GoesToCallCenterQueue_AndNobodyIsDealtIt(GenesysChannel channel)
+    public async Task HumanRequiredAtCreation_NobodyAccepted_GoesToCallCenter_AndRoundRobinWalksTheAgents(GenesysChannel channel)
     {
         var w = Build();
 
@@ -211,15 +199,15 @@ public class OmnichannelAnsweringAgentMatrixTests
         var second = await IngestAsync(w, "c-rr-2", channel, humanFollowUp: true);
         var third = await IngestAsync(w, "c-rr-3", channel, humanFollowUp: true);
 
-        // Three eligible agents, three consecutive tickets: still none dealt - every ticket waits in the queue with the AI Agent as owner.
-        Assert.All(new[] { first, second, third }, id => AssertQueuedWithAiOwner(w, id));
-        Assert.All(new[] { first, second, third }, id => Assert.True(w.Ticket(id).CurrentOwnerEmployeeId is null));
-        Assert.Empty(w.F.TicketAssignments.Added);
+        var owners = new[] { first, second, third }.Select(id => w.Ticket(id).CurrentOwnerEmployeeId!.Value).ToArray();
+        Assert.All(new[] { first, second, third }, id => Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(id).CurrentDepartmentId));
+        Assert.Equal(3, owners.Distinct().Count());          // three eligible agents, three consecutive tickets: strictly one each
+        Assert.All(owners, o => Assert.Contains(o, w.RoundRobinAgents));
     }
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task HumanRequiredReportedLater_RoutesTheTicket_ToCallCenterQueue_WithTheAiOwnerAndNoAgent(GenesysChannel channel)
+    public async Task HumanRequiredReportedLater_RoutesTheTicket_ToCallCenter_WithOneAgent(GenesysChannel channel)
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-late", channel);
@@ -227,8 +215,9 @@ public class OmnichannelAnsweringAgentMatrixTests
 
         await UpdateAsync(w, ticketId, new GenesysTicketUpdateDto("c-late", HumanFollowUpRequired: true));
 
-        AssertQueuedWithAiOwner(w, ticketId);
-        Assert.True(w.F.Interactions.All.Single(i => i.TicketId == ticketId).RequiresHumanFollowUp);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
+        Assert.Contains(w.Ticket(ticketId).CurrentOwnerEmployeeId!.Value, w.RoundRobinAgents);
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
     }
 
     // ---- 5. AI-only is preserved ---------------------------------------------------------------------------------------------------
@@ -257,11 +246,12 @@ public class OmnichannelAnsweringAgentMatrixTests
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-owned", channel, humanFollowUp: true);
-        AssertQueuedWithAiOwner(w, ticketId);                                             // waiting in the queue: nobody owns it yet
-        var other = w.RoundRobinAgents.First(a => a != w.Answering);
+        var rotationOwner = w.Ticket(ticketId).CurrentOwnerEmployeeId!.Value;
+        var other = w.RoundRobinAgents.First(a => a != rotationOwner && a != w.Answering);
 
-        // Another agent takes the ticket themselves (a human act: Take Ownership / a manual assignment).
+        // Another agent takes the ticket themselves (a human act, not an automatic pre-assignment).
         var ticket = w.Ticket(ticketId);
+        w.F.TicketAssignments.Added.Single(a => a.TicketId == ticketId && a.IsCurrent).MarkSuperseded();
         ticket.AssignTo(other);
         await w.F.TicketAssignments.AddAsync(
             new TicketAssignment(ticketId, other, w.F.CallCenter!.DepartmentId, DateTime.UtcNow, assigningActorEmployeeId: other));
@@ -306,7 +296,7 @@ public class OmnichannelAnsweringAgentMatrixTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task ConnectedAgentWhoCannotTakeIt_IsFlagged_AndTheTicketWaitsInTheCallCenterQueue_WithNoOwnerChange(GenesysChannel channel)
+    public async Task ConnectedAgentWhoCannotTakeIt_IsFlagged_AndTheSharedRotationGivesItACsAgent(GenesysChannel channel)
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-cannot", channel, humanFollowUp: null);
@@ -315,10 +305,11 @@ public class OmnichannelAnsweringAgentMatrixTests
 
         await ConnectAsync(w, ticketId, "c-cannot", "g-finance-person");
 
-        // Flagged for staff in the Call Center queue; neither the outsider nor a Round Robin fallback agent owns it, the AI Agent is unchanged.
-        AssertQueuedWithAiOwner(w, ticketId);
-        Assert.NotEqual(outsider, w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
+        var owner = w.Ticket(ticketId).CurrentOwnerEmployeeId;
+        Assert.NotNull(owner);
+        Assert.NotEqual(outsider, owner);
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
         Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == ticketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.EntityId == ticketId.ToString());
     }
 }

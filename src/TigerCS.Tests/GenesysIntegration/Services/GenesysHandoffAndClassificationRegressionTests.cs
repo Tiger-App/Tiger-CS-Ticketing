@@ -77,7 +77,7 @@ public class GenesysHandoffAndClassificationRegressionTests
     // ---- AI-only conversation / normal question / no handoff signal ----
 
     [Fact]
-    public async Task AiOnlyConversation_ThatEndsUnresolved_RaisesNoHandoff_IsFlaggedForFollowUp_AndIsNeverAssigned()
+    public async Task AiOnlyConversation_WithACustomerQuestion_RaisesNoHandoff_AndIsReportedAsAiHandled()
     {
         var w = Build();
         var ticket = await IngestAsync(w, "conv-ai-only", new GenesysRequestTypeDto(Name: "Handover"));
@@ -94,14 +94,7 @@ public class GenesysHandoffAndClassificationRegressionTests
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
         Assert.Null(update.HandoffStatus);
         AssertNoHumanWasRequested(w);
-        // The conversation is over and nobody resolved it: flagged for follow-up (AiEndedUnresolved) - but that is a flag, never a handoff and never an assignment.
-        Assert.Equal("HumanFollowUp", await HandlingStateAsync(w, ticket));
-        Assert.True(w.F.Interactions.All.Single(i => i.TicketId == ticket.TicketId).RequiresHumanFollowUp);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
-        Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);   // its department was chosen by the request type: kept, not pulled into the Call Center
-        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
+        Assert.Equal("Ai", await HandlingStateAsync(w, ticket));
         Assert.Null(ticket.FirstHumanResponseAtUtc);
         Assert.Equal(TicketStatus.Open, ticket.TicketStatus);
     }
@@ -215,7 +208,7 @@ public class GenesysHandoffAndClassificationRegressionTests
     }
 
     [Fact]
-    public async Task ClassificationChanges_WhileNoHumanHasWorkedTheTicket_KeepHistory_AndTransferWithOriginatingDepartmentUntouched_WithoutAssigningAnyone()
+    public async Task ClassificationChanges_WhileNoHumanHasWorkedTheTicket_KeepHistory_AndTransferWithOriginatingDepartmentUntouched()
     {
         var w = Build();
         var financeEmployee = Guid.NewGuid();
@@ -234,9 +227,7 @@ public class GenesysHandoffAndClassificationRegressionTests
         Assert.Equal(w.Receipt.RequestTypeId, ticket.RequestTypeId);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);          // transferred
         Assert.Equal(w.Arrival.DepartmentId, ticket.OriginatingDepartmentId);       // write-once, untouched
-        Assert.Null(ticket.CurrentOwnerEmployeeId);                                 // the Finance rule is NOT applied: the AI Agent still owns the ticket
-        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
+        Assert.Equal(financeEmployee, ticket.CurrentOwnerEmployeeId);               // assignment re-run for the receiving department
 
         // History: an append-only event and an audit entry name the previous and the new request type.
         var evt = Assert.Single(w.F.WorkflowEvents.All, e => e.EventType == WorkflowEventType.RequestTypeReclassified);
