@@ -808,36 +808,6 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
     }
 
     [Fact]
-    public async Task AnInactivityClosedTicket_IsViewedAndReopenedByItsLastResponsibleCsAgent_InsideTheWindow_ThroughTheRealEndpoints()
-    {
-        var own = await DepartmentAsync();
-        var (agent, agentId) = await ClientAsync(departmentId: own);
-        var (otherAgent, _) = await ClientAsync(departmentId: own);
-        var ticket = await CreateManualTicketAsync(agent, own, departmentQueue: true);   // unowned; the creating CS Agent is responsible
-        await _factory.CloseForInactivityAsync(ticket.TicketId, DateTime.UtcNow.AddDays(-2));
-
-        // Visible to them: detail (full access), list, and the other read endpoints; closed to every other CS Agent.
-        var detail = await (await agent.GetAsync($"/api/tickets/{ticket.TicketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.Equal("Closed", detail!.TicketStatus);
-        Assert.False(detail.IsReadOnlyAccess);
-        Assert.Contains(ticket.TicketId, await ListedIdsAsync(agent));
-        Assert.Equal(HttpStatusCode.OK, (await agent.GetAsync($"/api/tickets/{ticket.TicketId}/history")).StatusCode);
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket.TicketId));
-        Assert.DoesNotContain(ticket.TicketId, await ListedIdsAsync(otherAgent));
-        Assert.Equal(
-            HttpStatusCode.Forbidden,
-            (await otherAgent.PostAsJsonAsync($"/api/tickets/{ticket.TicketId}/reopen", new ReopenTicketRequestDto("Mine now.", own, Convert.FromBase64String(detail.RowVersion)))).StatusCode);
-
-        // They reopen it within the existing window.
-        var reopen = await agent.PostAsJsonAsync(
-            $"/api/tickets/{ticket.TicketId}/reopen",
-            new ReopenTicketRequestDto("Customer wrote back after the bot closed the chat.", own, Convert.FromBase64String(detail.RowVersion)));
-        Assert.Equal(HttpStatusCode.OK, reopen.StatusCode);
-        Assert.Equal("InProgress", (await reopen.Content.ReadFromJsonAsync<TicketDetailDto>())!.TicketStatus);
-        Assert.NotEqual(Guid.Empty, agentId);
-    }
-
-    [Fact]
     public async Task AnInactivityClosedTicket_OutsideTheWindow_IsNotVisibleToTheCreatorAnyMore()
     {
         var own = await DepartmentAsync();

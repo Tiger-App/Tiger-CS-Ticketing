@@ -130,7 +130,9 @@ public class VoiceCallReconcilerTests
             var interactions = f.Interactions.All.Where(i => i.TicketId == ticketId).ToList();
             var genesys = interactions.Where(i => i.Source == InteractionContextSource.Genesys).ToList();
             var live = genesys.Where(i => i.EndedAtUtc == null && i.InactivityClosedAtUtc == null).ToList();
-            var handlers = f.Handlers.All.Where(h => h.TicketId == ticketId).ToList();
+            // Mirrors TicketUnassignedWorkRepository: only CONFIRMED connection counts as an answer (pickup, routing-connected, transcript), never a top-level agentId.
+            var handlers = f.Handlers.All.Where(h => h.TicketId == ticketId
+                && h.Source is InteractionHandlerSource.Inquiry or InteractionHandlerSource.Routing or InteractionHandlerSource.Transcript or InteractionHandlerSource.Legacy).ToList();
             var events = f.WorkflowEvents.All.Where(e => e.TicketId == ticketId).ToList();
             var flagged = events.Where(e => e.EventType == WorkflowEventType.ManualAssignmentRequired).Select(e => FlaggedAnswer.TryParse(e.Note)).LastOrDefault(x => x is not null);
             Guid? flaggedEmployee = null;
@@ -143,7 +145,7 @@ public class VoiceCallReconcilerTests
             var phoneOnly = genesys.Count > 0 && genesys.All(i => i.ChannelId == WellKnownChannels.Phone);
             DateTime? endReceived = phoneOnly && live.Count == 0 ? genesys.Max(i => i.EndReceivedAtUtc ?? i.EndedAtUtc) : null;
             var humanAnswered = t.FirstHumanResponseAtUtc is not null || answering is not null || flagged is not null
-                || events.Any(e => e.EventType is WorkflowEventType.GenesysAgentConnected or WorkflowEventType.GenesysCallTransferred or WorkflowEventType.HandoffStarted);
+                || events.Any(e => e.EventType == WorkflowEventType.HandoffStarted);
 
             return new UnassignedTicketEvidence(
                 t.TicketId, t.TicketNumber, t.TicketStatus, t.CurrentOwnerEmployeeId, t.CurrentDepartmentId, t.OriginatingDepartmentId, t.CreatedAtUtc, PendingApproval: false,
@@ -470,5 +472,183 @@ public class VoiceCallReconcilerTests
         Assert.Equal(legal.DepartmentId, w.Ticket(call.TicketId).CurrentDepartmentId);         // never pulled into the Call Center
         Assert.Equal(VoiceReconcileOutcome.AssignedRoundRobin, result.Outcome);
         Assert.Equal(lawyer, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+    }
+
+
+    [Fact]
+    public void AnAgentIdOnTheInteractionAlone_IsNotEvidence_AnEndedUnansweredCallIsStillConcluded() =>
+        Assert.Equal(VoiceReconcileClass.NoAnswerConcluded, C(Ev(endReceived: Now.AddHours(-1), phoneUnmapped: true)).Class);
+
+    [Fact]
+    public void ThePhoneOnlyTicket_IsExcludedFromTheCallCenterReconciliation_WhateverItsEvidence()
+    {
+        foreach (var e in new[]
+        {
+            Ev(endReceived: Now.AddHours(-1)),                                         // ended, unanswered
+            Ev(endReceived: Now.AddHours(-1), humanAnswered: true),                    // answered
+            Ev(endReceived: null),                                                     // live
+            Ev(endReceived: Now.AddHours(-1), flaggedId: "g-x"),                       // flagged
+        })
+        {
+            var legacy = UnassignedTicketClassifier.Classify(e, callCenterDepartmentId: 99, Now, staleAiAfter: TimeSpan.FromHours(1), actOnStaleAi: true);
+            Assert.Equal(new UnassignedTicketClassification(UnassignedTicketClass.HandledByVoiceReconciler, UnassignedTicketAction.None), legacy);
+        }
+
+        // ... while a ticket with any digital interaction is still the legacy job's.
+        Assert.NotEqual(UnassignedTicketClass.HandledByVoiceReconciler,
+            UnassignedTicketClassifier.Classify(Ev(phoneOnly: false, endReceived: Now.AddHours(-1)), 99, Now).Class);
+    }
+
+    // ---- offered / assigned but never answered: Round Robin is preserved ---------------------------------------------------------------
+
+    [Theory]
+    [InlineData(false)]   // the offered agent id maps to nobody
+    [InlineData(true)]    // the offered agent is a mapped, eligible Call Center agent
+    public async Task ANamedAgentOfferedTheCall_WhoNeverAnswered_DoesNotBlockRoundRobin(bool offeredIsMapped)
+    {
+        var w = NewWorld();
+        var offered = offeredIsMapped ? w.Agents[1] : (Id: Guid.Empty, GenesysId: "g-offered-ghost");
+        var call = await AiCallAsync(w, "r-offered-" + offeredIsMapped);
+        await w.F.AgentHandoff.RequestAsync(
+            ServiceAccount, new GenesysHandoffRequestDto(call.ConversationId, AgentAvailable: true, Mode: "HumanTakeover", AgentId: offered.GenesysId));
+        Assert.Equal(offered.GenesysId, w.F.InteractionFor(call.ConversationId)!.GenesysAgentId);   // the scenario: the id IS stored on the interaction
+        Assert.DoesNotContain(w.F.Handlers.All, h => h.TicketId == call.TicketId);                   // ... but nobody connected
+        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);                                 // an offer assigns nothing at handoff time
+        await EndAsync(w, call);
+        PassTheWindow(w);
+
+        var result = await RunAsync(w, call);
+
+        Assert.Equal(VoiceReconcileOutcome.AssignedRoundRobin, result.Outcome);
+        Assert.Equal(w.Agents[0].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);                // the next in the rotation - not the offered agent
+        Assert.Null(w.Ticket(call.TicketId).FirstHumanResponseAtUtc);                                // an offer is not a response
+    }
+
+    [Fact]
+    public async Task ARingingEvent_ThatNamesAnAgent_IsNotAnAnswer()
+    {
+        var w = NewWorld();
+        var call = await AiCallAsync(w, "r-ringing");
+        // An update that names an agent only as assigned / ringing: top-level agentId and handoff.assignedAgentId, no routing.agentId (the connected agent).
+        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, call.TicketId, new GenesysTicketUpdateDto(
+            call.ConversationId, AgentId: w.Agents[1].GenesysId, AgentName: "Ringing Agent",
+            Handoff: new GenesysHandoffUpdateDto(Required: true, Mode: "HumanTakeover", AssignedAgentId: w.Agents[1].GenesysId)));
+        await EndAsync(w, call);
+        PassTheWindow(w);
+
+        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Null(w.Ticket(call.TicketId).OriginalHumanAgentId);
+        Assert.Equal(VoiceReconcileOutcome.AssignedRoundRobin, (await RunAsync(w, call)).Outcome);
+    }
+
+    // ---- a CONNECTED agent whose mapping is missing ------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ADirectCallPickedUpByAnUnmappedAgent_IsFlaggedAtCreation_ThenAssignedWithTheRealConnectTime_WhenTheMappingIsFixed()
+    {
+        var w = NewWorld();
+        var connectedAt = DateTime.UtcNow.AddMinutes(-4);
+        var r = await w.F.Ingestion.IngestAsync(
+            ServiceAccount, new GenesysInquiryDto("r-pickup-unmapped", GenesysChannel.Phone, CustomerPhone: "+971500000001", DepartmentId: w.Cs.DepartmentId,
+                AgentId: "g-new-hire", ConnectedAtUtc: connectedAt));
+        var call = new Call(r.Ticket!.TicketId, "r-pickup-unmapped");
+        Assert.Null(w.Ticket(call.TicketId).CurrentOwnerEmployeeId);                                 // not guessed, not Round Robin
+        Assert.Single(w.F.WorkflowEvents.All, e => e.TicketId == call.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
+        await EndAsync(w, call);
+        PassTheWindow(w);
+        Assert.Equal(VoiceReconcileOutcome.FlaggedMappingPending, (await RunAsync(w, call)).Outcome);   // the window never turns a real answer into Round Robin
+
+        var hire = w.F.AddAgent("g-new-hire", "New Hire");
+        var fixedRun = await RunAsync(w, call);
+
+        Assert.Equal(VoiceReconcileOutcome.AssignedToAnsweringAgent, fixedRun.Outcome);
+        Assert.Equal(hire, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(hire, w.Ticket(call.TicketId).OriginalHumanAgentId);
+    }
+
+    // ---- delayed and out-of-order connected events -------------------------------------------------------------------------------------
+
+    [Fact]
+    public async Task ADelayedConnectEvent_IsDatedAtTheRealConnectTime_NotTheTimeItArrived()
+    {
+        var w = NewWorld();
+        var call = await AiCallAsync(w, "r-delayed");
+        var connectedAt = DateTime.UtcNow.AddMinutes(-12);                                          // the answer happened 12 minutes before the event reached us
+
+        await ConnectAsync(w, call, w.Agents[1].GenesysId, connectedAt);
+
+        Assert.Equal(connectedAt, w.Ticket(call.TicketId).FirstHumanResponseAtUtc);
+        var assignment = Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == call.TicketId);
+        Assert.Equal(w.Ticket(call.TicketId).CreatedAtUtc, assignment.AssignedAtUtc);               // dated at the connect - but never before the ticket existed
+    }
+
+    [Fact]
+    public async Task ALateConnectEvent_AfterRoundRobinAlreadyDealtTheUnansweredTicket_GoesToTheAgentWhoActuallyAnswered()
+    {
+        var w = NewWorld();
+        var call = await AiCallAsync(w, "r-late-after-rr");
+        await EndAsync(w, call);
+        PassTheWindow(w);
+        await RunAsync(w, call);
+        var provisional = w.Ticket(call.TicketId).CurrentOwnerEmployeeId;
+        Assert.Equal(w.Agents[0].Id, provisional);                                                   // the window concluded: Round Robin dealt it
+        var answered = DateTime.UtcNow.AddMinutes(-8);
+
+        await ConnectAsync(w, call, w.Agents[2].GenesysId, answered);                                // ... then the real answer event arrives
+
+        Assert.Equal(w.Agents[2].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);                // Round Robin never overrides the actual answering agent
+        Assert.Equal(answered, w.Ticket(call.TicketId).FirstHumanResponseAtUtc);
+    }
+
+    [Fact]
+    public async Task OutOfOrderConnects_TheAgentSeenFirstKeepsIt_AnOlderDuplicateOrAnEarlierOtherAgentNeverTakesItOver()
+    {
+        var w = NewWorld();
+        var call = await AiCallAsync(w, "r-ooo");
+        var t = DateTime.UtcNow.AddMinutes(-10);
+        await ConnectAsync(w, call, w.Agents[0].GenesysId, t.AddMinutes(5));
+
+        await ConnectAsync(w, call, w.Agents[1].GenesysId, t.AddMinutes(3));                         // an earlier event for another agent, arriving late
+        await ConnectAsync(w, call, w.Agents[0].GenesysId, t.AddMinutes(1));                         // an older duplicate of the first agent
+        await ConnectAsync(w, call, w.Agents[0].GenesysId, t.AddMinutes(5));                         // the exact duplicate
+
+        Assert.Equal(w.Agents[0].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == call.TicketId);
+        Assert.Equal(w.Agents[0].Id, w.Ticket(call.TicketId).OriginalHumanAgentId);
+        Assert.Equal(t.AddMinutes(5), w.Ticket(call.TicketId).FirstHumanResponseAtUtc);              // first processed answer; write-once, never moved
+    }
+
+    // ---- first-response SLA through the answering-agent service ---------------------------------------------------------------------------
+
+    [Fact]
+    public async Task AHandoffAndTheConnectedAgentInTheSameUpdate_StillRecordsTheFirstResponseAtTheConnectTime()
+    {
+        var w = NewWorld();
+        var call = await AiCallAsync(w, "r-same-update");
+        var connectedAt = DateTime.UtcNow.AddMinutes(-2);
+
+        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, call.TicketId, new GenesysTicketUpdateDto(
+            call.ConversationId, Handoff: new GenesysHandoffUpdateDto(Required: true, Mode: "HumanTakeover"),
+            Routing: new GenesysRoutingUpdateDto(AgentId: w.Agents[1].GenesysId, ConnectedAtUtc: connectedAt)));
+
+        Assert.Equal(w.Agents[1].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(connectedAt, w.Ticket(call.TicketId).FirstHumanResponseAtUtc);
+    }
+
+    [Fact]
+    public async Task TheReconcilerAssigningAFixedMapping_RecordsTheFirstResponse_OnlyAtTheFlaggedConnectTime_AndOnce()
+    {
+        var w = NewWorld();
+        var call = await AiCallAsync(w, "r-fr-fixed");
+        var connectedAt = DateTime.UtcNow.AddMinutes(-6);
+        await ConnectAsync(w, call, "g-fr-hire", connectedAt);
+        Assert.Null(w.Ticket(call.TicketId).FirstHumanResponseAtUtc);
+        w.F.AddAgent("g-fr-hire", "FR Hire");
+
+        await RunAsync(w, call);
+        await RunAsync(w, call);
+
+        Assert.Equal(connectedAt, w.Ticket(call.TicketId).FirstHumanResponseAtUtc);
+        Assert.Single(w.F.Audit.Entries, e => e.Action == "RecordFirstResponse" && e.EntityId == call.TicketId.ToString());
     }
 }

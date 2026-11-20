@@ -136,11 +136,6 @@ public sealed class CallCenterReconciliationSqlServerTests : IDisposable
         {
             var i = Interaction(t); i.MarkRequiresHumanFollowUp(); db.TicketInteractions.Add(i);
         });
-        // The same need on a VOICE call (approved voice rules): queued only, nobody chosen. A digital conversation keeps the behaviour from main (Round Robin).
-        var flaggedCall = AddTicket(seed.AccountingId, after: (db, t) =>
-        {
-            var i = Interaction(t, WellKnownChannels.Phone); i.MarkRequiresHumanFollowUp(); db.TicketInteractions.Add(i);
-        });
         var activeAi = AddTicket(seed.AccountingId, after: (db, t) => db.TicketInteractions.Add(Interaction(t)));
         var endedAi = AddTicket(seed.AccountingId, after: (db, t) => { var i = Interaction(t); i.End(Now.AddMinutes(-20), "done"); db.TicketInteractions.Add(i); });
         var closed = AddTicket(seed.AccountingId, t => ClaimTestData.MakeClosedUnowned(t, seed.Worker));
@@ -150,30 +145,22 @@ public sealed class CallCenterReconciliationSqlServerTests : IDisposable
         var before = SnapshotAssignments(preOwned.Append(ownedElsewhere));
 
         var eligible = await ListEligibleIdsAsync();
-        Assert.Equal([manualStuck, flaggedStuck, flaggedCall], eligible.Order().ToArray());
+        Assert.Equal([manualStuck, flaggedStuck], eligible.Order().ToArray());
 
-        // A ticket entered by hand (no Genesys conversation) is dealt by the Call Center rotation exactly as before...
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, (await ReconcileAsync(manualStuck)).Outcome);
-        // ...a DIGITAL Genesys ticket flagged for a person keeps the behaviour from main (Call Center first, then Round Robin)...
-        Assert.Equal(ReconcileOutcome.AssignedRoundRobin, (await ReconcileAsync(flaggedStuck)).Outcome);
-        // ...while a VOICE call flagged for a person is only QUEUED in the Call Center: nobody is chosen for it.
-        Assert.Equal(ReconcileOutcome.FlaggedForManualAssignment, (await ReconcileAsync(flaggedCall)).Outcome);
+        foreach (var id in eligible) Assert.True((await ReconcileAsync(id)).Outcome is ReconcileOutcome.AssignedRoundRobin);
 
         using var read = CreateContext();
-        var manual = read.Tickets.AsNoTracking().Single(x => x.TicketId == manualStuck);
-        Assert.Equal(seed.CallCenterId, manual.CurrentDepartmentId);
-        Assert.Contains(manual.CurrentOwnerEmployeeId!.Value, seed.CsAgents);
-        Assert.NotEqual(seed.DepartmentEmployee, manual.CurrentOwnerEmployeeId);              // restricted to CS Agents
-        Assert.Equal(1, read.TicketAssignments.Count(a => a.TicketId == manualStuck && a.IsCurrent));
-
-        var digital = read.Tickets.AsNoTracking().Single(x => x.TicketId == flaggedStuck);
-        Assert.Equal(seed.CallCenterId, digital.CurrentDepartmentId);
-        Assert.Contains(digital.CurrentOwnerEmployeeId!.Value, seed.CsAgents);                  // digital: dealt by the Call Center rotation, as on main
-
-        var call = read.Tickets.AsNoTracking().Single(x => x.TicketId == flaggedCall);
-        Assert.Equal(seed.CallCenterId, call.CurrentDepartmentId);                              // queue routing
-        Assert.Null(call.CurrentOwnerEmployeeId);                                               // no Round Robin for a voice call
-        Assert.Equal(0, read.TicketAssignments.Count(a => a.TicketId == flaggedCall));
+        foreach (var id in new[] { manualStuck, flaggedStuck })
+        {
+            var t = read.Tickets.AsNoTracking().Single(x => x.TicketId == id);
+            Assert.Equal(seed.CallCenterId, t.CurrentDepartmentId);
+            Assert.Contains(t.CurrentOwnerEmployeeId!.Value, seed.CsAgents);
+            Assert.NotEqual(seed.DepartmentEmployee, t.CurrentOwnerEmployeeId);              // restricted to CS Agents
+            Assert.Equal(1, read.TicketAssignments.Count(a => a.TicketId == id && a.IsCurrent));
+        }
+        Assert.NotEqual(
+            read.Tickets.Single(x => x.TicketId == manualStuck).CurrentOwnerEmployeeId,
+            read.Tickets.Single(x => x.TicketId == flaggedStuck).CurrentOwnerEmployeeId);   // Round Robin alternates
 
         Assert.Equal(before, SnapshotAssignments(preOwned.Append(ownedElsewhere)));          // owners, departments and assignment rows byte-for-byte unchanged
         foreach (var id in new[] { activeAi, endedAi, closed, transferredOut })
@@ -188,7 +175,7 @@ public sealed class CallCenterReconciliationSqlServerTests : IDisposable
         var answering = seed.CsAgents[2];
         var id = AddTicket(seed.AccountingId, after: (db, t) =>
         {
-            db.TicketInteractions.Add(Interaction(t, WellKnownChannels.Phone));
+            db.TicketInteractions.Add(Interaction(t));   // a digital (Website) ticket: unchanged behaviour
             db.SaveChanges();
             var interaction = db.TicketInteractions.First(i => i.TicketId == t.TicketId);
             db.TicketInteractionHandlers.Add(TicketInteractionHandler.Create(interaction.TicketInteractionId, t.TicketId, answering, "genesys-answering", InteractionHandlerSource.Routing, null, Now));
@@ -200,6 +187,26 @@ public sealed class CallCenterReconciliationSqlServerTests : IDisposable
         using var read = CreateContext();
         Assert.Equal(answering, read.Tickets.AsNoTracking().Single(t => t.TicketId == id).CurrentOwnerEmployeeId);
         Assert.Null(read.DepartmentAssignmentRotations.AsNoTracking().SingleOrDefault(r => r.DepartmentId == seed.CallCenterId)?.LastAssignedEmployeeId);
+    }
+
+    [VisibilitySqlServerFact]
+    public async Task APhoneOnlyTicket_IsLeftToVoiceCallReconciliation_AndNeverTouchedByThisJob()
+    {
+        var seed = CreateAndSeed(csAgents: 3);
+        var id = AddTicket(seed.AccountingId, after: (db, t) =>
+        {
+            db.TicketInteractions.Add(Interaction(t, WellKnownChannels.Phone));
+            db.SaveChanges();
+            var interaction = db.TicketInteractions.First(i => i.TicketId == t.TicketId);
+            db.TicketInteractionHandlers.Add(TicketInteractionHandler.Create(interaction.TicketInteractionId, t.TicketId, seed.CsAgents[2], "genesys-answering", InteractionHandlerSource.Routing, null, Now));
+        });
+
+        Assert.DoesNotContain(id, await ListEligibleIdsAsync());
+        Assert.Equal(ReconcileOutcome.Skipped, (await ReconcileAsync(id)).Outcome);
+
+        using var read = CreateContext();
+        Assert.Null(read.Tickets.AsNoTracking().Single(t => t.TicketId == id).CurrentOwnerEmployeeId);
+        Assert.Equal(0, read.TicketAssignments.Count(a => a.TicketId == id));
     }
 
     [VisibilitySqlServerFact]

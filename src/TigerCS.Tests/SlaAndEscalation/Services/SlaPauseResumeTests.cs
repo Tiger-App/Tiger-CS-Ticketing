@@ -503,65 +503,6 @@ public class SlaPauseResumeTests
 
     // ---- reopen starts a new Resolution cycle; no pause crosses it ----
 
-    [Fact]
-    public async Task Reopen_AfterAPausedResolve_StartsAFreshCycle_WithNoOpenPause()
-    {
-        var h = await SeedAsync();
-        h.Ticket.RecordFirstHumanResponse(CreatedAt.AddMinutes(10));
-        h.Time.Now = CreatedAt.AddHours(2);
-        await GoPendingAsync(h);
-        h.Time.Now = CreatedAt.AddHours(3);
-        await ResolveAsync(h);
-
-        var closeAt = CreatedAt.AddHours(4);
-        h.Time.Now = closeAt;
-        var close = await h.Service.CloseAsync(h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, new CloseTicketRequestDto([]));
-        Assert.Equal(TicketMutationOutcome.Success, close.Outcome);
-
-        var reopenAt = CreatedAt.AddHours(30);
-        h.Time.Now = reopenAt;
-        var reopen = await h.Service.ReopenAsync(
-            Guid.NewGuid(), [Roles.CsAgent], h.Ticket.TicketId, new ReopenTicketRequestDto("Customer called back.", 3, []));
-
-        Assert.Equal(TicketMutationOutcome.Success, reopen.Outcome);
-        Assert.Null(await h.Sla.Pauses.GetOpenAsync(h.Ticket.TicketId));
-
-        var periods = await h.Sla.SlaInstances.ListByTicketIdAsync(h.Ticket.TicketId);
-        Assert.Equal(2, periods.Count);
-        Assert.NotNull(periods[0].PeriodEndAtUtc);
-        Assert.Equal(SlaChangeReason.Reopen, periods[1].ChangeReason);
-        Assert.Equal(reopenAt, periods[1].PeriodStartAtUtc);
-
-        // History kept: the first period's pause row still belongs to it.
-        Assert.Equal(periods[0].TicketSlaInstanceId, h.Sla.Pauses.All.Single().TicketSlaInstanceId);
-        Assert.Empty(await h.Sla.Pauses.ListByInstanceIdAsync(periods[1].TicketSlaInstanceId));
-        Assert.Equal(SlaState.Running, h.Ticket.SlaState);
-    }
-
-    [Fact]
-    public async Task Reopen_ClosesAnyPauseStillOpenOnTheEndedPeriod()
-    {
-        var h = await SeedAsync();
-        h.Ticket.RecordFirstHumanResponse(CreatedAt.AddMinutes(10));
-        h.Time.Now = CreatedAt.AddHours(2);
-        await ResolveAsync(h);
-        var closeAt = CreatedAt.AddHours(3);
-        h.Time.Now = closeAt;
-        await h.Service.CloseAsync(h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, new CloseTicketRequestDto([]));
-
-        // Damaged data: a pause somehow still open on the closed ticket's period.
-        var instance = Current(h);
-        await h.Sla.Pauses.AddAsync(new TicketSlaPausePeriod(
-            h.Ticket.TicketId, instance.TicketSlaInstanceId, SlaPauseReason.PendingCustomer, CreatedAt.AddHours(1), instance.ResolutionDueAtUtc));
-
-        h.Time.Now = CreatedAt.AddHours(10);
-        var reopen = await h.Service.ReopenAsync(
-            Guid.NewGuid(), [Roles.CsAgent], h.Ticket.TicketId, new ReopenTicketRequestDto("Back again.", 3, []));
-
-        Assert.Equal(TicketMutationOutcome.Success, reopen.Outcome);
-        Assert.Null(await h.Sla.Pauses.GetOpenAsync(h.Ticket.TicketId));
-    }
-
     // ---- per-request-type override ----
 
     [Fact]

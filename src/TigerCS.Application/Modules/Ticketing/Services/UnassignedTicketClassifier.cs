@@ -18,6 +18,9 @@ public enum UnassignedTicketClass
     /// <summary>An approval is pending; the approval process decides first.</summary>
     PendingApproval,
 
+    /// <summary>Every Genesys interaction of the ticket is a Phone call: <c>VoiceCallReconciler</c> is the only reconciliation job responsible for it. This job never touches it.</summary>
+    HandledByVoiceReconciler,
+
     /// <summary>The Call Center transferred it onward (or it originated there and left): the destination's department queue is where it belongs.</summary>
     TransferredOutOfCallCenter,
 
@@ -66,12 +69,6 @@ public enum UnassignedTicketAction
 
     /// <summary>Move to the Call Center if needed and deal to the next eligible agent by Round Robin.</summary>
     RoundRobinCallCenter,
-
-    /// <summary>
-    /// A Genesys-handled ticket that needs a person: move it into the Call Center queue (unless an explicit workflow department is kept) and leave it there with its
-    /// owner - the AI Agent - unchanged. <b>No Round Robin, nobody is chosen</b>: a person gets it only on a real acceptance, or from an authorised assignment.
-    /// </summary>
-    RouteToCallCenterQueue,
 
     /// <summary>Deal to the next eligible employee of the ticket's CURRENT department by that department's Round Robin (a transfer that found nobody).</summary>
     RoundRobinDepartment,
@@ -150,6 +147,9 @@ public static class UnassignedTicketClassifier
         if (evidence.OwnerEmployeeId is not null) return Of(UnassignedTicketClass.HasOwner);
         if (evidence.PendingApproval) return Of(UnassignedTicketClass.PendingApproval);
 
+        // VOICE is owned by VoiceCallReconciler (end-of-call window, confirmed answer, first response): never classified for action here.
+        if (evidence.GenesysIsPhoneOnly) return Of(UnassignedTicketClass.HandledByVoiceReconciler);
+
         var inCallCenter = callCenterDepartmentId is { } cc && evidence.CurrentDepartmentId == cc;
         if (!inCallCenter && evidence.AwaitingDepartmentAssignment)
         {
@@ -165,21 +165,16 @@ public static class UnassignedTicketClassifier
             return Of(UnassignedTicketClass.HumanAnsweredNotAssigned, UnassignedTicketAction.AssignToAnsweringAgent);
         }
 
-        // VOICE: a person answered but cannot be given the ticket: queued and flagged, never Round Robin. Other channels keep the previous behaviour.
         if (evidence.PhonePickupByUnmappedAgent)
         {
-            return Of(UnassignedTicketClass.HumanAnsweredAgentNotMapped,
-                evidence.GenesysIsPhoneOnly ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter);
+            return Of(UnassignedTicketClass.HumanAnsweredAgentNotMapped, UnassignedTicketAction.RoundRobinCallCenter);
         }
 
         if (evidence.RequiresHumanFollowUp || evidence.OpenHandoff || evidence.HumanEvidence)
         {
-            // VOICE (phone-only): queue only, never a chosen person - the voice no-answer reconciler deals it once the call ended unanswered. Every other
-            // channel keeps the previous behaviour: Call Center first, then Round Robin.
-            var humanAction = evidence.GenesysIsPhoneOnly ? UnassignedTicketAction.RouteToCallCenterQueue : UnassignedTicketAction.RoundRobinCallCenter;
             return inCallCenter
-                ? Of(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, evidence.GenesysIsPhoneOnly ? UnassignedTicketAction.None : humanAction)
-                : Of(UnassignedTicketClass.HumanRequiredNotRouted, humanAction);
+                ? Of(UnassignedTicketClass.HumanRequiredInCallCenterUnassigned, UnassignedTicketAction.RoundRobinCallCenter)
+                : Of(UnassignedTicketClass.HumanRequiredNotRouted, UnassignedTicketAction.RoundRobinCallCenter);
         }
 
         if (!evidence.HasGenesysInteraction)
@@ -197,9 +192,7 @@ public static class UnassignedTicketClassifier
         var stale = staleAiAfter is { } threshold && nowUtc - evidence.LastActivityUtc > threshold;
         if (!stale) return Of(UnassignedTicketClass.ActiveAiConversation);
 
-        // VOICE: a stale AI call is REPORTED (class StaleAiNoEndEvent) and the AI Agent keeps it - ownership of an AI voice ticket changes only on a real answer,
-        // an authorised assignment, or the no-answer reconciler's conclusion after the call ended. Other channels keep AssignStaleAi (previous behaviour).
-        return actOnStaleAi && !evidence.GenesysIsPhoneOnly
+        return actOnStaleAi
             ? Of(UnassignedTicketClass.StaleAiNoEndEvent, UnassignedTicketAction.RoundRobinCallCenter)
             : Of(UnassignedTicketClass.StaleAiNoEndEvent);
     }

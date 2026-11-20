@@ -44,6 +44,21 @@ public sealed class ProductionConfigurationTests
     }
 
     [Fact]
+    public void Api_KeepsTheLegacyReconcilersAndBackfillsOff_ByDefault_AndCallCenterReconciliationStaysDryRun()
+    {
+        // PR #292: only VoiceCallReconciliation runs by default. The other four are opt-in, and the two that assign stay dry-run until deliberately taken live.
+        foreach (var layered in new[] { Layered("TigerCS.Api") })
+        {
+            Assert.False(layered.GetValue<bool>("CallCenterReconciliation:Enabled"));
+            Assert.True(layered.GetValue("CallCenterReconciliation:DryRun", true));
+            Assert.False(layered.GetValue<bool>("DefaultClassificationBackfill:Enabled"));
+            Assert.False(layered.GetValue<bool>("StalePhoneAssignment:Enabled"));
+            Assert.True(layered.GetValue("StalePhoneAssignment:DryRun", true));
+            Assert.False(layered.GetValue<bool>("CsAgentBackfill:Enabled"));
+        }
+    }
+
+    [Fact]
     public void Api_KeepsBackgroundJobsAndStartupRefreshesOff_UntilDeliberatelyEnabled()
     {
         var c = Layered("TigerCS.Api");

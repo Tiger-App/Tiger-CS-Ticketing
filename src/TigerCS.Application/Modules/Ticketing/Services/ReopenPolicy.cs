@@ -75,8 +75,11 @@ public sealed record ReopenPolicy(int WindowDays)
         && closedAtUtc is { } closedAt
         && IsWithinWindow(closedAt, nowUtc);
 
-    /// <summary>Resolved is reopenable; Cancelled only when it is the chatbot inactivity closure. Rejected, Duplicate and every other Cancelled are final.</summary>
-    public static bool IsReopenableOutcome(byte? resolutionOutcome, bool closedForCustomerInactivity) =>
-        resolutionOutcome == (byte)ResolutionOutcome.Resolved
-        || (closedForCustomerInactivity && resolutionOutcome == (byte)ResolutionOutcome.Cancelled);
+    /// <summary>
+    /// <b>Closed is terminal on every channel (PR #292).</b> No outcome is reopenable any more: not Resolved, not the chatbot-inactivity Cancelled, and not through a
+    /// Reopen Approval. A customer who writes again after closure gets a new linked ticket (BR-020) - the closed ticket keeps its owner, ClosedBy, ClosedAt and SLA result.
+    /// Every reopen surface (direct Reopen, Reopen Approval request/grant, the display flags) funnels through this one rule, so lifting the restriction later is a one-line change here.
+    /// The parameters are kept so callers and the persisted outcome vocabulary are untouched.
+    /// </summary>
+    public static bool IsReopenableOutcome(byte? resolutionOutcome, bool closedForCustomerInactivity) => false;
 }
