@@ -5,6 +5,7 @@ using TigerCS.Domain.Infrastructure;
 using TigerCS.Domain.Modules.Notifications;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.Notifications.Fakes;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.Notifications.Services;
 
@@ -225,7 +226,7 @@ public class CustomerLifecycleEmailHandlerTests
         await f.ResolveAsync(ticket);
         var resolved = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketResolved, ticket.TicketId);
         ticket.Close();
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
 
         await f.CreateResolvedHandler().HandleAsync(resolved);
 
@@ -371,7 +372,7 @@ public class CustomerLifecycleEmailHandlerTests
         var (f, ticket, _) = await SeedAsync();
         await f.ResolveAsync(ticket);
         ticket.Close();
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
         var message = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketReopened, ticket.TicketId, reopenCount: 1);
 
         await f.CreateReopenedHandler().HandleAsync(message);
@@ -387,7 +388,7 @@ public class CustomerLifecycleEmailHandlerTests
         var (f, ticket, _) = await SeedAsync();
         await f.ResolveAsync(ticket);
         ticket.Close();
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
         var message = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketReopened, ticket.TicketId, reopenCount: 1);
         ticket.AssignTo(Guid.NewGuid());
         ticket.Resolve(ResolutionOutcome.Resolved, null);

@@ -170,6 +170,7 @@ public sealed class GenesysServiceFixture
 
     /// <summary>The "who answered owns the ticket" service the update facade and the handoff use.</summary>
     public GenesysAnsweringAgentAssignmentService AnsweringAgents { get; }
+    public GenesysAgentOfferRecorder OfferRecorder { get; }
 
     /// <summary>The assignment engine (Round Robin + direct assignment to the answering agent), as production composes it for Genesys.</summary>
     public TicketAutoAssignmentService AutoAssignment { get; }
@@ -269,11 +270,12 @@ public sealed class GenesysServiceFixture
         HandlingHistory = new GenesysAgentHandlingHistory(WorkflowEvents, AgentResolution, Clock);
 
         AnsweringAgents = new GenesysAnsweringAgentAssignmentService(AgentResolution, autoAssignment, Handoffs, UnitOfWork, Clock, sla.FirstHumanResponse, Audit);
+        OfferRecorder = new GenesysAgentOfferRecorder(WorkflowEvents, Clock);
 
         AgentHandoff = new GenesysAgentHandoffAppService(
             Options, Conversations, Handoffs, WorkflowEvents, Tickets, UnitOfWork, Audit, TimeProvider.System,
             callCenterFirst ? Departments : null, callCenterFirst ? TicketAssignments : null, callCenterFirst ? autoAssignment : null,
-            answeringAgents: AnsweringAgents);
+            answeringAgents: AnsweringAgents, offerRecorder: OfferRecorder);
 
         RequestTypeClassification = new GenesysRequestTypeClassificationAppService(
             Tickets, Approvals, Conversations, Handoffs,
@@ -309,7 +311,7 @@ public sealed class GenesysServiceFixture
 
         ConversationEnd = new GenesysConversationEndAppService(
             Options, Conversations, Tickets, Handoffs, WorkflowEvents, sla.FirstHumanResponse,
-            UnitOfWork, Audit, TimeProvider.System, outboxWriter: outbox);
+            UnitOfWork, Audit, TimeProvider.System, outboxWriter: outbox, offerRecorder: OfferRecorder);
 
         var ticketQuery = new TicketQueryAppService(
             Tickets, DepartmentAssignments, new FakeTicketResolutionRepository(),
@@ -345,7 +347,8 @@ public sealed class GenesysServiceFixture
             answeringAgentAssignment: AnsweringAgents,
             ticketAssignmentRepository: TicketAssignments,
             ticketNoteRepository: TicketNotes,
-            defaultClassification: DefaultClassification);
+            defaultClassification: DefaultClassification,
+            offerRecorder: OfferRecorder);
 
         InactivityClose = new ChatbotInactivityCloseAppService(
             Options, Conversations, Tickets, Handoffs, Departments, Lifecycle, UnitOfWork, Clock, Audit);

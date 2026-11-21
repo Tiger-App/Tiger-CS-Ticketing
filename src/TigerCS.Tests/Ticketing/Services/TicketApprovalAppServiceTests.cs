@@ -160,13 +160,36 @@ public class TicketApprovalAppServiceTests
     private static RequestApprovalRequestDto ReopenRequest(string? reason = "Customer called back — still not cooling.") =>
         new(nameof(ApprovalType.ReopenApproval), reason);
 
+    /// <summary>
+    /// Test-data setup only: a Reopen Approval cycle that was raised BEFORE Closed became terminal and is still Pending in production data. The service can no
+    /// longer create one (the request path refuses), so the decision-time tests seed it straight into the repository, exactly as the old request path wrote it.
+    /// </summary>
+    private static async Task<TicketApproval> SeedLegacyPendingReopenApprovalAsync(Fixture f, Ticket ticket, Guid requester, string comment = "Customer called back.")
+    {
+        var requirement = await f.Requirements.GetActiveAsync(ticket.RequestTypeId!.Value, ApprovalType.ReopenApproval);
+        var approval = TicketApproval.Request(ticket.TicketId, requirement!, requester, Now.AddDays(-1), comment, Guid.NewGuid());
+        await f.Approvals.AddAsync(approval);
+        return approval;
+    }
+
+    /// <summary>The ticket and the approvals/events/audit are all untouched: a refusal writes nothing.</summary>
+    private static void AssertNothingWritten(Fixture f, Ticket ticket, int approvalsBefore = 0)
+    {
+        Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Equal((byte)ResolutionOutcome.Resolved, ticket.ResolutionOutcome);
+        Assert.Equal(0, ticket.ReopenCount);
+        Assert.Equal(approvalsBefore, f.Approvals.All.Count);
+        Assert.DoesNotContain(f.Events.All, e => e.EventType is WorkflowEventType.ApprovalRequested or WorkflowEventType.Reopened);
+        Assert.DoesNotContain(f.Audit.Entries, a => a.Action is "RequestApproval" or "Reopen");
+    }
+
     // ---- Who may REQUEST ----
 
     [Fact]
-    public async Task ReopenApproval_ByDepartmentEmployeeOfTheTicketsDepartment_IsAllowed_EvenThoughTheyDoNotOwnIt()
+    public async Task ReopenApproval_ByDepartmentEmployeeOfTheTicketsDepartment_IsRefused_ClosedIsTerminal()
     {
-        // The explicit rule for this type: on a Closed ticket the work is
-        // finished, so department membership decides, not who held it last.
+        // This used to be the explicit "department membership decides" rule. The requester is authorised exactly as before, but the ticket is Closed, which is
+        // terminal, so no Reopen Approval cycle can be raised.
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
@@ -175,9 +198,9 @@ public class TicketApprovalAppServiceTests
         var result = await f.Service.RequestApprovalAsync(
             requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest());
 
-        Assert.Equal(ApprovalMutationOutcome.Success, result.Outcome);
-        Assert.Equal(nameof(ApprovalStatus.Pending), result.Response!.Status);
-        Assert.Equal("CS Manager role", result.Response.TargetSummary);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, result.Outcome);
+        Assert.Null(result.Response);
+        AssertNothingWritten(f, ticket);
     }
 
     [Theory]
@@ -196,7 +219,7 @@ public class TicketApprovalAppServiceTests
     }
 
     [Fact]
-    public async Task ReopenApproval_ByDepartmentHeadOfTheTicketsDepartment_IsAllowed()
+    public async Task ReopenApproval_ByDepartmentHeadOfTheTicketsDepartment_IsRefused_ClosedIsTerminal()
     {
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
@@ -204,20 +227,22 @@ public class TicketApprovalAppServiceTests
 
         var result = await f.Service.RequestApprovalAsync(head, [Roles.DepartmentHead], ticket.TicketId, ReopenRequest());
 
-        Assert.Equal(ApprovalMutationOutcome.Success, result.Outcome);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, result.Outcome);
+        AssertNothingWritten(f, ticket);
     }
 
     [Theory]
     [InlineData(Roles.GeneralManager)]
     [InlineData(Roles.ChairmanCeo)]
-    public async Task ReopenApproval_ByAnExecutiveRole_IsAllowed_WithNoDepartmentMembership(string role)
+    public async Task ReopenApproval_ByAnExecutiveRole_WithNoDepartmentMembership_IsRefused_ClosedIsTerminal(string role)
     {
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
 
         var result = await f.Service.RequestApprovalAsync(Guid.NewGuid(), [role], ticket.TicketId, ReopenRequest());
 
-        Assert.Equal(ApprovalMutationOutcome.Success, result.Outcome);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, result.Outcome);
+        AssertNothingWritten(f, ticket);
     }
 
     [Fact]
@@ -255,11 +280,10 @@ public class TicketApprovalAppServiceTests
     }
 
     [Fact]
-    public async Task ReopenApproval_IsNotOfferedToASystemAdministrator_ThoughAdr0024StillReachesTheEndpoint()
+    public async Task ReopenApproval_IsNotOfferedToASystemAdministrator_AndTheRequestIsRefused_ClosedIsTerminal()
     {
-        // ADR-0024 is an authorization override, so the endpoint must stay
-        // reachable; the control is still suppressed, because the override
-        // already grants direct Reopen.
+        // ADR-0024 is an authorization override, so the endpoint stays reachable and the caller is authorised; the control is suppressed (the override
+        // already grants direct Reopen), and the request itself is now refused because the ticket is Closed, which is terminal.
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
 
@@ -268,11 +292,12 @@ public class TicketApprovalAppServiceTests
 
         var result = await f.Service.RequestApprovalAsync(
             Guid.NewGuid(), [Roles.SystemAdministrator], ticket.TicketId, ReopenRequest());
-        Assert.Equal(ApprovalMutationOutcome.Success, result.Outcome);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, result.Outcome);
+        AssertNothingWritten(f, ticket);
     }
 
     [Fact]
-    public async Task ReopenApproval_IsOfferedToAnEligibleRequester()
+    public async Task ReopenApproval_IsNotOfferedToAnyRequester_ClosedIsTerminal()
     {
         var f = CreateService(Now);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
@@ -282,11 +307,12 @@ public class TicketApprovalAppServiceTests
 
         var view = await f.Service.GetApprovalsViewAsync(requester, [Roles.DepartmentEmployee], ticket.TicketId);
 
+        // The requestable entry is still listed (the request type configures it) but it is never offered: CallerCanRequest is false.
         var offered = Assert.Single(view.Response!.RequestableApprovals);
         Assert.Equal(nameof(ApprovalType.ReopenApproval), offered.ApprovalType);
-        Assert.True(offered.CallerCanRequest);
+        Assert.False(offered.CallerCanRequest);
 
-        // A department colleague the ticket is not assigned to cannot open its approvals view.
+        // A department colleague the ticket is not assigned to still cannot open its approvals view.
         f.DepartmentAssignments.NotResponsibleForClosedTicket.Add((ticket.TicketId, colleague));
         var colleagueView = await f.Service.GetApprovalsViewAsync(colleague, [Roles.DepartmentEmployee], ticket.TicketId);
         Assert.Equal(TigerCS.Application.Modules.Ticketing.Dto.TicketQueryOutcome.Forbidden, colleagueView.Outcome);
@@ -382,8 +408,10 @@ public class TicketApprovalAppServiceTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public async Task ReopenApproval_WithoutAReason_IsRejected(string? reason)
+    public async Task ReopenApproval_WithoutAReason_IsRejected_AsNotEligible_BecauseTheTerminalRuleIsCheckedFirst(string? reason)
     {
+        // The reason check used to be reachable (ReasonRequired). The lifecycle-eligibility check runs before it and Closed is terminal, so the request is
+        // refused as ReopenNotEligible whatever the reason says; either way nothing is written.
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
@@ -391,12 +419,12 @@ public class TicketApprovalAppServiceTests
         var result = await f.Service.RequestApprovalAsync(
             requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest(reason));
 
-        Assert.Equal(ApprovalMutationOutcome.ReasonRequired, result.Outcome);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, result.Outcome);
         Assert.Empty(f.Approvals.All);
     }
 
     [Fact]
-    public async Task ReopenApproval_StoresTheReasonInRequestComment_WhereHistoryAndAuditBothShowIt()
+    public async Task ReopenApproval_RefusedRequest_StoresNoReason_NoEvent_NoAudit()
     {
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
@@ -405,47 +433,43 @@ public class TicketApprovalAppServiceTests
         var result = await f.Service.RequestApprovalAsync(
             requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest("  Customer called back.  "));
 
-        Assert.Equal(ApprovalMutationOutcome.Success, result.Outcome);
-        Assert.Equal("Customer called back.", result.Response!.RequestComment);
-        Assert.Equal("Customer called back.", Assert.Single(f.Approvals.All).RequestComment);
-
-        var requested = Assert.Single(f.Events.All, e => e.EventType == WorkflowEventType.ApprovalRequested);
-        Assert.Equal("Customer called back.", requested.Note);
-        Assert.Single(f.Audit.Entries, a => a.Action == "RequestApproval" && a.AfterValue!.Contains("Type=ReopenApproval"));
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, result.Outcome);
+        Assert.Null(result.Response);
+        Assert.Empty(f.Approvals.All);
+        Assert.DoesNotContain(f.Events.All, e => e.EventType == WorkflowEventType.ApprovalRequested);
+        Assert.DoesNotContain(f.Audit.Entries, a => a.Action == "RequestApproval");
+        AssertNothingWritten(f, ticket);
     }
 
-    // ---- Deciding ----
+    // ---- Deciding (a cycle raised before Closed became terminal is still Pending in production data) ----
 
     [Fact]
-    public async Task ReopenApproval_ApprovedByTheTargetedCsManager_LeavesTheTicketClosedAndUntouched()
+    public async Task ReopenApproval_ApprovedByTheTargetedCsManager_IsRefused_AndLeavesTheTicketClosedAndUntouched()
     {
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
-        var requested = await f.Service.RequestApprovalAsync(
-            requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest());
+        var legacy = await SeedLegacyPendingReopenApprovalAsync(f, ticket, requester);
 
         var departmentBefore = ticket.CurrentDepartmentId;
         var ownerBefore = ticket.CurrentOwnerEmployeeId;
 
         var result = await f.Service.DecideAsync(
             Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
-            requested.Response!.TicketApprovalId, new DecideApprovalRequestDto("Approve", "Go ahead."));
+            legacy.TicketApprovalId, new DecideApprovalRequestDto("Approve", "Go ahead."));
 
-        Assert.Equal(ApprovalMutationOutcome.Success, result.Outcome);
-        Assert.Equal(nameof(ApprovalStatus.Approved), result.Response!.Status);
+        // Granting would create an Approved cycle nobody can ever execute: refused, and the cycle stays Pending.
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, result.Outcome);
+        Assert.Equal(ApprovalStatus.Pending, Assert.Single(f.Approvals.All).Status);
 
-        // Approval authorizes the ask and performs NO part of the reopen.
         Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
         Assert.Equal((byte)ResolutionOutcome.Resolved, ticket.ResolutionOutcome);
         Assert.Equal(0, ticket.ReopenCount);
         Assert.Equal(departmentBefore, ticket.CurrentDepartmentId);
         Assert.Equal(ownerBefore, ticket.CurrentOwnerEmployeeId);
 
-        // ...and specifically none of the reopen's side effects.
-        Assert.DoesNotContain(f.Events.All, e => e.EventType == WorkflowEventType.Reopened);
-        Assert.Contains(f.Events.All, e => e.EventType == WorkflowEventType.ApprovalReceived);
-        Assert.DoesNotContain(f.Audit.Entries, a => a.Action == "Reopen");
+        Assert.DoesNotContain(f.Events.All, e => e.EventType is WorkflowEventType.Reopened or WorkflowEventType.ApprovalReceived);
+        Assert.DoesNotContain(f.Audit.Entries, a => a.Action is "Reopen" or "ApproveApproval");
     }
 
     [Fact]
@@ -454,14 +478,14 @@ public class TicketApprovalAppServiceTests
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
-        var requested = await f.Service.RequestApprovalAsync(
-            requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest());
+        var legacy = await SeedLegacyPendingReopenApprovalAsync(f, ticket, requester);
 
+        // Authorization still runs first: a non-targeted role is Forbidden, not told about the terminal rule.
         foreach (var role in new[] { Roles.CsAgent, Roles.CsSupervisor, Roles.DepartmentHead, Roles.GeneralManager, Roles.ReportingUser })
         {
             var refused = await f.Service.DecideAsync(
                 Guid.NewGuid(), [role], ticket.TicketId,
-                requested.Response!.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
+                legacy.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
             Assert.Equal(ApprovalMutationOutcome.Forbidden, refused.Outcome);
         }
 
@@ -469,19 +493,19 @@ public class TicketApprovalAppServiceTests
     }
 
     [Fact]
-    public async Task ReopenApproval_DecidedByASystemAdministrator_SucceedsThroughTheAdr0024Override()
+    public async Task ReopenApproval_DecidedByASystemAdministrator_IsAuthorisedByTheAdr0024Override_ButStillRefused_ClosedIsTerminal()
     {
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
-        var requested = await f.Service.RequestApprovalAsync(
-            requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest());
+        var legacy = await SeedLegacyPendingReopenApprovalAsync(f, ticket, requester);
 
         var result = await f.Service.DecideAsync(
             Guid.NewGuid(), [Roles.SystemAdministrator], ticket.TicketId,
-            requested.Response!.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
+            legacy.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
 
-        Assert.Equal(ApprovalMutationOutcome.Success, result.Outcome);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, result.Outcome);
+        Assert.Equal(ApprovalStatus.Pending, Assert.Single(f.Approvals.All).Status);
         Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
     }
 
@@ -491,17 +515,16 @@ public class TicketApprovalAppServiceTests
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
-        var requested = await f.Service.RequestApprovalAsync(
-            requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest());
+        var legacy = await SeedLegacyPendingReopenApprovalAsync(f, ticket, requester);
 
         var noReason = await f.Service.DecideAsync(
             Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
-            requested.Response!.TicketApprovalId, new DecideApprovalRequestDto("Reject"));
+            legacy.TicketApprovalId, new DecideApprovalRequestDto("Reject"));
         Assert.Equal(ApprovalMutationOutcome.ReasonRequired, noReason.Outcome);
 
         var rejected = await f.Service.DecideAsync(
             Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
-            requested.Response.TicketApprovalId, new DecideApprovalRequestDto("Reject", "Outside policy."));
+            legacy.TicketApprovalId, new DecideApprovalRequestDto("Reject", "Outside policy."));
 
         Assert.Equal(ApprovalMutationOutcome.Success, rejected.Outcome);
         Assert.Equal(nameof(ApprovalStatus.Rejected), rejected.Response!.Status);
@@ -513,23 +536,23 @@ public class TicketApprovalAppServiceTests
     // ---- Eligibility is re-checked at decision time ----
 
     [Fact]
-    public async Task ReopenApproval_ApprovedAfterTheWindowExpired_IsRefused_AndNeverBecomesApproved()
+    public async Task ReopenApproval_ApprovedInsideOrAfterTheOldWindow_IsRefused_AndNeverBecomesApproved()
     {
-        // Requested inside the window, decided outside it: granting would
-        // create an Approved cycle nobody could ever execute.
+        // Used to be: requested inside the window, decided outside it, refused. The window no longer matters - granting is refused inside it as well.
         var closedAt = Now.AddDays(-1);
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f, closedDaysAgo: 1);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
-        var requested = await f.Service.RequestApprovalAsync(
-            requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest());
-        Assert.Equal(ApprovalMutationOutcome.Success, requested.Outcome);
+        var legacy = await SeedLegacyPendingReopenApprovalAsync(f, ticket, requester);
+
+        var inside = await f.Service.DecideAsync(
+            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, legacy.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, inside.Outcome);
 
         // The same cycle, decided by a service whose clock is past the window.
         var later = ServiceAt(f, closedAt.AddDays(ReopenPolicy.DefaultWindowDays + 1));
         var expired = await later.DecideAsync(
-            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
-            requested.Response!.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
+            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, legacy.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
 
         Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, expired.Outcome);
         Assert.Equal(ApprovalStatus.Pending, Assert.Single(f.Approvals.All).Status);
@@ -541,13 +564,12 @@ public class TicketApprovalAppServiceTests
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f, closedDaysAgo: 1);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
-        var requested = await f.Service.RequestApprovalAsync(
-            requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest());
+        var legacy = await SeedLegacyPendingReopenApprovalAsync(f, ticket, requester);
 
         var later = ServiceAt(f, Now.AddDays(ReopenPolicy.DefaultWindowDays + 5));
         var rejected = await later.DecideAsync(
             Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
-            requested.Response!.TicketApprovalId, new DecideApprovalRequestDto("Reject", "Window has passed."));
+            legacy.TicketApprovalId, new DecideApprovalRequestDto("Reject", "Window has passed."));
 
         Assert.Equal(ApprovalMutationOutcome.Success, rejected.Outcome);
         Assert.Equal(ApprovalStatus.Rejected, Assert.Single(f.Approvals.All).Status);
@@ -556,56 +578,53 @@ public class TicketApprovalAppServiceTests
     // ---- Duplicates and re-request ----
 
     [Fact]
-    public async Task ReopenApproval_AllowsOnlyOnePendingCycle_AndBlocksReRequestOverAnApprovedOne()
+    public async Task ReopenApproval_AnyNewRequest_IsRefused_EvenOverALegacyPendingCycle_AndNoSecondCycleOpens()
     {
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
+        var legacy = await SeedLegacyPendingReopenApprovalAsync(f, ticket, requester);
 
-        var first = await f.Service.RequestApprovalAsync(
-            requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest());
-        Assert.Equal(ApprovalMutationOutcome.Success, first.Outcome);
-
-        var duplicate = await f.Service.RequestApprovalAsync(
+        // The terminal-state refusal is checked before the duplicate-cycle rule: it used to be DuplicateActiveApproval.
+        var again = await f.Service.RequestApprovalAsync(
             requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest("Again."));
-        Assert.Equal(ApprovalMutationOutcome.DuplicateActiveApproval, duplicate.Outcome);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, again.Outcome);
 
-        await f.Service.DecideAsync(
-            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
-            first.Response!.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
+        var approve = await f.Service.DecideAsync(
+            Guid.NewGuid(), [Roles.CsManager], ticket.TicketId, legacy.TicketApprovalId, new DecideApprovalRequestDto("Approve"));
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, approve.Outcome);
 
         var afterApproval = await f.Service.RequestApprovalAsync(
             requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest("Once more."));
-        Assert.Equal(ApprovalMutationOutcome.DuplicateActiveApproval, afterApproval.Outcome);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, afterApproval.Outcome);
+
+        var only = Assert.Single(f.Approvals.All);
+        Assert.Equal(ApprovalStatus.Pending, only.Status);
+        Assert.Equal("Customer called back.", only.RequestComment);
     }
 
     [Fact]
-    public async Task ReopenApproval_MayBeRequestedAgainAfterRejection_AndBothCyclesStayInHistory()
+    public async Task ReopenApproval_CannotBeRequestedAgainAfterRejection_ClosedIsTerminal_AndTheRejectedCycleStaysInHistory()
     {
         var f = CreateService(Now);
         var ticket = await SeedClosedReopenableTicketAsync(f);
         var requester = SeedDepartmentMember(f, CollectionsDepartmentId);
-
-        var first = await f.Service.RequestApprovalAsync(
-            requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest("First ask."));
+        var first = await SeedLegacyPendingReopenApprovalAsync(f, ticket, requester, "First ask.");
         await f.Service.DecideAsync(
             Guid.NewGuid(), [Roles.CsManager], ticket.TicketId,
-            first.Response!.TicketApprovalId, new DecideApprovalRequestDto("Reject", "Not yet."));
+            first.TicketApprovalId, new DecideApprovalRequestDto("Reject", "Not yet."));
 
         var second = await f.Service.RequestApprovalAsync(
             requester, [Roles.DepartmentEmployee], ticket.TicketId, ReopenRequest("Second ask."));
 
-        Assert.Equal(ApprovalMutationOutcome.Success, second.Outcome);
-        Assert.Equal(2, f.Approvals.All.Count);
+        Assert.Equal(ApprovalMutationOutcome.ReopenNotEligible, second.Outcome);
 
-        var rejectedCycle = f.Approvals.All.Single(a => a.Status == ApprovalStatus.Rejected);
-        Assert.False(rejectedCycle.IsCurrent);
+        // Only the rejected legacy cycle exists, untouched and still the current one: nothing superseded it.
+        var rejectedCycle = Assert.Single(f.Approvals.All);
+        Assert.Equal(ApprovalStatus.Rejected, rejectedCycle.Status);
+        Assert.True(rejectedCycle.IsCurrent);
         Assert.Equal("First ask.", rejectedCycle.RequestComment);
         Assert.Equal("Not yet.", rejectedCycle.DecisionComment);
-
-        var currentCycle = f.Approvals.All.Single(a => a.IsCurrent);
-        Assert.Equal(ApprovalStatus.Pending, currentCycle.Status);
-        Assert.Equal("Second ask.", currentCycle.RequestComment);
     }
 
     // ---- Send Receipts / Accounting approval ----

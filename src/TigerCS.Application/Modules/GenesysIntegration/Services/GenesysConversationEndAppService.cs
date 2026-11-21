@@ -69,7 +69,8 @@ public sealed class GenesysConversationEndAppService(
     ITicketingUnitOfWork unitOfWork,
     IAuditEntryWriter auditWriter,
     TimeProvider timeProvider,
-    IOutboxWriter? outboxWriter = null)
+    IOutboxWriter? outboxWriter = null,
+    GenesysAgentOfferRecorder? offerRecorder = null)
 {
     /// <summary>The internal "customer replied" notification; null when the host wired no Outbox writer (older fixtures).</summary>
     private readonly TicketNotificationEvents? _notificationEvents = TicketNotificationEvents.CreateOrNull(outboxWriter, auditWriter);
@@ -135,6 +136,10 @@ public sealed class GenesysConversationEndAppService(
         }
 
         interaction.RecordAgentIfAbsent(request.AgentId, request.AgentName);
+        if (offerRecorder is not null)
+        {
+            await offerRecorder.RecordAsync(interaction, request.AgentId, "ConversationEnd", offeredAtUtc: null, cancellationToken);   // named on the end event, not reported connected: an offer (VOICE)
+        }
 
         var stored = await conversationRepository.ListMessagesAsync(interaction.TicketInteractionId, cancellationToken);
         var pendingMessages = await AppendNewMessagesAsync(interaction, stored, messages, cancellationToken);

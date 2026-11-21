@@ -219,7 +219,7 @@ public class GenesysMultipleTicketsPerConversationTests
     // ---- 4. Request type routing ----
 
     [Fact]
-    public async Task LeasingRequest_RoutesToTheDepartmentTheRequestTypeIsConfiguredFor_ButTheAiAgentKeepsOwnership()
+    public async Task LeasingRequest_RoutesToTheDepartmentTheRequestTypeIsConfiguredFor_AndAutoAssigns()
     {
         var w = Build();
 
@@ -228,10 +228,7 @@ public class GenesysMultipleTicketsPerConversationTests
         var ticket = w.F.Tickets.All.Single();
         Assert.Equal("Classified", result.Classification!.Status);
         Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Null(ticket.CurrentOwnerEmployeeId);                              // the department's request-type assignment is NOT applied to an AI-handled ticket
-        Assert.True(ticket.IsOwnedByAiAgent);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
-        Assert.Empty(w.F.Rotation.Rows);                                         // no Round Robin either
+        Assert.Equal(w.LeasingEmployee, ticket.CurrentOwnerEmployeeId);          // the normal department auto-assignment ran
         Assert.Equal(w.Leasing.DepartmentId, result.Ticket!.CurrentDepartmentId);
     }
 
@@ -691,7 +688,7 @@ public class GenesysMultipleTicketsPerConversationTests
         var leasingView = await w.F.InteractionQuery.GetForTicketAsync(viewer, [Roles.CsAgent], leasing.TicketId);
 
         Assert.Equal("Human", Assert.Single(documentsView.Response!.Interactions).HandlingState);
-        Assert.Equal("HumanFollowUp", Assert.Single(leasingView.Response!.Interactions).HandlingState);   // leasing needs a person; no person has accepted or replied here
+        Assert.Equal("Ai", Assert.Single(leasingView.Response!.Interactions).HandlingState);
         // ...yet the conversation's words are still all readable on the leasing ticket.
         Assert.Equal(["I can help"], Assert.Single(leasingView.Response.Interactions).Messages.Select(m => m.Body));
     }

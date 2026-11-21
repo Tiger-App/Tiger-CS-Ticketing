@@ -1,9 +1,11 @@
 # Ticket 1878 (TG-REG-20261119-0027) — hotfix investigation (19 Nov 2026)
 
-> **Final rules (PR #292 review, 20 Nov 2026).** The ownership rules in §1.1, §6 and §7 apply to **every channel** (voice and WhatsApp alike), as recorded in
-> [`Ownership-Rules-All-Channels.md`](Ownership-Rules-All-Channels.md), which is current where the two differ. A second pass had narrowed them to Phone and let a voice job deal
-> unanswered calls by Round Robin; both were reconciled with the mandatory rules (no Round Robin after an AI conversation; unresolved tickets stay queued until valid acceptance or an authorised
-> manual assignment). Voice-specific by nature: the first response is the real connect time and a call's end is concluded after a configurable window. Display times use `TicketDisplay.ToUae`.
+> **Superseded in part (20 Nov 2026).** The ownership rules in §1.1, §6 and §7 below were narrowed by the approved decisions recorded in
+> [`Voice-Ownership-Rules.md`](Voice-Ownership-Rules.md): they now apply to **Phone interactions only** (digital channels keep their previous behaviour), Round Robin is restored for a voice
+> call that ended unanswered after a configurable reconciliation window, the first response for a call is the real connect time, and display times go through the single `TicketDisplay.ToUae` conversion. The timestamp
+> guard (§1.4), the Assignment History work (§1.3) and the closed-ticket protection (§1.1, last bullet) are unchanged and apply to every channel. Where this document and
+> `Voice-Ownership-Rules.md` differ, the latter is current.
+
 
 **Read first — what was and was not verified.** No Production database, payload log, Genesys execution history or deployed build was reachable from this
 environment. Everything below is either (a) read from the code and **reproduced on a real SQL Server with the real migrations and the real HTTP

@@ -121,7 +121,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         // 1. The AI creates the ticket: owned by the AI Agent, in its department, nobody assigned.
         var create = await w.Genesys.PostAsync("/api/genesys/tickets", Json(new
         {
-            conversationId = conversation, channel = "LiveChat", customerPhone = "+971500000011", departmentId = w.CustomerService,
+            conversationId = conversation, channel = "Phone", customerPhone = "+971500000011", departmentId = w.CustomerService,
             startedAtUtc = zonelessFuture
         }));
         Assert.Equal(HttpStatusCode.Created, create.StatusCode);
@@ -145,8 +145,8 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
 
         Assert.Equal("Ai", (await InteractionAsync(w, ticketId)).HandlingState);
 
-        // 2. The AI conversation ENDS unresolved: marked as requiring follow-up and queued in the Call Center - but nobody is assigned, nothing round-robins,
-        //    and the AI Agent stays the owner. (Ticket 1878: this exact event dealt the ticket to an agent one second later.)
+        // 2. The call ENDS unresolved: ending alone changes nothing - not queued, not flagged, nobody assigned, nothing round-robins, and the AI Agent stays the owner.
+        //    (Ticket 1878: this exact event dealt the ticket to an agent one second later.) Whether anyone answered is decided later, by VoiceCallReconciliation.
         var end = await w.Genesys.PatchAsync($"/api/genesys/tickets/{ticketId}", Json(new
         {
             conversationId = conversation,
@@ -165,25 +165,22 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         using (var db = Db())
         {
             var ticket = await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId);
-            Assert.Equal(w.CallCenter, ticket.CurrentDepartmentId);                                    // queue routing
+            Assert.Equal(w.CustomerService, ticket.CurrentDepartmentId);                               // not moved by the end of the call
             Assert.Equal(w.CustomerService, ticket.OriginatingDepartmentId);
             Assert.Null(ticket.CurrentOwnerEmployeeId);                                                // NOT given to an employee
             Assert.Equal(aiAgent, ticket.AiAgentOwnerEmployeeId);                                      // the AI Agent keeps it
             Assert.Empty(await db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId).ToListAsync());
-            Assert.True((await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).RequiresHumanFollowUp);
+            Assert.False((await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).RequiresHumanFollowUp);   // no permanent flag from the end alone
             Assert.DoesNotContain(await db.AuditEntries.AsNoTracking().Select(a => a.Action).ToListAsync(), a => a == "AutoAssign");
             Assert.Null(ticket.FirstHumanResponseAtUtc);                                               // queue routing is not a human response
 
             var history = await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).OrderBy(h => h.TicketAssignmentHistoryEntryId).ToListAsync();
-            Assert.Equal(2, history.Count);
-            Assert.Equal(TicketAssignmentSource.GenesysQueueRouting, history[1].Source);
-            Assert.Equal(w.CustomerService, history[1].PreviousDepartmentId);                          // previous / new department recorded
-            Assert.Equal(w.CallCenter, history[1].DepartmentId);
-            Assert.Equal((aiAgent, aiAgent), (history[1].PreviousEmployeeId!.Value, history[1].NewEmployeeId));   // ownership unchanged
+            Assert.Single(history);                                                                    // only the AI-owner row: the end wrote no routing / ownership entry
+            Assert.Equal(TicketAssignmentSource.GenesysAiAgent, history[0].Source);
         }
 
         var afterEnd = await InteractionAsync(w, ticketId);
-        Assert.Equal("HumanFollowUp", afterEnd.HandlingState);                                         // not "AI is handling this customer"
+        Assert.Equal("AiEnded", afterEnd.HandlingState);                                               // the call is over; not "AI is handling this customer"
         Assert.False(afterEnd.HumanAccepted);
         Assert.False(afterEnd.HumanResponded);
 
@@ -194,7 +191,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         }))).StatusCode);
         using (var db = Db())
         {
-            Assert.Equal(2, await db.TicketAssignmentHistory.AsNoTracking().CountAsync(h => h.TicketId == ticketId));
+            Assert.Equal(1, await db.TicketAssignmentHistory.AsNoTracking().CountAsync(h => h.TicketId == ticketId));
             Assert.Null((await db.Tickets.AsNoTracking().SingleAsync(t => t.TicketId == ticketId)).CurrentOwnerEmployeeId);
         }
 
@@ -244,7 +241,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
             Assert.Equal(1, await db.TicketInteractions.AsNoTracking().CountAsync(i => i.GenesysConversationId == conversation));   // no duplicate ticket
             Assert.Equal(1, await db.Tickets.AsNoTracking().CountAsync(t => t.TicketId == ticketId));
             Assert.Single(await db.TicketAssignments.AsNoTracking().Where(a => a.TicketId == ticketId && a.IsCurrent).ToListAsync());
-            Assert.Null(ticket.FirstHumanResponseAtUtc);                                               // accepting is not responding
+            Assert.NotNull(ticket.FirstHumanResponseAtUtc);                                            // voice: the connect time IS the first human response
             Assert.Equal(answering, (await db.TicketInteractions.AsNoTracking().SingleAsync(i => i.TicketId == ticketId)).HandledByUserId);
 
             var history = await db.TicketAssignmentHistory.AsNoTracking().Where(h => h.TicketId == ticketId).OrderBy(h => h.TicketAssignmentHistoryEntryId).ToListAsync();
@@ -265,7 +262,6 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
 
         var apiHistory = await w.Viewer.GetFromJsonAsync<List<TicketAssignmentHistoryItemDto>>($"/api/tickets/{ticketId}/assignment-history");
         Assert.Equal(answering, apiHistory![^1].NewEmployeeId);
-        Assert.Contains(apiHistory, h => h.Source == nameof(TicketAssignmentSource.GenesysQueueRouting) && h.PreviousDepartmentId == w.CustomerService);
 
         // 7. Closed is terminal: whoever closed it, late events change nothing.
         Snapshot before;
@@ -333,7 +329,7 @@ public sealed class AiEndedHumanFollowUpSqlServerTests : IDisposable
         var conversation = $"legal-{Guid.NewGuid():N}"[..20];
         var created = await w.Genesys.PostAsync("/api/genesys/tickets", Json(new
         {
-            conversationId = conversation, channel = "LiveChat", customerPhone = "+971500000013", departmentId = w.CustomerService
+            conversationId = conversation, channel = "Phone", customerPhone = "+971500000013", departmentId = w.CustomerService
         }));
         var legalTicket = (await created.Content.ReadFromJsonAsync<GenesysAcceptedDto>())!.TicketId;
         using (var db = Db())

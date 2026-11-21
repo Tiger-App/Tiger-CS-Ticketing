@@ -127,7 +127,15 @@ public enum WorkflowEventType : byte
     /// Center queue, unowned, and this event is the flag that a supervisor must assign it manually: it is never given to a different person
     /// by Round Robin. History only; the note names the Genesys agent and the reason. No schema change (the column is a tinyint).
     /// </summary>
-    ManualAssignmentRequired = 20
+    ManualAssignmentRequired = 20,
+
+    /// <summary>
+    /// VOICE: Genesys named an agent as the one the call was <b>offered / assigned / ringing</b> to - an offer, never an answer. One event per offer (the note carries
+    /// the Genesys user id and the offer time: <c>[GenesysUserId=&lt;id&gt;;OfferedAtUtc=&lt;iso&gt;;Source=&lt;where it came from&gt;]</c>). Append-only; the latest offer is
+    /// "the last agent the call was offered to", read by the voice reconciler when the call ended and nobody answered. Stored here for the same reason as the other
+    /// Genesys events (a tinyint with no value constraint, so no schema change).
+    /// </summary>
+    GenesysAgentOffered = 21
 }
 
 /// <summary>

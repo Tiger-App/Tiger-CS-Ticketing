@@ -344,30 +344,33 @@ public class TicketWorkflowEnforcementTests
             Guid.NewGuid(), [Roles.CsAgent], ticket.TicketId,
             new ReopenTicketRequestDto("Customer called back", ticket.CurrentDepartmentId, []));
 
-        Assert.Equal(TicketMutationOutcome.NotAllowedForRequestType, result.Outcome);
+        // The terminal-state rule refuses before the request type's capability is even consulted: this used to be NotAllowedForRequestType.
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, result.Outcome);
         Assert.Equal(TicketStatus.Closed, ticket.TicketStatus);
+        Assert.Equal(0, ticket.ReopenCount);
     }
 
     [Fact]
-    public async Task RequestTypeAllowingReopen_StillGoesThroughTheExistingReopenPolicy()
+    public async Task RequestTypeAllowingReopen_IsStillRefused_InsideAndOutsideTheWindow_ClosedIsTerminal()
     {
         var f = CreateService();
 
-        // Outside ISSUE-011's window: the capability allows reopen, but the
-        // existing ReopenPolicy remains the final enforcement point.
+        // Outside ISSUE-011's window: the capability allows reopen, but Closed is terminal - the window is irrelevant.
         var expired = await SeedClosedClassifiedTicketAsync(f, allowReopen: true, closedAtUtc: DateTime.UtcNow.AddDays(-30));
         var expiredResult = await f.Service.ReopenAsync(
             Guid.NewGuid(), [Roles.CsAgent], expired.TicketId,
             new ReopenTicketRequestDto("Late request", expired.CurrentDepartmentId, []));
-        Assert.Equal(TicketMutationOutcome.ReopenWindowExpired, expiredResult.Outcome);
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, expiredResult.Outcome);
+        Assert.Equal(TicketStatus.Closed, expired.TicketStatus);
 
-        // Inside the window it succeeds exactly as before this phase.
+        // Inside the window it is refused exactly the same way, and nothing changes.
         var fresh = await SeedClosedClassifiedTicketAsync(f, allowReopen: true, closedAtUtc: DateTime.UtcNow.AddDays(-1));
         var freshResult = await f.Service.ReopenAsync(
             Guid.NewGuid(), [Roles.CsAgent], fresh.TicketId,
             new ReopenTicketRequestDto("Customer called back", fresh.CurrentDepartmentId, []));
-        Assert.Equal(TicketMutationOutcome.Success, freshResult.Outcome);
-        Assert.Equal(TicketStatus.InProgress, fresh.TicketStatus);
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, freshResult.Outcome);
+        Assert.Equal(TicketStatus.Closed, fresh.TicketStatus);
+        Assert.Equal(0, fresh.ReopenCount);
     }
 
     // ---- Authorization unchanged ----

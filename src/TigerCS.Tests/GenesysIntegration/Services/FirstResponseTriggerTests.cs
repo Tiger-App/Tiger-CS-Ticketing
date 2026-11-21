@@ -1,6 +1,4 @@
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
-using TigerCS.Application.Modules.Ticketing.Dto;
-using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
@@ -13,9 +11,7 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// <summary>
 /// What stops the First Response SLA — and what must not. Only a HUMAN reply sent to the customer
 /// (a <see cref="InteractionMessageSender.HumanAgent"/> transcript line, or a person recording it) satisfies it.
-/// Bot messages, customer messages, platform lines, internal notes, assignment, transfer and accepting work never do - and neither does anything the
-/// AI Agent does: the AI owns a Genesys ticket first, asking for a person only moves it to the Call Center queue (no owner, no Round Robin), and a
-/// person getting the ticket (connected agent, accepted handoff) is still not a reply to the customer.
+/// Bot messages, customer messages, platform lines, internal notes, assignment, transfer and accepting work never do.
 /// (Manual recording rules are in SlaFirstResponseAppServiceTests; accepting a handoff in AiHumanHandoffFlowTests; adding an
 /// internal note in TicketNoteAppServiceTests.)
 /// </summary>
@@ -122,7 +118,7 @@ public class FirstResponseTriggerTests
     }
 
     [Fact]
-    public async Task RoutingToTheResponsibleDepartment_AndTheRulesAssigneeNotBeingApplied_DoNotStopIt()
+    public async Task RoutingToTheResponsibleDepartmentAndAutoAssignment_DoNotStopIt()
     {
         var f = new GenesysServiceFixture();
         var (arrival, _) = f.SeedGenesysDepartment("Customer Service", "CS");
@@ -140,10 +136,8 @@ public class FirstResponseTriggerTests
         var ticket = Assert.Single(f.Tickets.All);
         Assert.Equal(GenesysIngestionOutcome.TicketCreated, result.Outcome);
         Assert.Equal(finance.DepartmentId, ticket.CurrentDepartmentId);            // transferred
-        Assert.Null(ticket.CurrentOwnerEmployeeId);                                // the AI Agent still owns it: the rule's assignee is not applied
-        Assert.True(ticket.IsOwnedByAiAgent);
-        Assert.Empty(f.TicketAssignments.Added);
-        Assert.Null(ticket.FirstHumanResponseAtUtc);                               // a department move is not a reply to the customer
+        Assert.Equal(employee, ticket.CurrentOwnerEmployeeId);                     // assigned
+        Assert.Null(ticket.FirstHumanResponseAtUtc);                               // neither is a reply to the customer
         Assert.False(Assert.Single(f.Sla.SlaInstances.All).FirstResponseBreached);
     }
 
@@ -156,117 +150,6 @@ public class FirstResponseTriggerTests
 
         Assert.NotNull(requested.TicketAgentHandoffId);
         Assert.Null(ticket.FirstHumanResponseAtUtc);
-    }
-
-    // ---- the AI owns the ticket first; none of its moves, and none of a person's assignment, is a human response ----
-
-    private sealed record CallCenterWorld(GenesysServiceFixture F, Ticket Ticket, Guid Agent);
-
-    private static async Task<CallCenterWorld> SeedCallCenterAsync(string conversationId, GenesysChannel channel = GenesysChannel.WebsiteChat)
-    {
-        var f = new GenesysServiceFixture(callCenterFirst: true);
-        var (department, _) = f.SeedGenesysDepartment("Accounting", "ACC");
-        var agent = f.AddAgent("g-agent-1");
-        var result = await f.Ingestion.IngestAsync(ServiceAccount,
-            new GenesysInquiryDto(conversationId, channel, CustomerPhone: "+971500000001", DepartmentId: department.DepartmentId, StartedAtUtc: Start));
-        Assert.Equal(GenesysIngestionOutcome.TicketCreated, result.Outcome);
-        var ticket = f.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
-        Assert.True(ticket.IsOwnedByAiAgent);
-        return new CallCenterWorld(f, ticket, agent);
-    }
-
-    private static void AssertSlaStillRunning(CallCenterWorld w)
-    {
-        Assert.Null(w.Ticket.FirstHumanResponseAtUtc);
-        var period = Assert.Single(w.F.Sla.SlaInstances.All);
-        Assert.Null(period.PeriodEndAtUtc);
-    }
-
-    [Fact]
-    public async Task TheAiAskingForAPerson_MovesTheTicketToTheCallCenterQueue_AndDoesNotStopIt()
-    {
-        var w = await SeedCallCenterAsync("fr-ai-asks");
-
-        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, w.Ticket.TicketId, new GenesysTicketUpdateDto("fr-ai-asks", HumanFollowUpRequired: true));
-
-        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket.CurrentDepartmentId);   // queue routing ...
-        Assert.Null(w.Ticket.CurrentOwnerEmployeeId);                               // ... with nobody chosen: no Round Robin,
-        Assert.True(w.Ticket.IsOwnedByAiAgent);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == w.Ticket.TicketId);
-        AssertSlaStillRunning(w);                                                   // and the AI's own handling never counted as a human reply
-    }
-
-    [Fact]
-    public async Task AnAiConversationThatEndsUnresolved_IsQueuedForAPerson_AndDoesNotStopIt()
-    {
-        var w = await SeedCallCenterAsync("fr-ai-ended");
-
-        await w.F.ConversationEnd.EndAsync(ServiceAccount, new GenesysConversationEndDto(
-            "fr-ai-ended", Start.AddMinutes(30), "Completed",
-            Transcript: [Line("Customer", 0, "I need a receipt."), Line("VirtualAgent", 1, "Let me look into that."), Line("System", 2, "Conversation ended")]));
-
-        Assert.Null(w.Ticket.CurrentOwnerEmployeeId);                               // never dealt to anyone
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == w.Ticket.TicketId);
-        Assert.Empty(w.F.Rotation.Rows);
-        AssertSlaStillRunning(w);
-    }
-
-    [Fact]
-    public async Task AMappedAgentReportedConnected_IsAssignedTheTicket_ButAssignmentIsNotAReply_TheirFirstLineIs()
-    {
-        var w = await SeedCallCenterAsync("fr-connected");
-
-        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, w.Ticket.TicketId, new GenesysTicketUpdateDto(
-            "fr-connected", Routing: new GenesysRoutingUpdateDto(AgentId: "g-agent-1", AgentName: "Agent", ConnectedAtUtc: Start.AddMinutes(3))));
-
-        Assert.Equal(w.Agent, w.Ticket.CurrentOwnerEmployeeId);                     // a person now owns it ...
-        AssertSlaStillRunning(w);                                                   // ... which is not a response to the customer
-
-        await EndAsync(w.F, "fr-connected", Line("VirtualAgent", 1, "Connecting you."), Line("HumanAgent", 8, "Hello, I can help."));
-
-        Assert.Equal(Start.AddMinutes(8), w.Ticket.FirstHumanResponseAtUtc);        // only the real HumanAgent line, at the line's time
-    }
-
-    [Fact]
-    public async Task AnAgentWhoCannotTakeTheTicket_LeavesItQueuedAndFlagged_AndDoesNotStopIt()
-    {
-        var w = await SeedCallCenterAsync("fr-unmapped");
-
-        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, w.Ticket.TicketId, new GenesysTicketUpdateDto(
-            "fr-unmapped", Routing: new GenesysRoutingUpdateDto(AgentId: "nobody-maps-to-this-id", ConnectedAtUtc: Start.AddMinutes(3))));
-
-        Assert.Null(w.Ticket.CurrentOwnerEmployeeId);                               // no owner change, no Round Robin fallback
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == w.Ticket.TicketId);
-        AssertSlaStillRunning(w);
-    }
-
-    [Fact]
-    public async Task AcceptingAnAiHandoff_AssignsThePerson_ButDoesNotStopIt()
-    {
-        var w = await SeedCallCenterAsync("fr-accept");
-        var requested = await w.F.AgentHandoff.RequestAsync(ServiceAccount, new GenesysHandoffRequestDto("fr-accept"));
-        Assert.NotNull(requested.TicketAgentHandoffId);
-        Assert.Null(w.Ticket.CurrentOwnerEmployeeId);                               // requesting a person assigns nobody
-        AssertSlaStillRunning(w);
-
-        var accepted = await w.F.PendingWork.AcceptAsync(w.Agent, [Roles.CsAgent], requested.TicketAgentHandoffId!.Value);
-
-        Assert.Equal(AgentHandoffOutcome.Success, accepted.Outcome);
-        Assert.Equal(w.Agent, w.Ticket.CurrentOwnerEmployeeId);
-        AssertSlaStillRunning(w);                                                   // accepting work is not a reply to the customer
-    }
-
-    [Fact]
-    public async Task AnAiClosedTicket_NeverRecordsAHumanFirstResponse()
-    {
-        var w = await SeedCallCenterAsync("fr-closed-by-ai");
-
-        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, w.Ticket.TicketId, new GenesysTicketUpdateDto(
-            "fr-closed-by-ai", ClosedByAi: true,
-            Transcript: [new GenesysTranscriptMessageDto("VirtualAgent", Start.AddMinutes(2), "Glad I could help. Closing this now.", null, null, "m-9")]));
-
-        Assert.Null(w.Ticket.FirstHumanResponseAtUtc);
-        Assert.Null(w.Ticket.CurrentOwnerEmployeeId);
     }
 
     [Fact]
@@ -282,4 +165,8 @@ public class FirstResponseTriggerTests
 
         Assert.Equal(Start.AddMinutes(7), ticket.FirstHumanResponseAtUtc);
     }
+
+
+
+
 }

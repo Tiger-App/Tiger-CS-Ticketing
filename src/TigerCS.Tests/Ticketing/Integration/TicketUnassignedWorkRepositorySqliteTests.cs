@@ -90,6 +90,10 @@ public sealed class TicketUnassignedWorkRepositorySqliteTests : IDisposable
 
             var p = _db.AddTicket(context, _db.CustomerServiceId); phoneUnmapped = p.TicketId;
             context.TicketInteractions.Add(Genesys(p, WellKnownChannels.Phone, agentId: "unmapped-genesys-id"));
+            // The agent who CONNECTED could not be given the ticket: the answering-agent rule flags it with the Genesys id. The id stored on the interaction alone is not evidence.
+            context.TicketWorkflowEvents.Add(new TicketWorkflowEvent(
+                p.TicketId, WorkflowEventType.ManualAssignmentRequired, Now.AddMinutes(-5), actorEmployeeId: null, ticketApprovalId: null,
+                "Answered by Genesys agent unmapped-genesys-id - not mapped. [GenesysUserId=unmapped-genesys-id;Issue=NotMapped]", Guid.NewGuid()));
 
             context.SaveChanges();
 
@@ -117,10 +121,12 @@ public sealed class TicketUnassignedWorkRepositorySqliteTests : IDisposable
         Assert.Equal(UnassignedTicketClass.StaleAiNoEndEvent, result[staleAi].Class.Class);
         Assert.Equal(UnassignedTicketClass.AiEndedNoHumanNeed, result[aiEnded].Class.Class);
         Assert.Equal(UnassignedTicketClass.HumanRequiredNotRouted, result[humanFlagged].Class.Class);
-        Assert.Equal(UnassignedTicketClass.HumanAnsweredNotAssigned, result[answered].Class.Class);
         Assert.Equal(agent, result[answered].Evidence.AnsweringEmployeeId);
-        Assert.Equal(UnassignedTicketClass.HumanAnsweredAgentNotMapped, result[phoneUnmapped].Class.Class);
+        Assert.Equal(UnassignedTicketClass.HandledByVoiceReconciler, result[answered].Class.Class);   // a phone call (the handler helper adds one): the voice reconciler's, not this job's
+        Assert.True(result[phoneUnmapped].Evidence.PhonePickupByUnmappedAgent);                 // confirmed (flagged) connection by an agent who maps to nobody
         Assert.Equal("unmapped-genesys-id", result[phoneUnmapped].Evidence.UnmappedGenesysAgentId);
+        Assert.Equal(UnassignedTicketClass.HandledByVoiceReconciler, result[phoneUnmapped].Class.Class);   // a phone-only ticket is the voice reconciler's, never this job's
+        Assert.Equal(UnassignedTicketAction.None, result[phoneUnmapped].Class.Action);
         Assert.Equal(UnassignedTicketClass.TransferredOutOfCallCenter, result[transferredOut].Class.Class);
     }
 

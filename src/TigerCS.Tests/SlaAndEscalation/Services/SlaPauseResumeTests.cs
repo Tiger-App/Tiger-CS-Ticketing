@@ -501,10 +501,10 @@ public class SlaPauseResumeTests
         Assert.Equal(SlaState.Running, h.Ticket.SlaState);
     }
 
-    // ---- reopen starts a new Resolution cycle; no pause crosses it ----
+    // ---- reopen is refused (Closed is terminal): no new Resolution cycle starts and no pause is touched ----
 
     [Fact]
-    public async Task Reopen_AfterAPausedResolve_StartsAFreshCycle_WithNoOpenPause()
+    public async Task Reopen_AfterAPausedResolve_IsRefused_ClosedIsTerminal_AndStartsNoFreshCycle()
     {
         var h = await SeedAsync();
         h.Ticket.RecordFirstHumanResponse(CreatedAt.AddMinutes(10));
@@ -518,28 +518,32 @@ public class SlaPauseResumeTests
         var close = await h.Service.CloseAsync(h.OwnerId, [Roles.CsAgent], h.Ticket.TicketId, new CloseTicketRequestDto([]));
         Assert.Equal(TicketMutationOutcome.Success, close.Outcome);
 
-        var reopenAt = CreatedAt.AddHours(30);
-        h.Time.Now = reopenAt;
+        var periodsBefore = await h.Sla.SlaInstances.ListByTicketIdAsync(h.Ticket.TicketId);
+        var slaStateBefore = h.Ticket.SlaState;
+        var pausesBefore = h.Sla.Pauses.All.Count;
+
+        h.Time.Now = CreatedAt.AddHours(30);
         var reopen = await h.Service.ReopenAsync(
             Guid.NewGuid(), [Roles.CsAgent], h.Ticket.TicketId, new ReopenTicketRequestDto("Customer called back.", 3, []));
 
-        Assert.Equal(TicketMutationOutcome.Success, reopen.Outcome);
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, reopen.Outcome);
+        Assert.Equal(TicketStatus.Closed, h.Ticket.TicketStatus);
+        Assert.Equal(0, h.Ticket.ReopenCount);
         Assert.Null(await h.Sla.Pauses.GetOpenAsync(h.Ticket.TicketId));
 
+        // No fresh SLA period, no Reopen change reason, the closed ticket keeps its SLA result.
         var periods = await h.Sla.SlaInstances.ListByTicketIdAsync(h.Ticket.TicketId);
-        Assert.Equal(2, periods.Count);
-        Assert.NotNull(periods[0].PeriodEndAtUtc);
-        Assert.Equal(SlaChangeReason.Reopen, periods[1].ChangeReason);
-        Assert.Equal(reopenAt, periods[1].PeriodStartAtUtc);
+        Assert.Equal(periodsBefore.Count, periods.Count);
+        Assert.DoesNotContain(periods, p => p.ChangeReason == SlaChangeReason.Reopen);
+        Assert.Equal(slaStateBefore, h.Ticket.SlaState);
 
-        // History kept: the first period's pause row still belongs to it.
+        // History kept and untouched: the pause row still belongs to the one period.
+        Assert.Equal(pausesBefore, h.Sla.Pauses.All.Count);
         Assert.Equal(periods[0].TicketSlaInstanceId, h.Sla.Pauses.All.Single().TicketSlaInstanceId);
-        Assert.Empty(await h.Sla.Pauses.ListByInstanceIdAsync(periods[1].TicketSlaInstanceId));
-        Assert.Equal(SlaState.Running, h.Ticket.SlaState);
     }
 
     [Fact]
-    public async Task Reopen_ClosesAnyPauseStillOpenOnTheEndedPeriod()
+    public async Task Reopen_IsRefused_AndLeavesAnyPauseStillOpenOnTheClosedPeriodUntouched_ClosedIsTerminal()
     {
         var h = await SeedAsync();
         h.Ticket.RecordFirstHumanResponse(CreatedAt.AddMinutes(10));
@@ -553,13 +557,17 @@ public class SlaPauseResumeTests
         var instance = Current(h);
         await h.Sla.Pauses.AddAsync(new TicketSlaPausePeriod(
             h.Ticket.TicketId, instance.TicketSlaInstanceId, SlaPauseReason.PendingCustomer, CreatedAt.AddHours(1), instance.ResolutionDueAtUtc));
+        var periodsBefore = (await h.Sla.SlaInstances.ListByTicketIdAsync(h.Ticket.TicketId)).Count;
 
         h.Time.Now = CreatedAt.AddHours(10);
         var reopen = await h.Service.ReopenAsync(
             Guid.NewGuid(), [Roles.CsAgent], h.Ticket.TicketId, new ReopenTicketRequestDto("Back again.", 3, []));
 
-        Assert.Equal(TicketMutationOutcome.Success, reopen.Outcome);
-        Assert.Null(await h.Sla.Pauses.GetOpenAsync(h.Ticket.TicketId));
+        // The refusal writes nothing: the damaged pause is not "repaired" by a reopen that never happened, and no new period starts.
+        Assert.Equal(TicketMutationOutcome.ResolutionOutcomeNotReopenable, reopen.Outcome);
+        Assert.Equal(TicketStatus.Closed, h.Ticket.TicketStatus);
+        Assert.NotNull(await h.Sla.Pauses.GetOpenAsync(h.Ticket.TicketId));
+        Assert.Equal(periodsBefore, (await h.Sla.SlaInstances.ListByTicketIdAsync(h.Ticket.TicketId)).Count);
     }
 
     // ---- per-request-type override ----

@@ -7,6 +7,7 @@ using TigerCS.Domain.Infrastructure;
 using TigerCS.Domain.Modules.Notifications;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.Notifications.Fakes;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.Notifications.Services;
 
@@ -68,7 +69,7 @@ public class CustomerNotificationModeTests
             default:
                 await f.ResolveAsync(ticket);
                 ticket.Close();
-                ticket.Reopen(ticket.CurrentDepartmentId);
+                LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
                 message = f.EnqueueLifecycleEvent(OutboxEventTypes.TicketReopened, ticket.TicketId, ticket.ReopenCount);
                 handler = f.CreateReopenedHandler();
                 break;
@@ -294,7 +295,7 @@ public class CustomerNotificationModeTests
         await f.CreateHandler().HandleAsync(f.EnqueueTicketCreated(ticket.TicketId));
         await f.ResolveAsync(ticket);
         ticket.Close();
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
         await f.CreateReopenedHandler().HandleAsync(f.EnqueueLifecycleEvent(OutboxEventTypes.TicketReopened, ticket.TicketId, ticket.ReopenCount));
 
         Assert.Equal(2, f.Email.Sent.Count);

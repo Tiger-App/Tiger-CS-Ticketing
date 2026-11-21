@@ -14,10 +14,9 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// <summary>
 /// Genesys tickets start on the default (Normal) priority with their SLA
 /// running from creation, and a request type — supplied at ingestion or
-/// later by the bot — routes the ticket to its configured department and
-/// applies its SLA policy without restarting the clock. The AI Agent keeps
-/// ownership: the request type's assignment rule is NOT applied to a
-/// ticket the AI handles, so nobody is assigned until a person accepts it. A missing/unusable request type leaves the ticket
+/// later by the bot — routes the ticket to its configured department, runs
+/// the existing automatic assignment and applies its SLA policy without
+/// restarting the clock. A missing/unusable request type leaves the ticket
 /// Unclassified for the existing manual classification workflow — never a
 /// human handoff.
 /// </summary>
@@ -52,16 +51,6 @@ public class GenesysRequestTypeRoutingTests
         w.F.DepartmentAssignments.Assignments.Add(
             new UserDepartmentAssignment(employee, w.Finance.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
         return employee;
-    }
-
-    /// <summary>The AI Agent still owns the ticket: no human owner, no assignment row, no Round Robin turn (a rule's employee is NOT dealt the ticket).</summary>
-    private static void AssertOwnedByTheAiNotAssigned(World w, Ticket ticket)
-    {
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("AssignedEmployeeId=", StringComparison.Ordinal));
-        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
     }
 
     private static async Task<Ticket> IngestAsync(World w, string conversationId, GenesysRequestTypeDto? requestType = null)
@@ -115,7 +104,7 @@ public class GenesysRequestTypeRoutingTests
     // ---- Valid request type → configured department + existing auto-assignment ----
 
     [Fact]
-    public async Task ValidRequestType_AtIngestion_RoutesToTheConfiguredDepartment_ButTheAiKeepsTheTicket_AndNobodyIsAssigned()
+    public async Task ValidRequestType_AtIngestion_RoutesToTheConfiguredDepartment_AndAutoAssigns()
     {
         var w = Build();
         var employee = AddFinanceEmployee(w);
@@ -131,20 +120,20 @@ public class GenesysRequestTypeRoutingTests
         Assert.NotNull(ticket.WorkflowTemplateId);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(w.Arrival.DepartmentId, ticket.OriginatingDepartmentId); // write-once
-        AssertOwnedByTheAiNotAssigned(w, ticket);                              // the configured rule's employee is NOT dealt an AI-handled ticket
+        Assert.Equal(employee, ticket.CurrentOwnerEmployeeId);
         Assert.Equal(w.Finance.DepartmentId, result.Ticket!.CurrentDepartmentId);
 
-        // Classification and routing are audited; assignment is not performed.
+        // Classification, routing and assignment are each audited.
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "ClassifyRequestType");
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "Transfer" && e.AfterValue!.Contains($"DepartmentId={w.Finance.DepartmentId}", StringComparison.Ordinal));
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains($"AssignedEmployeeId={employee}", StringComparison.Ordinal));
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains($"AssignedEmployeeId={employee}", StringComparison.Ordinal));
 
         // A request type that classified the ticket means no human classification queue.
         Assert.Empty(w.F.Handoffs.All);
     }
 
     [Fact]
-    public async Task ValidRequestType_WithNoEligibleEmployee_LeavesTheTicketInTheResponsibleDepartmentQueue_OwnedByTheAi()
+    public async Task ValidRequestType_WithNoEligibleEmployee_LeavesTheTicketInTheResponsibleDepartmentQueue()
     {
         var w = Build();
         // The rule's employee is not a member of Finance, so there is nobody eligible.
@@ -153,7 +142,8 @@ public class GenesysRequestTypeRoutingTests
         var ticket = await IngestAsync(w, "conv-queue", new GenesysRequestTypeDto(Name: "payment receipt"));
 
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
-        AssertOwnedByTheAiNotAssigned(w, ticket);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.StartsWith("DepartmentQueue", StringComparison.Ordinal));
     }
 
     // ---- Missing / unresolved request type → human classification queue ----
@@ -280,7 +270,7 @@ public class GenesysRequestTypeRoutingTests
         Assert.Equal("Classified", result.Classification!.Status);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(w.Arrival.DepartmentId, ticket.OriginatingDepartmentId);
-        AssertOwnedByTheAiNotAssigned(w, ticket);                                     // routed by the request type, still the AI's: the rule is not applied
+        Assert.Equal(employee, ticket.CurrentOwnerEmployeeId);
 
         // Classification raises no human work and leaves none behind.
         Assert.Empty(w.F.Handoffs.All);
@@ -402,15 +392,15 @@ public class GenesysRequestTypeRoutingTests
     // ---- First Response ----
 
     [Fact]
-    public async Task BotReplyAndTransfer_DoNotCountAsFirstResponse_ButTheFirstHumanReplyDoes()
+    public async Task BotReplyAssignmentAndTransfer_DoNotCountAsFirstResponse_ButTheFirstHumanReplyDoes()
     {
         var w = Build();
         var employee = AddFinanceEmployee(w);
         w.F.AssignmentRules.Add(RequestTypeAssignmentRule.ForSpecificEmployee(w.RequestType.RequestTypeId, employee));
         var ticket = await IngestAsync(w, "conv-fr", new GenesysRequestTypeDto(w.RequestType.RequestTypeId));
 
-        // Routed (but not assigned: the AI Agent still owns it)...
-        AssertOwnedByTheAiNotAssigned(w, ticket);
+        // Routed and assigned...
+        Assert.Equal(employee, ticket.CurrentOwnerEmployeeId);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.FirstHumanResponseAtUtc);
 
