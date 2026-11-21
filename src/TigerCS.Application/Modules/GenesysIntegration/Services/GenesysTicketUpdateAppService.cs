@@ -372,7 +372,7 @@ public sealed class GenesysTicketUpdateAppService(
             var answered = await answeringAgentAssignment.ApplyConnectedAgentAsync(
                 callerEmployeeId, ticket, interaction, answeringAgentId, source: "Routing", cancellationToken,
                 firstResponseIsFromTheAnsweringAgent: firstResponseWasOpenBeforeThisUpdate && FirstResponseBelongsTo(request, answeringAgentId),
-                connectedAtUtc: request.Routing?.ConnectedAtUtc, allowOwnerTransfer: options.ReassignOnTransfer && !interaction.IsEnded && !isVoice);   // a transfer is only meaningful while the call is live; VOICE never reassigns: later agents are history only
+                connectedAtUtc: request.Routing?.ConnectedAtUtc, allowOwnerTransfer: options.ReassignOnTransfer && !interaction.IsEnded);   // only a CONFIRMED connected agent (routing.agentId) can take the ticket - never ringing / an offer / a transfer attempt. VOICE too (approved): when a transferred call is actually answered by another human, the existing ticket is reassigned to them (history preserved); a transfer nobody answers leaves the owner
             if (answered.Outcome == AnswerAssignmentOutcome.ConcurrencyConflict)
             {
                 return GenesysTicketUpdateResult.Failure(GenesysTicketUpdateOutcome.ConcurrencyConflict, answered.Detail);

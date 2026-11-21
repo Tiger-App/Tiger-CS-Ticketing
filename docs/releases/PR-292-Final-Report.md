@@ -31,7 +31,7 @@ Historical timestamp remediation is separate and not part of this order (`Diagno
 | Setting | Default | Purpose | Recommended production value |
 |---|---|---|---|
 | `Genesys:AssignOnAnswer` | true | The employee Genesys reports *connected* owns the ticket. | **true** |
-| `Genesys:ReassignOnTransfer` | true | A different employee connected to a live **digital** conversation takes over (voice never reassigns: the first person who answered keeps the call). | **true** (unchanged from `main`) |
+| `Genesys:ReassignOnTransfer` | true | A different employee connected to a live **digital** conversation takes over (voice too: a human who actually answers a transferred call takes the existing ticket; ringing / offered agents never do). | **true** (unchanged from `main`) |
 | `Genesys:AssignOnTranscriptEvidence` | true | A human transcript line from a mapped, eligible agent proves who received it. | **true**; false = assign only on the connect event (stricter) |
 | `Genesys:AutoRaiseHandoffOnConversationEnd` | false | Raise a handoff work item from an end event alone. | **false** (it never assigns now, but would create work items) |
 | `Genesys:FutureTimestampToleranceMinutes` | 5 | An event time further in the future than this is impossible (clock skew / local-as-UTC) and is not stored as sent; audited. | **5** |
