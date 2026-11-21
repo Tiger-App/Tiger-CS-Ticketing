@@ -74,7 +74,8 @@ public sealed class GenesysTicketUpdateAppService(
     GenesysAnsweringAgentAssignmentService? answeringAgentAssignment = null,
     ITicketAssignmentRepository? ticketAssignmentRepository = null,
     ITicketNoteRepository? ticketNoteRepository = null,
-    DefaultClassificationService? defaultClassification = null)
+    DefaultClassificationService? defaultClassification = null,
+    GenesysAgentOfferRecorder? offerRecorder = null)
 {
     /// <summary>The exact closure reason recorded when the AI finishes the conversation.</summary>
     public const string ClosedByAiReason = "Closed by AI";
@@ -455,6 +456,11 @@ public sealed class GenesysTicketUpdateAppService(
             // one who actually took the conversation.
             await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
             interaction.RecordAgentIfAbsent(request.AgentId, request.AgentName);
+            if (offerRecorder is not null)
+            {
+                await offerRecorder.RecordAsync(interaction, request.AgentId, "Update", offeredAtUtc: null, cancellationToken);   // assigned / ringing: an offer (VOICE), never an answer
+            }
+
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
         }

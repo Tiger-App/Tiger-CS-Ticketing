@@ -125,7 +125,12 @@ public sealed record UnassignedTicketEvidence(
     // event, or a flagged answer). An agent merely ASSIGNED / offered the call (HandoffAssigned) is NOT an answer. Safe default false.
     bool HumanAnswered = false,
     // VOICE: when the recorded handler connected (Genesys' connected time), where recorded.
-    DateTime? AnsweringConnectedAtUtc = null);
+    DateTime? AnsweringConnectedAtUtc = null,
+    // VOICE: the LAST agent Genesys OFFERED the call to, read from the offer events (GenesysAgentOffered) - never from the ticket owner. The Genesys id, the employee that
+    // id maps to NOW (null while unmapped) and when it was offered. Null = no agent was ever offered the call.
+    string? VoiceLastOfferedGenesysUserId = null,
+    Guid? VoiceLastOfferedEmployeeId = null,
+    DateTime? VoiceLastOfferedAtUtc = null);
 
 public sealed record UnassignedTicketClassification(UnassignedTicketClass Class, UnassignedTicketAction Action);
 
@@ -231,5 +236,43 @@ public sealed record FlaggedAnswer(string GenesysUserId, string Issue, DateTime?
             ? DateTime.SpecifyKind(at, DateTimeKind.Utc)
             : null;
         return new FlaggedAnswer(id.Trim(), parts.GetValueOrDefault("Issue") ?? string.Empty, connected);
+    }
+}
+
+/// <summary>
+/// An agent a Genesys call was OFFERED to, as written into the note of a <see cref="WorkflowEventType.GenesysAgentOffered"/> event by <c>GenesysAgentOfferRecorder</c>:
+/// <c>[GenesysUserId=&lt;id&gt;;OfferedAtUtc=&lt;iso&gt;;Source=&lt;source&gt;]</c>. Read back by the evidence repository so the voice reconciler knows the LAST agent offered.
+/// </summary>
+public sealed record OfferedAgent(string GenesysUserId, DateTime? OfferedAtUtc, string Source)
+{
+    public static string Format(string genesysUserId, DateTime offeredAtUtc, string source) =>
+        $"[GenesysUserId={genesysUserId};OfferedAtUtc={offeredAtUtc.ToUniversalTime():O};Source={source}]";
+
+    public static OfferedAgent? TryParse(string? note)
+    {
+        if (string.IsNullOrWhiteSpace(note))
+        {
+            return null;
+        }
+
+        var open = note.LastIndexOf("[GenesysUserId=", StringComparison.Ordinal);
+        var close = open < 0 ? -1 : note.IndexOf(']', open);
+        if (open < 0 || close < 0)
+        {
+            return null;
+        }
+
+        var parts = note[(open + 1)..close].Split(';', StringSplitOptions.RemoveEmptyEntries)
+            .Select(p => p.Split('=', 2)).Where(kv => kv.Length == 2).ToDictionary(kv => kv[0], kv => kv[1], StringComparer.Ordinal);
+        if (!parts.TryGetValue("GenesysUserId", out var id) || string.IsNullOrWhiteSpace(id))
+        {
+            return null;
+        }
+
+        DateTime? offeredAt = parts.TryGetValue("OfferedAtUtc", out var raw)
+            && DateTime.TryParse(raw, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.RoundtripKind, out var at)
+            ? DateTime.SpecifyKind(at, DateTimeKind.Utc)
+            : null;
+        return new OfferedAgent(id.Trim(), offeredAt, parts.GetValueOrDefault("Source") ?? string.Empty);
     }
 }

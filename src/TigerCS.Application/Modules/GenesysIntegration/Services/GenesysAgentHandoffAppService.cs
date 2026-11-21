@@ -60,7 +60,8 @@ public sealed class GenesysAgentHandoffAppService(
     IDepartmentRepository? departmentRepository = null,
     ITicketAssignmentRepository? ticketAssignmentRepository = null,
     Ticketing.Services.TicketAutoAssignmentService? autoAssignmentService = null,
-    GenesysAnsweringAgentAssignmentService? answeringAgents = null)
+    GenesysAnsweringAgentAssignmentService? answeringAgents = null,
+    GenesysAgentOfferRecorder? offerRecorder = null)
 {
     public Task<GenesysHandoffResult> RequestAsync(
         Guid callerEmployeeId, GenesysHandoffRequestDto request, CancellationToken cancellationToken = default) =>
@@ -215,6 +216,10 @@ public sealed class GenesysAgentHandoffAppService(
 
         await handoffRepository.AddAsync(handoff, cancellationToken);
         interaction.RecordAgentIfAbsent(request.AgentId, request.AgentName);
+        if (offerRecorder is not null)
+        {
+            await offerRecorder.RecordAsync(interaction, agentId, "HandoffRequest", requestedAtUtc, cancellationToken);   // an offer (VOICE), never an answer
+        }
 
         var requestCorrelationId = Guid.NewGuid();
         if (callCenter is not null)
@@ -438,6 +443,10 @@ public sealed class GenesysAgentHandoffAppService(
         // TigerCS agent takes the work here.
         handoff.AssignTo(employeeId: null, genesysAgentId: agentId, assignedAtUtc: now);
         interaction.RecordAgentIfAbsent(agentId, request.AgentName);
+        if (offerRecorder is not null)
+        {
+            await offerRecorder.RecordAsync(interaction, agentId, "HandoffAssignment", request.AssignedAtUtc, cancellationToken);   // an offer (VOICE), never an answer
+        }
 
         var assignCorrelationId = Guid.NewGuid();
         if (beforeStatus != handoff.Status)

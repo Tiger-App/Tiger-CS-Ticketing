@@ -1436,6 +1436,94 @@ public sealed class TicketAutoAssignmentService(
     }
 
     /// <summary>
+    /// <b>VOICE - the call ended and nobody answered: the ticket goes to the LAST agent Genesys offered the call to</b> (read from the offer events, never from the ticket
+    /// owner). A system assignment: no actor, no first response, no "answered" claim, no Original Human Agent - the person did not answer anything. A person who actually
+    /// answers later replaces it (the assignment is an automatic pre-assignment). Not Round Robin, and never another employee when this agent cannot take it: then nothing is
+    /// assigned and the reason is returned so the caller can leave the ticket flagged for follow-up. Runs in the caller's transaction (the caller saves).
+    /// </summary>
+    /// <returns>Whether it assigned, and the eligibility problem (<see cref="AnsweringAgentIssue.None"/> when it assigned or when nothing applied).</returns>
+    public async Task<(bool Assigned, AnsweringAgentIssue Issue)> AssignLastOfferedAgentAsync(
+        Ticket ticket, AnsweringAgent agent, string? conversationId, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+        ArgumentNullException.ThrowIfNull(agent);
+
+        if (ticket.TicketStatus is not TicketStatus.Open || ticket.CurrentOwnerEmployeeId is not null
+            || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter)
+        {
+            return (false, AnsweringAgentIssue.None);
+        }
+
+        var issue = agent.Issue != AnsweringAgentIssue.None
+            ? agent.Issue
+            : agent.EmployeeId is { } employeeId
+                ? await CheckAnsweringAgentAsync(employeeId, callCenter.DepartmentId, cancellationToken)
+                : AnsweringAgentIssue.NotMapped;
+        if (issue != AnsweringAgentIssue.None)
+        {
+            return (false, issue);
+        }
+
+        var agentId = agent.EmployeeId!.Value;
+        var aiOwner = ticket.AiAgentOwnerEmployeeId;
+
+        // Same department rule as an answered call: Call Center first, except a ticket that follows an EXPLICIT workflow department (Legal, Collections, ...) which is
+        // assigned in place.
+        var keepWorkflowDepartment = aiOwner is not null && ticket.CurrentDepartmentId != callCenter.DepartmentId
+            && await HasExplicitWorkflowRoutingAsync(ticket, callCenter.DepartmentId, cancellationToken);
+        var assignmentDepartmentId = keepWorkflowDepartment ? ticket.CurrentDepartmentId : callCenter.DepartmentId;
+
+        var currentAssignment = await ticketAssignmentRepository.GetCurrentAsync(ticket.TicketId, cancellationToken);
+        if (ticket.CurrentDepartmentId != callCenter.DepartmentId && !keepWorkflowDepartment)
+        {
+            var fromDepartmentId = ticket.CurrentDepartmentId;
+            ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: true);
+            currentAssignment?.MarkSuperseded();
+            await auditWriter.WriteAsync(
+                actorEmployeeId: null, "Transfer", "Ticket", ticket.TicketId.ToString(),
+                beforeValue: $"DepartmentId={fromDepartmentId};AssignedEmployeeId=DepartmentQueue",
+                afterValue: $"DepartmentId={callCenter.DepartmentId};Reason=Voice call unanswered - routed to the Call Center for the last agent it was offered to;"
+                    + $"OriginatingDepartmentId={ticket.OriginatingDepartmentId} (unchanged);Source=VoiceReconciler",
+                correlationId, cancellationToken);
+            if (workflowEventRepository is not null)
+            {
+                await workflowEventRepository.AddAsync(
+                    TicketWorkflowEvent.ForTransfer(
+                        ticket.TicketId, nowUtc, actorEmployeeId: null, TicketTransferReason.SystemRouting, fromDepartmentId, callCenter.DepartmentId, agentId,
+                        "Voice call unanswered: routed to the Call Center for the last agent it was offered to.", correlationId),
+                    cancellationToken);
+            }
+
+            currentAssignment = null;
+        }
+
+        currentAssignment?.MarkSuperseded();
+        ticket.AssignTo(agentId);
+        await ticketAssignmentRepository.AddAsync(
+            new TicketAssignment(ticket.TicketId, agentId, assignmentDepartmentId, nowUtc, assigningActorEmployeeId: null),
+            cancellationToken);
+        await auditWriter.WriteAsync(
+            actorEmployeeId: null, "AssignLastOfferedAgent", "Ticket", ticket.TicketId.ToString(),
+            beforeValue: "Unassigned",
+            afterValue: $"AssignedEmployeeId={agentId};DepartmentId={assignmentDepartmentId};Mode=LastOfferedAgent;Trigger=VoiceNoAnswer;GenesysUserId={agent.GenesysUserId};"
+                + "RoundRobin=false;Answered=false",
+            correlationId, cancellationToken);
+        await NotifyAssignedAsync(ticket, previousOwnerEmployeeId: null, agentId, actorEmployeeId: null, correlationId, nowUtc, cancellationToken);
+
+        if (assignmentHistoryRepository is not null)
+        {
+            await assignmentHistoryRepository.AddAsync(
+                TicketAssignmentHistoryEntry.ForGenesys(
+                    ticket.TicketId, assignmentDepartmentId, aiOwner, agentId, TicketAssignmentSource.GenesysLastOfferedAgent,
+                    changedByEmployeeId: null, nowUtc, sourceEventAtUtc: null, conversationId,
+                    "The call ended unanswered: assigned to the last agent Genesys offered it to (not an answer, not Round Robin)."),
+                cancellationToken);
+        }
+
+        return (true, AnsweringAgentIssue.None);
+    }
+
+    /// <summary>
     /// True when a PERSON has transferred the ticket (any transfer event that is not system routing, escalations included), or the ticket
     /// has already been in the Call Center and is no longer there. Either way a later "agent connected" must not move it again.
     /// </summary>

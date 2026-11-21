@@ -828,6 +828,9 @@ public static class GenesysAuditActions
     /// <summary>A voice call ended, nobody answered it and the reconciliation window passed: the ticket was concluded as AI-failed / unanswered and dealt to an agent by Round Robin.</summary>
     public const string VoiceNoAnswerConcluded = "GenesysVoiceNoAnswerConcluded";
 
+    /// <summary>VOICE: the last agent the call was offered to cannot take the ticket; it is left unassigned and flagged for follow-up (no Round Robin), once.</summary>
+    public const string VoiceLastOfferedAgentUnavailable = "GenesysVoiceLastOfferedAgentUnavailable";
+
     /// <summary>A Genesys agent was resolved to a Ticketing user and recorded as the handler of an interaction.</summary>
     public const string InteractionHandlerRecorded = "GenesysInteractionHandlerRecorded";
 

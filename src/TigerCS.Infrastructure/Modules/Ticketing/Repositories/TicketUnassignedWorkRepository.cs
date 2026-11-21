@@ -173,6 +173,17 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
             : (await db.Users.AsNoTracking().Where(u => u.GenesysUserId != null && flaggedIds.Contains(u.GenesysUserId)).Select(u => new { u.GenesysUserId, u.Id }).ToListAsync(ct))
                 .ToDictionary(u => u.GenesysUserId!, u => u.Id, StringComparer.OrdinalIgnoreCase);
 
+        // VOICE: the agents Genesys OFFERED a call to (GenesysAgentOffered events), resolved against the CURRENT mapping.
+        var offeredIds = events.SelectMany(g => g)
+            .Where(e => e.EventType == WorkflowEventType.GenesysAgentOffered)
+            .Select(e => OfferedAgent.TryParse(e.Note)?.GenesysUserId)
+            .Where(id => id is not null).Select(id => id!).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var offeredUsers = offeredIds.Count == 0
+            ? new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase)
+            : (await db.Users.AsNoTracking().Where(u => u.GenesysUserId != null && offeredIds.Contains(u.GenesysUserId)).Select(u => new { u.GenesysUserId, u.Id }).ToListAsync(ct))
+                .GroupBy(u => u.GenesysUserId!, StringComparer.OrdinalIgnoreCase).Where(g => g.Count() == 1)   // an ambiguous id maps to nobody
+                .ToDictionary(g => g.Key, g => g.Single().Id, StringComparer.OrdinalIgnoreCase);
+
         var result = new List<UnassignedTicketEvidence>(tickets.Count);
         foreach (var t in tickets)
         {
@@ -241,6 +252,16 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
             // A person ANSWERED but cannot be given the ticket = a CONNECTED agent (a connect event / a phone pickup) whose id maps to nobody or to an ineligible account.
             // That is recorded by the flag the answering-agent rule writes (ManualAssignmentRequired, with the Genesys id). The agent id stored on the interaction is NOT
             // evidence: RecordAgentIfAbsent also stores an agent that was only offered / assigned / ringing, who may never have picked up.
+            // VOICE: the LAST agent the call was offered to - the latest offer by the time Genesys gave (the receipt time when it gave none), then by arrival.
+            var lastOffer = phoneOnly
+                ? te.Where(e => e.EventType == WorkflowEventType.GenesysAgentOffered)
+                    .Select(e => (Parsed: OfferedAgent.TryParse(e.Note), e.OccurredAtUtc))
+                    .Where(x => x.Parsed is not null)
+                    .OrderBy(x => x.Parsed!.OfferedAtUtc ?? x.OccurredAtUtc).ThenBy(x => x.OccurredAtUtc)
+                    .LastOrDefault()
+                : default;
+            var lastOfferedId = lastOffer.Parsed?.GenesysUserId;
+
             var phoneUnmapped = answeringId is null && flagged.Parsed is not null;
             var unmappedId = phoneUnmapped ? flagged.Parsed!.GenesysUserId : null;
 
@@ -275,7 +296,10 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
                         || (!phoneOnly && e.EventType is WorkflowEventType.GenesysAgentConnected or WorkflowEventType.GenesysCallTransferred))
                     || flagged.Parsed is not null,
                 AnsweringConnectedAtUtc: th.FirstOrDefault()?.ConnectedAtUtc,
-                FlaggedAnsweringEmployeeId: flagged.Parsed is { } fp && flaggedUsers.TryGetValue(fp.GenesysUserId, out var flaggedEmployee) ? flaggedEmployee : null));
+                FlaggedAnsweringEmployeeId: flagged.Parsed is { } fp && flaggedUsers.TryGetValue(fp.GenesysUserId, out var flaggedEmployee) ? flaggedEmployee : null,
+                VoiceLastOfferedGenesysUserId: lastOfferedId,
+                VoiceLastOfferedEmployeeId: lastOfferedId is not null && offeredUsers.TryGetValue(lastOfferedId, out var offeredEmployee) ? offeredEmployee : null,
+                VoiceLastOfferedAtUtc: lastOffer.Parsed is null ? null : lastOffer.Parsed.OfferedAtUtc ?? lastOffer.OccurredAtUtc));
         }
 
         return result;

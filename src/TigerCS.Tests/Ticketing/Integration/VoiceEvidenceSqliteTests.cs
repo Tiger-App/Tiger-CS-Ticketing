@@ -111,6 +111,43 @@ public sealed class VoiceEvidenceSqliteTests : IDisposable
     }
 
     [Fact]
+    public async Task TheLastOfferedAgent_IsReadFromTheOfferEvents_OrderedByOfferTime_AndResolvedAgainstTheCurrentMapping_NeverFromTheOwner()
+    {
+        var offeredUser = Guid.NewGuid();
+        var ids = Seed(Guid.NewGuid(), "g-flag-unused");
+        using (var context = _db.CreateContext())
+        {
+            context.Users.Add(new TigerCS.Infrastructure.Identity.ApplicationUser
+            {
+                Id = offeredUser, UserName = "offered@example.test", NormalizedUserName = "OFFERED@EXAMPLE.TEST", Email = "offered@example.test",
+                SecurityStamp = Guid.NewGuid().ToString(), GenesysUserId = "g-offered-last"
+            });
+            // Three offers. The events ARRIVED in the order first / last / middle, but Genesys' own offer times say "g-offered-last" is the latest.
+            void Offer(string id, DateTime offeredAt, DateTime receivedAt) => context.TicketWorkflowEvents.Add(new TicketWorkflowEvent(
+                ids.Phone, WorkflowEventType.GenesysAgentOffered, receivedAt, actorEmployeeId: null, ticketApprovalId: null,
+                $"Genesys offered the call to agent {id}. {OfferedAgent.Format(id, offeredAt, "HandoffAssignment")}", Guid.NewGuid()));
+            Offer("g-offered-first", Now.AddMinutes(-29), Now.AddMinutes(-29));
+            Offer("g-offered-last", Now.AddMinutes(-25), Now.AddMinutes(-28));
+            Offer("g-offered-middle", Now.AddMinutes(-27), Now.AddMinutes(-27));
+            context.SaveChanges();
+        }
+
+        using var read = _db.CreateContext();
+        var repository = new TicketUnassignedWorkRepository(read);
+        var evidence = await repository.GetEvidenceAsync(ids.Phone);
+
+        Assert.Equal("g-offered-last", evidence!.VoiceLastOfferedGenesysUserId);               // the latest OFFER, whatever order the events arrived in
+        Assert.Equal(offeredUser, evidence.VoiceLastOfferedEmployeeId);                        // resolved against the mapping that exists NOW
+        Assert.Equal(Now.AddMinutes(-25), evidence.VoiceLastOfferedAtUtc);
+        Assert.False(evidence.HumanAnswered);                                                  // an offer is never an answer
+        Assert.Null(evidence.AnsweringEmployeeId);
+
+        // A call nobody was ever offered carries no last offer; a digital ticket never carries one.
+        Assert.Null((await repository.GetEvidenceAsync(ids.Old))!.VoiceLastOfferedGenesysUserId);
+        Assert.Null((await repository.GetEvidenceAsync(ids.Digital))!.VoiceLastOfferedGenesysUserId);
+    }
+
+    [Fact]
     public async Task AFlaggedAnswer_IsResolvedAgainstTheCurrentMapping_SoACorrectedMappingIsNoticed()
     {
         var fixedUser = Guid.NewGuid();
