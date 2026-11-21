@@ -102,9 +102,16 @@ public static class NewRequestTypesImporter
             departments = await LoadDepartmentsAsync(dbContext, cancellationToken);
         }
 
+        // A DEACTIVATED Accounting department is treated as absent: the import never wires a new approval to a retired department
+        // (and never reactivates it). The affected approval is then simply not configured, like the missing-department case.
         var accountingDepartmentId = departments
             .FirstOrDefault(d => string.Equals(d.Code, WorkflowReferenceData.AccountingCode, StringComparison.OrdinalIgnoreCase))
             ?.DepartmentId;
+        if (accountingDepartmentId is { } candidateAccountingId
+            && !await dbContext.Departments.AsNoTracking().AnyAsync(d => d.DepartmentId == candidateAccountingId && d.IsActive, cancellationToken))
+        {
+            accountingDepartmentId = null;
+        }
         var approvalDepartmentMissing = false;
 
         var results = new List<NewRequestTypeImportRowResult>();

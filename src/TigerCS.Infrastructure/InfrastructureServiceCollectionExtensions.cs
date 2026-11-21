@@ -521,6 +521,8 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<AdminUserAppService>();
         services.AddScoped<AdminUserPermissionAppService>();
         services.AddScoped<AdminUserTransferDepartmentAppService>();
+        services.AddScoped<TigerCS.Application.Modules.Administration.Abstractions.IDepartmentDeactivationDependencyReader,
+            TigerCS.Infrastructure.Modules.Administration.DepartmentDeactivationDependencyReader>();
         services.AddScoped<AdminDepartmentAppService>();
         services.AddScoped<DepartmentCoverageService>();
         services.AddScoped<StaffProvisioningService>();

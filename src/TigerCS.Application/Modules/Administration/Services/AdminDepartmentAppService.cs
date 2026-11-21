@@ -1,4 +1,5 @@
 using TigerCS.Application.Abstractions;
+using TigerCS.Application.Modules.Administration.Abstractions;
 using TigerCS.Application.Modules.Administration.Dto;
 using TigerCS.Application.Modules.IdentityAndAccess.Abstractions;
 using TigerCS.Application.Modules.IdentityAndAccess.Services;
@@ -23,7 +24,8 @@ public sealed class AdminDepartmentAppService(
     IRequestTypeRepository requestTypeRepository,
     DepartmentAssignmentService departmentAssignmentService,
     IIdentityUnitOfWork unitOfWork,
-    IAuditEntryWriter auditWriter)
+    IAuditEntryWriter auditWriter,
+    IDepartmentDeactivationDependencyReader dependencyReader)
 {
     public async Task<IReadOnlyList<AdminDepartmentDto>> ListAsync(bool includeInactive, CancellationToken cancellationToken = default)
     {
@@ -127,6 +129,18 @@ public sealed class AdminDepartmentAppService(
             return AdminResult<AdminDepartmentDetailDto>.NotFound();
         }
 
+        // Safety guard: a department with live routing or approval dependencies cannot be switched off - doing so would strand work
+        // (new tickets rejected at routing, approvals nobody can decide). Nothing changes until every blocker is resolved.
+        if (!request.IsActive && department.IsActive)
+        {
+            var blockers = await dependencyReader.GetBlockersAsync(departmentId, cancellationToken);
+            if (blockers.Count > 0)
+            {
+                return AdminResult<AdminDepartmentDetailDto>.Conflict(
+                    [$"'{department.Name}' cannot be deactivated while it has unresolved dependencies.", .. blockers]);
+            }
+        }
+
         var before = department.IsActive;
         if (request.IsActive)
         {
@@ -152,6 +166,11 @@ public sealed class AdminDepartmentAppService(
         if (department is null)
         {
             return AdminResult<AdminDepartmentDetailDto>.NotFound();
+        }
+
+        if (!department.IsActive)
+        {
+            return AdminResult<AdminDepartmentDetailDto>.Conflict($"'{department.Name}' is inactive and cannot receive new members.");
         }
 
         if (await employeeRepository.GetByIdAsync(request.EmployeeId, cancellationToken) is null)
