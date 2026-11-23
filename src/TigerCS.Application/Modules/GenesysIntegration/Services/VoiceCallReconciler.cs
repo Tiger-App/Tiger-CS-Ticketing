@@ -306,39 +306,24 @@ public sealed class VoiceCallReconciler(
                     beforeValue: null,
                     afterValue: $"TicketId={ticketId};Conversations={string.Join(',', phone.Select(i => i.GenesysConversationId ?? "(none)"))};"
                         + $"EndReceivedAtUtc={evidence.VoiceEndReceivedAtUtc:O};WindowSeconds={(int)options.NoAnswerWindow.TotalSeconds};ConcludedAtUtc={now:O};"
-                        + "Reason=The call ended, no person answered, the AI did not close the ticket and the reconciliation window passed; assigned to the last agent the call was offered to, or left unassigned for follow-up when nobody was offered it (no Round Robin)",
+                        + "Reason=The call ended, no person answered, the AI did not close the ticket and the reconciliation window passed; no agent is assigned from an offer and there is no Round Robin: queued and flagged for follow-up until Genesys confirms a connected agent",
                     correlationId, cancellationToken);
             }
 
-            // THE APPROVED VOICE RULE for a call that ended with nobody answering. The agent is read from the Genesys OFFER events (GenesysAgentOffered) - never from the current
-            // ticket owner - and NEVER by Round Robin:
-            //   * the call was offered to one or more agents -> the ticket goes to the LAST agent it was offered to;
-            //   * no agent was ever offered the call           -> the ticket stays UNASSIGNED, flagged and queued for follow-up.
-            // A last-offered agent who cannot take the ticket (unmapped, deactivated, not a CS Agent ...) is not replaced by somebody else: the ticket waits, flagged, and is
-            // retried on the next run (a corrected mapping is picked up). A person who really answers later replaces this assignment.
-            if (evidence.VoiceLastOfferedGenesysUserId is { } offeredGenesysId)
+            // NO AUTOMATIC ASSIGNMENT (Genesys waiting-state rule): the absence of a Genesys confirmation is not evidence of who should own the ticket.
+            // The last agent the call was merely OFFERED to is never assigned - an offer / ringing is not an answer - and neither is Round Robin. The offer is
+            // recorded for diagnostics only; the ticket stays queued and flagged, and a person who is later CONFIRMED as connected (a late routing event, handled by
+            // the update path or the answered-but-unassigned branch above) takes it.
+            if (flagged && evidence.VoiceLastOfferedGenesysUserId is { } offeredGenesysId)
             {
-                var offered = await answeringAgentAssignment.ResolveAsync(offeredGenesysId, cancellationToken);
-                var conversationId = phone.OrderByDescending(i => i.CreatedAtUtc).Select(i => i.GenesysConversationId).FirstOrDefault();
-                var (assigned, issue) = await autoAssignment.AssignLastOfferedAgentAsync(ticket, offered, conversationId, now, correlationId, cancellationToken);
-                if (assigned)
-                {
-                    await unitOfWork.SaveChangesAsync(cancellationToken);
-                    await transaction.CommitAsync(cancellationToken);
-                    return new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.AssignedToLastOfferedAgent, ticket.CurrentOwnerEmployeeId);
-                }
-
-                if (flagged && issue != AnsweringAgentIssue.None)
-                {
-                    await auditWriter.WriteAsync(
-                        actorEmployeeId: null, GenesysAuditActions.VoiceLastOfferedAgentUnavailable, "Ticket", ticketId.ToString(),
-                        beforeValue: null,
-                        afterValue: $"TicketId={ticketId};GenesysUserId={offeredGenesysId};Issue={issue};Action=left unassigned and flagged for follow-up (no Round Robin); retried on the next run",
-                        correlationId, cancellationToken);
-                }
+                await auditWriter.WriteAsync(
+                    actorEmployeeId: null, GenesysAuditActions.VoiceLastOfferedAgentUnavailable, "Ticket", ticketId.ToString(),
+                    beforeValue: null,
+                    afterValue: $"TicketId={ticketId};GenesysUserId={offeredGenesysId};Issue=OfferedNotConnected;Action=not assigned (an offer is not a confirmed connection); awaiting a Genesys update",
+                    correlationId, cancellationToken);
             }
 
-            const string reason = "Voice call ended unanswered - queued in the Call Center for follow-up (no Round Robin)";
+            const string reason = "Voice call ended unanswered - queued in the Call Center for follow-up (no assignment without a confirmed Genesys connection, no Round Robin)";
             var routed = ticket.CurrentDepartmentId != callCenter.DepartmentId
                 && await autoAssignment.RouteExistingTicketToCallCenterAsync(
                     ticket, now, correlationId, reason, cancellationToken, requiredRole: null, dealToAgent: false, voiceOwnership: true);

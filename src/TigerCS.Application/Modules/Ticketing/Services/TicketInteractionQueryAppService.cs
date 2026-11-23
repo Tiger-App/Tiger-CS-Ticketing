@@ -197,7 +197,10 @@ public sealed class TicketInteractionQueryAppService(
         // sibling ticket does not make this ticket human-handled.
         DescribeHandlingState(interaction, ownMessages, handoff),
         HumanAccepted: HumanAccepted(interaction, handoff),
-        HumanResponded: ownMessages.Any(m => m.Sender == InteractionMessageSender.HumanAgent));
+        HumanResponded: ownMessages.Any(m => m.Sender == InteractionMessageSender.HumanAgent),
+        ConversationStatus: interaction.Source == InteractionContextSource.Genesys
+            ? GenesysConversationStatus.Derive(interaction.IsEnded, HumanAccepted(interaction, handoff), DescribeHandlingState(interaction, ownMessages, handoff))
+            : null);
 
     /// <summary>A person actually took the interaction (not merely was assigned the ticket): a handoff taken, a recorded handler, or the answering agent of a call.</summary>
     private static bool HumanAccepted(TicketInteraction interaction, TicketAgentHandoff? handoff) =>

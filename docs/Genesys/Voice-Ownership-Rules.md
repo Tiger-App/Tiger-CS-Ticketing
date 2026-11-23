@@ -16,7 +16,7 @@ classification assigning an owner, `AssignStaleAi`, and the end-of-conversation 
 |---|---|---|
 | 1 | AI answers the call → the AI Agent owns the ticket (`Tickets.AiAgentOwnerEmployeeId`, no person owner). | `RecordAiAgentAssignmentAsync` (unchanged) |
 | 2 | AI resolves → an explicit, valid `closedByAi: true` closes it under the AI Agent; `ended` before `closedByAi` is supported. | `GenesysTicketUpdateAppService.ApplyClosedByAiAsync` |
-| 3 | AI failed + call ended + nobody answered + window passed → the ticket goes to the **LAST agent Genesys offered the call to** (read from the Genesys **offer events**, never from the ticket owner). **No Round Robin** when that agent is known. **No agent ever offered the call → the ticket stays UNASSIGNED** (flagged, queued in the Call Center) for follow-up. An offered agent who cannot take it (unmapped, not a CS Agent, locked) is **not** replaced by another employee: the ticket waits, flagged, and is retried each run. A person who actually answers later replaces this assignment. | `VoiceCallReconciler`, `TicketAutoAssignmentService.AssignLastOfferedAgentAsync` |
+| 3 | AI failed + call ended + nobody answered + window passed → **no automatic assignment**: the ticket is flagged and queued in the Call Center for follow-up (an explicit workflow department keeps its own department). The last agent Genesys *offered* the call to is **not** assigned (an offer / ringing is not a confirmed connection) and there is **no Round Robin**; the offer is recorded in the audit for diagnostics only. A later **confirmed** connection (routing agent) assigns the agent who answered. |
 | 4 | Direct human call → the answering employee; AI→human transfer → the first human who actually answered (`routing.agentId` = connected). | `GenesysAnsweringAgentAssignmentService` |
 | 5 | A transferred call is **actually answered** by another human (`03-update-routing`, `routing.agentId` = connected) → the **existing ticket** is reassigned to that agent (history preserved: previous and new employee). A transfer nobody answers (ringing / offered / top-level `agentId` / handoff assignee) changes nothing: the current owner keeps it. Same ticket, never a duplicate. | `GenesysTicketUpdateAppService` (`allowOwnerTransfer`, same as digital: `Genesys:ReassignOnTransfer`) |
 | 6 | Closed tickets are never reopened, never re-owned, by any automated flow, on any channel. | see §5 |
@@ -34,9 +34,9 @@ the ticket is Open and unowned; every Genesys interaction is a Phone call; every
 response, no handoff-started event, no flagged answer); no approval is pending; the end was **received** at least `NoAnswerWindowSeconds` ago and no
 more than `LookbackHours` ago. It then marks the ticket as needing a person (sticky, audited once: `GenesysVoiceNoAnswerConcluded`) and:
 
-* **an agent was offered the call** → the ticket is assigned to the **last** one (history source `GenesysLastOfferedAgent`, audit `AssignLastOfferedAgent`, system actor). It is an *assignment*, not an *answer*: no first response, no Original Human Agent, no handler row. **No Round Robin.**
+* **an agent was offered the call** → **not assigned.** An offer proves nothing about who will answer; the offer is audited (`GenesysVoiceLastOfferedAgentUnavailable`, once) for diagnostics (this replaces the earlier "last offered agent" rule, which conflicted with the Genesys waiting-state rule).
 * **nobody was ever offered the call** → the ticket stays **unassigned** in the Call Center queue for follow-up (an explicit workflow department keeps its own department). **No Round Robin.**
-* **the last offered agent cannot take it** → nobody else is dealt in their place: left unassigned and flagged (audit `GenesysVoiceLastOfferedAgentUnavailable`, once), retried every run so a corrected mapping is picked up.
+* **no confirmation ever arrives** → the ticket stays queued and flagged ("Awaiting Genesys Update"); nothing is assigned because time passed.
 
 **What counts as an offer.** Genesys *offer events* on a Phone conversation: a handoff request or assignment that names an agent, and an update or end event whose top-level `agentId` names an agent without reporting them *connected*.
 Each distinct offer is appended to the ticket's event log (`GenesysAgentOffered`, note `[GenesysUserId=…;OfferedAtUtc=…;Source=…]`; no schema change). The same agent named again straight after itself is a redelivery and writes nothing; a different agent — or the same agent after another one — is a new offer.
@@ -107,3 +107,17 @@ diagnostic `Diagnose_TigerCS_PROD_Ticket1878_GenesysTimelineOwnership_ReadOnly.s
   `Deploy_TigerCS_PROD_AddInteractionEndReceivedAt.sql`). Apply **after** `AddAssignmentHistoryPreviousDepartment`, **before** deploying the build. No backfill (older calls fall back to `EndedAtUtc`).
 * New optional inquiry field `connectedAtUtc` (additive; an older Genesys flow keeps working).
 * New config section `VoiceCallReconciliation` (defaults above; also in `appsettings.json` / `appsettings.Production.json`).
+
+
+## Conversation status (PR #292)
+
+A Genesys interaction carries a **conversation status**, separate from the Ticket Status, the owner (`Assigned To`) and Assignment History. It is **derived** at read time (`GenesysConversationStatus`, no column, no migration) and never assigns anyone:
+
+| Status | Meaning | Evidence |
+|---|---|---|
+| Awaiting Genesys Update | a person is needed / expected, Genesys has not confirmed one | handling state `HumanFollowUp` / `WaitingForHuman`, open, no confirmed connection |
+| Conversation In Progress | open and handled by the AI / existing owner | open, handling state `Ai` |
+| Assigned | Genesys confirmed a connected human | routing agent / accepted handoff / recorded handler |
+| Conversation Ended | conversation-level end recorded | `EndedAtUtc` (an agent disconnect is not an end) |
+
+While awaiting: no human assignment, no Round Robin, no last-offered assignment, no assignment from ringing, existing AI / system ownership is kept and the ticket is never labelled "Unassigned" because of a pending update. `ReassignOnTransfer = true` is unchanged: a transfer target who actually connects takes the ticket; an offer / ringing leaves the owner. Contract limit: Genesys sends no explicit "conversation active" or "awaiting" event, so *In Progress* and *Awaiting* are inferred, not reported. The Ticket Details **Conversation status** row shows the state.
