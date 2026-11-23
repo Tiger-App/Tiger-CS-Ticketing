@@ -31,7 +31,8 @@ public sealed class TicketInteractionQueryAppService(
     IGenesysConversationRepository conversationRepository,
     IChannelRepository channelRepository,
     ITicketAgentHandoffRepository agentHandoffRepository,
-    TicketQueryAppService ticketQueryAppService)
+    TicketQueryAppService ticketQueryAppService,
+    ITicketInteractionHandlerRepository? handlerRepository = null)
 {
     public async Task<TicketQueryResultDto<TicketInteractionHistoryDto>> GetForTicketAsync(
         Guid callerEmployeeId,
@@ -95,13 +96,23 @@ public sealed class TicketInteractionQueryAppService(
             .GroupBy(h => h.TicketInteractionId)
             .ToDictionary(g => g.Key, g => g.First());
 
+        // Interactions with a CONFIRMED human connection: a handler recorded from a routing (connected) event, a HumanAgent transcript line or the creating event.
+        // A handler recorded only from an update's top-level agentId / the end event names an agent who was assigned or ringing - an offer, never a confirmation.
+        var confirmedHandlerInteractionIds = handlerRepository is null
+            ? new HashSet<long>()
+            : (await handlerRepository.ListByTicketIdAsync(ticketId, cancellationToken))
+                .Where(h => h.Source is InteractionHandlerSource.Inquiry or InteractionHandlerSource.Routing or InteractionHandlerSource.Transcript)
+                .Select(h => h.TicketInteractionId)
+                .ToHashSet();
+
         var items = interactions
             .Select(interaction => ToDto(
                 interaction,
                 channelNames.GetValueOrDefault(interaction.ChannelId),
                 messagesByInteraction.TryGetValue(interaction.TicketInteractionId, out var messages) ? messages : [],
                 storedMessages.TryGetValue(interaction.TicketInteractionId, out var ownMessages) ? ownMessages : [],
-                handoffsByInteraction.GetValueOrDefault(interaction.TicketInteractionId)))
+                handoffsByInteraction.GetValueOrDefault(interaction.TicketInteractionId),
+                confirmedHandlerInteractionIds.Contains(interaction.TicketInteractionId)))
             // Chronological: Genesys' own start time where it supplied one,
             // otherwise the moment Ticketing recorded the interaction.
             .OrderBy(i => i.StartedAtUtc)
@@ -156,7 +167,7 @@ public sealed class TicketInteractionQueryAppService(
 
     private static TicketInteractionDto ToDto(
         TicketInteraction interaction, string? channelName, IReadOnlyList<TicketInteractionMessage> messages,
-        IReadOnlyList<TicketInteractionMessage> ownMessages, TicketAgentHandoff? handoff) => new(
+        IReadOnlyList<TicketInteractionMessage> ownMessages, TicketAgentHandoff? handoff, bool confirmedHandler = false) => new(
         interaction.TicketInteractionId,
         interaction.IsOriginatingInteraction,
         interaction.Source.ToString(),
@@ -199,7 +210,13 @@ public sealed class TicketInteractionQueryAppService(
         HumanAccepted: HumanAccepted(interaction, handoff),
         HumanResponded: ownMessages.Any(m => m.Sender == InteractionMessageSender.HumanAgent),
         ConversationStatus: interaction.Source == InteractionContextSource.Genesys
-            ? GenesysConversationStatus.Derive(interaction.IsEnded, HumanAccepted(interaction, handoff), DescribeHandlingState(interaction, ownMessages, handoff))
+            ? GenesysConversationStatus.Derive(
+                interaction.IsEnded,
+                humanConfirmed: confirmedHandler
+                    || handoff is { Status: AgentHandoffStatus.Assigned or AgentHandoffStatus.InProgress or AgentHandoffStatus.Completed }
+                    || ownMessages.Any(m => m.Sender == InteractionMessageSender.HumanAgent),
+                DescribeHandlingState(interaction, ownMessages, handoff),
+                humanRequired: interaction.RequiresHumanFollowUp || handoff is { Status: AgentHandoffStatus.WaitingForAgent })
             : null);
 
     /// <summary>A person actually took the interaction (not merely was assigned the ticket): a handoff taken, a recorded handler, or the answering agent of a call.</summary>

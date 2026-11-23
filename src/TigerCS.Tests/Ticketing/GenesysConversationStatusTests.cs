@@ -10,7 +10,7 @@ public sealed class GenesysConversationStatusTests
     [InlineData("Ai", GenesysConversationStatus.InProgress)]                       // AI live: in progress, the AI Agent keeps the ticket
     [InlineData("HumanFollowUp", GenesysConversationStatus.AwaitingGenesysUpdate)]  // a person is needed, none confirmed: awaiting, never "Unassigned"
     [InlineData("WaitingForHuman", GenesysConversationStatus.AwaitingGenesysUpdate)]
-    [InlineData("Human", GenesysConversationStatus.Assigned)]
+    [InlineData("Human", GenesysConversationStatus.InProgress)]   // a handler alone is not a confirmation: only humanConfirmed assigns
     [InlineData(null, GenesysConversationStatus.InProgress)]
     public void OpenConversation_IsJudgedByTheHandlingState(string? handling, string expected) =>
         Assert.Equal(expected, GenesysConversationStatus.Derive(isEnded: false, humanConfirmed: false, handling));

@@ -318,7 +318,7 @@ public sealed class GenesysServiceFixture
             new FakeTicketStatusHistoryRepository(), ReopenPolicy.Default, TimeProvider.System, handlerRepository: FakeTicketInteractionHandlerRepository.Permissive());
 
         InteractionQuery = new TicketInteractionQueryAppService(
-            Tickets, Interactions, Conversations, Channels, Handoffs, ticketQuery);
+            Tickets, Interactions, Conversations, Channels, Handoffs, ticketQuery, Tickets.Handlers);
 
         PendingWork = new AgentHandoffAppService(
             Handoffs, ticketQuery, Tickets, TicketAssignments, StatusHistory, WorkflowEvents,

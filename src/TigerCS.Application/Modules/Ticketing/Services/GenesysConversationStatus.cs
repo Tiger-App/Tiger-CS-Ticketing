@@ -24,21 +24,22 @@ public static class GenesysConversationStatus
     public const string Ended = "Ended";
 
     /// <param name="isEnded">The interaction has a recorded conversation-level end.</param>
-    /// <param name="humanConfirmed">A confirmed human connection / accepted handoff / recorded handler (the existing <c>HumanAccepted</c> fact).</param>
+    /// <param name="humanConfirmed">A CONFIRMED human: a handler recorded from a routing (connected) event / HumanAgent transcript line / creating event, an accepted handoff, or a human reply. An agent that was only assigned, offered or ringing (a top-level agentId) is not confirmation.</param>
     /// <param name="handlingState">The existing handling state: Ai, AiEnded, HumanFollowUp, WaitingForHuman, Human.</param>
-    public static string Derive(bool isEnded, bool humanConfirmed, string? handlingState)
+    /// <param name="humanRequired">A person is needed but none is confirmed: the interaction is flagged for human follow-up, or a handoff is waiting for an agent. Channel-neutral (WhatsApp, chat, ...): the digital handling state stays "Ai" for display, so this is what marks a digital conversation as awaiting.</param>
+    public static string Derive(bool isEnded, bool humanConfirmed, string? handlingState, bool humanRequired = false)
     {
         if (isEnded)
         {
             return Ended;
         }
 
-        if (humanConfirmed || handlingState == "Human")
+        if (humanConfirmed)
         {
             return Assigned;
         }
 
-        return handlingState is "HumanFollowUp" or "WaitingForHuman" ? AwaitingGenesysUpdate : InProgress;
+        return humanRequired || handlingState is "HumanFollowUp" or "WaitingForHuman" ? AwaitingGenesysUpdate : InProgress;
     }
 
     /// <summary>Compact label for the UI. Unknown / null renders as an em dash.</summary>
