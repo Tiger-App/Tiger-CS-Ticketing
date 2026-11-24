@@ -60,6 +60,21 @@ public sealed record QueueingEventRequest
     /// <summary>Why (reassigned, returned, recalled, closed, cancelled). Optional. Recorded as the history note. Max 1000.</summary>
     public string? Reason { get; init; }
 
+    /// <summary>Optional display name of the company. Recorded in the TigerCS audit. Max 200.</summary>
+    public string? CompanyName { get; init; }
+
+    /// <summary>Optional display name of the requested service. Max 200.</summary>
+    public string? TicketTypeName { get; init; }
+
+    /// <summary>Optional project code (text only). Max 100.</summary>
+    public string? ProjectCode { get; init; }
+
+    /// <summary>Optional project name, shown in the TigerCS ticket summary. Max 200.</summary>
+    public string? ProjectName { get; init; }
+
+    /// <summary>Optional unit code, shown in the TigerCS ticket summary. Max 100.</summary>
+    public string? UnitCode { get; init; }
+
     private static readonly JsonSerializerOptions WireOptions = new()
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -76,7 +91,7 @@ public sealed record QueueingEventRequest
     /// </summary>
     public static IReadOnlyList<string> RequiredMembers(QueueingEventType type) => type switch
     {
-        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone"],
+        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId"],   // plus CustomerPhone or CustomerEmail (checked in Validate)
         QueueingEventType.TicketAssigned or QueueingEventType.TicketReassigned => ["AssignedUserId"],
         QueueingEventType.TicketCommentAdded => ["Comment"],
         _ => []
@@ -139,6 +154,21 @@ public sealed record QueueingEventRequest
         }
 
         Text(nameof(CustomerEmail), CustomerEmail, 256, false);
+        if (EventType == QueueingEventType.TicketCreated && string.IsNullOrWhiteSpace(CustomerPhone) && string.IsNullOrWhiteSpace(CustomerEmail))
+        {
+            errors[nameof(CustomerPhone)] = "CustomerPhone or CustomerEmail is required.";
+        }
+
+        if (!string.IsNullOrWhiteSpace(CustomerEmail) && !CustomerEmail.Contains('@'))
+        {
+            errors[nameof(CustomerEmail)] = "CustomerEmail must be an email address.";
+        }
+
+        Text(nameof(CompanyName), CompanyName, 200, false);
+        Text(nameof(TicketTypeName), TicketTypeName, 200, false);
+        Text(nameof(ProjectCode), ProjectCode, 100, false);
+        Text(nameof(ProjectName), ProjectName, 200, false);
+        Text(nameof(UnitCode), UnitCode, 100, false);
         Text(nameof(AssignedUserId), AssignedUserId, 100, required.Contains(nameof(AssignedUserId)));
         Text(nameof(PerformedByUserId), PerformedByUserId, 100, false);
         Text(nameof(CounterId), CounterId, 100, false);

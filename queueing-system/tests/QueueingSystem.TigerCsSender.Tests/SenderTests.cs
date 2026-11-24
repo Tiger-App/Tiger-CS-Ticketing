@@ -58,7 +58,7 @@ public sealed class QueueingEventFactoryTests
     }
 
     [Theory]
-    [InlineData(QueueingEventType.TicketCreated, "QueueNumber,CompanyId,TicketTypeId,CustomerPhone")]
+    [InlineData(QueueingEventType.TicketCreated, "QueueNumber,CompanyId,TicketTypeId")]
     [InlineData(QueueingEventType.TicketAssigned, "AssignedUserId")]
     [InlineData(QueueingEventType.TicketReassigned, "AssignedUserId")]
     [InlineData(QueueingEventType.TicketCommentAdded, "Comment")]
@@ -71,7 +71,9 @@ public sealed class QueueingEventFactoryTests
         Assert.Equal(expected.Length == 0 ? [] : expected.Split(','), QueueingEventRequest.RequiredMembers(type));
 
         var bare = new QueueingEventRequest { EventId = "e", EventType = type, ExternalTicketId = "QT-1", EventSequence = 1, OccurredAtUtc = Now };
-        Assert.Equal(expected.Length == 0 ? [] : expected.Split(',').Order(), bare.Validate(Now).Keys.Order());
+        // TicketCreated additionally needs a phone OR an email (reported against CustomerPhone).
+        var expectedErrors = (expected.Length == 0 ? [] : expected.Split(',')).Concat(type == QueueingEventType.TicketCreated ? ["CustomerPhone"] : []);
+        Assert.Equal(expectedErrors.Order(), bare.Validate(Now).Keys.Order());
     }
 
     [Fact]

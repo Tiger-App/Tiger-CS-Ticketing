@@ -486,14 +486,73 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         await f.PostAsync(Created(id));
         await f.PostAsync(Simple("TicketClosed", id, 2));
 
-        var (_, assign) = await f.PostAsync(f.Assigned(id, 3));
-        Assert.Equal(QueueingResultStatus.Rejected, assign!.Status);
-        Assert.Equal(QueueingOutcomeCodes.TicketTerminal, assign.Outcome);
+        var (_, ret) = await f.PostAsync(Simple("TicketReturned", id, 3));
+        Assert.Equal(QueueingResultStatus.Rejected, ret!.Status);
+        Assert.Equal(QueueingOutcomeCodes.TicketTerminal, ret.Outcome);
         Assert.Equal(TicketStatus.Closed, (await f.FindTicketAsync(id))!.TicketStatus);
         Assert.Null((await f.FindTicketAsync(id))!.CurrentOwnerEmployeeId);
 
         var (_, comment) = await f.PostAsync(Simple("TicketCommentAdded", id, 4, comment: "Late note"));
         Assert.Equal(QueueingResultStatus.Processed, comment!.Status);
+    }
+
+    [Theory]
+    [InlineData("TicketClosed")]
+    [InlineData("TicketCancelled")]
+    public async Task AReassignmentAfterClosureOrCancellation_ReopensTheSameTicketForTheNewEmployee(string terminalEvent)
+    {
+        var id = NewTicketId();
+        await f.PostAsync(Created(id));
+        await f.PostAsync(Simple(terminalEvent, id, 2));
+        Assert.Equal(TicketStatus.Closed, (await f.FindTicketAsync(id))!.TicketStatus);
+
+        var (http, assign) = await f.PostAsync(f.Assigned(id, 3, type: "TicketReassigned"));
+
+        Assert.Equal(HttpStatusCode.OK, http.StatusCode);
+        Assert.Equal(QueueingResultStatus.Processed, assign!.Status);
+        var ticket = (await f.FindTicketAsync(id))!;
+        Assert.Equal(TicketStatus.InProgress, ticket.TicketStatus);
+        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.ResolutionOutcome);
+        Assert.Equal(1, ticket.ReopenCount);
+        Assert.Equal(QueueingTicketState.Assigned, (await f.FindLinkAsync(ticket.TicketId))!.State);
+
+        // ...and it can be closed again, still exactly one TigerCS ticket for the queue ticket.
+        var (_, closed) = await f.PostAsync(Simple("TicketClosed", id, 4));
+        Assert.Equal(QueueingResultStatus.Processed, closed!.Status);
+        Assert.Equal(assign.TicketId, closed.TicketId);
+    }
+
+    [Fact]
+    public async Task AReopeningAssignment_ToAnUnmappedEmployee_LeavesTheTicketClosedAndIsRetryable()
+    {
+        var id = NewTicketId();
+        await f.PostAsync(Created(id));
+        await f.PostAsync(Simple("TicketClosed", id, 2));
+
+        var (_, assign) = await f.PostAsync(f.Assigned(id, 3, "queue-user-never-mapped-reopen"));
+
+        Assert.Equal(QueueingResultStatus.Pending, assign!.Status);
+        Assert.Equal(TicketStatus.Closed, (await f.FindTicketAsync(id))!.TicketStatus);
+    }
+
+    [Fact]
+    public async Task ACreationWithEmailAndNoPhone_CreatesTheTicket()
+    {
+        var (http, body) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null, CustomerEmail = "email.only@example.test" });
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        Assert.Equal("TICKET_CREATED", body!.Outcome);
+    }
+
+    [Fact]
+    public async Task ProjectAndUnitContext_IsAccepted_AndAppearsInTheTicketSummary()
+    {
+        var id = NewTicketId();
+        var (http, _) = await f.PostAsync(Created(id) with { ProjectName = "Tiger Tower", UnitCode = "U-1204", CompanyName = "Tiger Properties" });
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        var ticket = (await f.FindTicketAsync(id))!;
+        Assert.Contains("Tiger Tower", ticket.RequestSummary);
+        Assert.Contains("U-1204", ticket.RequestSummary);
     }
 
     // ------------------------------------------------------------------ missing mappings, handled explicitly
@@ -965,9 +1024,9 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
     }
 
     [Fact]
-    public async Task CustomerPhone_IsMandatoryOnCreation_AndMustLookLikeANumber()
+    public async Task PhoneOrEmail_IsMandatoryOnCreation_AndAPhoneMustLookLikeANumber()
     {
-        var (http, body) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null });
+        var (http, body) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null, CustomerEmail = null });
         Assert.Equal(HttpStatusCode.BadRequest, http.StatusCode);
         Assert.Contains("CustomerPhone", body!.Errors!.Keys);
 

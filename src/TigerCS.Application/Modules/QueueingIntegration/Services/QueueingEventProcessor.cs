@@ -324,6 +324,37 @@ public sealed class QueueingEventProcessor(
             return await SupersedeAsync(row, message, ticket, link, cancellationToken);
         }
 
+        if (link.IsTerminal && message.EventType is QueueingEventType.TicketAssigned or QueueingEventType.TicketReassigned)
+        {
+            // The Queueing System (source of truth) took a closed / cancelled queue ticket back into service: an integration-controlled reopen,
+            // then the assignment itself. The employee is resolved FIRST so an unmapped employee never leaves a reopened, unassigned ticket behind.
+            if (options.ServiceAccountEmployeeId is not { } reopenAccount || reopenAccount == Guid.Empty)
+            {
+                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.ServiceAccountNotConfigured,
+                    "QueueingIntegration:ServiceAccountEmployeeId is not configured.", ticket.TicketId, cancellationToken);
+            }
+
+            var assignee = await ResolveEmployeeAsync(message.AssignedUserId!, reopenAccount, cancellationToken);
+            if (assignee.EmployeeId is null)
+            {
+                return await UnresolveAsync(row.EventId, assignee.Code!, assignee.Detail, ticket.TicketId, cancellationToken);
+            }
+
+            var reopenReason = $"{SourceLabel}: reopened - the queue ticket was assigned again after it was {link.State}"
+                + (message.CounterId is null ? string.Empty : $" (counter {message.CounterId})");
+            var reopened = await lifecycleAppService.ReopenForQueueingAsync(
+                reopenAccount, ticket.TicketId, reopenReason, _ => link.ReopenToWaiting(), cancellationToken);
+            if (reopened.Outcome != TicketMutationOutcome.Success)
+            {
+                store.DiscardPendingChanges();
+                return await FromMutationFailureAsync(row.EventId, reopened.Outcome, ticket.TicketId, cancellationToken);
+            }
+
+            ticket = (await ticketRepository.GetByIdAsync(ticket.TicketId, cancellationToken))!;
+            link = (await store.GetLinkAsync(ticket.TicketId, cancellationToken))!;
+            return await AssignAsync(row, message, ticket, link, cancellationToken);
+        }
+
         if (link.IsTerminal)
         {
             return await RejectAsync(row, ticket, QueueingOutcomeCodes.TicketTerminal,
@@ -508,6 +539,7 @@ public sealed class QueueingEventProcessor(
                 beforeValue: null,
                 afterValue: $"TicketId={newTicket.TicketId};{EventFacts(message)};QueueNumber={message.QueueNumber};CompanyId={message.CompanyId};TicketTypeId={message.TicketTypeId};"
                     + $"DepartmentId={department.DepartmentId};RequestTypeId={requestType?.RequestTypeId.ToString(CultureInfo.InvariantCulture) ?? "(none)"};"
+                    + $"CompanyName={message.CompanyName};TicketTypeName={message.TicketTypeName};ProjectCode={message.ProjectCode};ProjectName={message.ProjectName};UnitCode={message.UnitCode};CustomerEmail={message.CustomerEmail};"
                     + $"Channel={channel.Code};CustomerLookup={lookup.Status};{classificationNote ?? "RequestTypeMapping=Resolved"}",
                 Guid.NewGuid(), token);
 
@@ -934,6 +966,16 @@ public sealed class QueueingEventProcessor(
         if (!string.IsNullOrWhiteSpace(customerName))
         {
             summary += $" - {customerName.Trim()}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(message.ProjectName ?? message.ProjectCode))
+        {
+            summary += $" - Project {(message.ProjectName ?? message.ProjectCode)!.Trim()}";
+        }
+
+        if (!string.IsNullOrWhiteSpace(message.UnitCode))
+        {
+            summary += $" - Unit {message.UnitCode.Trim()}";
         }
 
         return summary.Length <= 500 ? summary : summary[..500];

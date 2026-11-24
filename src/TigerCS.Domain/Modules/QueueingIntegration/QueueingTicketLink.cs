@@ -69,6 +69,14 @@ public class QueueingTicketLink
 
     public bool IsTerminal => State is QueueingTicketState.Closed or QueueingTicketState.Cancelled;
 
+    /// <summary>The ticket was reopened by the Queueing System: waiting again. The applied sequence is deliberately unchanged - the assignment that
+    /// caused the reopen is applied next and advances it, so a retry of that assignment is never mistaken for a stale event.</summary>
+    public void ReopenToWaiting()
+    {
+        State = QueueingTicketState.Waiting;
+        AssignedExternalUserId = null;
+    }
+
     public void Apply(QueueingTicketState state, long sequence, DateTime occurredAtUtc, string? counterId, string? assignedExternalUserId)
     {
         State = state;

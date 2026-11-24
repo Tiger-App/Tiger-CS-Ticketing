@@ -14,7 +14,7 @@ public static class QueueingEventValidator
     /// <summary>The fields each event type requires beyond the envelope (EventId, EventType, ExternalTicketId, EventSequence, OccurredAtUtc).</summary>
     public static readonly IReadOnlyDictionary<QueueingEventType, string[]> RequiredFields = new Dictionary<QueueingEventType, string[]>
     {
-        [QueueingEventType.TicketCreated] = ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone"],
+        [QueueingEventType.TicketCreated] = ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone or CustomerEmail"],
         [QueueingEventType.TicketAssigned] = ["AssignedUserId"],
         [QueueingEventType.TicketReassigned] = ["AssignedUserId"],
         [QueueingEventType.TicketReturned] = [],
@@ -115,13 +115,28 @@ public static class QueueingEventValidator
         var comment = Text("Comment", request.Comment, options.MaxCommentLength, required: type == QueueingEventType.TicketCommentAdded);
         var reason = Text("Reason", request.Reason, QueueingEvent.DetailMaxLength, required: false);
         var customerName = Text("CustomerName", request.CustomerName, 200, required: false);
-        var customerPhone = Text("CustomerPhone", request.CustomerPhone, 32, required: type == QueueingEventType.TicketCreated);
+        var customerPhone = Text("CustomerPhone", request.CustomerPhone, 32, required: false);
         if (customerPhone is not null && !TigerCS.Domain.Modules.Ticketing.CustomerPhoneNumber.LooksLikeNumber(customerPhone))
         {
             Add("CustomerPhone", "CustomerPhone must be a phone number.");
         }
 
         var customerEmail = Text("CustomerEmail", request.CustomerEmail, 256, required: false);
+        if (type == QueueingEventType.TicketCreated && customerPhone is null && customerEmail is null)
+        {
+            Add("CustomerPhone", "CustomerPhone or CustomerEmail is required.");
+        }
+
+        if (customerEmail is not null && !customerEmail.Contains('@'))
+        {
+            Add("CustomerEmail", "CustomerEmail must be an email address.");
+        }
+
+        var companyName = Text("CompanyName", request.CompanyName, 200, required: false);
+        var ticketTypeName = Text("TicketTypeName", request.TicketTypeName, 200, required: false);
+        var projectCode = Text("ProjectCode", request.ProjectCode, 100, required: false);
+        var projectName = Text("ProjectName", request.ProjectName, 200, required: false);
+        var unitCode = Text("UnitCode", request.UnitCode, 100, required: false);
 
         if (problems.Count > 0 || type is null)
         {
@@ -133,7 +148,8 @@ public static class QueueingEventValidator
         errors = [];
         message = new QueueingEventMessage(
             eventId!, type.Value, externalTicketId!, request.EventSequence!.Value, AsUtc(request.OccurredAtUtc!.Value),
-            queueNumber, companyId, ticketTypeId, customerName, customerPhone, customerEmail, assignedUserId, performedBy, counterId, comment, reason);
+            queueNumber, companyId, ticketTypeId, customerName, customerPhone, customerEmail, assignedUserId, performedBy, counterId, comment, reason,
+            companyName, ticketTypeName, projectCode, projectName, unitCode);
         return true;
     }
 }

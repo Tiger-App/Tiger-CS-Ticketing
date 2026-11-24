@@ -37,8 +37,9 @@ public sealed class QueueingEventFactory(IEventSequenceProvider sequences, Func<
 
     /// <summary>A customer took a queue ticket. Must be the ticket's first event (sequence 1).</summary>
     public async Task<QueueingEventRequest> CreatedAsync(
-        string externalTicketId, string queueNumber, string companyId, string ticketTypeId, string customerPhone,
-        string? customerName = null, string? customerEmail = null, DateTime? occurredAtUtc = null, CancellationToken cancellationToken = default)
+        string externalTicketId, string queueNumber, string companyId, string ticketTypeId, string? customerPhone,
+        string? customerName = null, string? customerEmail = null, DateTime? occurredAtUtc = null, CancellationToken cancellationToken = default,
+        string? companyName = null, string? ticketTypeName = null, string? projectCode = null, string? projectName = null, string? unitCode = null)
     {
         var sequence = await sequences.NextAsync(externalTicketId, cancellationToken);
         if (sequence != 1)
@@ -49,7 +50,8 @@ public sealed class QueueingEventFactory(IEventSequenceProvider sequences, Func<
         return await BuildAsync(QueueingEventType.TicketCreated, externalTicketId, sequence, occurredAtUtc, e => e with
         {
             QueueNumber = queueNumber, CompanyId = companyId, TicketTypeId = ticketTypeId, CustomerPhone = customerPhone,
-            CustomerName = customerName, CustomerEmail = customerEmail
+            CustomerName = customerName, CustomerEmail = customerEmail,
+            CompanyName = companyName, TicketTypeName = ticketTypeName, ProjectCode = projectCode, ProjectName = projectName, UnitCode = unitCode
         });
     }
 

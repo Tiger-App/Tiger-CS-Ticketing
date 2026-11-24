@@ -1320,6 +1320,30 @@ public class Ticket
     }
 
     /// <summary>
+    /// Integration-controlled reopen of a <b>queue-managed</b> ticket: the Queueing System (source of truth) legitimately took a closed or
+    /// cancelled queue ticket back into service. Allowed only for a Closed queue-managed ticket, whatever its Resolved / Cancelled outcome (the
+    /// generic <see cref="Reopen"/> keeps its own rules for everybody else). The ticket returns to <see cref="TicketStatus.Open"/>, unowned, in its
+    /// current department; the assignment that follows takes it to InProgress through the normal transition.
+    /// </summary>
+    public void ReopenForQueue()
+    {
+        if (!IsQueueManaged)
+        {
+            throw new InvalidOperationException("Only a queue-managed ticket can be reopened by the Queueing System.");
+        }
+
+        if (TicketStatus is not TicketStatus.Closed)
+        {
+            throw new TicketNotEligibleForReopenException(TicketId, TicketStatus);
+        }
+
+        TicketStatus = TicketStatus.Open;
+        ResolutionOutcome = null;
+        CurrentOwnerEmployeeId = null;
+        ReopenCount++;
+    }
+
+    /// <summary>
     /// Records that the <b>automated</b> acknowledgement (FR-NOT-01) was
     /// delivered.
     ///

@@ -277,7 +277,7 @@ Always required: `EventId`, `EventType`, `ExternalTicketId`, `EventSequence`, `O
 
 | Event | Also required |
 |---|---|
-| TicketCreated | `QueueNumber`, `CompanyId`, `TicketTypeId`, **`CustomerPhone`** (must contain digits) |
+| TicketCreated | `QueueNumber`, `CompanyId`, `TicketTypeId`, and **`CustomerPhone` (must contain digits) or `CustomerEmail`** - at least one; a customer with an email and no phone is accepted (the CRM phone lookup is skipped). Optional context: `CompanyName`, `TicketTypeName`, `ProjectCode`, `ProjectName`, `UnitCode` (shown in the ticket summary and audit; not matched to a TigerCS unit). |
 | TicketAssigned / TicketReassigned | `AssignedUserId` |
 | TicketCommentAdded | `Comment` |
 | TicketReturned / TicketRecalled / TicketClosed / TicketCancelled | nothing |
@@ -964,9 +964,13 @@ Run on 2026-11-17 against a **real SQL Server 2022** (Developer, native Linux in
 |---|---|---|
 | D4 | Department settings that disable assignment (`AllowAssignment = false`). | Honoured: the event is held (`TICKET_NOT_ELIGIBLE`). Alternative: let the integration bypass it. |
 | D6 | Automatic customer match. | The lookup only enriches the name/audit; a ticket is never auto-verified against a CRM customer (same rule as Genesys). |
-| D7 | Reopen of a closed queue ticket. | Not supported by the Queueing System; a later state event on a closed ticket is `Rejected`. |
+| D7 | Reopen of a closed queue ticket. | **Supported (integration-controlled).** A `TicketAssigned` / `TicketReassigned` with a newer sequence on a Closed (Resolved or Cancelled) queue ticket reopens the *same* ticket: Closed -> Open (system status-history row, audit `QueueingReopen`, `ReopenCount` +1, new Resolution SLA cycle, no approval or reopen window), then the normal assignment takes it to `InProgress`. An unmapped employee is checked first and leaves the ticket Closed (`USER_NOT_MAPPED`, retried). `TicketReturned` / `TicketClosed` / `TicketCancelled` on a Closed ticket stay `Rejected`. |
 | D8 | Mapping administration UI. | Tables + SQL only. |
 | D10 | `Failed` events need a person. | Visible in `QueueingEvents` (`Status = 6`); no dashboard yet. |
 | D12 | Rate limiting / lockout of the API key. | A wrong key is a plain `401`; limit it at the network gateway. |
 | D13 | Retention of superseded / rejected events' payloads. | Kept (the 90-day rule covers *successfully processed* events only, as decided). Extend the rule if those payloads should also go. |
 | D14 | A company mapped to the Call Center department. | Such a ticket starts `InProgress` (the existing Call Center rule) and unassigned. Avoid mapping a queue company to it. |
+
+## 14. Monitoring
+
+`GET /api/integrations/queueing/monitoring?take=50` - read-only, authenticated with the same `X-Queueing-Api-Key`. Returns `countsByStatus` (Received, Processed, Unresolved, Superseded, Rejected, Failed), `heldOrFailedByOutcome` (e.g. `USER_NOT_MAPPED`, `COMPANY_NOT_MAPPED`), `oldestUnresolvedReceivedAtUtc` and an `attention` list of the `Unresolved` / `Failed` events (ids, outcome, detail, attempts, next retry - never customer data). Alert when `Failed > 0`, or when `oldestUnresolvedReceivedAtUtc` is older than a few minutes (a mapping or employee is missing). The Queueing System reports its own side (pending / dead-lettered outbox rows) at `GET /TigerCsIntegration/GetMonitoring`.

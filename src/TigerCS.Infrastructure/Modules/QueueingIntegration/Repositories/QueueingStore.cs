@@ -33,6 +33,27 @@ public sealed class QueueingStore(TigerCsDbContext dbContext) : IQueueingStore
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingMonitoringSnapshot> GetMonitoringSnapshotAsync(
+        DateTime nowUtc, int take, CancellationToken cancellationToken = default)
+    {
+        var events = dbContext.QueueingEvents.AsNoTracking().Where(e => e.Source == QueueingEvent.SourceName);
+        var byStatus = (await events.GroupBy(e => e.Status).Select(g => new { g.Key, Count = g.Count() }).ToListAsync(cancellationToken))
+            .ToDictionary(x => x.Key.ToString(), x => x.Count);
+
+        var attentionQuery = events.Where(e => e.Status == QueueingEventStatus.Unresolved || e.Status == QueueingEventStatus.Failed);
+        var byOutcome = (await attentionQuery.GroupBy(e => e.OutcomeCode ?? "UNKNOWN").Select(g => new { g.Key, Count = g.Count() }).ToListAsync(cancellationToken))
+            .ToDictionary(x => x.Key, x => x.Count);
+        var oldest = await events.Where(e => e.Status == QueueingEventStatus.Unresolved).MinAsync(e => (DateTime?)e.ReceivedAtUtc, cancellationToken);
+
+        var attention = (await attentionQuery.OrderByDescending(e => e.Status).ThenBy(e => e.ReceivedAtUtc).Take(Math.Clamp(take, 1, 500)).ToListAsync(cancellationToken))
+            .Select(e => new TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingMonitoringEventDto(
+                e.EventId, e.EventType.ToString(), e.ExternalTicketId, e.EventSequence, e.Status.ToString(), e.OutcomeCode, e.OutcomeDetail,
+                e.AttemptCount, e.ReceivedAtUtc, e.NextRetryAtUtc))
+            .ToList();
+
+        return new TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingMonitoringSnapshot(nowUtc, byStatus, byOutcome, oldest, attention);
+    }
+
     public async Task<IReadOnlyList<QueueingEvent>> ListPurgeablePayloadsAsync(DateTime processedBeforeUtc, int take, CancellationToken cancellationToken = default) =>
         await dbContext.QueueingEvents
             .Where(e => e.Status == QueueingEventStatus.Processed && e.Payload != null && e.ProcessedAtUtc != null && e.ProcessedAtUtc < processedBeforeUtc)

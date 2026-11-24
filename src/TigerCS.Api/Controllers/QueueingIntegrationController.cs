@@ -21,8 +21,20 @@ namespace TigerCS.Api.Controllers;
 [Authorize(AuthenticationSchemes = QueueingApiKeyDefaults.Scheme, Policy = PolicyNames.QueueingIntegration)]
 [Tags(OpenApiTags.QueueingIntegration)]
 [NoPermissionRequired("Queueing System integration surface; authenticated by its own API key, never by a staff account, so no staff permission applies.")]
-public class QueueingIntegrationController(QueueingEventProcessor processor) : ControllerBase
+public class QueueingIntegrationController(
+    QueueingEventProcessor processor,
+    TigerCS.Application.Modules.QueueingIntegration.Abstractions.IQueueingStore store,
+    TimeProvider timeProvider) : ControllerBase
 {
+    /// <summary>Health of the integration: events per status, held / failed events by outcome, and the ones that need attention (no customer data).</summary>
+    /// <remarks>Read-only and authenticated with the same API key as the receiver, so the Queueing System's monitoring can read TigerCS's side too. An event that is
+    /// <c>Unresolved</c> is retried by TigerCS (mapping or employee missing); <c>Failed</c> ran out of attempts and needs a person.</remarks>
+    [HttpGet("monitoring")]
+    [ProducesResponseType<QueueingMonitoringSnapshot>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Monitoring([FromQuery] int take = 50, CancellationToken cancellationToken = default) =>
+        Ok(await store.GetMonitoringSnapshotAsync(timeProvider.GetUtcNow().UtcDateTime, take, cancellationToken));
+
     /// <summary>Receive one Queueing System event.</summary>
     /// <remarks>
     /// <b>Idempotent on <c>eventId</c></b> (a unique database index): a redelivery returns the original outcome and changes nothing. One TigerCS ticket per

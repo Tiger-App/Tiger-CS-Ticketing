@@ -29,6 +29,10 @@ public interface IQueueingStore
 
     Task AddLinkAsync(QueueingTicketLink link, CancellationToken cancellationToken = default);
 
+    /// <summary>Read-only health snapshot: counts per status, held / failed events by outcome, and the first <paramref name="take"/> events that need attention.</summary>
+    Task<TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingMonitoringSnapshot> GetMonitoringSnapshotAsync(
+        DateTime nowUtc, int take, CancellationToken cancellationToken = default);
+
     Task<QueueingCompanyMapping?> GetCompanyMappingAsync(string companyId, CancellationToken cancellationToken = default);
 
     Task<QueueingTicketTypeMapping?> GetTicketTypeMappingAsync(string companyId, string ticketTypeId, CancellationToken cancellationToken = default);

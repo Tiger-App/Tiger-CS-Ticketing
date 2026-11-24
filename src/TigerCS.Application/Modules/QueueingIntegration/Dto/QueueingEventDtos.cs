@@ -25,6 +25,11 @@ namespace TigerCS.Application.Modules.QueueingIntegration.Dto;
 /// <param name="Comment">The comment text. Required on TicketCommentAdded.</param>
 /// <param name="Reason">Why (reassigned, returned, recalled, closed, cancelled). Optional; recorded as the history note.</param>
 /// <param name="OccurredAtUtc">When the event happened in the Queueing System (UTC). Preserved on every record TigerCS writes for it.</param>
+/// <param name="CompanyName">Optional display name of the company. Recorded in the audit.</param>
+/// <param name="TicketTypeName">Optional display name of the requested service. Recorded in the audit.</param>
+/// <param name="ProjectCode">Optional project code (text only, not matched to a TigerCS unit).</param>
+/// <param name="ProjectName">Optional project name. Shown in the ticket summary.</param>
+/// <param name="UnitCode">Optional unit code. Shown in the ticket summary.</param>
 public sealed record QueueingEventRequest(
     string? EventId,
     string? EventType,
@@ -41,7 +46,12 @@ public sealed record QueueingEventRequest(
     string? CounterId = null,
     string? Comment = null,
     string? Reason = null,
-    DateTime? OccurredAtUtc = null)
+    DateTime? OccurredAtUtc = null,
+    string? CompanyName = null,
+    string? TicketTypeName = null,
+    string? ProjectCode = null,
+    string? ProjectName = null,
+    string? UnitCode = null)
 {
     private static readonly JsonSerializerOptions Canonical = new(JsonSerializerDefaults.Web)
     {
@@ -74,7 +84,12 @@ public sealed record QueueingEventMessage(
     string? PerformedByUserId,
     string? CounterId,
     string? Comment,
-    string? Reason);
+    string? Reason,
+    string? CompanyName = null,
+    string? TicketTypeName = null,
+    string? ProjectCode = null,
+    string? ProjectName = null,
+    string? UnitCode = null);
 
 /// <summary>What happened to the event, as the Queueing System sees it. Serialised by name.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -135,3 +150,24 @@ public sealed record QueueingEventResponse(
     [JsonIgnore]
     public bool CreatedTicket { get; init; }
 }
+
+/// <summary>One held (Unresolved) or Failed event, for monitoring. Carries identifiers and the reason only - never the customer payload.</summary>
+public sealed record QueueingMonitoringEventDto(
+    string EventId,
+    string EventType,
+    string ExternalTicketId,
+    long EventSequence,
+    string Status,
+    string? OutcomeCode,
+    string? OutcomeDetail,
+    int AttemptCount,
+    DateTime ReceivedAtUtc,
+    DateTime? NextRetryAtUtc);
+
+/// <summary>A read-only snapshot of the integration's health: how many events are in each state and which ones need attention.</summary>
+public sealed record QueueingMonitoringSnapshot(
+    DateTime AsOfUtc,
+    IReadOnlyDictionary<string, int> CountsByStatus,
+    IReadOnlyDictionary<string, int> HeldOrFailedByOutcome,
+    DateTime? OldestUnresolvedReceivedAtUtc,
+    IReadOnlyList<QueueingMonitoringEventDto> Attention);

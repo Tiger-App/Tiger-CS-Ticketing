@@ -844,6 +844,79 @@ public sealed class TicketLifecycleAppService(
     }
 
     /// <summary>
+    /// Integration-controlled reopen of a closed / cancelled <b>queue-managed</b> ticket, driven only by the Queueing System (it is the source of
+    /// truth). No approval, reopen window or auto-assignment applies: the ticket goes back to Open, unowned, with a new Resolution SLA cycle, and the
+    /// assignment event that caused it assigns it next. <paramref name="beforeCommit"/> stages the integration's own state in the same transaction.
+    /// </summary>
+    public async Task<TicketMutationResult> ReopenForQueueingAsync(
+        Guid integrationEmployeeId, long ticketId, string reason, Action<DateTime>? beforeCommit, CancellationToken cancellationToken = default)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
+        if (ticket is null)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        var currentResolution = await ticketResolutionRepository.GetCurrentAsync(ticketId, cancellationToken);
+        if (!ticket.IsQueueManaged || ticket.TicketStatus != TicketStatus.Closed || currentResolution is null)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.NotEligibleForReopen);
+        }
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var correlationId = Guid.NewGuid();
+        var previousOutcome = currentResolution.ResolutionOutcome;
+        var previousSlaState = ticket.SlaState;
+        var trimmed = Truncate(reason.Trim(), ReopenReasonMaxLength);
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+
+        ticket.ReopenForQueue();
+        if (slaPauseService is not null)
+        {
+            await slaPauseService.CloseOpenPauseAsync(ticket, now, integrationEmployeeId, correlationId, cancellationToken);
+        }
+
+        ticket.RestartSlaClockForReopen();
+        currentResolution.Archive();
+        await slaDueDateService.StartReopenResolutionCycleAsync(ticket, now, integrationEmployeeId, correlationId, cancellationToken);
+
+        await statusHistoryRepository.AddAsync(
+            new TicketStatusHistory(
+                ticketId, TicketStatusDimension.TicketStatus, (byte)TicketStatus.Closed, (byte)TicketStatus.Open,
+                actorEmployeeId: null, actorIsSystem: true, note: trimmed, correlationId, now),
+            cancellationToken);
+        if (ticket.SlaState != previousSlaState)
+        {
+            await statusHistoryRepository.AddAsync(
+                new TicketStatusHistory(
+                    ticketId, TicketStatusDimension.SlaState, (byte)previousSlaState, (byte)ticket.SlaState,
+                    actorEmployeeId: null, actorIsSystem: true, note: "New Resolution SLA cycle opened on reopen.", correlationId, now),
+                cancellationToken);
+        }
+
+        await auditWriter.WriteAsync(
+            integrationEmployeeId, "QueueingReopen", "Ticket", ticketId.ToString(),
+            beforeValue: $"{TicketStatus.Closed};ResolutionOutcome={previousOutcome}",
+            afterValue: $"{TicketStatus.Open};ReopenCount={ticket.ReopenCount};DepartmentId={ticket.CurrentDepartmentId};Reason={trimmed}",
+            correlationId, cancellationToken);
+
+        beforeCommit?.Invoke(now);
+
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.ConcurrencyConflict);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
+    }
+
+    /// <summary>
     /// Brings the SLA pause state in line with the ticket's just-updated
     /// status. A no-op where no <see cref="SlaPauseService"/> is composed
     /// (unit-test compositions that do not exercise SLA pausing).

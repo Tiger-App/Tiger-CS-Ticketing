@@ -296,7 +296,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
             .Distinct()
             .ToList();
 
-        Assert.Equal(["POST /api/integrations/queueing/events"], keyEndpoints);
+        Assert.Equal(["GET /api/integrations/queueing/monitoring", "POST /api/integrations/queueing/events"], keyEndpoints.Order(StringComparer.Ordinal));
     }
 
     private static IReadOnlyCollection<string> ProtectedEndpointsOf(EndpointDataSource endpoints) =>
