@@ -8,6 +8,7 @@ using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.IdentityAndAccess.Fakes;
 using TigerCS.Tests.Notifications.Fakes;
 using TigerCS.Tests.Ticketing.Fakes;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.Notifications.Services;
 
@@ -88,7 +89,7 @@ public class TicketReviewQueryTests
         await f.CreateReviewService().SubmitAsync(TokenFrom(first!.PageUrl), new SubmitReviewRequestDto(3, "Fine."));
 
         ticket.Close();
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
         await f.ResolveAsync(ticket);
         var second = await f.CreateInvitationService().PrepareAsync(ticket);
 

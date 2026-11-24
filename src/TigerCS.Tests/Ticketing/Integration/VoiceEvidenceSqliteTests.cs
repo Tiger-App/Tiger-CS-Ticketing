@@ -111,6 +111,43 @@ public sealed class VoiceEvidenceSqliteTests : IDisposable
     }
 
     [Fact]
+    public async Task TheLastOfferedAgent_IsReadFromTheOfferEvents_OrderedByOfferTime_AndResolvedAgainstTheCurrentMapping_NeverFromTheOwner()
+    {
+        var offeredUser = Guid.NewGuid();
+        var ids = Seed(Guid.NewGuid(), "g-flag-unused");
+        using (var context = _db.CreateContext())
+        {
+            context.Users.Add(new TigerCS.Infrastructure.Identity.ApplicationUser
+            {
+                Id = offeredUser, UserName = "offered@example.test", NormalizedUserName = "OFFERED@EXAMPLE.TEST", Email = "offered@example.test",
+                SecurityStamp = Guid.NewGuid().ToString(), GenesysUserId = "g-offered-last"
+            });
+            // Three offers. The events ARRIVED in the order first / last / middle, but Genesys' own offer times say "g-offered-last" is the latest.
+            void Offer(string id, DateTime offeredAt, DateTime receivedAt) => context.TicketWorkflowEvents.Add(new TicketWorkflowEvent(
+                ids.Phone, WorkflowEventType.GenesysAgentOffered, receivedAt, actorEmployeeId: null, ticketApprovalId: null,
+                $"Genesys offered the call to agent {id}. {OfferedAgent.Format(id, offeredAt, "HandoffAssignment")}", Guid.NewGuid()));
+            Offer("g-offered-first", Now.AddMinutes(-29), Now.AddMinutes(-29));
+            Offer("g-offered-last", Now.AddMinutes(-25), Now.AddMinutes(-28));
+            Offer("g-offered-middle", Now.AddMinutes(-27), Now.AddMinutes(-27));
+            context.SaveChanges();
+        }
+
+        using var read = _db.CreateContext();
+        var repository = new TicketUnassignedWorkRepository(read);
+        var evidence = await repository.GetEvidenceAsync(ids.Phone);
+
+        Assert.Equal("g-offered-last", evidence!.VoiceLastOfferedGenesysUserId);               // the latest OFFER, whatever order the events arrived in
+        Assert.Equal(offeredUser, evidence.VoiceLastOfferedEmployeeId);                        // resolved against the mapping that exists NOW
+        Assert.Equal(Now.AddMinutes(-25), evidence.VoiceLastOfferedAtUtc);
+        Assert.False(evidence.HumanAnswered);                                                  // an offer is never an answer
+        Assert.Null(evidence.AnsweringEmployeeId);
+
+        // A call nobody was ever offered carries no last offer; a digital ticket never carries one.
+        Assert.Null((await repository.GetEvidenceAsync(ids.Old))!.VoiceLastOfferedGenesysUserId);
+        Assert.Null((await repository.GetEvidenceAsync(ids.Digital))!.VoiceLastOfferedGenesysUserId);
+    }
+
+    [Fact]
     public async Task AFlaggedAnswer_IsResolvedAgainstTheCurrentMapping_SoACorrectedMappingIsNoticed()
     {
         var fixedUser = Guid.NewGuid();
@@ -157,5 +194,104 @@ public sealed class VoiceEvidenceSqliteTests : IDisposable
         Assert.Null(FlaggedAnswer.TryParse("no marker here"));
         Assert.Null(FlaggedAnswer.TryParse("[Issue=NotMapped]"));
         Assert.Null(FlaggedAnswer.TryParse("[GenesysUserId=;Issue=NotMapped]"));
+    }
+
+
+    // ---- offered / assigned / ringing is NOT an answer ----------------------------------------------------------------------------------
+
+    private async Task<(long TicketId, UnassignedTicketEvidence Evidence)> OfferedCallAsync(string agentId, bool mappedUser)
+    {
+        long ticketId;
+        using (var context = _db.CreateContext())
+        {
+            context.Departments.Add(new Department("Call Center", "CC"));
+            if (mappedUser)
+            {
+                context.Users.Add(new TigerCS.Infrastructure.Identity.ApplicationUser
+                {
+                    Id = Guid.NewGuid(), UserName = "offered@example.test", NormalizedUserName = "OFFERED@EXAMPLE.TEST", Email = "offered@example.test",
+                    SecurityStamp = Guid.NewGuid().ToString(), GenesysUserId = agentId
+                });
+            }
+
+            context.SaveChanges();
+            var ticket = _db.AddTicket(context, _db.CustomerServiceId);
+            // The agent id Genesys named for a live transfer (RecordAgentIfAbsent): stored on the interaction, no handler, no connect event, no flag.
+            var call = TicketInteraction.CreateFromGenesys(
+                ticket.TicketId, WellKnownChannels.Phone, "+971500000000", "v-offered", calledNumber: null, genesysQueueId: null, genesysQueueName: null, genesysAgentId: agentId,
+                genesysAgentName: null, interactionStartedAtUtc: Now.AddMinutes(-30), direction: "Inbound", createdAtUtc: Now.AddMinutes(-30), isOriginatingInteraction: true,
+                genesysServiceRequestId: "svc1");
+            call.End(Now.AddMinutes(-20), "CustomerDisconnect", receivedAtUtc: Now.AddMinutes(-10));
+            context.TicketInteractions.Add(call);
+            context.SaveChanges();
+            ticketId = ticket.TicketId;
+        }
+
+        using var read = _db.CreateContext();
+        return (ticketId, (await new TicketUnassignedWorkRepository(read).GetEvidenceAsync(ticketId))!);
+    }
+
+    [Theory]
+    [InlineData("g-offered-unmapped", false)]    // a named agent who maps to nobody
+    [InlineData("g-offered-mapped", true)]       // a mapped agent
+    public async Task AnAgentIdAlone_OfferedAssignedOrRinging_IsNeverEvidenceOfAHumanAnswer_SoTheEndedCallIsDealtByRoundRobin(string agentId, bool mapped)
+    {
+        var (_, evidence) = await OfferedCallAsync(agentId, mapped);
+
+        Assert.False(evidence.HumanAnswered);
+        Assert.False(evidence.PhonePickupByUnmappedAgent);
+        Assert.Null(evidence.UnmappedGenesysAgentId);
+        Assert.Null(evidence.AnsweringEmployeeId);
+        var result = VoiceCallClassifier.Classify(evidence, Now, new VoiceCallReconciliationOptions());
+        Assert.Equal(new VoiceReconcileClassification(VoiceReconcileClass.NoAnswerConcluded, VoiceReconcileAction.ConcludeNoAnswer), result);
+    }
+
+    [Fact]
+    public async Task AConnectedAgentWhoMapsToNobody_IsAHumanAnswer_FlaggedAndNeverRoundRobin()
+    {
+        var (ticketId, _) = await OfferedCallAsync("g-connected-unmapped", mappedUser: false);
+        using (var context = _db.CreateContext())
+        {
+            context.TicketWorkflowEvents.Add(new TicketWorkflowEvent(
+                ticketId, WorkflowEventType.ManualAssignmentRequired, Now.AddMinutes(-15), actorEmployeeId: null, ticketApprovalId: null,
+                "Answered by Genesys agent g-connected-unmapped - not mapped. [GenesysUserId=g-connected-unmapped;Issue=NotMapped;ConnectedAtUtc=2026-09-10T11:40:00.0000000Z]", Guid.NewGuid()));
+            context.SaveChanges();
+        }
+
+        using var read = _db.CreateContext();
+        var evidence = (await new TicketUnassignedWorkRepository(read).GetEvidenceAsync(ticketId))!;
+
+        Assert.True(evidence.HumanAnswered);
+        Assert.True(evidence.PhonePickupByUnmappedAgent);
+        Assert.Equal("g-connected-unmapped", evidence.UnmappedGenesysAgentId);
+        Assert.Equal(VoiceReconcileClass.AnsweringAgentMappingPending, VoiceCallClassifier.Classify(evidence, Now, new VoiceCallReconciliationOptions()).Class);
+    }
+
+    [Theory]
+    [InlineData(InteractionHandlerSource.Update, false)]            // a top-level agentId on an update: the agent may only have been offered / assigned
+    [InlineData(InteractionHandlerSource.ConversationEnd, false)]   // ... or named on the end event
+    [InlineData(InteractionHandlerSource.Routing, true)]            // the agent a routing update reported CONNECTED
+    [InlineData(InteractionHandlerSource.Inquiry, true)]            // the pickup recorded when the call's ticket was created
+    [InlineData(InteractionHandlerSource.Transcript, true)]         // a person who wrote to the customer
+    public async Task AMappedHandlerCountsAsAnAnswer_OnlyWhenItsSourceIsAConfirmedConnection(InteractionHandlerSource source, bool answered)
+    {
+        var agentUser = Guid.NewGuid();
+        var (ticketId, _) = await OfferedCallAsync("g-handler", mappedUser: false);
+        using (var context = _db.CreateContext())
+        {
+            var interaction = context.TicketInteractions.Single(i => i.TicketId == ticketId);
+            context.TicketInteractionHandlers.Add(TicketInteractionHandler.Create(
+                interaction.TicketInteractionId, ticketId, agentUser, "g-handler", source, Now.AddMinutes(-25), Now.AddMinutes(-24)));
+            context.SaveChanges();
+        }
+
+        using var read = _db.CreateContext();
+        var evidence = (await new TicketUnassignedWorkRepository(read).GetEvidenceAsync(ticketId))!;
+
+        Assert.Equal(answered, evidence.HumanAnswered);
+        Assert.Equal(answered ? agentUser : (Guid?)null, evidence.AnsweringEmployeeId);
+        Assert.Equal(
+            answered ? VoiceReconcileClass.AnsweringAgentResolvable : VoiceReconcileClass.NoAnswerConcluded,
+            VoiceCallClassifier.Classify(evidence, Now, new VoiceCallReconciliationOptions()).Class);
     }
 }

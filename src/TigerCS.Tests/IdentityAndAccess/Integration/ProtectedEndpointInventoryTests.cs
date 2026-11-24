@@ -66,7 +66,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["POST /api/tickets/{ticketId:long}/resolution"] = nameof(SystemAdministratorEndpointAuthorizationTests.ResolveAndCloseTicket_BothReturn200),
         ["POST /api/tickets/{ticketId:long}/close"] = nameof(SystemAdministratorEndpointAuthorizationTests.ResolveAndCloseTicket_BothReturn200),
         ["POST /api/tickets/{ticketId:long}/classification"] = nameof(SystemAdministratorEndpointAuthorizationTests.GenesysEndpoints_AuthorizedThroughTheOverride),
-        ["POST /api/tickets/{ticketId:long}/reopen"] = nameof(SystemAdministratorEndpointAuthorizationTests.ReopenTicket_Returns200),
+        ["POST /api/tickets/{ticketId:long}/reopen"] = nameof(SystemAdministratorEndpointAuthorizationTests.ReopenTicket_IsRefusedEvenForTheAdministrator_BecauseClosedIsTerminal),
         ["GET /api/tickets/{ticketId:long}/history"] = nameof(SystemAdministratorEndpointAuthorizationTests.GetTicketLifecycleHistory_Returns200),
         ["POST /api/tickets/{ticketId:long}/reconciliation"] = nameof(SystemAdministratorEndpointAuthorizationTests.ReconcileUnverifiedTicket_Returns200),
         ["GET /api/tickets/{ticketId:long}/approvals"] = nameof(SystemAdministratorEndpointAuthorizationTests.ApprovalWorkflowEndpoints_AuthorizedThroughTheOverride),

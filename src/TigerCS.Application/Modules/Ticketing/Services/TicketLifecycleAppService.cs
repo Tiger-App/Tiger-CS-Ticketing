@@ -724,6 +724,10 @@ public sealed class TicketLifecycleAppService(
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.ResolutionOutcomeNotReopenable);
         }
+        catch (ClosedTicketIsTerminalException)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.ResolutionOutcomeNotReopenable);
+        }
 
         // A pause can never survive into the new cycle: close anything still
         // open on the period being ended (normally nothing — Resolve/Close

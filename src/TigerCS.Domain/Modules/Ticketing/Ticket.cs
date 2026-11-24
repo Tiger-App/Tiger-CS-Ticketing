@@ -1262,13 +1262,9 @@ public class Ticket
     /// </para>
     /// </summary>
     /// <param name="targetDepartmentId">The department that takes responsibility for the reopened work.</param>
-    /// <param name="closedForCustomerInactivity">
-    /// The one carve-out from the Resolved-only rule: the caller has read the
-    /// current resolution and it is the chatbot inactivity closure
-    /// (<see cref="TicketResolution.ClosedForCustomerInactivity"/>), so a
-    /// <b>Cancelled</b> outcome is reopenable for this closure — and only this
-    /// one. Rejected, Duplicate and every other Cancelled stay final.
-    /// </param>
+    /// <param name="closedForCustomerInactivity">Kept for call-site compatibility; it no longer changes anything - Closed is terminal on every channel.</param>
+    /// <exception cref="TicketNotEligibleForReopenException">The ticket is not Closed.</exception>
+    /// <exception cref="ClosedTicketIsTerminalException">The ticket is Closed: <b>always</b> thrown (Closed is terminal - no reopening by a person, approval, API or job).</exception>
     public void Reopen(int targetDepartmentId, bool closedForCustomerInactivity = false)
     {
         if (TicketStatus is not TicketStatus.Closed)
@@ -1276,24 +1272,9 @@ public class Ticket
             throw new TicketNotEligibleForReopenException(TicketId, TicketStatus);
         }
 
-        var reopenableOutcome = ResolutionOutcome == (byte)ResolutionOutcomeValue.Resolved
-            || (closedForCustomerInactivity && ResolutionOutcome == (byte)ResolutionOutcomeValue.Cancelled);
-        if (!reopenableOutcome)
-        {
-            throw new TicketResolutionOutcomeNotReopenableException(TicketId, ResolutionOutcome);
-        }
-
-        if (targetDepartmentId <= 0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(targetDepartmentId), targetDepartmentId, "A reopened ticket must name the department that takes it on.");
-        }
-
-        TicketStatus = TicketStatus.InProgress;
-        ResolutionOutcome = null;
-        CurrentDepartmentId = targetDepartmentId;
-        CurrentOwnerEmployeeId = null;
-        ReopenCount++;
+        // CLOSED IS TERMINAL (approved business rule, every channel): there is no outcome, window, approval or caller for which a Closed ticket becomes active again.
+        // Enforced here (domain) and in ReopenPolicy / ReopenEligibilityService / TicketLifecycleAppService / TicketApprovalAppService (application).
+        throw new ClosedTicketIsTerminalException(TicketId);
     }
 
     /// <summary>

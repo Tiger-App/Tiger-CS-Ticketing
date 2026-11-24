@@ -279,37 +279,38 @@ public class VoiceOwnershipRulesTests
     }
 
     [Fact]
-    public async Task ManyAgentsInTurn_TheAgentWhoLastActuallyAnsweredOwns_AndTheSameEventTwiceChangesNothing()
+    public async Task ManyAgentsInTurn_EachAgentWhoActuallyAnswersOwnsIt_AndTheSameOrAnOlderEventChangesNothing()
     {
         var w = NewWorld();
         var call = await AiCallAsync(w, "v-many");
         var t0 = DateTime.UtcNow.AddMinutes(-10);
-        await ConnectAsync(w, call, w.Agents[2].GenesysId, t0.AddMinutes(1));
+        await ConnectAsync(w, call, w.Agents[2].GenesysId, t0.AddMinutes(1));                   // AI -> agent 3 answers
 
-        await ConnectAsync(w, call, w.Agents[0].GenesysId, t0.AddMinutes(2));
-        await ConnectAsync(w, call, w.Agents[1].GenesysId, t0.AddMinutes(3));
-        await ConnectAsync(w, call, w.Agents[1].GenesysId, t0.AddMinutes(3));                  // the same event twice
-        await ConnectAsync(w, call, w.Agents[2].GenesysId, t0.AddMinutes(1));                  // a late, older event: stale, never overwrites the newest assignment
+        await ConnectAsync(w, call, w.Agents[0].GenesysId, t0.AddMinutes(2));                   // transferred: agent 1 actually answers
+        await ConnectAsync(w, call, w.Agents[1].GenesysId, t0.AddMinutes(3));                   // transferred again: agent 2 actually answers
+        await ConnectAsync(w, call, w.Agents[1].GenesysId, t0.AddMinutes(3));                   // the same event twice
+        await ConnectAsync(w, call, w.Agents[2].GenesysId, t0.AddMinutes(1));                   // a late, older event: stale
 
-        // Same rule as every channel (Genesys:ReassignOnTransfer, default true): the person who ACTUALLY accepted the interaction owns it; history keeps every step.
-        Assert.Equal(w.Agents[1].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(w.Agents[1].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);           // the agent who LAST actually answered
         Assert.Single(w.Current(call.TicketId));
         Assert.Equal(1, w.F.TicketAssignments.Added.Count(a => a.TicketId == call.TicketId && a.AssignedEmployeeId == w.Agents[1].Id));
+        Assert.Equal(1, w.F.Tickets.All.Count(t => t.TicketId == call.TicketId));              // the SAME ticket: no duplicate
     }
 
     [Fact]
-    public async Task ManyAgentsInTurn_WhenReassignOnTransferIsSwitchedOff_TheFirstPersonWhoAnsweredKeepsIt()
+    public async Task ATransferNobodyAnswers_RingingOrOffered_KeepsTheCurrentOwner()
     {
         var w = NewWorld();
-        w.F.Options.ReassignOnTransfer = false;
-        var call = await AiCallAsync(w, "v-many-off");
-        var t0 = DateTime.UtcNow.AddMinutes(-10);
-        await ConnectAsync(w, call, w.Agents[2].GenesysId, t0.AddMinutes(1));
+        var call = await AiCallAsync(w, "v-transfer-unanswered");
+        await ConnectAsync(w, call, w.Agents[0].GenesysId, DateTime.UtcNow.AddMinutes(-5));    // Mohammad answers
+        Assert.Equal(w.Agents[0].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
 
-        await ConnectAsync(w, call, w.Agents[0].GenesysId, t0.AddMinutes(2));
-        await ConnectAsync(w, call, w.Agents[1].GenesysId, t0.AddMinutes(3));
+        // The call is transferred to Ahmad, who is only offered / ringing: top-level agentId, a handoff assignment - never routing.agentId (connected).
+        await w.F.TicketUpdate.UpdateAsync(ServiceAccount, call.TicketId, new GenesysTicketUpdateDto(
+            call.ConversationId, AgentId: w.Agents[1].GenesysId, AgentName: "Ahmad",
+            Handoff: new GenesysHandoffUpdateDto(Required: true, Mode: "HumanTakeover", AssignedAgentId: w.Agents[1].GenesysId)));
 
-        Assert.Equal(w.Agents[2].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);
+        Assert.Equal(w.Agents[0].Id, w.Ticket(call.TicketId).CurrentOwnerEmployeeId);          // Ahmad never answered: Mohammad keeps it
         Assert.Single(w.Current(call.TicketId));
     }
 

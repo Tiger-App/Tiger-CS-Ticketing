@@ -322,9 +322,9 @@ public class ClosedTicketIsTerminalTests
         Assert.Empty(offenders);
     }
 
-    /// <summary>Every domain mutator that could move a Closed ticket refuses it; <c>Reopen</c> is the only way out, and it needs an explicit target department.</summary>
+    /// <summary>Every domain mutator that could move a Closed ticket refuses it; <c>Reopen</c> too: Closed is terminal, there is no way out.</summary>
     [Fact]
-    public async Task EveryTicketMutator_RefusesAClosedTicket_ExceptTheExplicitReopen()
+    public async Task EveryTicketMutator_RefusesAClosedTicket_IncludingReopen()
     {
         var c = await ClosedTicketAsync(Closer.Ai);
 
@@ -335,9 +335,11 @@ public class ClosedTicketIsTerminalTests
         Assert.Throws<TicketClosedException>(() => c.Ticket.RaiseEscalationLevel(EscalationLevel.Level2));
         Assert.Equal(TicketStatus.Closed, c.Ticket.TicketStatus);
 
-        c.Ticket.Reopen(c.Ticket.OriginatingDepartmentId);                       // the one explicit way back
-        Assert.NotEqual(TicketStatus.Closed, c.Ticket.TicketStatus);
-        Assert.Equal(1, c.Ticket.ReopenCount);
+        // Closed is terminal at the DOMAIN level too: there is no way back - not even with an explicit target department.
+        Assert.Throws<ClosedTicketIsTerminalException>(() => c.Ticket.Reopen(c.Ticket.OriginatingDepartmentId));
+        Assert.Throws<ClosedTicketIsTerminalException>(() => c.Ticket.Reopen(c.Ticket.OriginatingDepartmentId, closedForCustomerInactivity: true));
+        Assert.Equal(TicketStatus.Closed, c.Ticket.TicketStatus);
+        Assert.Equal(0, c.Ticket.ReopenCount);
     }
 
     private static string FindSourceRoot()

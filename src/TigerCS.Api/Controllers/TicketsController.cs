@@ -1308,8 +1308,8 @@ public class TicketsController(
 
         TicketMutationOutcome.ResolutionOutcomeNotReopenable => Problem(
             type: "https://tigercs.internal/problems/resolution-outcome-not-reopenable",
-            title: "This ticket's outcome cannot be reopened",
-            detail: "Only a ticket closed as Resolved, or one cancelled automatically for chatbot inactivity, may be reopened — every other Cancelled, Rejected and Duplicate are final. Raise a new ticket instead.",
+            title: "A closed ticket cannot be reopened",
+            detail: "Closed is final on every channel: a closed ticket keeps its owner, closure and SLA result and is never reopened. Raise a new linked ticket instead.",
             statusCode: StatusCodes.Status422UnprocessableEntity),
 
         TicketMutationOutcome.ReopenReasonRequired => Problem(

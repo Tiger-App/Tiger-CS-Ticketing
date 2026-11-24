@@ -17,9 +17,7 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// <summary>
 /// Leasing requests from the Genesys AI Agent: the delivered configuration (what the seed/import provides), the exact UAT payload
 /// (<c>conversationId</c>, <c>serviceRequestId</c>, <c>requestType: "Leasing"</c>, <c>humanFollowUpRequired: true</c>) routed through the
-/// existing request-type routing, and the follow-up ticket staying open against every automatic closer. The department comes from the request type
-/// (an explicit workflow, so it is kept and not pulled into the Call Center); the person does NOT: the AI Agent stays the owner and the configured
-/// assignment rule is not applied while the AI handles the conversation.
+/// existing request-type routing and automatic assignment, and the follow-up ticket staying open against every automatic closer.
 /// </summary>
 public class GenesysLeasingRoutingTests
 {
@@ -79,21 +77,12 @@ public class GenesysLeasingRoutingTests
         return new World(f, bot, leasing, type, employee);
     }
 
-    /// <summary>The AI Agent owns it; the leasing employee the rule names (and everybody else) is not dealt it, and no Round Robin turn is used.</summary>
-    private static void AssertOwnedByTheAiNotAssigned(World w, Ticket ticket)
-    {
-        Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(ServiceAccount, ticket.AiAgentOwnerEmployeeId);
-        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticket.TicketId);
-        Assert.All(w.F.Rotation.Rows.Values, r => Assert.Null(r.LastAssignedEmployeeId));
-    }
-
     private static GenesysInquiryDto UatRequest() =>
         new("TEST-CONVERSATION-001", GenesysChannel.WebsiteChat, CustomerPhone: "+971500000001", QueueId: "queue-bot",
             ServiceRequestId: "leasing-001", RequestType: new GenesysRequestTypeDto(Name: "Leasing"), HumanFollowUpRequired: true);
 
     [Fact]
-    public async Task TheUatLeasingRequest_CreatesASeparateTicket_RoutedToLeasing_OwnedByTheAi_NotAssigned_AndOpenForHumanFollowUp()
+    public async Task TheUatLeasingRequest_CreatesASeparateTicket_RoutedToLeasing_AutoAssigned_AndOpenForHumanFollowUp()
     {
         var w = Build();
         var documents = await w.F.Ingestion.IngestAsync(ServiceAccount, UatRequest() with
@@ -109,13 +98,13 @@ public class GenesysLeasingRoutingTests
         Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);       // by the configured request type, no id in code
         Assert.Equal(w.Bot.DepartmentId, ticket.OriginatingDepartmentId);
         Assert.Equal(w.LeasingType.RequestTypeId, ticket.RequestTypeId);
-        AssertOwnedByTheAiNotAssigned(w, ticket);                                // the request-type rule is NOT applied while the AI handles it
+        Assert.Equal(w.Employee, ticket.CurrentOwnerEmployeeId);                 // the existing assignment rule
         Assert.Equal(TicketStatus.Open, ticket.TicketStatus);
         Assert.True(w.F.Interactions.All.Single(i => i.TicketId == ticket.TicketId).RequiresHumanFollowUp);
     }
 
     [Fact]
-    public async Task TheDedicatedLeasingInquiryType_RoutesFromGenesysByName_AtNormalPriority_OwnedByTheAi_NotAssigned_AndOpenForHumanFollowUp()
+    public async Task TheDedicatedLeasingInquiryType_RoutesFromGenesysByName_AtNormalPriority_AutoAssigned_AndOpenForHumanFollowUp()
     {
         var w = Build(requestTypeName: "Leasing Inquiry");
         var request = UatRequest() with { ServiceRequestId = "leasing-inquiry-001", RequestType = new GenesysRequestTypeDto(Name: "Leasing Inquiry") };
@@ -133,7 +122,7 @@ public class GenesysLeasingRoutingTests
         Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(w.LeasingType.RequestTypeId, ticket.RequestTypeId);
         Assert.Equal((byte)PriorityLevel.Medium, ticket.PriorityId);             // "Normal" is the Medium tier
-        AssertOwnedByTheAiNotAssigned(w, ticket);
+        Assert.Equal(w.Employee, ticket.CurrentOwnerEmployeeId);
         Assert.True(w.F.Interactions.All.Single(i => i.TicketId == ticket.TicketId).RequiresHumanFollowUp);
 
         // a retry of the same (conversation, serviceRequestId) returns the same ticket; the old name no longer resolves

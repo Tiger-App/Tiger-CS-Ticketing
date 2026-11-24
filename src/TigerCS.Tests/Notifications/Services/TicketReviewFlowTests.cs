@@ -6,6 +6,7 @@ using TigerCS.Application.Modules.Notifications;
 using TigerCS.Domain.Infrastructure;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.Notifications.Fakes;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.Notifications.Services;
 
@@ -297,7 +298,7 @@ public class TicketReviewFlowTests
         await service.SubmitAsync(first, new SubmitReviewRequestDto(3, null));
 
         ticket.Close();
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
         await f.ResolveAsync(ticket);
         var second = await f.CreateInvitationService().PrepareAsync(ticket);
 

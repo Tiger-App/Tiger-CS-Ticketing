@@ -60,7 +60,8 @@ public sealed class GenesysAgentHandoffAppService(
     IDepartmentRepository? departmentRepository = null,
     ITicketAssignmentRepository? ticketAssignmentRepository = null,
     Ticketing.Services.TicketAutoAssignmentService? autoAssignmentService = null,
-    GenesysAnsweringAgentAssignmentService? answeringAgents = null)
+    GenesysAnsweringAgentAssignmentService? answeringAgents = null,
+    GenesysAgentOfferRecorder? offerRecorder = null)
 {
     public Task<GenesysHandoffResult> RequestAsync(
         Guid callerEmployeeId, GenesysHandoffRequestDto request, CancellationToken cancellationToken = default) =>
@@ -176,7 +177,7 @@ public sealed class GenesysAgentHandoffAppService(
         // VOICE (Phone) only: the AI Agent stays the owner while a human is requested / pending, an explicit workflow department is kept, and Round Robin does not
         // run at handoff time (a human may still answer; the voice no-answer reconciler concludes otherwise after the call ended and the window passed).
         // Every other channel keeps the previous behaviour: Call Center first and one agent by Round Robin.
-        var voice = GenesysOwnershipRules.AppliesTo(interaction.ChannelId);   // every channel, not only Phone: AI Agent stays owner, queue only, no Round Robin
+        var voice = interaction.ChannelId == WellKnownChannels.Phone;
         var callCenter = await ResolveCallCenterRoutingAsync(ticket, trigger, voice, cancellationToken);
         var routedFromDepartmentId = ticket.CurrentDepartmentId;
         var routedFromOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;   // non-null only for an automatic pre-assignment (see ResolveCallCenterRoutingAsync)
@@ -215,6 +216,10 @@ public sealed class GenesysAgentHandoffAppService(
 
         await handoffRepository.AddAsync(handoff, cancellationToken);
         interaction.RecordAgentIfAbsent(request.AgentId, request.AgentName);
+        if (offerRecorder is not null)
+        {
+            await offerRecorder.RecordAsync(interaction, agentId, "HandoffRequest", requestedAtUtc, cancellationToken);   // an offer (VOICE), never an answer
+        }
 
         var requestCorrelationId = Guid.NewGuid();
         if (callCenter is not null)
@@ -438,6 +443,10 @@ public sealed class GenesysAgentHandoffAppService(
         // TigerCS agent takes the work here.
         handoff.AssignTo(employeeId: null, genesysAgentId: agentId, assignedAtUtc: now);
         interaction.RecordAgentIfAbsent(agentId, request.AgentName);
+        if (offerRecorder is not null)
+        {
+            await offerRecorder.RecordAsync(interaction, agentId, "HandoffAssignment", request.AssignedAtUtc, cancellationToken);   // an offer (VOICE), never an answer
+        }
 
         var assignCorrelationId = Guid.NewGuid();
         if (beforeStatus != handoff.Status)

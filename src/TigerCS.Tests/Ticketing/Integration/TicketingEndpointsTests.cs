@@ -509,7 +509,7 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
     }
 
     [Fact]
-    public async Task Reopen_Lifecycle_NonCsRolesAreForbidden_CsAgentSucceeds_AndEligibilityRidesTheDetail()
+    public async Task Reopen_Lifecycle_NonCsRolesAreForbidden_CsAgentIsRefused_ClosedIsTerminal_AndEligibilityRidesTheDetail()
     {
         var agentClient = await CreateAuthenticatedClientAsync(Roles.CsAgent);
         var (ticketId, departmentId, initialRowVersion) = await CreateVerifiedTicketAsync(agentClient);
@@ -540,8 +540,7 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
                 new ResolveTicketRequestDto("Resolved", "Fixed the AC unit.", null, null, Convert.FromBase64String(afterStatus!.RowVersion))))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
 
-        // Resolved is NOT reopenable under the approved rule, and the detail
-        // read says so — which is what keeps the Reopen control off the page.
+        // Resolved is NOT reopenable, and the detail read says so — which is what keeps the Reopen control off the page.
         var whileResolved = await (await agentClient.GetAsync($"/api/tickets/{ticketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.False(whileResolved!.IsReopenEligible);
@@ -552,27 +551,23 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
             new ReopenTicketRequestDto("Too early.", departmentId, Convert.FromBase64String(afterResolve!.RowVersion)));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, reopenWhileResolved.StatusCode);
 
-        // Close it — only now is it reopenable, and the window starts here.
+        // Close it. Closed is terminal: the closure moment is recorded, but the detail never offers a reopen.
         var afterClose = await (await agentClient.PostAsJsonAsync(
                 $"/api/tickets/{ticketId}/close", new CloseTicketRequestDto(Convert.FromBase64String(afterResolve.RowVersion))))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
 
         var detail = await (await agentClient.GetAsync($"/api/tickets/{ticketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.True(detail!.IsReopenEligible);
+        Assert.False(detail!.IsReopenEligible);
         Assert.NotNull(detail.ClosedAtUtc);
 
-        // Approved rule: the Agent reopens. The Department Employee who worked
-        // the ticket cannot.
+        // The Department Employee who worked the ticket cannot (role), exactly as before.
         var forbiddenReopen = await workerClient.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/reopen",
             new ReopenTicketRequestDto("Trying to reopen my own work.", departmentId, Convert.FromBase64String(afterClose!.RowVersion)));
         Assert.Equal(HttpStatusCode.Forbidden, forbiddenReopen.StatusCode);
 
-        // Nor may any other non-CS role — the direct endpoint is the rule's
-        // enforcement point, so hitting it straight cannot bypass the missing
-        // UI control. Department Head and General Manager are here on purpose:
-        // both reach the ticket, neither holds direct Reopen.
+        // Nor may any other non-CS role - the role check still runs first, so hitting the endpoint straight is Forbidden, not "terminal".
         foreach (var role in new[] { Roles.DepartmentHead, Roles.GeneralManager, Roles.ChairmanCeo, Roles.ReportingUser })
         {
             var refusedClient = await CreateAuthenticatedClientAsync(role);
@@ -582,8 +577,7 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
             Assert.Equal(HttpStatusCode.Forbidden, refused.StatusCode);
         }
 
-        // A blank reason, and a missing department, are rejected before any
-        // state changes.
+        // A blank reason, and a missing department, are rejected by input validation before any state is looked at.
         var blankReason = await agentClient.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/reopen",
             new ReopenTicketRequestDto("   ", departmentId, Convert.FromBase64String(afterClose.RowVersion)));
@@ -594,129 +588,82 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
             new ReopenTicketRequestDto("Customer called back.", 0, Convert.FromBase64String(afterClose.RowVersion)));
         Assert.Equal(HttpStatusCode.BadRequest, noDepartment.StatusCode);
 
+        // An unknown target department used to be a 404. The terminal-state refusal now runs BEFORE the routing validation, so a Closed
+        // ticket is answered "a closed ticket cannot be reopened" whatever department the caller names.
         var unknownDepartment = await agentClient.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/reopen",
             new ReopenTicketRequestDto("Customer called back.", 99999, Convert.FromBase64String(afterClose.RowVersion)));
-        Assert.Equal(HttpStatusCode.NotFound, unknownDepartment.StatusCode);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, unknownDepartment.StatusCode);
 
-        // The CS Agent reopens: back to InProgress, ReopenCount incremented,
-        // live resolution outcome cleared, owner released to the queue.
+        // The CS Agent tries the real reopen: refused, Closed is terminal.
         var reopenResponse = await agentClient.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/reopen",
             new ReopenTicketRequestDto("Customer called back — still not cooling.", departmentId, Convert.FromBase64String(afterClose.RowVersion)));
-        Assert.Equal(HttpStatusCode.OK, reopenResponse.StatusCode);
-        var reopened = await reopenResponse.Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.Equal("InProgress", reopened!.TicketStatus);
-        Assert.Equal(1, reopened.ReopenCount);
-        Assert.Null(reopened.ResolutionOutcome);
-        Assert.Null(reopened.CurrentOwnerEmployeeId);
-        Assert.Equal(departmentId, reopened.CurrentDepartmentId);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, reopenResponse.StatusCode);
+        Assert.Contains("A closed ticket cannot be reopened", await reopenResponse.Content.ReadAsStringAsync(), StringComparison.Ordinal);
 
-        // Identity is untouched — same ticket, not a copy.
-        Assert.Equal(ticketId, reopened.TicketId);
-        Assert.Equal(detail.TicketNumber, reopened.TicketNumber);
+        // Nothing changed: same ticket, still Closed, owner and outcome kept, no reopen counted, same row version.
+        var unchanged = await (await agentClient.GetAsync($"/api/tickets/{ticketId}"))
+            .Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", unchanged!.TicketStatus);
+        Assert.Equal(0, unchanged.ReopenCount);
+        Assert.Equal(detail.ResolutionOutcome, unchanged.ResolutionOutcome);
+        Assert.Equal(detail.CurrentOwnerEmployeeId, unchanged.CurrentOwnerEmployeeId);
+        Assert.Equal(detail.ClosedAtUtc, unchanged.ClosedAtUtc);
+        Assert.Equal(detail.RowVersion, unchanged.RowVersion);
+        Assert.False(unchanged.IsReopenEligible);
 
-        // The reopen released the owner, and a CS Agent sees an unassigned ticket only through Take Ownership, so the reads after it
-        // are made as a CS Supervisor (who sees every department) - the assertions are unchanged.
         var supervisorClient = await CreateAuthenticatedClientAsync(Roles.CsSupervisor);
 
-        // The reason is now readable: the lifecycle history endpoint serves the
-        // row the reopen wrote, which is what Ticket Details renders.
+        // No lifecycle row for a reopen, and no typed Reopened event.
         var history = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/history"))
             .Content.ReadFromJsonAsync<TicketLifecycleHistoryDto>();
-        var reopenEntry = Assert.Single(
-            history!.Entries,
-            e => e.Dimension == "TicketStatus" && e.OldValue == "Closed" && e.NewValue == "InProgress");
-        Assert.Equal("Customer called back — still not cooling.", reopenEntry.Note);
-        Assert.False(reopenEntry.ActorIsSystem);
-
-        // ...and the typed event carries the routing/SLA facts beside it.
+        Assert.DoesNotContain(history!.Entries, e => e.Dimension == "TicketStatus" && e.OldValue == "Closed");
         var approvals = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/approvals"))
             .Content.ReadFromJsonAsync<TicketApprovalsViewDto>();
-        var reopenEvent = Assert.Single(approvals!.Events, e => e.EventType == "Reopened");
-        Assert.True(ReopenActivityFacts.TryParse(reopenEvent.Note, out var facts));
-        Assert.Equal(departmentId, facts.ToDepartmentId);
-        Assert.Equal(1, facts.ReopenCount);
+        Assert.DoesNotContain(approvals!.Events, e => e.EventType == "Reopened");
 
-        // An actively-worked ticket has nothing to reopen.
+        // A second attempt (even by a supervisor, with the current token) gets the same refusal.
         var secondReopen = await supervisorClient.PostAsJsonAsync(
             $"/api/tickets/{ticketId}/reopen",
-            new ReopenTicketRequestDto("Already reopened.", departmentId, Convert.FromBase64String(reopened.RowVersion)));
+            new ReopenTicketRequestDto("Trying again.", departmentId, Convert.FromBase64String(unchanged.RowVersion)));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, secondReopen.StatusCode);
     }
 
     [Fact]
-    public async Task Reopen_MovesTheTicketOutOfClosedAndBackIntoTheActiveQueue_WithoutDuplicatingIt()
+    public async Task Reopen_DoesNotMoveTheTicketOutOfClosed_ItStaysInTheClosedQueue_ClosedIsTerminal()
     {
         var agentClient = await CreateAuthenticatedClientAsync(Roles.CsAgent);
-        var (ticketId, departmentId, initialRowVersion) = await CreateVerifiedTicketAsync(agentClient);
-
-        var (workerUsername, workerPassword, workerId) = await _factory.SeedEmployeeAsync(Roles.DepartmentEmployee);
-        await _factory.AssignPrimaryDepartmentAsync(workerId, departmentId);
-        var workerClient = _factory.CreateClient();
-        var login = await (await workerClient.PostAsJsonAsync(
-            "/api/auth/login", new LoginRequestDto(workerUsername, workerPassword))).Content.ReadFromJsonAsync<LoginResponseDto>();
-        workerClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", login!.AccessToken);
-
-        var (headUsername, headPassword, headId) = await _factory.SeedEmployeeAsync(Roles.DepartmentHead);
-        await _factory.AssignPrimaryDepartmentAsync(headId, departmentId);
-        var headClient = _factory.CreateClient();
-        var headLogin = await (await headClient.PostAsJsonAsync(
-            "/api/auth/login", new LoginRequestDto(headUsername, headPassword))).Content.ReadFromJsonAsync<LoginResponseDto>();
-        headClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", headLogin!.AccessToken);
-
-        var afterAssign = await (await headClient.PostAsJsonAsync(
-                $"/api/tickets/{ticketId}/assignment", new AssignTicketRequestDto(workerId, initialRowVersion)))
-            .Content.ReadFromJsonAsync<TicketDetailDto>();
-        var afterStatus = await (await workerClient.PostAsJsonAsync(
-                $"/api/tickets/{ticketId}/status", new ChangeStatusRequestDto("InProgress", Convert.FromBase64String(afterAssign!.RowVersion))))
-            .Content.ReadFromJsonAsync<TicketDetailDto>();
-        var afterResolve = await (await workerClient.PostAsJsonAsync(
-                $"/api/tickets/{ticketId}/resolution",
-                new ResolveTicketRequestDto("Resolved", "Fixed the AC unit.", null, null, Convert.FromBase64String(afterStatus!.RowVersion))))
-            .Content.ReadFromJsonAsync<TicketDetailDto>();
-        var afterClose = await (await agentClient.PostAsJsonAsync(
-                $"/api/tickets/{ticketId}/close", new CloseTicketRequestDto(Convert.FromBase64String(afterResolve!.RowVersion))))
-            .Content.ReadFromJsonAsync<TicketDetailDto>();
-
-        Assert.Contains(await QueueTicketIdsAsync(agentClient, "Closed"), id => id == ticketId);
-
-        // Once reopened the ticket has no owner, and a CS Agent sees an unassigned ticket only through Take Ownership - so the
-        // post-reopen queue/detail reads below are made as a CS Supervisor, who sees every department's tickets.
+        var (ticketId, departmentId, closedRowVersion) = await DriveTicketToClosedAsync(agentClient);
         var supervisorClient = await CreateAuthenticatedClientAsync(Roles.CsSupervisor);
 
-        var reopened = await (await agentClient.PostAsJsonAsync(
-                $"/api/tickets/{ticketId}/reopen",
-                new ReopenTicketRequestDto("Customer called back.", departmentId, Convert.FromBase64String(afterClose!.RowVersion))))
+        Assert.Contains(await QueueTicketIdsAsync(agentClient, "Closed"), id => id == ticketId);
+        var before = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.Equal("InProgress", reopened!.TicketStatus);
 
-        // Gone from Closed, present among the active work — both are live
-        // queries over the same row, so nothing had to be "refreshed".
-        Assert.DoesNotContain(await QueueTicketIdsAsync(supervisorClient, "Closed"), id => id == ticketId);
-        Assert.Contains(await QueueTicketIdsAsync(supervisorClient, "InProgress"), id => id == ticketId);
+        var response = await agentClient.PostAsJsonAsync(
+            $"/api/tickets/{ticketId}/reopen",
+            new ReopenTicketRequestDto("Customer called back.", departmentId, closedRowVersion));
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
 
-        // No owner, so it waits in the department queue rather than in anyone's
-        // My Tickets — including the employee who worked it before.
-        Assert.Null(reopened.CurrentOwnerEmployeeId);
-        Assert.DoesNotContain(await QueueTicketIdsAsync(supervisorClient, ticketStatus: null, ownerEmployeeId: workerId), id => id == ticketId);
+        // Still in the Closed queue, once; never among the active work.
+        Assert.Single(await QueueTicketIdsAsync(supervisorClient, "Closed"), id => id == ticketId);
+        Assert.DoesNotContain(await QueueTicketIdsAsync(supervisorClient, "InProgress"), id => id == ticketId);
 
-        // A reopen is not a new ticket: the queue holds exactly one row for it,
-        // at its current state, and the customer's history gained no sibling
-        // copy of it (the anchor ticket is excluded from its own history).
-        var active = await QueueTicketIdsAsync(supervisorClient, "InProgress");
-        Assert.Single(active, id => id == ticketId);
+        // Closure cleared the owner and the refusal did not hand the ticket to a department queue or anybody else.
+        var detailAfter = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal(before!.CurrentOwnerEmployeeId, detailAfter!.CurrentOwnerEmployeeId);
+        Assert.Equal(before.CurrentDepartmentId, detailAfter.CurrentDepartmentId);
 
+        // The customer's history gained no sibling copy of it (the anchor ticket is excluded from its own history).
         var history = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}/customer-history?limit=10"))
             .Content.ReadFromJsonAsync<CustomerHistoryDto>();
-        // (Other tests in this shared fixture contribute their own tickets to
-        // this customer's history — what matters is that the reopened one is
-        // not among them a second time.)
         Assert.DoesNotContain(history!.Tickets, t => t.TicketId == ticketId);
 
         var detail = await (await supervisorClient.GetAsync($"/api/tickets/{ticketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.Equal("InProgress", detail!.TicketStatus);
+        Assert.Equal("Closed", detail!.TicketStatus);
+        Assert.Equal(0, detail.ReopenCount);
         Assert.False(detail.IsReopenEligible);
     }
 
@@ -725,14 +672,15 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
     [InlineData(Roles.CsSupervisor)]
     [InlineData(Roles.CsManager)]
     [InlineData(Roles.SystemAdministrator)]
-    public async Task Reopen_ByEveryAuthorizedRole_Returns200(string role)
+    public async Task Reopen_ByEveryFormerlyAuthorizedRole_Returns422_AndLeavesTheTicketClosed_ClosedIsTerminal(string role)
     {
-        // The final approved rule end to end, through the real endpoint: the
-        // CS layer holds direct Reopen, and System Administrator arrives at
-        // the same place through ADR-0024's central override rather than
-        // through TicketRoleSets.Reopen, which does not name it.
+        // The CS layer used to hold direct Reopen (System Administrator through ADR-0024's central override). Closed is now terminal on every
+        // channel: the same callers, through the real endpoint, are refused with the terminal-state problem and nothing changes.
         var setupClient = await CreateAuthenticatedClientAsync(Roles.CsAgent);
         var (ticketId, departmentId, closedRowVersion) = await DriveTicketToClosedAsync(setupClient);
+        // Read as a CS Supervisor (sees every ticket): handing the ticket to a second CS Agent below must not blind the observer.
+        var observer = await CreateAuthenticatedClientAsync(Roles.CsSupervisor);
+        var before = await (await observer.GetAsync($"/api/tickets/{ticketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
 
         var client = await CreateAuthenticatedClientAsync(role);
 
@@ -746,11 +694,15 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
             $"/api/tickets/{ticketId}/reopen",
             new ReopenTicketRequestDto("Customer called back.", departmentId, closedRowVersion));
 
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        var reopened = await response.Content.ReadFromJsonAsync<TicketDetailDto>();
-        Assert.Equal("InProgress", reopened!.TicketStatus);
-        Assert.Equal(ticketId, reopened.TicketId);
-        Assert.Equal(1, reopened.ReopenCount);
+        Assert.Equal(HttpStatusCode.UnprocessableEntity, response.StatusCode);
+        Assert.Contains("A closed ticket cannot be reopened", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+
+        var after = await (await observer.GetAsync($"/api/tickets/{ticketId}")).Content.ReadFromJsonAsync<TicketDetailDto>();
+        Assert.Equal("Closed", after!.TicketStatus);
+        Assert.Equal(0, after.ReopenCount);
+        Assert.Equal(before!.ResolutionOutcome, after.ResolutionOutcome);
+        Assert.Equal(before.CurrentOwnerEmployeeId, after.CurrentOwnerEmployeeId);
+        Assert.Equal(before.RowVersion, after.RowVersion);
     }
 
     [Theory]
@@ -781,13 +733,13 @@ public class TicketingEndpointsTests : IClassFixture<TigerCsApiFactory>
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
 
-        // ...and the ticket is untouched, so a refused call cannot be a
-        // partial one: still Closed, still reopen-eligible for CS.
+        // ...and the ticket is untouched, so a refused call cannot be a partial one: still Closed. (The reopen-eligibility flag is now false
+        // for everyone: Closed is terminal.)
         var detail = await (await setupClient.GetAsync($"/api/tickets/{ticketId}"))
             .Content.ReadFromJsonAsync<TicketDetailDto>();
         Assert.Equal("Closed", detail!.TicketStatus);
         Assert.Equal(0, detail.ReopenCount);
-        Assert.True(detail.IsReopenEligible);
+        Assert.False(detail.IsReopenEligible);
     }
 
     /// <summary>

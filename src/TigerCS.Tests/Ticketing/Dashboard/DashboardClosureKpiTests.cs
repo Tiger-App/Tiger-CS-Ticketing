@@ -3,6 +3,7 @@ using TigerCS.Application.Modules.Ticketing.Abstractions;
 using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.Ticketing.Dashboard;
 
@@ -146,7 +147,7 @@ public sealed class DashboardClosureKpiTests : IDisposable
         _db.AddReview(context, ticket); // cycle 0
 
         // Reopen and close again: cycle 1, not yet reviewed.
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
         ticket.AssignTo(_db.LifecycleWorkerId);
         ticket.Resolve(ResolutionOutcome.Resolved, null);
         ticket.Close();

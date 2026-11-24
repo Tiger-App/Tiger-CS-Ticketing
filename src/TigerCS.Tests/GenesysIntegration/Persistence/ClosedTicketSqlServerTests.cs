@@ -13,6 +13,7 @@ using TigerCS.Infrastructure.Modules.WorkflowConfiguration.Repositories;
 using TigerCS.Infrastructure.Persistence;
 using TigerCS.Tests.Administration.Services;
 using TigerCS.Tests.Ticketing.Integration;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.GenesysIntegration.Persistence;
 
@@ -214,7 +215,7 @@ public sealed class ClosedTicketSqlServerTests : IDisposable
         using (var reopen = CreateContext())
         {
             var ticket = await reopen.Tickets.SingleAsync(t => t.TicketId == ticketId);
-            ticket.Reopen(seed.CustomerServiceId);
+            LegacyReopenedTicket.Apply(ticket, seed.CustomerServiceId);
             await reopen.SaveChangesAsync();
         }
 

@@ -35,7 +35,13 @@ public enum TicketAssignmentSource : byte
     GenesysQueueRouting = 6,
 
     /// <summary>A department transfer of a Genesys-handled ticket (by a person, or a workflow), with or without a new assignee.</summary>
-    GenesysDepartmentTransfer = 7
+    GenesysDepartmentTransfer = 7,
+
+    /// <summary>
+    /// VOICE: a call ended and nobody answered; the ticket was given to the LAST agent Genesys offered the call to. System assignment (no actor): it says nothing about
+    /// the agent having answered, accepted or replied, and a person who actually answers later replaces it.
+    /// </summary>
+    GenesysLastOfferedAgent = 8
 }
 
 /// <summary>

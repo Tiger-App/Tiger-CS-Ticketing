@@ -4,6 +4,7 @@ using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.IdentityAndAccess.Fakes;
 using TigerCS.Tests.Ticketing.Fakes;
+using TigerCS.Tests.Ticketing;
 
 namespace TigerCS.Tests.Ticketing.Services;
 
@@ -137,7 +138,7 @@ public class DashboardAppServiceTests
         ticket.ChangeStatus(TicketStatus.InProgress);
         ticket.Resolve(ResolutionOutcome.Resolved, duplicateOfTicketId: null);
         ticket.Close();
-        ticket.Reopen(ticket.CurrentDepartmentId);
+        LegacyReopenedTicket.Apply(ticket, ticket.CurrentDepartmentId);
 
         var result = await f.Service.GetSummaryAsync(caller, [Roles.CsManager]);
 
