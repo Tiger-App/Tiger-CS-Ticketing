@@ -26,8 +26,8 @@ public class VoiceCallReconciliationRegistrationTests
 
         var options = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<VoiceCallReconciliationOptions>>().CurrentValue;
         Assert.True(options.Enabled);
-        // Production ships OBSERVE-ONLY (DryRun = true: classify and log, write nothing) until the operator has reviewed the first day of logs and switches it to false; other environments run live.
-        Assert.Equal(environment == "Production", options.DryRun);
+        // Every environment ships OBSERVE-ONLY (DryRun = true: classify and log, write nothing) until the operator has reviewed the first day of logs and switches it to false.
+        Assert.True(options.DryRun);
         Assert.Equal(300, options.NoAnswerWindowSeconds);                                      // the documented, proposed window
         Assert.Equal(24, options.LookbackHours);
     }

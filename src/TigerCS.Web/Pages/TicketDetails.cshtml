@@ -1371,6 +1371,11 @@ else
                         <dd>@TicketDisplay.HandlingStateLabel(handlingInteraction.HandlingState, handlingInteraction.AgentName)@if (handlingInteraction.Handoff is { } handlingHandoff) { <text> &middot; Handoff: @TicketDisplay.HandoffStatusLabel(handlingHandoff.Status)</text> }</dd>
                     </div>
                 }
+                @if (handlingInteraction?.ConversationStatus is { } conversationStatus)
+                {
+                    @* Genesys processing state, separate from Ticket Status and Assigned To: a pending Genesys update is never presented as a missing owner. *@
+                    <div class="facts-row"><dt>Conversation status</dt><dd>@TigerCS.Application.Modules.Ticketing.Services.GenesysConversationStatus.Label(conversationStatus)</dd></div>
+                }
                 <div class="facts-row"><dt>Opened</dt><dd>@TicketDisplay.AgoLabel(t.CreatedAtUtc, DateTime.UtcNow)</dd></div>
                 @if (t.EscalationLevel != "None")
                 {

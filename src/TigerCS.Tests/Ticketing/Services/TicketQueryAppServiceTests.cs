@@ -234,7 +234,7 @@ public class TicketQueryAppServiceTests
     }
 
     [Fact]
-    public async Task GetDetailAsync_ClosedWithinTheWindow_IsReopenEligible_AndCarriesBothTimestamps()
+    public async Task GetDetailAsync_ClosedWithinTheWindow_IsNotReopenEligible_ClosedIsTerminal_ButStillCarriesBothTimestamps()
     {
         var now = new DateTime(2026, 9, 1, 10, 0, 0, DateTimeKind.Utc);
         var f = CreateService(new Notifications.Fakes.FakeTimeProvider(now));
@@ -243,7 +243,8 @@ public class TicketQueryAppServiceTests
 
         var result = await f.Service.GetDetailAsync(Guid.NewGuid(), [Roles.CsManager], ticket.TicketId);
 
-        Assert.True(result.Response!.IsReopenEligible);
+        // Inside the (old) window, closed as Resolved, by a role that used to hold Reopen: still not eligible.
+        Assert.False(result.Response!.IsReopenEligible);
         Assert.Equal(now.AddDays(-3), result.Response.ResolvedAtUtc);
         Assert.Equal(now.AddDays(-2), result.Response.ClosedAtUtc);
     }

@@ -159,7 +159,7 @@ public class GenesysAssignmentFlowTests
     // ---- Multiple transfers, duplicates, ordering -------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task AiToAToB_EachAgentWhoActuallyAnswersOwnsIt_AndTheWholeHistoryIsPreserved()
+    public async Task AiToAToB_OnAVoiceCall_EachAgentWhoActuallyAnswersOwnsIt_AndTheWholeHistoryIsPreserved()
     {
         var w = NewWorld();
         var call = await AiCallAsync(w, "conv-multi");
