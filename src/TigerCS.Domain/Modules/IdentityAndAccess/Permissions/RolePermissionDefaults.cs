@@ -29,11 +29,11 @@ public static class RolePermissionDefaults
             [Roles.CsAgent] = Set(
                 TicketsView, TicketsCreate, TicketsEdit, TicketsTransfer, TicketsClose, TicketsReopen, TicketsEscalate,
                 CustomersView, CustomersSend, CollectionsView, CampaignsView, DashboardView,
-                InteractionsView, InteractionsEdit),
+                InteractionsView, InteractionsEdit, EmployeeReviewsView),
             [Roles.CsSupervisor] = Set(
                 TicketsView, TicketsCreate, TicketsEdit, TicketsAssign, TicketsTransfer, TicketsClose, TicketsReopen, TicketsEscalate,
                 CustomersView, CustomersSend, CollectionsView, CollectionsSend, CampaignsView, DashboardView,
-                InteractionsView, InteractionsEdit),
+                InteractionsView, InteractionsEdit, EmployeeReviewsView),
             [Roles.DepartmentEmployee] = Set(
                 TicketsView, TicketsEdit, TicketsResolve, TicketsApprove, TicketsEscalate, CustomersView, DashboardView),
             [Roles.DepartmentHead] = Set(
@@ -42,12 +42,12 @@ public static class RolePermissionDefaults
             [Roles.CsManager] = Set(
                 TicketsView, TicketsEdit, TicketsAssign, TicketsTransfer, TicketsTransferAny, TicketsApprove, TicketsClose, TicketsReopen, TicketsEscalate,
                 CustomersView, CustomersSend, CustomersEdit, CustomersViewHistory, Permissions.CollectionsAccess, CollectionsView, CollectionsEdit, CollectionsSend,
-                CampaignsView, CampaignsExport, ReportsView, DashboardView, InteractionsView, InteractionsEdit),
+                CampaignsView, CampaignsExport, ReportsView, DashboardView, InteractionsView, InteractionsEdit, EmployeeReviewsView),
             [Roles.GeneralManager] = Set(
                 TicketsView, TicketsEdit, TicketsApprove, TicketsEscalate,
-                CustomersView, CollectionsView, CampaignsView, CampaignsExport, ReportsView, DashboardView),
+                CustomersView, CollectionsView, CampaignsView, CampaignsExport, ReportsView, DashboardView, EmployeeReviewsView),
             [Roles.ChairmanCeo] = Set(
-                TicketsView, CustomersView, CollectionsView, CampaignsView, ReportsView, DashboardView),
+                TicketsView, CustomersView, CollectionsView, CampaignsView, ReportsView, DashboardView, EmployeeReviewsView),
             // ReportsRead (the API policy) admits CS Manager, General Manager and Chairman/CEO only, so Reporting User has no Reports.View
             // baseline even though its role description mentions reports; granting it is the supported way to open reports for that role.
             [Roles.ReportingUser] = Set(DashboardView),

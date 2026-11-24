@@ -1,3 +1,5 @@
+using TigerCS.Domain.Modules.EmployeeReviews;
+using TigerCS.Infrastructure.Modules.EmployeeReviews;
 using Microsoft.AspNetCore.Identity.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore;
 using TigerCS.Domain.Audit;
@@ -125,6 +127,10 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
     public DbSet<TicketReviewInvitation> TicketReviewInvitations => Set<TicketReviewInvitation>();
 
     public DbSet<TicketReview> TicketReviews => Set<TicketReview>();
+
+    public DbSet<EmployeeReviewDevice> EmployeeReviewDevices => Set<EmployeeReviewDevice>();
+
+    public DbSet<EmployeeReview> EmployeeReviews => Set<EmployeeReview>();
 
     public DbSet<Workflow> Workflows => Set<Workflow>();
 
@@ -303,6 +309,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new NotificationConfiguration());
         builder.ApplyConfiguration(new TicketReviewInvitationConfiguration());
         builder.ApplyConfiguration(new TicketReviewConfiguration());
+        builder.ApplyConfiguration(new EmployeeReviewDeviceConfiguration());
+        builder.ApplyConfiguration(new EmployeeReviewConfiguration());
 
         builder.ApplyConfiguration(new WorkflowConfiguration());
         builder.ApplyConfiguration(new WorkflowTemplateConfiguration());

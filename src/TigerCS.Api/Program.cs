@@ -26,6 +26,27 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddControllers();
 
+// Review tablets: one device sends a handful of reviews a minute at most, so the ceilings below are far above any real use and exist only to
+// stop a runaway client or a guessing attack. Partitioned by the device credential (hashed - never kept in the clear), else by caller address.
+builder.Services.AddRateLimiter(options =>
+{
+    options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+    options.AddPolicy(TigerCS.Api.Controllers.PublicEmployeeReviewsController.RateLimitPolicy, httpContext =>
+    {
+        var key = httpContext.Request.Headers[TigerCS.Api.Controllers.PublicEmployeeReviewsController.TokenHeader].ToString();
+        var partition = string.IsNullOrEmpty(key)
+            ? "ip:" + (httpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown")
+            : "device:" + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(key)));
+        return System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(partition, _ =>
+            new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 60,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            });
+    });
+});
+
 // Every expected failure path in this Api already returns a structured
 // ProblemDetails body (Problem(...)/ValidationProblem(...) throughout the
 // controllers). Without this, an *unexpected* exception instead falls
@@ -391,6 +412,7 @@ app.UseTigerCsClientDisconnectHandling();
 
 app.UseHttpsRedirection();
 
+app.UseRateLimiter();
 app.UseAuthentication();
 app.UseAuthorization();
 

@@ -1,0 +1,36 @@
+@page "/EmployeeReviews/Activate"
+@using TigerCS.Web.Services.EmployeeReviews
+@model TigerCS.Web.Pages.EmployeeReviews.ActivateModel
+@{
+    Layout = "_TabletLayout";
+    ViewData["Title"] = TabletText.Get("activate-title", Model.Language);
+    ViewData["TabletLanguage"] = Model.Language;
+    string T(string key) => TabletText.Get(key, Model.Language);
+    var problemKey = Model.Problem switch
+    {
+        TigerCS.Web.Pages.EmployeeReviews.ActivationProblem.Invalid => "activate-invalid",
+        TigerCS.Web.Pages.EmployeeReviews.ActivationProblem.Inactive => "activate-inactive",
+        TigerCS.Web.Pages.EmployeeReviews.ActivationProblem.Unavailable => "activate-unavailable",
+        _ => null
+    };
+}
+
+<main class="tablet tablet--notice">
+    <header class="tablet-head">
+        <img class="tablet-logo" src="~/img/tiger-logo.png" alt="Tiger Group" />
+    </header>
+    <section class="tablet-body tablet-activate">
+        <h1>@T("activate-title")</h1>
+        <p>@T("activate-sub")</p>
+        @if (problemKey is not null)
+        {
+            <p class="tablet-error" role="alert" data-activation-problem="@Model.Problem">@T(problemKey)</p>
+        }
+        @* A plain form (works without script). The script only pre-fills the code from the link's #fragment. *@
+        <form method="post" class="tablet-activate__form" data-activate-form>
+            <label class="tablet-comment-label" for="activation-code">@T("activate-label")</label>
+            <input id="activation-code" name="Code" class="tablet-code" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="128" required />
+            <button type="submit" class="tablet-submit">@T("activate-button")</button>
+        </form>
+    </section>
+</main>

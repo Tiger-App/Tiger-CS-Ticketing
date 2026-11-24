@@ -50,6 +50,7 @@ public static class OpenApiTags
     public const string Genesys = "Genesys";
     public const string QueueingIntegration = "Queueing Integration";
     public const string CustomerReviews = "Customer Reviews";
+    public const string EmployeeReviews = "Employee Reviews";
     public const string Collections = "Collections";
     public const string PendingCustomerInteractions = "Pending Customer Interactions";
     public const string Administration = "Administration";
@@ -118,6 +119,10 @@ public static class OpenApiTags
             "The public customer satisfaction review page's backend. Anonymous: the opaque review token from a Resolved/Closed "
             + "email is the only credential. Looking up a link never records anything; a review is committed only by an explicit "
             + "submission, once per ticket."),
+        (EmployeeReviews,
+            "Customer star ratings of employees, collected on review tablets. The tablet endpoints are anonymous: the device token "
+            + "(sent in the X-Device-Token header) is the only credential and the employee is always resolved from the tablet's own "
+            + "assignment. The reporting endpoints are scoped to the caller's own visibility; tablet administration is System Administrator only."),
         (Genesys,
             "The three externally consumable Genesys contracts. CREATE: one normalized endpoint every channel "
             + "(phone, website chat, chatbot, WhatsApp, social media) converges on, idempotent on the Genesys "

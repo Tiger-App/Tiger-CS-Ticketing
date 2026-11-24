@@ -32,6 +32,11 @@
                         <span class="admin-subnav__dot" aria-hidden="true"></span>@module.Label
                     </a>
                 }
+                @* Review Tablets (Employee Review feature): not one of the five modules, so listed here beside them. *@
+                var tabletsActive = section == AdminModules.ReviewTablets.Key;
+                <a class="admin-subnav__link @AdminModules.ReviewTablets.Tone @(tabletsActive ? "is-active" : "")" href="@AdminModules.ReviewTablets.Href" aria-current="@(tabletsActive ? "page" : null)">
+                    <span class="admin-subnav__dot" aria-hidden="true"></span>@AdminModules.ReviewTablets.Label
+                </a>
             }
             @if (canManageTowers)
             {

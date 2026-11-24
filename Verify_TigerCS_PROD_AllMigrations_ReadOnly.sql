@@ -78,7 +78,8 @@ INSERT @Repo (MigrationId) VALUES
     (N'20261118124858_AddTicketAiAgentOwner'),
     (N'20261119081103_AddCustomerProfileAuditAndProperties'),
     (N'20261119120249_AddAssignmentHistoryPreviousDepartment'),
-    (N'20261120074059_AddInteractionEndReceivedAt');
+    (N'20261120074059_AddInteractionEndReceivedAt'),
+    (N'20261124071552_AddEmployeeReviews');
 
 -- 1. Pending: in the repository, not applied in production
 SELECT r.MigrationId AS PendingMigration FROM @Repo r
@@ -122,7 +123,9 @@ FROM (VALUES
     (N'AddCustomerProfileAuditAndProperties',  N'column CustomerProfileOverrides.Location',  N'CustomerProfileOverrides', N'Location'),
     (N'AddCustomerProfileAuditAndProperties',  N'column CustomerProfileOverrides.PreferredLanguage', N'CustomerProfileOverrides', N'PreferredLanguage'),
     (N'AddAssignmentHistoryPreviousDepartment', N'column TicketAssignmentHistory.PreviousDepartmentId', N'TicketAssignmentHistory', N'PreviousDepartmentId'),
-    (N'AddInteractionEndReceivedAt', N'column TicketInteractions.EndReceivedAtUtc', N'TicketInteractions', N'EndReceivedAtUtc')
+    (N'AddInteractionEndReceivedAt', N'column TicketInteractions.EndReceivedAtUtc', N'TicketInteractions', N'EndReceivedAtUtc'),
+    (N'AddEmployeeReviews',        N'table EmployeeReviewDevices',              N'EmployeeReviewDevices', NULL),
+    (N'AddEmployeeReviews',        N'table EmployeeReviews',                    N'EmployeeReviews', NULL)
 ) x(Migration, Object, Tbl, Col)
 ORDER BY Present, x.Migration;
 

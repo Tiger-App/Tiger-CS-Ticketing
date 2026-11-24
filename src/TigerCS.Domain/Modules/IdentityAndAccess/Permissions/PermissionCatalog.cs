@@ -73,11 +73,12 @@ public static class PermissionModules
     public const string Campaigns = "Campaigns";
     public const string Reports = "Reports";
     public const string Dashboard = "Dashboard";
+    public const string EmployeeReviews = "Employee Reviews";
     public const string Interactions = "Pending Interactions";
     public const string Administration = "Administration";
 
     public static readonly IReadOnlyList<string> Ordered =
-    [Tickets, Customers, Collections, Campaigns, Reports, Dashboard, Interactions, Administration];
+    [Tickets, Customers, Collections, Campaigns, Reports, Dashboard, EmployeeReviews, Interactions, Administration];
 }
 
 /// <summary>
@@ -122,6 +123,9 @@ public static class Permissions
     public const string ReportsView = "Reports.View";
 
     public const string DashboardView = "Dashboard.View";
+
+    /// <summary>Open the Employee Reviews dashboard: customer star ratings of employees, within the caller's own scope (everyone for management, their departments for supervisors, only themselves otherwise).</summary>
+    public const string EmployeeReviewsView = "EmployeeReviews.View";
 
     public const string InteractionsView = "Interactions.View";
     public const string InteractionsEdit = "Interactions.Edit";
@@ -175,6 +179,10 @@ public static class PermissionCatalog
         new(Permissions.ReportsView, PermissionModules.Reports, PermissionAction.View, "View reports", "Team performance and executive reports."),
 
         new(Permissions.DashboardView, PermissionModules.Dashboard, PermissionAction.View, "View dashboard", "Dashboard KPIs and overview."),
+
+        new(Permissions.EmployeeReviewsView, PermissionModules.EmployeeReviews, PermissionAction.View, "View employee reviews",
+            "Customer star ratings and comments left for employees on review tablets. Management sees every employee, a supervisor the employees of their departments, anyone else only their own reviews.",
+            EnforceEffective: true),
 
         new(Permissions.InteractionsView, PermissionModules.Interactions, PermissionAction.View, "View pending interactions", "List customer interactions waiting for a human."),
         new(Permissions.InteractionsEdit, PermissionModules.Interactions, PermissionAction.Edit, "Handle pending interactions", "Start, complete or cancel a pending interaction."),

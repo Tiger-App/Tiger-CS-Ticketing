@@ -1,0 +1,171 @@
+@page "/EmployeeReviews"
+@using System.Globalization
+@using TigerCS.Web.Pages.EmployeeReviews
+@model TigerCS.Web.Pages.EmployeeReviews.IndexModel
+@{
+    ViewData["Title"] = "Employee Reviews";
+    ViewData["ActiveNav"] = "employeereviews";
+    Layout = "_Layout";
+    string DateValue(DateOnly d) => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    var o = Model.Overview;
+}
+
+<div class="page er-page">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">Employee Reviews</h1>
+            @if (o is not null)
+            {
+                <p class="page-subtitle">Customer ratings collected on review tablets · @Model.PeriodLabel (UAE time).</p>
+            }
+        </div>
+    </div>
+
+    @if (o is null)
+    {
+        <div class="panel">
+            <div class="@(Model.Outcome == ApiOutcome.Forbidden ? "empty-state" : "error-state")">
+                <p>@IndexModel.LoadFailureMessage(Model.Outcome)</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        <form class="filter-bar er-filters" method="get" action="/EmployeeReviews" aria-label="Employee review filters">
+            <div class="field-group">
+                <label class="field-label" for="dateFrom">Date from</label>
+                <input class="field-input" type="date" id="dateFrom" name="dateFrom" value="@DateValue(o.Filters.DateFrom)" />
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="dateTo">Date to</label>
+                <input class="field-input" type="date" id="dateTo" name="dateTo" value="@DateValue(o.Filters.DateTo)" />
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="employeeId">Employee</label>
+                <select class="field-select" id="employeeId" name="employeeId">
+                    <option value="">All employees</option>
+                    @foreach (var e in o.Filters.Employees)
+                    {
+                        <option value="@e.EmployeeId" selected="@(o.Filters.EmployeeId == e.EmployeeId)">@e.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="departmentId">Department</label>
+                <select class="field-select" id="departmentId" name="departmentId">
+                    <option value="">All departments</option>
+                    @foreach (var d in o.Filters.Departments)
+                    {
+                        <option value="@d.Id" selected="@(o.Filters.DepartmentId == d.Id)">@d.Name</option>
+                    }
+                </select>
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="rating">Stars</label>
+                <select class="field-select" id="rating" name="rating">
+                    <option value="">All ratings</option>
+                    @for (var s = 5; s >= 1; s--)
+                    {
+                        <option value="@s" selected="@(o.Filters.Rating == s)">@s @(s == 1 ? "star" : "stars")</option>
+                    }
+                </select>
+            </div>
+            <div class="filter-bar__submit">
+                <button type="submit" class="btn btn-sm">Apply</button>
+                @if (Model.HasFilters)
+                {
+                    <a class="btn btn-ghost btn-sm" href="/EmployeeReviews">Clear</a>
+                }
+            </div>
+        </form>
+
+        <section class="er-summary" aria-label="Summary">
+            <div class="panel er-kpis">
+                <div class="er-kpi" data-kpi="total"><span class="er-kpi__value">@o.Summary.TotalReviews.ToString("N0", CultureInfo.InvariantCulture)</span><span class="er-kpi__label">Total reviews</span></div>
+                <div class="er-kpi" data-kpi="average"><span class="er-kpi__value">@IndexModel.Average(o.Summary.AverageRating)<small> / 5</small></span><span class="er-kpi__label">Average rating</span></div>
+            </div>
+            <div class="panel er-dist" aria-label="Five-star distribution">
+                <h2 class="er-h">Rating distribution</h2>
+                <ul class="er-dist__list">
+                    @foreach (var star in o.Summary.Distribution)
+                    {
+                        <li class="er-dist__row" data-star-row="@star.Rating">
+                            <span class="er-dist__label">@star.Rating ★</span>
+                            <span class="bar-track" aria-hidden="true"><span class="bar-fill @IndexModel.WidthClass(star.Count, o.Summary.TotalReviews)"></span></span>
+                            <span class="er-dist__count">@star.Count</span>
+                        </li>
+                    }
+                </ul>
+            </div>
+        </section>
+
+        <section class="panel" aria-label="Reviews per employee">
+            <h2 class="er-h er-h--pad">Reviews per employee</h2>
+            @if (o.Employees.Count == 0)
+            {
+                <div class="empty-state empty-state--compact"><p>No reviews for these filters.</p></div>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="data-table er-table" data-table="employees">
+                        <thead>
+                            <tr>
+                                <th>Employee</th>
+                                <th>Department</th>
+                                <th class="col-num">Reviews</th>
+                                <th class="col-num">Average</th>
+                                <th class="col-num">5★</th><th class="col-num">4★</th><th class="col-num">3★</th><th class="col-num">2★</th><th class="col-num">1★</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var row in o.Employees)
+                            {
+                                <tr>
+                                    <td><a href="/EmployeeReviews/Employee/@row.EmployeeId@Model.DrillQuery()">@row.EmployeeName</a></td>
+                                    <td>@(row.Department ?? "—")</td>
+                                    <td class="col-num">@row.ReviewCount</td>
+                                    <td class="col-num">@IndexModel.Average(row.AverageRating)</td>
+                                    @foreach (var star in row.Distribution)
+                                    {
+                                        <td class="col-num">@star.Count</td>
+                                    }
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+
+        <section class="panel" aria-label="Customer comments">
+            <h2 class="er-h er-h--pad">Customer comments</h2>
+            @if (o.Comments.Count == 0)
+            {
+                <div class="empty-state empty-state--compact"><p>No comments for these filters.</p></div>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="data-table er-table" data-table="comments">
+                        <thead>
+                            <tr><th>Date (UAE)</th><th>Employee</th><th>Department</th><th>Rating</th><th>Comment</th></tr>
+                        </thead>
+                        <tbody>
+                            @foreach (var c in o.Comments)
+                            {
+                                <tr>
+                                    <td class="er-nowrap">@c.CreatedAtUae.ToString("dd MMM yyyy, HH:mm", CultureInfo.InvariantCulture)</td>
+                                    <td>@c.EmployeeName</td>
+                                    <td>@(c.Department ?? "—")</td>
+                                    <td class="er-stars" title="@c.Rating of 5">@IndexModel.Stars(c.Rating)</td>
+                                    <td class="er-comment">@c.Comment</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
+</div>
