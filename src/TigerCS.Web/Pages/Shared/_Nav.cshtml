@@ -27,6 +27,8 @@
     {
         Add("collections", "Collections", "/Collections/CampaignList", Permissions.CollectionsView);
     }
+    // Employee Reviews: customer star ratings of employees. The Api scopes every figure to what the viewer may see.
+    Add("employeereviews", "Employee Reviews", "/EmployeeReviews", Permissions.EmployeeReviewsView, EmployeeReviewsPolicy.AppliesTo(currentUser));
     // Management reports and Administration are role-gated at the Api: the role, or an explicit grant.
     Add("reports", "Team Performance", "/Reports/TeamPerformance", Permissions.ReportsView, ReportsPolicy.AppliesTo(currentUser));
     var adminRole = AdministrationPolicy.AppliesTo(currentUser);

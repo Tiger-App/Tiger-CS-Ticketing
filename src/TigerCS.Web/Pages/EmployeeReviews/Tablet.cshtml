@@ -1,0 +1,84 @@
+@page "/EmployeeReviews/Tablet"
+@using TigerCS.Web.Services.EmployeeReviews
+@model TigerCS.Web.Pages.EmployeeReviews.TabletModel
+@{
+    Layout = "_TabletLayout";
+    ViewData["Title"] = TabletText.Get("question", Model.Language);
+    ViewData["TabletLanguage"] = Model.Language;
+    string T(string key) => TabletText.Get(key, Model.Language);
+    var nextLanguage = Model.Language == TabletText.Arabic ? TabletText.English : TabletText.Arabic;
+}
+
+@if (Model.State == TigerCS.Web.Pages.EmployeeReviews.TabletPageState.Ready)
+{
+    <main class="tablet" data-tablet-root data-lang="@Model.Language" data-thanks-ms="5000">
+        <header class="tablet-head">
+            <img class="tablet-logo" src="~/img/tiger-logo.png" alt="Tiger Group" />
+            <button type="button" class="tablet-lang" data-lang-toggle @TabletText.Attrs("language-toggle")>@T("language-toggle")</button>
+        </header>
+
+        @* The one anti-forgery token the script sends back with every submission. *@
+        <form method="post" class="tablet-af">@Html.AntiForgeryToken()</form>
+
+        <section class="tablet-body" data-view="form">
+            <div class="tablet-employee">
+                <p class="tablet-served" @TabletText.Attrs("served-by")>@T("served-by")</p>
+                <p class="tablet-employee__name" data-employee-name>@Model.EmployeeName</p>
+            </div>
+
+            <h1 class="tablet-question" id="tablet-question-label" @TabletText.Attrs("question")>@T("question")</h1>
+
+            <div class="tablet-stars" role="radiogroup" aria-labelledby="tablet-question-label" dir="ltr" data-stars>
+                @for (var star = 1; star <= 5; star++)
+                {
+                    <button type="button" class="tablet-star" role="radio" aria-checked="false" data-star="@star" aria-label="@star">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6.1 6.6.9-4.8 4.6 1.2 6.6L12 17.4l-5.9 3.3 1.2-6.6L2.5 9.5l6.6-.9L12 2.5z" /></svg>
+                    </button>
+                }
+            </div>
+            <p class="tablet-rating-label" data-rating-label aria-live="polite" @TabletText.Attrs("rating-hint")>@T("rating-hint")</p>
+
+            <label class="tablet-comment-label" for="tablet-comment" @TabletText.Attrs("comment-label")>@T("comment-label")</label>
+            <textarea id="tablet-comment" class="tablet-comment" rows="3" maxlength="1000" data-comment
+                      placeholder="@T("comment-placeholder")"
+                      data-i18n-placeholder="comment-placeholder"
+                      data-placeholder-en="@TabletText.Get("comment-placeholder", TabletText.English)"
+                      data-placeholder-ar="@TabletText.Get("comment-placeholder", TabletText.Arabic)"></textarea>
+
+            <p class="tablet-error" role="alert" data-error hidden></p>
+
+            <button type="button" class="tablet-submit" data-submit @TabletText.Attrs("submit")>@T("submit")</button>
+        </section>
+
+        <section class="tablet-body tablet-thanks" data-view="thanks" hidden aria-live="polite">
+            <svg class="tablet-check" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10" /><path d="M7.5 12.5l3 3 6-6.5" /></svg>
+            <h1 @TabletText.Attrs("thanks-title")>@T("thanks-title")</h1>
+            <p @TabletText.Attrs("thanks-sub")>@T("thanks-sub")</p>
+            <p class="tablet-pending" data-pending-note hidden @TabletText.Attrs("pending-note")>@T("pending-note")</p>
+        </section>
+
+        @* The star-label texts the script shows under the stars. *@
+        <ul class="tablet-star-labels" hidden>
+            @for (var star = 1; star <= 5; star++)
+            {
+                <li data-star-label="@star" @TabletText.Attrs($"star-{star}")>@T($"star-{star}")</li>
+            }
+        </ul>
+        <p hidden data-text-choose-rating @TabletText.Attrs("choose-rating")>@T("choose-rating")</p>
+        <p hidden data-text-sending @TabletText.Attrs("sending")>@T("sending")</p>
+    </main>
+}
+else
+{
+    var inactive = Model.State == TigerCS.Web.Pages.EmployeeReviews.TabletPageState.Inactive;
+    ViewData["AutoReloadMs"] = inactive ? 30000 : 10000;
+    <main class="tablet tablet--notice">
+        <header class="tablet-head">
+            <img class="tablet-logo" src="~/img/tiger-logo.png" alt="Tiger Group" />
+        </header>
+        <section class="tablet-body tablet-thanks">
+            <h1 data-notice="@(inactive ? "inactive" : "unavailable")">@T(inactive ? "inactive-title" : "unavailable-title")</h1>
+            <p>@T(inactive ? "inactive-sub" : "unavailable-sub")</p>
+        </section>
+    </main>
+}

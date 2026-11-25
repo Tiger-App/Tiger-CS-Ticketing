@@ -1,0 +1,144 @@
+@page "/Admin/EmployeeReviewDevices"
+@using System.Globalization
+@model TigerCS.Web.Pages.Admin.EmployeeReviewDevicesModel
+@{
+    ViewData["Title"] = "Review Tablets";
+    ViewData["ActiveNav"] = "admin";
+    ViewData["AdminSection"] = "reviewtablets";
+    Layout = "_Layout";
+    var module = AdminModules.ReviewTablets;
+    string Uae(DateTime? utc) => utc is { } t ? TigerCS.Domain.Common.UaeCalendar.ToUae(t).ToString("dd MMM yyyy, HH:mm", CultureInfo.InvariantCulture) : "Never";
+}
+
+<div class="page admin-page @module.Tone">
+    @await Html.PartialAsync("_AdminCrumbs", (module.Key, (string?)null))
+
+    <header class="admin-head">
+        <div class="admin-head__main">
+            @await Html.PartialAsync("_AdminEyebrow", module.Key)
+            <h1 class="page-title">Employee Review Devices</h1>
+            <p class="page-subtitle">Each tablet shows the review screen for one Customer Service employee. Changing the employee affects new reviews only; reviews already collected stay with the employee they were given for. Times are UAE time.</p>
+        </div>
+    </header>
+
+    @await Html.PartialAsync("_AdminMessages", Model)
+
+    @if (Model.Issued is { } issued)
+    {
+        <div class="panel er-issued" data-issued-credential>
+            <h2 class="er-h er-h--pad">Activation code for “@issued.Device.DeviceName”</h2>
+            <div class="er-issued__body">
+                <p class="page-subtitle">Open <strong>/EmployeeReviews/Activate</strong> on the tablet and enter this code (or open the link below on the tablet). It is shown only once and cannot be recovered — generate a new one if it is lost.</p>
+                <label class="field-label" for="issued-code">Activation code</label>
+                <input id="issued-code" class="field-input er-secret" type="text" readonly value="@issued.Token" />
+                <label class="field-label" for="issued-link">Activation link</label>
+                <input id="issued-link" class="field-input er-secret" type="text" readonly value="@Model.ActivationUrl(issued.Token)" />
+            </div>
+        </div>
+    }
+
+    <div class="admin-grid admin-grid--list-form">
+        <div>
+            <div class="panel">
+                @if (Model.LoadError is not null)
+                {
+                    <div class="error-state"><p>@Model.LoadError</p></div>
+                }
+                else if (Model.Devices.Count == 0)
+                {
+                    <div class="empty-state empty-state--compact"><p class="empty-state__title">No review tablets yet</p><p>Register the first tablet using the form.</p></div>
+                }
+                else
+                {
+                    <div class="table-scroll">
+                        <table class="data-table er-table" data-table="devices">
+                            <thead>
+                                <tr><th>Tablet</th><th>Employee</th><th>Status</th><th>Last activity (UAE)</th><th class="col-actions">Actions</th></tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var d in Model.Devices)
+                                {
+                                    var statusText = !d.HasCredential ? "Revoked" : d.IsActive ? (d.EmployeeIsActive ? "Active" : "Employee inactive") : "Inactive";
+                                    <tr data-device="@d.DeviceName">
+                                        <td>@d.DeviceName</td>
+                                        <td>@d.EmployeeName<br /><small class="text-secondary">@(d.Department ?? "—")</small></td>
+                                        <td>@statusText</td>
+                                        <td class="er-nowrap">@Uae(d.LastSeenAtUtc)</td>
+                                        <td>
+                                            <div class="er-actions">
+                                                <details>
+                                                    <summary class="btn btn-sm">Edit</summary>
+                                                    <form method="post" asp-page-handler="Update" class="er-device-form">
+                                                        <input type="hidden" name="Edit.DeviceId" value="@d.Id" />
+                                                        <div class="field-group">
+                                                            <label class="field-label" for="name-@d.Id">Name</label>
+                                                            <input class="field-input" id="name-@d.Id" name="Edit.DeviceName" maxlength="100" required value="@d.DeviceName" />
+                                                        </div>
+                                                        <div class="field-group">
+                                                            <label class="field-label" for="emp-@d.Id">Employee</label>
+                                                            <select class="field-select" id="emp-@d.Id" name="Edit.EmployeeId">
+                                                                @if (Model.Employees.All(e => e.EmployeeId != d.EmployeeId))
+                                                                {
+                                                                    <option value="@d.EmployeeId" selected="selected">@d.EmployeeName (current)</option>
+                                                                }
+                                                                @foreach (var e in Model.Employees)
+                                                                {
+                                                                    <option value="@e.EmployeeId" selected="@(e.EmployeeId == d.EmployeeId)">@e.DisplayName@(e.Department is null ? "" : " — " + e.Department)</option>
+                                                                }
+                                                            </select>
+                                                        </div>
+                                                        <button type="submit" class="btn btn-sm btn-gold">Save</button>
+                                                    </form>
+                                                </details>
+                                                @if (d.HasCredential)
+                                                {
+                                                    <form method="post" asp-page-handler="Toggle">
+                                                        <input type="hidden" name="deviceId" value="@d.Id" />
+                                                        <input type="hidden" name="isActive" value="@((!d.IsActive).ToString().ToLowerInvariant())" />
+                                                        <button type="submit" class="btn btn-sm">@(d.IsActive ? "Deactivate" : "Activate")</button>
+                                                    </form>
+                                                }
+                                                <form method="post" asp-page-handler="Regenerate">
+                                                    <input type="hidden" name="deviceId" value="@d.Id" />
+                                                    <button type="submit" class="btn btn-sm">@(d.HasCredential ? "New credential" : "Issue credential")</button>
+                                                </form>
+                                                @if (d.HasCredential)
+                                                {
+                                                    <form method="post" asp-page-handler="Revoke">
+                                                        <input type="hidden" name="deviceId" value="@d.Id" />
+                                                        <button type="submit" class="btn btn-sm btn-ghost">Revoke</button>
+                                                    </form>
+                                                }
+                                            </div>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    </div>
+                }
+            </div>
+        </div>
+
+        <aside class="panel" id="register-device">
+            <h2 class="er-h er-h--pad">Register a tablet</h2>
+            <form method="post" asp-page-handler="Register" class="er-device-form er-register">
+                <div class="field-group">
+                    <label class="field-label" for="Register_DeviceName">Tablet name</label>
+                    <input class="field-input" id="Register_DeviceName" name="Register.DeviceName" maxlength="100" required value="@Model.Register.DeviceName" placeholder="e.g. Reception desk 1" />
+                </div>
+                <div class="field-group">
+                    <label class="field-label" for="Register_EmployeeId">Customer Service employee</label>
+                    <select class="field-select" id="Register_EmployeeId" name="Register.EmployeeId" required>
+                        <option value="">Choose an employee…</option>
+                        @foreach (var e in Model.Employees)
+                        {
+                            <option value="@e.EmployeeId" selected="@(Model.Register.EmployeeId == e.EmployeeId)">@e.DisplayName@(e.Department is null ? "" : " — " + e.Department)</option>
+                        }
+                    </select>
+                </div>
+                <button type="submit" class="btn btn-gold">Register tablet</button>
+            </form>
+        </aside>
+    </div>
+</div>

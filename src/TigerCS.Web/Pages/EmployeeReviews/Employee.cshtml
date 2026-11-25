@@ -1,0 +1,103 @@
+@page "/EmployeeReviews/Employee/{employeeId:guid}"
+@using System.Globalization
+@using TigerCS.Web.Pages.EmployeeReviews
+@model TigerCS.Web.Pages.EmployeeReviews.EmployeeModel
+@{
+    ViewData["Title"] = Model.Detail?.EmployeeName ?? "Employee Reviews";
+    ViewData["ActiveNav"] = "employeereviews";
+    Layout = "_Layout";
+    string DateValue(DateOnly d) => d.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture);
+    var d = Model.Detail;
+}
+
+<div class="page er-page">
+    <div class="page-header">
+        <div>
+            <h1 class="page-title">@(d?.EmployeeName ?? "Employee Reviews")</h1>
+            @if (d is not null)
+            {
+                <p class="page-subtitle">@(d.Department ?? "No department") · @Model.PeriodLabel (UAE time)</p>
+            }
+        </div>
+        <div class="page-header__actions"><a class="btn btn-sm" href="/EmployeeReviews">All employees</a></div>
+    </div>
+
+    @if (d is null)
+    {
+        <div class="panel">
+            <div class="@(Model.Outcome == ApiOutcome.Forbidden ? "empty-state" : "error-state")">
+                <p>@(Model.Outcome == ApiOutcome.Forbidden ? "You do not have permission to view this employee's reviews." : IndexModel.LoadFailureMessage(Model.Outcome))</p>
+            </div>
+        </div>
+    }
+    else
+    {
+        <form class="filter-bar er-filters" method="get" aria-label="Review filters">
+            <div class="field-group">
+                <label class="field-label" for="dateFrom">Date from</label>
+                <input class="field-input" type="date" id="dateFrom" name="dateFrom" value="@DateValue(d.Filters.DateFrom)" />
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="dateTo">Date to</label>
+                <input class="field-input" type="date" id="dateTo" name="dateTo" value="@DateValue(d.Filters.DateTo)" />
+            </div>
+            <div class="field-group">
+                <label class="field-label" for="rating">Stars</label>
+                <select class="field-select" id="rating" name="rating">
+                    <option value="">All ratings</option>
+                    @for (var s = 5; s >= 1; s--)
+                    {
+                        <option value="@s" selected="@(d.Filters.Rating == s)">@s @(s == 1 ? "star" : "stars")</option>
+                    }
+                </select>
+            </div>
+            <div class="filter-bar__submit"><button type="submit" class="btn btn-sm">Apply</button></div>
+        </form>
+
+        <section class="er-summary" aria-label="Summary">
+            <div class="panel er-kpis">
+                <div class="er-kpi" data-kpi="total"><span class="er-kpi__value">@d.Summary.TotalReviews</span><span class="er-kpi__label">Total reviews</span></div>
+                <div class="er-kpi" data-kpi="average"><span class="er-kpi__value">@IndexModel.Average(d.Summary.AverageRating)<small> / 5</small></span><span class="er-kpi__label">Average rating</span></div>
+            </div>
+            <div class="panel er-dist" aria-label="Rating breakdown">
+                <h2 class="er-h">Rating breakdown</h2>
+                <ul class="er-dist__list">
+                    @foreach (var star in d.Summary.Distribution)
+                    {
+                        <li class="er-dist__row" data-star-row="@star.Rating">
+                            <span class="er-dist__label">@star.Rating ★</span>
+                            <span class="bar-track" aria-hidden="true"><span class="bar-fill @IndexModel.WidthClass(star.Count, d.Summary.TotalReviews)"></span></span>
+                            <span class="er-dist__count">@star.Count</span>
+                        </li>
+                    }
+                </ul>
+            </div>
+        </section>
+
+        <section class="panel" aria-label="Review history">
+            <h2 class="er-h er-h--pad">Review history</h2>
+            @if (d.Reviews.Count == 0)
+            {
+                <div class="empty-state empty-state--compact"><p>No reviews for this period.</p></div>
+            }
+            else
+            {
+                <div class="table-scroll">
+                    <table class="data-table er-table" data-table="history">
+                        <thead><tr><th>Date (UAE)</th><th>Rating</th><th>Comment</th></tr></thead>
+                        <tbody>
+                            @foreach (var r in d.Reviews)
+                            {
+                                <tr>
+                                    <td class="er-nowrap">@r.CreatedAtUae.ToString("dd MMM yyyy, HH:mm", CultureInfo.InvariantCulture)</td>
+                                    <td class="er-stars" title="@r.Rating of 5">@IndexModel.Stars(r.Rating)</td>
+                                    <td class="er-comment">@(r.Comment ?? "—")</td>
+                                </tr>
+                            }
+                        </tbody>
+                    </table>
+                </div>
+            }
+        </section>
+    }
+</div>

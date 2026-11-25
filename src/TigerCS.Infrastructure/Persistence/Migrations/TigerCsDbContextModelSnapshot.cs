@@ -1873,6 +1873,92 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.ToTable("VerificationSessions", (string)null);
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.EmployeeReviews.EmployeeReview", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Comment")
+                        .HasMaxLength(1000)
+                        .HasColumnType("nvarchar(1000)");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<Guid>("DeviceId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<byte>("Rating")
+                        .HasColumnType("tinyint");
+
+                    b.Property<Guid>("SubmissionId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CreatedAtUtc")
+                        .HasDatabaseName("IX_EmployeeReviews_CreatedAtUtc");
+
+                    b.HasIndex("DeviceId")
+                        .HasDatabaseName("IX_EmployeeReviews_DeviceId");
+
+                    b.HasIndex("SubmissionId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_EmployeeReviews_SubmissionId");
+
+                    b.HasIndex("EmployeeId", "CreatedAtUtc")
+                        .HasDatabaseName("IX_EmployeeReviews_EmployeeId_CreatedAtUtc");
+
+                    b.ToTable("EmployeeReviews", null, t =>
+                        {
+                            t.HasCheckConstraint("CK_EmployeeReviews_Rating", "[Rating] BETWEEN 1 AND 5");
+                        });
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.EmployeeReviews.EmployeeReviewDevice", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime>("CreatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<string>("DeviceName")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("nvarchar(100)");
+
+                    b.Property<Guid>("EmployeeId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<bool>("IsActive")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTime?>("LastSeenAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<byte[]>("TokenHash")
+                        .HasColumnType("varbinary(32)");
+
+                    b.Property<DateTime>("UpdatedAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EmployeeId")
+                        .HasDatabaseName("IX_EmployeeReviewDevices_EmployeeId");
+
+                    b.HasIndex("TokenHash")
+                        .IsUnique()
+                        .HasDatabaseName("UX_EmployeeReviewDevices_TokenHash")
+                        .HasFilter("[TokenHash] IS NOT NULL");
+
+                    b.ToTable("EmployeeReviewDevices", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.GenesysIntegration.GenesysQueueMapping", b =>
                 {
                     b.Property<int>("GenesysQueueMappingId")
@@ -5085,6 +5171,30 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                     b.HasOne("TigerCS.Domain.Modules.CustomerVerification.UnitReference", null)
                         .WithMany()
                         .HasForeignKey("UnitReferenceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.EmployeeReviews.EmployeeReview", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.EmployeeReviews.EmployeeReviewDevice", null)
+                        .WithMany()
+                        .HasForeignKey("DeviceId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("TigerCS.Domain.Modules.EmployeeReviews.EmployeeReviewDevice", b =>
+                {
+                    b.HasOne("TigerCS.Domain.Modules.IdentityAndAccess.Employee", null)
+                        .WithMany()
+                        .HasForeignKey("EmployeeId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });
