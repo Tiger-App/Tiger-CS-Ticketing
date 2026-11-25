@@ -53,12 +53,22 @@ public static class AdminModules
     public static AdminModule Channels { get; } =
         new("channels", "Channels", "/Admin/Channels", "channels", "tone-success", "Customer entry points", "active channel", "active channels");
 
+    /// <summary>
+    /// Review Tablets (Employee Review feature). Deliberately not in <see cref="All"/>: the console's five modules and their overview cards are
+    /// unchanged; this page is reached from the sub-navigation like Collections Tower Assignments is, and resolves for its breadcrumb and eyebrow.
+    /// </summary>
+    public static AdminModule ReviewTablets { get; } =
+        new("reviewtablets", "Review Tablets", "/Admin/EmployeeReviewDevices", "tablet", "tone-secondary", "Customer review devices and their employees", "review tablet", "review tablets");
+
     /// <summary>The modules in the order the console presents them.</summary>
     public static IReadOnlyList<AdminModule> All { get; } = [Users, Departments, RequestTypes, Workflows, Channels];
 
     /// <summary>The module a section key belongs to, or <c>null</c> for the overview and anything unrecognised.</summary>
     public static AdminModule? Find(string? key) =>
-        key is null ? null : All.FirstOrDefault(m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase));
+        key is null
+            ? null
+            : All.FirstOrDefault(m => string.Equals(m.Key, key, StringComparison.OrdinalIgnoreCase))
+              ?? (string.Equals(ReviewTablets.Key, key, StringComparison.OrdinalIgnoreCase) ? ReviewTablets : null);
 
     /// <summary>The tone class for a section key; the overview carries the brand accent.</summary>
     public static string ToneFor(string? key) => Find(key)?.Tone ?? "tone-brand";

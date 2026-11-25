@@ -1,0 +1,22 @@
+@using TigerCS.Web.Services.EmployeeReviews
+@{
+    var language = TabletText.Normalize(ViewData["TabletLanguage"] as string);
+}
+<!DOCTYPE html>
+<html lang="@language" dir="@TabletText.Direction(language)">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <meta name="robots" content="noindex, nofollow" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <title>@ViewData["Title"] · Tiger Group</title>
+    <link rel="icon" href="~/img/logo-sm.svg" />
+    <link rel="stylesheet" href="~/css/tablet.css" asp-append-version="true" />
+</head>
+<body class="tablet-page" data-auto-reload="@(ViewData["AutoReloadMs"] ?? "")">
+    @RenderBody()
+    <script src="~/js/tablet.js" asp-append-version="true"></script>
+</body>
+</html>

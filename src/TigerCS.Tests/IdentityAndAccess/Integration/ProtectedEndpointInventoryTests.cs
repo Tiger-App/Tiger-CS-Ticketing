@@ -95,6 +95,16 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         ["POST /api/genesys/agent-context"] = nameof(GenesysIntegration.Integration.GenesysAgentMappingEndpointsTests.MappedAgent_ResolvesToTheTicketingUser_AndRecordsInteractionOwnership),
         // Genesys Secure Screen Pop — issuing a launch URL (redeeming it is anonymous, below).
         ["POST /api/genesys/screen-pop"] = nameof(GenesysIntegration.Integration.GenesysScreenPopEndpointsTests.Issue_ReturnsAOneHourLaunchUrl_AndStoresOnlyTheHash),
+        // Employee Reviews: tablet administration (System Administrator only) and the role-scoped dashboard.
+        ["GET /api/admin/employee-review-devices"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
+        ["GET /api/admin/employee-review-devices/eligible-employees"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
+        ["POST /api/admin/employee-review-devices"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
+        ["PUT /api/admin/employee-review-devices/{deviceId:guid}"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
+        ["POST /api/admin/employee-review-devices/{deviceId:guid}/activation"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
+        ["POST /api/admin/employee-review-devices/{deviceId:guid}/credential"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
+        ["DELETE /api/admin/employee-review-devices/{deviceId:guid}/credential"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
+        ["GET /api/employee-reviews"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
+        ["GET /api/employee-reviews/employees/{employeeId:guid}"] = nameof(EmployeeReviews.EmployeeReviewEndpointTests.SystemAdministrator_IsAuthorizedOnEveryEmployeeReviewEndpoint),
         ["GET /api/collections/customer-lookup/payment-summary"] = nameof(Collections.Edsm.EdsmPaymentSummaryApiTests.LookupFinancialsAndHistory_AreAuthorizedWithoutAnyTicket_ThroughTheRealHost),
         ["GET /api/customers/lookup/ticket-history"] = nameof(Collections.Edsm.EdsmPaymentSummaryApiTests.LookupFinancialsAndHistory_AreAuthorizedWithoutAnyTicket_ThroughTheRealHost),
         // Collections — the explicit financial permissions, with the System Administrator override, on both prefixes.
@@ -363,6 +373,10 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         // the authenticated Genesys service account, and the session it
         // yields is the mapped user's ordinary one (GenesysScreenPopEndpointsTests).
         //
+        // /api/public/employee-reviews/{session,submit} are anonymous because they serve the customer review tablet, which has no login. The
+        // credential is the tablet's random 256-bit device token (only its hash is stored; an administrator can revoke or replace it), sent in a
+        // header; the employee reviewed is always resolved from the tablet's own assignment, never from the request (EmployeeReviewEndpointTests).
+        //
         // /api/public/ticket-reviews/{lookup,submit} are anonymous because they serve the customer satisfaction review
         // page, opened from an email link by a customer with no login. The credential is a random 256-bit single-ticket
         // token (only its hash is stored, it expires, and one review is accepted per ticket); lookup is read-only and
@@ -382,6 +396,8 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
             [
                 "/api/auth/login",
                 "/api/auth/screen-pop/redeem",
+                "/api/public/employee-reviews/session",
+                "/api/public/employee-reviews/submit",
                 "/api/public/ticket-reviews/lookup",
                 "/api/public/ticket-reviews/submit",
                 "/health",

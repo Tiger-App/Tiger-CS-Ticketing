@@ -23,6 +23,10 @@ builder.Services.AddRazorPages(options =>
     // Customer satisfaction review: opened from an email link by a customer with no TigerCS login. The opaque token is the
     // credential and TigerCS.Api validates it on every call; a GET never saves anything.
     options.Conventions.AllowAnonymousToPage("/Review");
+    // Employee review tablets: a kiosk with no TigerCS login. The tablet's own activation credential (an HttpOnly cookie, checked by
+    // TigerCS.Api on every call) is its identity; the dashboard pages in the same folder keep the default sign-in requirement.
+    options.Conventions.AllowAnonymousToPage("/EmployeeReviews/Tablet");
+    options.Conventions.AllowAnonymousToPage("/EmployeeReviews/Activate");
 
     // Administration area: System Administrator only. This only decides what
     // the Web renders — every api/admin/* endpoint enforces the same policy
@@ -72,6 +76,11 @@ builder.Services.AddHttpClient<AuthApiClient>(client => client.BaseAddress = new
 
 // The public review page calls anonymous endpoints: no session exists, so no bearer handler.
 builder.Services.AddHttpClient<ReviewsApiClient>(client => client.BaseAddress = new Uri(apiBaseUrl));
+
+// The employee review tablet is anonymous too: its device token (from the tablet's own cookie) is sent as a header per call.
+builder.Services.AddHttpClient<EmployeeReviewTabletApiClient>(client => client.BaseAddress = new Uri(apiBaseUrl));
+builder.Services.AddHttpClient<EmployeeReviewsApiClient>(client => client.BaseAddress = new Uri(apiBaseUrl))
+    .AddHttpMessageHandler<BearerTokenHandler>();
 
 // Every other client calls authenticated endpoints.
 builder.Services.AddHttpClient<TicketsApiClient>(client => client.BaseAddress = new Uri(apiBaseUrl))
