@@ -23,6 +23,9 @@ namespace TigerCS.Tests.Ticketing.Integration;
 /// assignment rows; AI / released / transferred tickets are untouched; parallel reconcilers never create two owners; and the SQL application
 /// lock keeps runs from overlapping. Without <c>TIGERCS_TEST_SQL_SERVER</c> they are SKIPPED, never "passed".
 /// </summary>
+// CallCenterReconciliationRunLock keeps a process-wide static in-process gate. Every test class that builds the REAL lock must share this collection, so xUnit never runs them
+// in parallel: another class holding the gate makes TryAcquireAsync return null even though no SQL application lock is held.
+[Collection(CallCenterReconciliationRunLockCollection.Name)]
 public sealed class CallCenterReconciliationSqlServerTests : IDisposable
 {
     private static readonly DateTime Now = DateTime.UtcNow;
