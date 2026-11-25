@@ -10,6 +10,7 @@ using Env = TigerCS.Tests.Ticketing.Services.CallCenterUnassignedWorkReconcilerT
 namespace TigerCS.Tests.Ticketing.Services;
 
 /// <summary>The pass around the reconciler: defaults, MaxAssignmentsPerRun, no overlap, and the eligible / skipped / assigned / failed log lines.</summary>
+[Collection(TigerCS.Tests.Ticketing.Integration.CallCenterReconciliationRunLockCollection.Name)]   // builds the real run lock: shares its static gate with the SQL lock test
 public class CallCenterUnassignedWorkJobTests
 {
     private sealed class Monitor(CallCenterReconciliationOptions value) : IOptionsMonitor<CallCenterReconciliationOptions>
