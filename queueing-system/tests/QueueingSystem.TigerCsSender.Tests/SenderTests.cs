@@ -71,8 +71,7 @@ public sealed class QueueingEventFactoryTests
         Assert.Equal(expected.Length == 0 ? [] : expected.Split(','), QueueingEventRequest.RequiredMembers(type));
 
         var bare = new QueueingEventRequest { EventId = "e", EventType = type, ExternalTicketId = "QT-1", EventSequence = 1, OccurredAtUtc = Now };
-        // TicketCreated additionally needs a phone OR an email (reported against CustomerPhone).
-        var expectedErrors = (expected.Length == 0 ? [] : expected.Split(',')).Concat(type == QueueingEventType.TicketCreated ? ["CustomerPhone"] : []);
+        var expectedErrors = expected.Length == 0 ? [] : expected.Split(',');
         Assert.Equal(expectedErrors.Order(), bare.Validate(Now).Keys.Order());
     }
 
@@ -84,6 +83,24 @@ public sealed class QueueingEventFactoryTests
         Assert.Contains("CustomerPhone",
             new QueueingEventRequest { EventId = "e", EventType = QueueingEventType.TicketCreated, ExternalTicketId = "QT-1", EventSequence = 1, OccurredAtUtc = Now, CustomerPhone = "abc",
                 QueueNumber = "A", CompanyId = "c", TicketTypeId = "t" }.Validate(Now).Keys);
+    }
+
+    [Fact]
+    public void ATicketCreated_WithNeitherPhoneNorEmail_IsValid_AndTheNamesAreNeverRequired()
+    {
+        // The queue number, company and ticket type identify the customer; TigerCS never needs (or invents) a phone, and CompanyName / TicketTypeName are optional.
+        var created = new QueueingEventRequest
+        {
+            EventId = "e", EventType = QueueingEventType.TicketCreated, ExternalTicketId = "QT-1", EventSequence = 1, OccurredAtUtc = Now,
+            QueueNumber = "A-017", CompanyId = "c", TicketTypeId = "t"
+        };
+
+        Assert.Empty(created.Validate(Now));
+        Assert.DoesNotContain("CustomerPhone", QueueingEventRequest.RequiredMembers(QueueingEventType.TicketCreated));
+        Assert.DoesNotContain("CustomerEmail", QueueingEventRequest.RequiredMembers(QueueingEventType.TicketCreated));
+        Assert.DoesNotContain("CompanyName", QueueingEventRequest.RequiredMembers(QueueingEventType.TicketCreated));
+        Assert.DoesNotContain("TicketTypeName", QueueingEventRequest.RequiredMembers(QueueingEventType.TicketCreated));
+        Assert.DoesNotContain("CustomerPhone", created.ToJson());   // nothing is invented: the member is simply omitted
     }
 
     [Fact]

@@ -81,7 +81,9 @@ public class QueueingTicketLink
     {
         State = state;
         LastAppliedSequence = sequence;
-        LastAppliedOccurredAtUtc = occurredAtUtc;
+        // OccurredAtUtc is not an ordering authority (a reconciled event may carry an earlier time than one already applied): the sequence orders, and this only ever moves forward,
+        // so it is the floor for the time the ticket's own history is stamped with.
+        LastAppliedOccurredAtUtc = occurredAtUtc > LastAppliedOccurredAtUtc ? occurredAtUtc : LastAppliedOccurredAtUtc;
         CounterId = counterId;
         AssignedExternalUserId = state == QueueingTicketState.Assigned ? assignedExternalUserId : null;
     }

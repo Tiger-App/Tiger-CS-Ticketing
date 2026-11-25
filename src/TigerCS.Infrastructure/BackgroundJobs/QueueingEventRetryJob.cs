@@ -24,6 +24,20 @@ public sealed class QueueingEventRetryJob(IServiceScopeFactory scopeFactory, ILo
             {
                 logger.LogInformation("Queueing retry sweep settled {Count} event(s).", settled);
             }
+
+            // The alert for blocked queue tickets: the oldest unresolved event of a ticket (a missing mapping or employee, or a Failed event waiting for an administrator)
+            // holds every later event of that ticket. Counts, ages and outcome codes only - never event content - so a log-based alert can fire on it.
+            var options = scope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions>();
+            var snapshot = await scope.ServiceProvider.GetRequiredService<TigerCS.Application.Modules.QueueingIntegration.Abstractions.IQueueingStore>()
+                .GetMonitoringSnapshotAsync(
+                    scope.ServiceProvider.GetRequiredService<TimeProvider>().GetUtcNow().UtcDateTime, 5, TimeSpan.FromMinutes(Math.Max(1, options.BlockedAlertAfterMinutes)), cancellationToken);
+            if (snapshot.AlertCount > 0)
+            {
+                var worst = snapshot.BlockedTickets.FirstOrDefault(b => b.Alert);
+                logger.LogWarning(
+                    "Queueing integration ALERT: {AlertCount} queue ticket(s) blocked (of {Blocked}); the oldest has waited {AgeSeconds}s on {Outcome} ({FailureClass}, {Status}). Fix the mapping / employee, or reprocess a Failed event.",
+                    snapshot.AlertCount, snapshot.BlockedTicketCount, snapshot.OldestBlockedAgeSeconds, worst?.HeadOutcomeCode, worst?.FailureClass, worst?.HeadStatus);
+            }
         }
         catch (Exception ex) when (ex is not OperationCanceledException)
         {

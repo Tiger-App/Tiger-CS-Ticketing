@@ -39,7 +39,7 @@ public sealed record QueueingEventRequest
     /// <summary>Optional. Max 200.</summary>
     public string? CustomerName { get; init; }
 
-    /// <summary>The customer's mobile number. <b>Required on TicketCreated</b> (used for the CRM lookup). Must contain digits; international format (+971...) preferred. Max 32.</summary>
+    /// <summary>The customer's mobile number. Optional (used for the CRM lookup, which is skipped when there is none; TigerCS never invents one). Must contain digits when sent; international format (+971...) preferred. Max 32.</summary>
     public string? CustomerPhone { get; init; }
 
     /// <summary>Optional. Max 256.</summary>
@@ -91,7 +91,7 @@ public sealed record QueueingEventRequest
     /// </summary>
     public static IReadOnlyList<string> RequiredMembers(QueueingEventType type) => type switch
     {
-        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId"],   // plus CustomerPhone or CustomerEmail (checked in Validate)
+        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId"],
         QueueingEventType.TicketAssigned or QueueingEventType.TicketReassigned => ["AssignedUserId"],
         QueueingEventType.TicketCommentAdded => ["Comment"],
         _ => []
@@ -154,11 +154,6 @@ public sealed record QueueingEventRequest
         }
 
         Text(nameof(CustomerEmail), CustomerEmail, 256, false);
-        if (EventType == QueueingEventType.TicketCreated && string.IsNullOrWhiteSpace(CustomerPhone) && string.IsNullOrWhiteSpace(CustomerEmail))
-        {
-            errors[nameof(CustomerPhone)] = "CustomerPhone or CustomerEmail is required.";
-        }
-
         if (!string.IsNullOrWhiteSpace(CustomerEmail) && !CustomerEmail.Contains('@'))
         {
             errors[nameof(CustomerEmail)] = "CustomerEmail must be an email address.";

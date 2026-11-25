@@ -14,7 +14,7 @@ public static class QueueingEventValidator
     /// <summary>The fields each event type requires beyond the envelope (EventId, EventType, ExternalTicketId, EventSequence, OccurredAtUtc).</summary>
     public static readonly IReadOnlyDictionary<QueueingEventType, string[]> RequiredFields = new Dictionary<QueueingEventType, string[]>
     {
-        [QueueingEventType.TicketCreated] = ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone or CustomerEmail"],
+        [QueueingEventType.TicketCreated] = ["QueueNumber", "CompanyId", "TicketTypeId"],   // no phone / email required: the API key + ExternalTicketId + QueueNumber identify the customer
         [QueueingEventType.TicketAssigned] = ["AssignedUserId"],
         [QueueingEventType.TicketReassigned] = ["AssignedUserId"],
         [QueueingEventType.TicketReturned] = [],
@@ -122,11 +122,6 @@ public static class QueueingEventValidator
         }
 
         var customerEmail = Text("CustomerEmail", request.CustomerEmail, 256, required: false);
-        if (type == QueueingEventType.TicketCreated && customerPhone is null && customerEmail is null)
-        {
-            Add("CustomerPhone", "CustomerPhone or CustomerEmail is required.");
-        }
-
         if (customerEmail is not null && !customerEmail.Contains('@'))
         {
             Add("CustomerEmail", "CustomerEmail must be an email address.");

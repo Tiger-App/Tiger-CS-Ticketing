@@ -366,7 +366,10 @@ public sealed class TicketRepository(TigerCsDbContext dbContext, ReopenPolicy? r
         // NULL <= 2 being unknown, so the intent survives a refactor.
         var criticalOrHigh = await active.CountAsync(t => t.PriorityId != null && t.PriorityId <= 2, cancellationToken);
         var pendingCustomer = await visible.CountAsync(t => t.TicketStatus == TicketStatus.PendingCustomer, cancellationToken);
-        var reopened = await active.CountAsync(t => t.ReopenCount > 0, cancellationToken);
+        // "Reopened" counts business reopens. A queue ticket the Queueing System took back into service (ReopenCount is its cycle key, bumped by the integration) is a mirrored
+        // state change, not a reopen decision, so it is not counted here; every other ticket is counted exactly as before.
+        var reopened = await active.CountAsync(
+            t => t.ReopenCount > 0 && (t.IntegrationSource == null || t.IntegrationSource != TicketIntegrationSources.QueueingSystem), cancellationToken);
         var myTickets = await visible.CountAsync(t => t.CurrentOwnerEmployeeId == query.CallerEmployeeId, cancellationToken);
 
         // At risk: a pending, unbreached deadline on the current SLA period

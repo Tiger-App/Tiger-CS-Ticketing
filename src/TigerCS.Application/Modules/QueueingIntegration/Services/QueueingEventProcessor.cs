@@ -130,8 +130,9 @@ public sealed class QueueingEventProcessor(
 
         if (existing.Status == QueueingEventStatus.Failed)
         {
-            existing.Reopen();   // a redelivery of a Failed event restarts its retry cycle - saved now, so a later discard cannot undo it
-            await unitOfWork.SaveChangesAsync(cancellationToken);
+            // A Failed event is restarted only by an administrator's audited reprocess (ReprocessAsync) - never by a redelivery, so a sender that keeps resending cannot
+            // turn a permanently invalid event into an uncontrolled retry loop. Answered from the stored outcome; everything behind it stays held.
+            return await FromRowAsync(existing, QueueingResultStatus.Pending, cancellationToken);
         }
 
         return await ProcessWithLockAsync(existing, message, cancellationToken);
@@ -209,6 +210,51 @@ public sealed class QueueingEventProcessor(
         return purged;
     }
 
+    /// <summary>
+    /// The administrator's reprocess of one stuck event (a Failed event, or a held one whose cause was fixed): audited first (who, which event, what it was), then its
+    /// retry cycle restarts (attempts reset - the payload and the EventId never change), it is applied again under the ticket's lock and, if it settles, the events held behind it
+    /// are released in sequence order. Never skips, edits or deletes an event, and sends nothing to the Queueing System. Returns null when the event does not exist, and a
+    /// result with status <c>NotReprocessable</c> when it is neither Failed nor Unresolved.
+    /// </summary>
+    public async Task<QueueingReprocessResult?> ReprocessAsync(Guid administratorEmployeeId, string eventId, CancellationToken cancellationToken = default)
+    {
+        var row = await store.GetEventAsync(eventId, cancellationToken);
+        if (row is null)
+        {
+            return null;
+        }
+
+        var previousStatus = row.Status;
+        var previousOutcome = row.OutcomeCode;
+        if (previousStatus is not (QueueingEventStatus.Failed or QueueingEventStatus.Unresolved) || row.Payload is null)
+        {
+            return new QueueingReprocessResult(row.EventId, row.ExternalTicketId, previousStatus.ToString(), previousOutcome, "NotReprocessable", previousOutcome, null);
+        }
+
+        if (!QueueingEventValidator.TryValidate(
+                System.Text.Json.JsonSerializer.Deserialize<QueueingEventRequest>(row.Payload, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!,
+                options, DateTime.MaxValue.AddDays(-1), out var message, out _))
+        {
+            return new QueueingReprocessResult(row.EventId, row.ExternalTicketId, previousStatus.ToString(), previousOutcome, "NotReprocessable", previousOutcome,
+                "The stored event no longer validates.");
+        }
+
+        await auditWriter.WriteAsync(
+            administratorEmployeeId, QueueingAuditActions.EventReprocessed, "QueueingEvent", row.EventId,
+            beforeValue: $"Status={previousStatus};Outcome={previousOutcome ?? "(none)"};Attempts={row.AttemptCount};Sequence={row.EventSequence};Type={row.EventType};ExternalTicketId={row.ExternalTicketId}",
+            afterValue: "ReprocessRequested;AttemptsReset",
+            Guid.NewGuid(), cancellationToken);
+        row.Reopen();   // saved together with the audit entry, so a later discard cannot undo the restart
+        await unitOfWork.SaveChangesAsync(cancellationToken);
+
+        var response = await ProcessWithLockAsync(row, message!, cancellationToken);
+
+        var after = await store.GetEventAsync(row.EventId, cancellationToken);
+        return new QueueingReprocessResult(
+            row.EventId, row.ExternalTicketId, previousStatus.ToString(), previousOutcome,
+            after?.Status.ToString() ?? response.Status.ToString(), after?.OutcomeCode ?? response.Outcome, response.Detail);
+    }
+
     // ------------------------------------------------------------------ locking and failure containment
 
     private async Task<QueueingEventResponse> ProcessWithLockAsync(QueueingEvent row, QueueingEventMessage message, CancellationToken cancellationToken)
@@ -221,9 +267,12 @@ public sealed class QueueingEventProcessor(
 
         var response = await ProcessContainedAsync(row, message, cancellationToken);
 
-        if (message.EventType == QueueingEventType.TicketCreated && response.Status is QueueingResultStatus.Processed)
+        // Strict per-ticket order: once an event has settled (applied, superseded or rejected), the events that were held behind it are released, in sequence order, under
+        // this same lock. A held or failed event releases nothing - everything behind it stays held.
+        if (QueueingEventTypes.IsStateChange(message.EventType)
+            && response.Status is QueueingResultStatus.Processed or QueueingResultStatus.Superseded or QueueingResultStatus.Rejected)
         {
-            await DrainWaitingEventsAsync(message.ExternalTicketId, row.EventId, cancellationToken);
+            await ReleaseHeldFollowersAsync(message.ExternalTicketId, row.EventId, cancellationToken);
         }
 
         return response;
@@ -236,6 +285,30 @@ public sealed class QueueingEventProcessor(
             // The event's own time, never later than now: every record TigerCS writes while applying it carries when it happened in the queue.
             var realNow = timeProvider.GetUtcNow().UtcDateTime;
             var effective = message.OccurredAtUtc > realNow ? realNow : message.OccurredAtUtc;
+
+            // EventSequence is the only ordering authority. A reconciled event (derived from the queue's current state) may carry an OccurredAtUtc that is earlier than an event
+            // already applied - or earlier than the ticket's own creation. It is never rejected or reordered for that; but the ticket's history must not run backwards (a closure
+            // before the creation, a negative SLA span), so the time its records are stamped with is floored at the ticket's creation and at the latest time already applied.
+            if (message.EventType != QueueingEventType.TicketCreated
+                && await store.FindTicketAsync(TicketIntegrationSources.QueueingSystem, message.ExternalTicketId, cancellationToken) is { } existingTicket)
+            {
+                var floor = existingTicket.CreatedAtUtc;
+                if (await store.GetLinkAsync(existingTicket.TicketId, cancellationToken) is { } existingLink && existingLink.LastAppliedOccurredAtUtc > floor)
+                {
+                    floor = existingLink.LastAppliedOccurredAtUtc;
+                }
+
+                if (floor > realNow)
+                {
+                    floor = realNow;
+                }
+
+                if (effective < floor)
+                {
+                    effective = floor;
+                }
+            }
+
             using var scope = IntegrationEventScope.Begin(effective, realNow);
             return await ApplyAsync(row, message, effective, cancellationToken);
         }
@@ -259,7 +332,11 @@ public sealed class QueueingEventProcessor(
         }
     }
 
-    private async Task DrainWaitingEventsAsync(string externalTicketId, string exceptEventId, CancellationToken cancellationToken)
+    /// <summary>
+    /// Releases the events held behind an event that has just settled, strictly in sequence order. The chain stops at the first event that cannot be applied (it becomes the
+    /// new head; everything after it stays held) or whose own backoff has not elapsed (it is retried by the sweep, as the head). Never skips an event.
+    /// </summary>
+    private async Task ReleaseHeldFollowersAsync(string externalTicketId, string exceptEventId, CancellationToken cancellationToken)
     {
         // Ids only, then each event is re-read right before it is applied (see RetryDueAsync): an earlier event's failure must not detach the later ones.
         var waitingIds = (await store.ListWaitingForTicketAsync(externalTicketId, cancellationToken)).Select(e => e.EventId).ToList();
@@ -276,14 +353,28 @@ public sealed class QueueingEventProcessor(
                 continue;
             }
 
+            // A hold that is waiting for an EVENT (the ticket's creation, or an earlier event) is released now - the event it waited for has just settled. A hold waiting
+            // for configuration (a missing mapping / employee) keeps its own backoff: the sweep retries it as the head, and nothing behind it may pass.
+            if (waiting.Status == QueueingEventStatus.Unresolved && waiting.NextRetryAtUtc is { } due && due > Now()
+                && waiting.OutcomeCode is not (QueueingOutcomeCodes.AwaitingTicket or QueueingOutcomeCodes.AwaitingPreviousEvent or QueueingOutcomeCodes.CreationInProgress))
+            {
+                break;
+            }
+
             if (!QueueingEventValidator.TryValidate(
                     System.Text.Json.JsonSerializer.Deserialize<QueueingEventRequest>(waiting.Payload, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!,
                     options, DateTime.MaxValue.AddDays(-1), out var message, out _))
             {
+                waiting.MarkRejected(QueueingOutcomeCodes.ProcessingFailed, "The stored event no longer validates.", waiting.TicketId, Now());
+                await unitOfWork.SaveChangesAsync(cancellationToken);
                 continue;
             }
 
-            await ProcessContainedAsync(waiting, message!, cancellationToken);
+            var response = await ProcessContainedAsync(waiting, message!, cancellationToken);
+            if (response.Status is QueueingResultStatus.Pending or QueueingResultStatus.Busy)
+            {
+                break;
+            }
         }
     }
 
@@ -318,10 +409,28 @@ public sealed class QueueingEventProcessor(
                 : await RecordRecallAsync(row, message, ticket, cancellationToken);
         }
 
+        // Strict per-ticket order: while an EARLIER state-changing event of this queue ticket is unresolved (a mapping is missing, an employee is not set up, the event Failed,
+        // or it is still being processed) this one is held behind it - never applied around it, never skipped. It is released, in sequence order, the moment the earlier one
+        // settles (ReleaseHeldFollowersAsync), and it consumes no retry attempt meanwhile. Other queue tickets are unaffected.
+        var blocker = await store.FindEarlierUnsettledAsync(message.ExternalTicketId, message.EventSequence, row.EventId, cancellationToken);
+        if (blocker is not null)
+        {
+            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.AwaitingPreviousEvent,
+                $"Held behind event sequence {blocker.EventSequence} ({blocker.EventType}) of queue ticket '{message.ExternalTicketId}', which is {blocker.Status}"
+                + (blocker.OutcomeCode is null ? string.Empty : $" ({blocker.OutcomeCode})")
+                + ". Events are applied strictly in sequence order and nothing is skipped; this event is applied right after it.",
+                ticket.TicketId, cancellationToken);
+        }
+
         // State-changing events: the newest state wins.
         if (link.IsStale(message.EventSequence))
         {
             return await SupersedeAsync(row, message, ticket, link, cancellationToken);
+        }
+
+        if (link.State == QueueingTicketState.Cancelled && message.EventType == QueueingEventType.TicketClosed)
+        {
+            return await MirrorCancelledThenClosedAsync(row, message, ticket, link, cancellationToken);
         }
 
         if (link.IsTerminal && message.EventType is QueueingEventType.TicketAssigned or QueueingEventType.TicketReassigned)
@@ -724,6 +833,39 @@ public sealed class QueueingEventProcessor(
         return Respond(row, (await ticketRepository.GetByIdAsync(ticket.TicketId, cancellationToken))!, QueueingResultStatus.Processed);
     }
 
+    /// <summary>
+    /// The Queueing System closed, as served, a queue ticket that was cancelled (its CloseSpecificTicket has no guard, so CANCELED -&gt; CLOSED really happens): TigerCS mirrors
+    /// the transition - the same closed ticket changes its outcome Cancelled -&gt; Resolved, history and audit kept. The reverse (Closed -&gt; Cancelled) cannot occur in the
+    /// Queueing System (cancelling is only possible from WAITING / INPROGRESS) and stays rejected.
+    /// </summary>
+    private async Task<QueueingEventResponse> MirrorCancelledThenClosedAsync(
+        QueueingEvent row, QueueingEventMessage message, Ticket ticket, QueueingTicketLink link, CancellationToken cancellationToken)
+    {
+        if (options.ServiceAccountEmployeeId is not { } serviceAccount || serviceAccount == Guid.Empty)
+        {
+            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.ServiceAccountNotConfigured,
+                "QueueingIntegration:ServiceAccountEmployeeId is not configured.", ticket.TicketId, cancellationToken);
+        }
+
+        var reason = message.Reason ?? message.Comment ?? "Closed as served in the Queueing System after it was cancelled";
+        var closedBy = message.PerformedByUserId is { } performer
+            ? (await ResolveEmployeeAsync(performer, serviceAccount, cancellationToken)).EmployeeId
+            : null;
+        var detail = $"{EventFacts(message)};PerformedByUserId={message.PerformedByUserId ?? "(none)"};CounterId={message.CounterId ?? "(none)"};PreviousState=Cancelled";
+
+        var result = await lifecycleAppService.ChangeQueueClosureOutcomeAsync(
+            serviceAccount, ticket.TicketId, $"{SourceLabel}: {reason}", detail,
+            _ => StageApplied(link, row, message, QueueingTicketState.Closed, QueueingOutcomeCodes.Applied, reason),
+            cancellationToken, closedBy);
+        if (result.Outcome != TicketMutationOutcome.Success)
+        {
+            store.DiscardPendingChanges();
+            return await FromMutationFailureAsync(row.EventId, result.Outcome, ticket.TicketId, cancellationToken);
+        }
+
+        return Respond(row, (await ticketRepository.GetByIdAsync(ticket.TicketId, cancellationToken))!, QueueingResultStatus.Processed);
+    }
+
     // ------------------------------------------------------------------ additive events
 
     private async Task<QueueingEventResponse> AddCommentAsync(
@@ -1004,10 +1146,31 @@ public sealed class QueueingEventProcessor(
         // Re-read so the failure is recorded on a clean row, whatever was staged before.
         store.DiscardPendingChanges();
         var row = (await store.GetEventAsync(eventId, cancellationToken))!;
-        var attempt = row.AttemptCount + 1;
-        var delay = Math.Min(options.MaxRetryDelaySeconds, options.RetryBaseDelaySeconds * Math.Pow(2, Math.Min(attempt - 1, 20)));
         var now = Now();
-        row.MarkUnresolved(code, detail, ticketId, now, now.AddSeconds(delay), options.MaxRetryAttempts);
+        switch (QueueingOutcomeCodes.Classify(code))
+        {
+            case QueueingFailureClass.Ordering:
+                // Waiting for an earlier event (or the ticket's creation): no retry of its own, no attempt consumed - released in order when that event settles.
+                row.MarkHeldForOrdering(code, detail, ticketId);
+                break;
+
+            case var failureClass:
+                // Configuration holds (a mapping / employee / setting is missing) retry indefinitely at a capped exponential backoff - they never "give up", monitoring
+                // alerts on their age. Transient and unexplained failures are bounded: after MaxRetryAttempts the event is Failed and waits for an administrator.
+                var attempt = row.AttemptCount + 1;
+                var delay = Math.Min(options.MaxRetryDelaySeconds, options.RetryBaseDelaySeconds * Math.Pow(2, Math.Min(attempt - 1, 20)));
+                int? bound = failureClass == QueueingFailureClass.Configuration ? null : Math.Max(1, options.MaxRetryAttempts);
+                row.MarkUnresolved(code, detail, ticketId, now, now.AddSeconds(delay), bound);
+                if (row.Status == QueueingEventStatus.Failed)
+                {
+                    logger.LogError(
+                        "Queueing event {EventId} ({EventType}) for {ExternalTicketId} FAILED after {Attempts} attempts ({OutcomeCode}). Every later event of the queue ticket is held until an administrator reprocesses it.",
+                        row.EventId, row.EventType, row.ExternalTicketId, row.AttemptCount, code);
+                }
+
+                break;
+        }
+
         await unitOfWork.SaveChangesAsync(cancellationToken);
         return await FromRowAsync(row, QueueingResultStatus.Pending, cancellationToken);
     }
@@ -1033,8 +1196,9 @@ public sealed class QueueingEventProcessor(
             ? status
             : row.Status switch
             {
-                QueueingEventStatus.Unresolved or QueueingEventStatus.Received => QueueingResultStatus.Pending,
-                QueueingEventStatus.Failed => QueueingResultStatus.Rejected,
+                // A Failed event is still unresolved (nothing was applied and everything behind it waits): it is stored, TigerCS will not retry it by itself, and the
+                // sender must not resend it - an administrator reprocesses it. Hence Pending, not retryable.
+                QueueingEventStatus.Unresolved or QueueingEventStatus.Received or QueueingEventStatus.Failed => QueueingResultStatus.Pending,
                 _ => status
             };
         return new QueueingEventResponse(
@@ -1062,4 +1226,7 @@ public static class QueueingAuditActions
     public const string TicketRecalled = "QueueingTicketRecalled";
     public const string CommentAdded = "QueueingCommentAdded";
     public const string EventSuperseded = "QueueingEventSuperseded";
+
+    /// <summary>An administrator restarted a stuck (Failed or held) event. Entity type <c>QueueingEvent</c>, entity id the EventId.</summary>
+    public const string EventReprocessed = "QueueingEventReprocessed";
 }

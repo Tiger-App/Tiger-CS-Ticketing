@@ -25,16 +25,41 @@ public sealed class QueueingStore(TigerCsDbContext dbContext) : IQueueingStore
     public async Task<IReadOnlyList<QueueingEvent>> ListDueForRetryAsync(DateTime nowUtc, int take, CancellationToken cancellationToken = default)
     {
         var interruptedBefore = nowUtc - InterruptedAfter;
-        return await dbContext.QueueingEvents
-            .Where(e => (e.Status == QueueingEventStatus.Unresolved && e.NextRetryAtUtc != null && e.NextRetryAtUtc <= nowUtc)
+        var events = dbContext.QueueingEvents.Where(e => e.Source == QueueingEvent.SourceName);
+
+        // Strict per-ticket order: a state-changing event is only ever retried as the HEAD of its ticket - when no earlier state-changing event of the same queue
+        // ticket is unsettled (Received, Unresolved or Failed). Events held behind it have no retry of their own; they are released, in order, when it settles. So a
+        // stuck ticket costs one retry per backoff window however many events pile up behind it, and a Failed head is never retried automatically.
+        return await events
+            // An ordering hold (no retry time of its own) is only ever picked here as a head: its predecessor has settled, so the release that should have applied it
+            // missed it (a race between two nodes) - this is the safety net that guarantees it can never be stranded.
+            .Where(e => (e.Status == QueueingEventStatus.Unresolved && (e.NextRetryAtUtc == null || e.NextRetryAtUtc <= nowUtc))
                 || (e.Status == QueueingEventStatus.Received && e.ReceivedAtUtc < interruptedBefore))
+            .Where(e => e.EventType == QueueingEventType.TicketCommentAdded || e.EventType == QueueingEventType.TicketRecalled
+                || !events.Any(h => h.ExternalTicketId == e.ExternalTicketId && h.EventSequence < e.EventSequence
+                    && h.EventType != QueueingEventType.TicketCommentAdded && h.EventType != QueueingEventType.TicketRecalled
+                    && (h.Status == QueueingEventStatus.Received || h.Status == QueueingEventStatus.Unresolved || h.Status == QueueingEventStatus.Failed)))
             .OrderBy(e => e.ExternalTicketId).ThenBy(e => e.EventSequence)
             .Take(take)
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<QueueingEvent?> FindEarlierUnsettledAsync(
+        string externalTicketId, long beforeSequence, string exceptEventId, CancellationToken cancellationToken = default)
+    {
+        var id = externalTicketId.Trim();
+        var except = exceptEventId.Trim();
+        return await dbContext.QueueingEvents
+            .AsNoTracking()
+            .Where(e => e.Source == QueueingEvent.SourceName && e.ExternalTicketId == id && e.EventSequence < beforeSequence && e.EventId != except
+                && e.EventType != QueueingEventType.TicketCommentAdded && e.EventType != QueueingEventType.TicketRecalled
+                && (e.Status == QueueingEventStatus.Received || e.Status == QueueingEventStatus.Unresolved || e.Status == QueueingEventStatus.Failed))
+            .OrderBy(e => e.EventSequence).ThenBy(e => e.QueueingEventId)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingMonitoringSnapshot> GetMonitoringSnapshotAsync(
-        DateTime nowUtc, int take, CancellationToken cancellationToken = default)
+        DateTime nowUtc, int take, TimeSpan alertAfter, CancellationToken cancellationToken = default)
     {
         var events = dbContext.QueueingEvents.AsNoTracking().Where(e => e.Source == QueueingEvent.SourceName);
         var byStatus = (await events.GroupBy(e => e.Status).Select(g => new { g.Key, Count = g.Count() }).ToListAsync(cancellationToken))
@@ -51,7 +76,33 @@ public sealed class QueueingStore(TigerCsDbContext dbContext) : IQueueingStore
                 e.AttemptCount, e.ReceivedAtUtc, e.NextRetryAtUtc))
             .ToList();
 
-        return new TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingMonitoringSnapshot(nowUtc, byStatus, byOutcome, oldest, attention);
+        // Blocked queue tickets: one row per ticket, described by its HEAD (the lowest-sequence unsettled state-changing event - the one everything behind it waits for).
+        var unsettled = await events
+            .Where(e => (e.Status == QueueingEventStatus.Unresolved || e.Status == QueueingEventStatus.Failed)
+                && e.EventType != QueueingEventType.TicketCommentAdded && e.EventType != QueueingEventType.TicketRecalled)
+            .Select(e => new { e.ExternalTicketId, e.EventId, e.EventSequence, e.Status, e.OutcomeCode, e.AttemptCount, e.ReceivedAtUtc })
+            .ToListAsync(cancellationToken);
+        var blocked = unsettled
+            .GroupBy(e => e.ExternalTicketId)
+            .Select(g =>
+            {
+                var head = g.OrderBy(e => e.EventSequence).First();
+                var ageSeconds = (int)Math.Max(0, (nowUtc - head.ReceivedAtUtc).TotalSeconds);
+                return new TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingBlockedTicketDto(
+                    g.Key, head.EventId, head.EventSequence, head.Status.ToString(), head.OutcomeCode,
+                    QueueingOutcomeCodes.Classify(head.OutcomeCode).ToString(), head.AttemptCount, head.ReceivedAtUtc, ageSeconds,
+                    HeldBehind: g.Count() - 1, Alert: ageSeconds >= alertAfter.TotalSeconds || head.Status == QueueingEventStatus.Failed);
+            })
+            .OrderByDescending(b => b.AgeSeconds)
+            .ToList();
+
+        return new TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingMonitoringSnapshot(nowUtc, byStatus, byOutcome, oldest, attention)
+        {
+            BlockedTicketCount = blocked.Count,
+            AlertCount = blocked.Count(b => b.Alert),
+            OldestBlockedAgeSeconds = blocked.Count == 0 ? null : blocked.Max(b => b.AgeSeconds),
+            BlockedTickets = [.. blocked.Take(Math.Clamp(take, 1, 500))]
+        };
     }
 
     public async Task<IReadOnlyList<QueueingEvent>> ListPurgeablePayloadsAsync(DateTime processedBeforeUtc, int take, CancellationToken cancellationToken = default) =>

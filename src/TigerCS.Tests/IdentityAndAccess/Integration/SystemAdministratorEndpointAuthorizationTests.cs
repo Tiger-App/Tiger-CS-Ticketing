@@ -1140,6 +1140,16 @@ public class SystemAdministratorEndpointAuthorizationTests : IClassFixture<Tiger
     }
 
     [Fact]
+    public async Task QueueingEventReprocess_IsAllowedForASystemAdministrator_AnUnknownEventIs404()
+    {
+        var (client, _) = await CreateAdministratorAsync();
+
+        var response = await client.PostAsync("/api/admin/queueing/events/no-such-event/reprocess", content: null);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);   // authorised (not 401/403); the event simply does not exist
+    }
+
+    [Fact]
     public async Task DefaultClassificationBackfill_PreviewAndDryRun_Return200_AndALiveRunIsRefusedUnlessEnabled()
     {
         var (client, _) = await CreateAdministratorAsync();

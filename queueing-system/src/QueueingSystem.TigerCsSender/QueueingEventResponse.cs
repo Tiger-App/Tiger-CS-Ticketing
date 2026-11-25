@@ -13,7 +13,7 @@ public enum QueueingResultStatus
     /// <summary>This EventId was already received; the original outcome is returned. Delivered.</summary>
     Duplicate,
 
-    /// <summary>Stored but not applied yet (its ticket does not exist yet, or a mapping / employee is not set up). TigerCS retries it itself - do NOT resend.</summary>
+    /// <summary>Stored but not applied yet (its ticket does not exist yet, a mapping / employee is not set up, or an EARLIER event of the same queue ticket is not applied yet - TigerCS applies a queue ticket's events strictly in sequence order and holds every later one). TigerCS retries it itself - do NOT resend.</summary>
     Pending,
 
     /// <summary>Older than the ticket's applied state; recorded, deliberately not applied. Delivered; do not resend.</summary>
@@ -44,7 +44,7 @@ public sealed record QueueingEventResponse
 
     [JsonPropertyName("status")] public QueueingResultStatus Status { get; init; }
 
-    /// <summary>A stable machine-readable code: TICKET_CREATED, APPLIED, TICKET_ALREADY_EXISTS, ALREADY_IN_STATE, STALE_EVENT, TICKET_ALREADY_CLOSED, AWAITING_TICKET_CREATED, COMPANY_NOT_MAPPED, TICKET_TYPE_NOT_MAPPED, REQUEST_TYPE_UNUSABLE, USER_NOT_MAPPED, USER_INACTIVE, USER_NOT_IN_DEPARTMENT, CHANNEL_NOT_CONFIGURED, PRIORITY_NOT_CONFIGURED, SERVICE_ACCOUNT_NOT_CONFIGURED, CONCURRENT_UPDATE, PROCESSING_FAILED, TICKET_NOT_ELIGIBLE, EVENT_ID_REUSED, VALIDATION_FAILED, INTEGRATION_DISABLED.</summary>
+    /// <summary>A stable machine-readable code: TICKET_CREATED, APPLIED, TICKET_ALREADY_EXISTS, ALREADY_IN_STATE, STALE_EVENT, TICKET_ALREADY_CLOSED, AWAITING_TICKET_CREATED, AWAITING_PREVIOUS_EVENT, COMPANY_NOT_MAPPED, TICKET_TYPE_NOT_MAPPED, REQUEST_TYPE_UNUSABLE, USER_NOT_MAPPED, USER_INACTIVE, USER_NOT_IN_DEPARTMENT, CHANNEL_NOT_CONFIGURED, PRIORITY_NOT_CONFIGURED, SERVICE_ACCOUNT_NOT_CONFIGURED, CONCURRENT_UPDATE, PROCESSING_FAILED, TICKET_NOT_ELIGIBLE, EVENT_ID_REUSED, VALIDATION_FAILED, INTEGRATION_DISABLED.</summary>
     [JsonPropertyName("outcome")] public string? Outcome { get; init; }
 
     [JsonPropertyName("ticketId")] public long? TicketId { get; init; }

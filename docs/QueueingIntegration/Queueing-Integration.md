@@ -23,8 +23,10 @@ SLA and reporting consistent with it.
 | `TicketReturned` | The owner is released and the ticket returns to **`Open`**, in the same department. This transition exists **only for queue-managed tickets** (`Ticket.ReturnToQueue`); the generic status table is untouched (`InProgress -> Open` is still not a TigerCS transition for anyone else). The assignment row is superseded and a system status-history row (`InProgress -> Open`, with the reason) is written. A later `TicketAssigned` takes the ticket `Open -> InProgress` again, exactly as for a first assignment. |
 | `TicketCommentAdded` | A ticket note, authored by the employee who wrote it when mapped (otherwise by the integration account, with the queue user named in the text). Still recorded after closure. |
 | `TicketRecalled` | A history (audit + timeline) entry with counter, performer and reason. Nothing else changes. Still recorded after closure. |
-| `TicketClosed` | System closure, resolution outcome **Resolved**, owner cleared, SLA resolution clock settled. |
+| `TicketClosed` | System closure, resolution outcome **Resolved**, owner cleared, SLA resolution clock settled. On a ticket that is **Cancelled** (the Queueing System can close a cancelled queue ticket as served) the same closed ticket changes its outcome **Cancelled -> Resolved**: the Cancelled resolution row is archived (kept), a new Resolved row is added, the outcome change is on the status history and audit trail, and the Resolution SLA clock is settled. `ReopenCount` is untouched and no second closure notification is queued. |
 | `TicketCancelled` | The same closure with resolution outcome **Cancelled** (TigerCS has no Cancelled status; Cancelled is an existing resolution outcome). |
+
+**TigerCS is a one-way mirror.** It never sends anything to the Queueing System and never decides anything about a queue ticket; it only reflects the state the Queueing System reports - including the transitions out of a terminal state when they actually happen in the Queueing System: Closed/Cancelled -> `InProgress` again (`TicketAssigned` / `TicketReassigned`, see D7) and Cancelled -> Closed (`TicketClosed`). The reverse Closed -> Cancelled cannot happen in the Queueing System (it only cancels `WAITING` / `INPROGRESS` tickets) and stays `Rejected`. Comments and recalls are outside the synchronisation scope: the sender does not send them (the event types stay in the contract and are still accepted).
 
 ### 1.1 Department and request-type resolution
 
@@ -161,7 +163,7 @@ public sealed record QueueingEventRequest
     /// <summary>Optional. Max 200.</summary>
     public string? CustomerName { get; init; }
 
-    /// <summary>The customer's mobile number. <b>Required on TicketCreated</b> (used for the CRM lookup). Must contain digits; international format (+971...) preferred. Max 32.</summary>
+    /// <summary>The customer's mobile number. Optional: when there is none the CRM phone lookup is skipped and TigerCS never invents one. Must contain digits when sent; international format (+971...) preferred. Max 32.</summary>
     public string? CustomerPhone { get; init; }
 
     /// <summary>Optional. Max 256.</summary>
@@ -198,7 +200,7 @@ public sealed record QueueingEventRequest
     /// </summary>
     public static IReadOnlyList<string> RequiredMembers(QueueingEventType type) => type switch
     {
-        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId", "CustomerPhone"],
+        QueueingEventType.TicketCreated => ["QueueNumber", "CompanyId", "TicketTypeId"],
         QueueingEventType.TicketAssigned or QueueingEventType.TicketReassigned => ["AssignedUserId"],
         QueueingEventType.TicketCommentAdded => ["Comment"],
         _ => []
@@ -277,7 +279,7 @@ Always required: `EventId`, `EventType`, `ExternalTicketId`, `EventSequence`, `O
 
 | Event | Also required |
 |---|---|
-| TicketCreated | `QueueNumber`, `CompanyId`, `TicketTypeId`, and **`CustomerPhone` (must contain digits) or `CustomerEmail`** - at least one; a customer with an email and no phone is accepted (the CRM phone lookup is skipped). Optional context: `CompanyName`, `TicketTypeName`, `ProjectCode`, `ProjectName`, `UnitCode` (shown in the ticket summary and audit; not matched to a TigerCS unit). |
+| TicketCreated | `QueueNumber`, `CompanyId`, `TicketTypeId`. **No customer phone or email is required**: the authenticated API key plus `ExternalTicketId` and `QueueNumber` (and `CustomerName` when known) identify the queue customer. A customer with a phone, an email, both or neither is accepted; when there is no phone the CRM phone lookup is skipped and **TigerCS never generates a placeholder number**. A phone, when sent, must contain digits, and an email must contain `@`. Optional context: `CustomerName`, `CustomerPhone`, `CustomerEmail`, `ProjectCode`, `ProjectName`, `UnitCode`, and the display names `CompanyName` / `TicketTypeName` (accepted but never required; they are recorded in the audit, not matched to anything). Project and unit appear in the ticket summary and audit and are not matched to a TigerCS unit. |
 | TicketAssigned / TicketReassigned | `AssignedUserId` |
 | TicketCommentAdded | `Comment` |
 | TicketReturned / TicketRecalled / TicketClosed / TicketCancelled | nothing |
@@ -295,6 +297,8 @@ A missing or invalid member is a `400` naming the member; nothing is stored.
 5. It must be **strictly increasing in the order the events happened**. Gaps are tolerated (TigerCS only compares), but a number lower than one already used for a *newer* event is a stale event.
 6. **How TigerCS uses it.** For a state-changing event (`TicketAssigned`, `TicketReassigned`, `TicketReturned`, `TicketClosed`, `TicketCancelled`): if its sequence is **greater** than the last applied sequence it is applied; if it is **not greater** it is recorded as `Superseded` and never applied. `TicketCommentAdded` and `TicketRecalled` only add records, so they are recorded whatever their sequence (even after closure) and do not move the applied sequence. An event for a queue ticket TigerCS has not seen yet (`TicketCreated` not processed) is stored and applied right after `TicketCreated`.
 7. **Send each queue ticket's events in order, one at a time** (different tickets in parallel is fine). TigerCS tolerates reordering, but in-order delivery means it never has to.
+8. **Strict per-ticket order (in TigerCS).** A state-changing event is applied only when **no earlier event of the same queue ticket is unresolved** (Received, Unresolved or `Failed`). While one is - a mapping or an employee is missing, the event failed, or it is still being processed - every later event of that ticket is **held behind it** (`202`, `AWAITING_PREVIOUS_EVENT`, `retryable: true`): never applied around it, **never skipped**, and it consumes no retry attempt. The moment the earlier event settles (applied, superseded or rejected), the held events are applied in sequence order. Only the oldest unresolved event of a ticket (its *head*) is retried; other queue tickets are unaffected. Comments and recalls never block and are never blocked.
+9. **`OccurredAtUtc` is never an ordering authority - the sequence is.** An event derived from the queue's current state (post-commit reconciliation, `Reason`: `Reconciled from Queueing state`) may carry an `OccurredAtUtc` earlier than an event already applied, or even earlier than the ticket's creation. TigerCS never rejects, supersedes or reorders an event because of its time; the only rule on it is the existing "not more than 5 minutes in the future". So that the ticket's own history cannot run backwards, the time its records are stamped with (status history, resolution, SLA periods, assignment rows, audit) is floored at the ticket's creation and at the latest time already applied; the event's original `OccurredAtUtc` is kept on the inbox row. A reconciled `TicketCreated` -> `TicketClosed` / `TicketCancelled` with no `TicketAssigned` in between closes cleanly (Resolved / Cancelled) and invents no assignment; a last owner in `PerformedByUserId` that is not mapped never holds a closure (it is only the performer).
 
 ## 5. Response
 
@@ -820,7 +824,7 @@ Response - `409 Conflict`:
 | `200` | `Duplicate` | This `EventId` was already received; the original outcome is returned. | Mark sent. |
 | `200` | `Superseded` | Older than the applied state (`STALE_EVENT`); recorded, not applied. | Mark sent. Do not resend. |
 | `200` | `Rejected` | Valid but not applicable (e.g. a state change after closure, `TICKET_ALREADY_CLOSED`). | Mark sent. Do not resend. |
-| `202` | `Pending` | **Stored, not applied yet** (`AWAITING_TICKET_CREATED`, `COMPANY_NOT_MAPPED`, `TICKET_TYPE_NOT_MAPPED`, `REQUEST_TYPE_UNUSABLE`, `USER_NOT_MAPPED`, `USER_INACTIVE`, `USER_NOT_IN_DEPARTMENT`, `CHANNEL_NOT_CONFIGURED`, `PRIORITY_NOT_CONFIGURED`, `SERVICE_ACCOUNT_NOT_CONFIGURED`, `CONCURRENT_UPDATE`, `PROCESSING_FAILED`, `TICKET_NOT_ELIGIBLE`). `retryable: true`. | Mark sent. **Do not resend** - TigerCS retries it. Alert the business when `outcome` is a mapping problem. |
+| `202` | `Pending` | **Stored, not applied yet** (`AWAITING_TICKET_CREATED`, `AWAITING_PREVIOUS_EVENT`, `COMPANY_NOT_MAPPED`, `TICKET_TYPE_NOT_MAPPED`, `REQUEST_TYPE_UNUSABLE`, `USER_NOT_MAPPED`, `USER_INACTIVE`, `USER_NOT_IN_DEPARTMENT`, `CHANNEL_NOT_CONFIGURED`, `PRIORITY_NOT_CONFIGURED`, `SERVICE_ACCOUNT_NOT_CONFIGURED`, `CONCURRENT_UPDATE`, `PROCESSING_FAILED`, `TICKET_NOT_ELIGIBLE`). `retryable: true`. | Mark sent. **Do not resend** - TigerCS retries it. Alert the business when `outcome` is a mapping problem. |
 | `400` | `Invalid` | Validation failed; `errors` names the members. Nothing stored. | Dead-letter and alert. Do **not** resend as is. |
 | `401` / `403` | - | Missing or invalid API key. | **Stop sending, alert, keep every event.** Resume when the key is fixed. |
 | `409` | `Conflict` | Same `EventId` already received with different content (`EVENT_ID_REUSED`). | Dead-letter and alert (a sender bug). |
@@ -843,7 +847,16 @@ The sender library implements exactly this (`TigerCsEventSender`, `SendDispositi
 - **Atomic creation.** The ticket, its queue-state row, the customer contact, the history entry and the inbox row are written in **one database transaction**: the queue-state and inbox rows are staged inside ticket creation, immediately before its final save. There is no moment at which a ticket exists without its queue state, and **no later event is ever needed to repair an incomplete creation**; if anything fails, the whole creation rolls back (no ticket, no history, no SLA period, no outbox row) and the event stays stored for retry.
 - **Atomic state changes.** For assignment + start of work, return, close and cancel, the integration's own state (queue state and inbox row) is staged on the same unit of work as the ticket change and commits in the very transaction of that change. A refused or failed change leaves the ticket **and** the queue state exactly as they were.
 - **Out-of-order.** See section 4.
-- **Unresolved events** are persisted and retried with exponential backoff (30 s doubling, cap 1 h, 12 attempts) by a Hangfire job (`queueing-event-retry`, every minute, when `BackgroundJobs:Enabled`) - or immediately by a redelivery of the same `EventId`. Each event is re-read before it is applied, so one event's failure never affects the rest of the batch. After the last attempt it becomes `Failed`; redelivering it starts a fresh cycle.
+- **Unresolved events** are persisted and retried by a Hangfire job (`queueing-event-retry`, every minute, when `BackgroundJobs:Enabled`), only as the head of their queue ticket (section 4.8), or immediately by a redelivery of the same `EventId`. Each event is re-read before it is applied, so one event's failure never affects the rest of the batch. How a hold is retried depends on its class (the `outcome` code):
+
+  | Class | Outcomes | Retry |
+  |---|---|---|
+  | **Ordering** | `AWAITING_PREVIOUS_EVENT` | No retry or attempt of its own: released, in order, when the earlier event settles (the sweep picks it up only if a race between two nodes orphaned it). |
+  | **Configuration** (recoverable by setting something up, or by the missing creation event arriving) | `AWAITING_TICKET_CREATED`, `COMPANY_NOT_MAPPED`, `TICKET_TYPE_NOT_MAPPED`, `REQUEST_TYPE_UNUSABLE`, `USER_NOT_MAPPED`, `USER_INACTIVE`, `USER_NOT_IN_DEPARTMENT`, `CHANNEL_NOT_CONFIGURED`, `PRIORITY_NOT_CONFIGURED`, `SERVICE_ACCOUNT_NOT_CONFIGURED` | **Indefinitely**, exponential backoff (30 s doubling) **capped** at `MaxRetryDelaySeconds` (1 h). There is no terminal cutoff: the event waits for the configuration, and monitoring alerts on its age. |
+  | **Transient** | `CONCURRENT_UPDATE` | Backoff, bounded by `MaxRetryAttempts`. |
+  | **Unexplained** | `PROCESSING_FAILED`, `TICKET_NOT_ELIGIBLE`, anything else | Backoff, bounded by `MaxRetryAttempts` (12), then `Failed`. |
+
+  A `Failed` event is **never retried automatically, never skipped and never restarted by a redelivery** (a sender that keeps resending cannot create a retry loop; the redelivery is answered `202`, `retryable: false`). Every later event of its queue ticket stays held behind it until an administrator reprocesses it (section 14).
 - **Original timestamps.** While an event is applied, the application clock answers `OccurredAtUtc` (never later than now): ticket creation time, **SLA period start**, assignment time, status history, resolution time and audit entries carry when it happened in the queue. Retry scheduling and "processed at" use the real time. Nothing else is affected.
 
 ### 8.1 Payload retention
@@ -860,7 +873,7 @@ The payload of a **successfully processed** event (customer name, phone, email a
 ## 10. Customer notifications and manual changes
 
 - **No TigerCS customer email or SMS for a queue-managed ticket.** The acknowledgement is not even queued; every other customer email (assigned, in progress, resolved, closed, reopened) is **skipped with the recorded reason `ManagedByExternalSystem`**. TigerCS sends no customer SMS about tickets at all (SMS is used for OTP only). Internal "assigned to you" notices to staff are unchanged.
-- **Manual changes in TigerCS are blocked** for queue-managed tickets: assign, reassign, transfer, take ownership, change status, resolve, close and reopen are refused with `409 ticket-managed-by-queueing-system`. **Comments / notes stay open.** (`QueueingIntegration:ManualChangePolicy = Block`, the default; `Allow` lets a person edit locally, but the next queue event overwrites it.) Queue-managed tickets are excluded from the unassigned-work reconcilers, so no background job assigns them behind the queue's back.
+- **Manual changes in TigerCS are blocked** for queue-managed tickets: assign, reassign, transfer, take ownership, change status, resolve, close and reopen are refused with `409 ticket-managed-by-queueing-system`. **Comments / notes stay open.** TigerCS is a read-only mirror of the Queueing System, so this is **not configurable**: `QueueingIntegration:ManualChangePolicy` is still read (existing configuration keeps binding) but `Allow` is ignored. The block is enforced in three layers: the application services refuse with `409 ticket-managed-by-queueing-system`; every system closure path (`CloseForCustomerInactivity`, AI-only timeout, AI completion, document delivery) refuses a queue ticket; and every lifecycle / assignment mutator of the `Ticket` domain entity throws `QueueManagedTicketMutationException` unless the Queueing integration is applying one of its own events, so a job or service that forgot its own guard still cannot change a mirrored ticket. Queue-managed tickets are excluded from the unassigned-work reconcilers; a test enumerates every background job and every `Ticket` mutator and fails when a new one has not been reviewed against this rule.
 
 ## 11. Configuration keys
 
@@ -876,9 +889,10 @@ The payload of a **successfully processed** event (customer name, phone, email a
 | `QueueingIntegration:ChannelCode` | The channel queue tickets are recorded on. | `WALK_IN_KIOSK` |
 | `QueueingIntegration:DefaultTicketPriority` | Starting priority, by name. | `Normal` |
 | `QueueingIntegration:UserLookupMode` | `Mapping` (queue user -> `QueueingUserMappings`) or `EmployeeId` (the queue user id *is* the TigerCS employee id). | `Mapping` |
-| `QueueingIntegration:ManualChangePolicy` | `Block` or `Allow` (section 10). | `Block` |
+| `QueueingIntegration:ManualChangePolicy` | Ignored: manual lifecycle / assignment changes to a queue ticket are always blocked (section 10). | `Block` |
 | `QueueingIntegration:PayloadRetentionDays` | Days a processed event's payload is kept (section 8.1). `<= 0` disables. | `90` |
-| `QueueingIntegration:MaxRetryAttempts` | Retries of an unresolved event before it is `Failed`. | `12` |
+| `QueueingIntegration:MaxRetryAttempts` | Attempts of a **bounded** failure (transient or unexplained, section 8) before the event is `Failed`. Configuration holds (a missing mapping / employee) are never bounded. | `12` |
+| `QueueingIntegration:BlockedAlertAfterMinutes` | How long a queue ticket's oldest unresolved event may block it before monitoring reports an alert (a `Failed` head always alerts). | `15` |
 | `QueueingIntegration:RetryBaseDelaySeconds` / `MaxRetryDelaySeconds` | Backoff start (doubles) and cap. | `30` / `3600` |
 | `QueueingIntegration:MaxClockSkewSeconds` | How far in the future `OccurredAtUtc` may be. | `300` |
 | `QueueingIntegration:MaxCommentLength` | Longest `Comment`. | `4000` |
@@ -956,7 +970,7 @@ Run on 2026-11-17 against a **real SQL Server 2022** (Developer, native Linux in
 
 ## 13. Decisions
 
-**Applied** (confirmed by the business): (1) `TicketReturned` releases the employee and returns the ticket to `Open`, for queue-managed tickets only; (2) an unmapped ticket type of a mapped company uses the department's General request type, logged; the department is never guessed; (3) SLA starts at the original `OccurredAtUtc`; (4) `CustomerPhone` is mandatory on `TicketCreated`; (5) manual assignment, status change, close and reopen stay blocked, comments allowed; (6) 90-day configurable payload retention that keeps identifiers and history and never deletes unresolved events; (7) no TigerCS customer SMS/email for queue tickets; (8) `TicketClosed` = Resolved, `TicketCancelled` = Cancelled.
+**Applied** (confirmed by the business): (1) `TicketReturned` releases the employee and returns the ticket to `Open`, for queue-managed tickets only; (2) an unmapped ticket type of a mapped company uses the department's General request type, logged; the department is never guessed; (3) SLA starts at the original `OccurredAtUtc`; (4) `CustomerPhone` and `CustomerEmail` are both optional on `TicketCreated` (no placeholder is ever generated; only the Queueing endpoint is relaxed - every other ticket source keeps its own validation); (5) manual assignment, status change, close and reopen stay blocked, comments allowed; (6) 90-day configurable payload retention that keeps identifiers and history and never deletes unresolved events; (7) no TigerCS customer SMS/email for queue tickets; (8) `TicketClosed` = Resolved, `TicketCancelled` = Cancelled.
 
 **Still open**
 
@@ -964,9 +978,9 @@ Run on 2026-11-17 against a **real SQL Server 2022** (Developer, native Linux in
 |---|---|---|
 | D4 | Department settings that disable assignment (`AllowAssignment = false`). | Honoured: the event is held (`TICKET_NOT_ELIGIBLE`). Alternative: let the integration bypass it. |
 | D6 | Automatic customer match. | The lookup only enriches the name/audit; a ticket is never auto-verified against a CRM customer (same rule as Genesys). |
-| D7 | Reopen of a closed queue ticket. | **Supported (integration-controlled).** A `TicketAssigned` / `TicketReassigned` with a newer sequence on a Closed (Resolved or Cancelled) queue ticket reopens the *same* ticket: Closed -> Open (system status-history row, audit `QueueingReopen`, `ReopenCount` +1, new Resolution SLA cycle, no approval or reopen window), then the normal assignment takes it to `InProgress`. An unmapped employee is checked first and leaves the ticket Closed (`USER_NOT_MAPPED`, retried). `TicketReturned` / `TicketClosed` / `TicketCancelled` on a Closed ticket stay `Rejected`. |
+| D7 | Reopen of a closed queue ticket. | **Supported, as a pure mirror of what the Queueing System actually does.** A `TicketAssigned` / `TicketReassigned` with a newer sequence on a Closed (Resolved or Cancelled) queue ticket takes the *same* ticket back into service: Closed -> Open (system status-history row, audit `QueueingReopen`, no approval or reopen window), then the normal assignment takes it to `InProgress`. It is **not** a business reopen: no person decides it, and the dashboard "Reopened" count does not include queue tickets. `ReopenCount` is incremented because it is the ticket's cycle key (closure notifications, review cycles and their idempotency keys are all keyed by it - without it the second closure would collide with the first); the original SLA cycle and its results are kept, a **separate SLA reopen cycle** is opened, and the earlier resolution row is archived, never deleted. An unmapped employee is checked first and leaves the ticket Closed (`USER_NOT_MAPPED`, held and retried; later events wait behind it). A `TicketClosed` on a Cancelled ticket changes its outcome Cancelled -> Resolved (section 1); `TicketReturned` / `TicketCancelled` / a repeated `TicketClosed` on a Closed ticket stay `Rejected`. |
 | D8 | Mapping administration UI. | Tables + SQL only. |
-| D10 | `Failed` events need a person. | Visible in `QueueingEvents` (`Status = 6`); no dashboard yet. |
+| D10 | `Failed` events need a person. | **Audited administrator reprocess** (section 14) - the only way to restart a `Failed` event; nothing is ever skipped. Monitoring and a log alert report every blocked ticket. |
 | D12 | Rate limiting / lockout of the API key. | A wrong key is a plain `401`; limit it at the network gateway. |
 | D13 | Retention of superseded / rejected events' payloads. | Kept (the 90-day rule covers *successfully processed* events only, as decided). Extend the rule if those payloads should also go. |
 | D14 | A company mapped to the Call Center department. | Such a ticket starts `InProgress` (the existing Call Center rule) and unassigned. Avoid mapping a queue company to it. |
@@ -974,3 +988,9 @@ Run on 2026-11-17 against a **real SQL Server 2022** (Developer, native Linux in
 ## 14. Monitoring
 
 `GET /api/integrations/queueing/monitoring?take=50` - read-only, authenticated with the same `X-Queueing-Api-Key`. Returns `countsByStatus` (Received, Processed, Unresolved, Superseded, Rejected, Failed), `heldOrFailedByOutcome` (e.g. `USER_NOT_MAPPED`, `COMPANY_NOT_MAPPED`), `oldestUnresolvedReceivedAtUtc` and an `attention` list of the `Unresolved` / `Failed` events (ids, outcome, detail, attempts, next retry - never customer data). Alert when `Failed > 0`, or when `oldestUnresolvedReceivedAtUtc` is older than a few minutes (a mapping or employee is missing). The Queueing System reports its own side (pending / dead-lettered outbox rows) at `GET /TigerCsIntegration/GetMonitoring`.
+
+The snapshot also reports the **blocked queue tickets** (a ticket is blocked while it has an unresolved state-changing event; every later event waits behind it, section 4.8): `blockedTicketCount`, `alertCount`, `oldestBlockedAgeSeconds` and `blockedTickets` - one row per ticket described by its head event (`headEventId`, `headEventSequence`, `headStatus`, `headOutcomeCode`, `failureClass` = Ordering / Configuration / Transient / Unexplained, `attemptCount`, `ageSeconds`, `heldBehind`, `alert`). `alert` is true when the head has been blocked longer than `QueueingIntegration:BlockedAlertAfterMinutes` (15) or has `Failed`. The `queueing-event-retry` job also logs a warning (`Queueing integration ALERT: ...`, counts, age and outcome code only) every minute while any ticket is alerting, so a log-based alert can fire without polling the endpoint.
+
+### 14.1 Administrator reprocess
+
+`POST /api/admin/queueing/events/{eventId}/reprocess` - System Administrator with `Administration.Configuration.Edit`, staff sign-in (not the Queueing API key). For a **Failed** event, or an **Unresolved** one whose cause was just fixed: it is written to the audit trail first (`QueueingEventReprocessed`: the administrator, the event, its status / outcome / attempts before), then the retry cycle restarts (attempts reset; the payload and `EventId` never change), the event is applied again under the ticket's lock and, if it settles, the events held behind it are applied in sequence order. `404` for an unknown event; `409` when the event is neither Failed nor Unresolved. There is deliberately **no skip**: an event that cannot be applied stays blocking until its cause is fixed. Reprocessing sends nothing to the Queueing System.

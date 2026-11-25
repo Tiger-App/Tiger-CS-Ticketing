@@ -170,4 +170,45 @@ public sealed record QueueingMonitoringSnapshot(
     IReadOnlyDictionary<string, int> CountsByStatus,
     IReadOnlyDictionary<string, int> HeldOrFailedByOutcome,
     DateTime? OldestUnresolvedReceivedAtUtc,
-    IReadOnlyList<QueueingMonitoringEventDto> Attention);
+    IReadOnlyList<QueueingMonitoringEventDto> Attention)
+{
+    /// <summary>How many queue tickets have an unresolved (held or Failed) state event, i.e. are blocked: their later events wait behind it.</summary>
+    public int BlockedTicketCount { get; init; }
+
+    /// <summary>How many of those are alerts: blocked longer than <c>QueueingIntegration:BlockedAlertAfterMinutes</c>, or Failed.</summary>
+    public int AlertCount { get; init; }
+
+    /// <summary>Age in seconds of the longest-blocked ticket's head event, or null when nothing is blocked.</summary>
+    public int? OldestBlockedAgeSeconds { get; init; }
+
+    /// <summary>One row per blocked queue ticket (oldest first), described by its head event. Identifiers and reasons only - never customer data.</summary>
+    public IReadOnlyList<QueueingBlockedTicketDto> BlockedTickets { get; init; } = [];
+}
+
+/// <summary>
+/// A queue ticket whose events are blocked, described by its HEAD event (the lowest-sequence unresolved one - everything behind it waits for it). FailureClass is
+/// Ordering / Configuration / Transient / Unexplained (how the head is retried, see <c>QueueingFailureClass</c>); HeldBehind is how many later events wait behind the head;
+/// Alert is true when the head has been blocked longer than the alert threshold, or has Failed.
+/// </summary>
+public sealed record QueueingBlockedTicketDto(
+    string ExternalTicketId,
+    string HeadEventId,
+    long HeadEventSequence,
+    string HeadStatus,
+    string? HeadOutcomeCode,
+    string FailureClass,
+    int AttemptCount,
+    DateTime HeadReceivedAtUtc,
+    int AgeSeconds,
+    int HeldBehind,
+    bool Alert);
+
+/// <summary>The result of an administrator's reprocess of one event: the event as it stands afterwards, and what the processor answered.</summary>
+public sealed record QueueingReprocessResult(
+    string EventId,
+    string ExternalTicketId,
+    string PreviousStatus,
+    string? PreviousOutcomeCode,
+    string Status,
+    string? OutcomeCode,
+    string? Detail);

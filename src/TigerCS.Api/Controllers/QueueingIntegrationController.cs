@@ -24,16 +24,19 @@ namespace TigerCS.Api.Controllers;
 public class QueueingIntegrationController(
     QueueingEventProcessor processor,
     TigerCS.Application.Modules.QueueingIntegration.Abstractions.IQueueingStore store,
+    TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions options,
     TimeProvider timeProvider) : ControllerBase
 {
-    /// <summary>Health of the integration: events per status, held / failed events by outcome, and the ones that need attention (no customer data).</summary>
+    /// <summary>Health of the integration: events per status, held / failed events by outcome, the blocked queue tickets, and the ones that need attention (no customer data).</summary>
     /// <remarks>Read-only and authenticated with the same API key as the receiver, so the Queueing System's monitoring can read TigerCS's side too. An event that is
-    /// <c>Unresolved</c> is retried by TigerCS (mapping or employee missing); <c>Failed</c> ran out of attempts and needs a person.</remarks>
+    /// <c>Unresolved</c> is retried by TigerCS (mapping or employee missing - indefinitely, at a capped backoff); <c>Failed</c> exhausted its bounded attempts and needs an
+    /// administrator's reprocess. Every later event of a blocked ticket waits behind its head event (<c>blockedTickets</c>); alert on <c>alertCount &gt; 0</c>.</remarks>
     [HttpGet("monitoring")]
     [ProducesResponseType<QueueingMonitoringSnapshot>(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public async Task<IActionResult> Monitoring([FromQuery] int take = 50, CancellationToken cancellationToken = default) =>
-        Ok(await store.GetMonitoringSnapshotAsync(timeProvider.GetUtcNow().UtcDateTime, take, cancellationToken));
+        Ok(await store.GetMonitoringSnapshotAsync(
+            timeProvider.GetUtcNow().UtcDateTime, take, TimeSpan.FromMinutes(Math.Max(1, options.BlockedAlertAfterMinutes)), cancellationToken));
 
     /// <summary>Receive one Queueing System event.</summary>
     /// <remarks>

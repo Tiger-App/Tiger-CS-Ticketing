@@ -10,7 +10,9 @@ public enum QueueingEventStatus : byte
 
     /// <summary>
     /// Could not be applied YET - the ticket does not exist yet (out of order), or a mapping / configuration it needs is missing. The event is
-    /// kept, nothing was changed, and it is retried (<see cref="QueueingEvent.NextRetryAtUtc"/>) until it applies or runs out of attempts.
+    /// kept, nothing was changed, and it is retried (<see cref="QueueingEvent.NextRetryAtUtc"/>) until it applies. A configuration hold (a mapping or an
+    /// employee is missing) is retried indefinitely with a capped exponential backoff; a transient or unexplained failure is bounded (then <see cref="Failed"/>);
+    /// an event held only because an EARLIER event of the same queue ticket is unresolved has no retry of its own - it is released, in order, when that event settles.
     /// </summary>
     Unresolved = 3,
 
@@ -20,7 +22,7 @@ public enum QueueingEventStatus : byte
     /// <summary>Valid but not applicable (e.g. a state change after the ticket is closed). Recorded, never retried.</summary>
     Rejected = 5,
 
-    /// <summary>An <see cref="Unresolved"/> event that exhausted its attempts. Needs a person; redelivering the same EventId starts it again.</summary>
+    /// <summary>An <see cref="Unresolved"/> event of a bounded failure class that exhausted its attempts. Never retried automatically and never skipped: every later event of the same queue ticket stays held until a person reprocesses it (audited administrator action).</summary>
     Failed = 6
 }
 
@@ -137,12 +139,16 @@ public class QueueingEvent
         ProcessedAtUtc = nowUtc;
     }
 
-    /// <summary>Unresolved, with the next retry; after <paramref name="maxAttempts"/> it becomes <see cref="QueueingEventStatus.Failed"/> and stops being retried.</summary>
-    public void MarkUnresolved(string outcomeCode, string? detail, long? ticketId, DateTime nowUtc, DateTime nextRetryAtUtc, int maxAttempts)
+    /// <summary>
+    /// Unresolved, with the next retry. <paramref name="maxAttempts"/> bounds a transient or unexplained failure: after that many attempts the event becomes
+    /// <see cref="QueueingEventStatus.Failed"/> and is no longer retried automatically. <c>null</c> (a configuration hold: a mapping or an employee is missing) never
+    /// fails the event - it is retried for as long as it takes, at the capped backoff, and monitoring raises the alert.
+    /// </summary>
+    public void MarkUnresolved(string outcomeCode, string? detail, long? ticketId, DateTime nowUtc, DateTime nextRetryAtUtc, int? maxAttempts)
     {
         AttemptCount++;
         Settle(outcomeCode, detail, ticketId);
-        if (AttemptCount >= maxAttempts)
+        if (maxAttempts is { } max && AttemptCount >= max)
         {
             Status = QueueingEventStatus.Failed;
             NextRetryAtUtc = null;
@@ -154,7 +160,18 @@ public class QueueingEvent
         }
     }
 
-    /// <summary>A redelivery of a Failed event starts a fresh retry cycle.</summary>
+    /// <summary>
+    /// Held only because an earlier event of the same queue ticket (or the ticket's creation) is not applied yet. It has no retry of its own and consumes no attempt:
+    /// it is applied, in sequence order, the moment the earlier event settles.
+    /// </summary>
+    public void MarkHeldForOrdering(string outcomeCode, string? detail, long? ticketId)
+    {
+        Settle(outcomeCode, detail, ticketId);
+        Status = QueueingEventStatus.Unresolved;
+        NextRetryAtUtc = null;
+    }
+
+    /// <summary>A redelivery of a Failed event, or an administrator's reprocess, starts a fresh retry cycle (the attempt counter restarts; the payload and the EventId never change).</summary>
     public void Reopen()
     {
         Status = QueueingEventStatus.Received;
@@ -195,4 +212,34 @@ public static class QueueingOutcomeCodes
     public const string ConcurrentUpdate = "CONCURRENT_UPDATE";
     public const string ProcessingFailed = "PROCESSING_FAILED";
     public const string NotEligible = "TICKET_NOT_ELIGIBLE";
+    public const string AwaitingPreviousEvent = "AWAITING_PREVIOUS_EVENT";
+
+    /// <summary>
+    /// How a hold is retried. <see cref="QueueingFailureClass.Ordering"/>: released in order, no retry of its own. <see cref="QueueingFailureClass.Configuration"/>: a
+    /// mapping / employee / setting is missing - retried indefinitely at the capped backoff. Everything else is bounded.
+    /// </summary>
+    public static QueueingFailureClass Classify(string? outcomeCode) => outcomeCode switch
+    {
+        AwaitingPreviousEvent or CreationInProgress => QueueingFailureClass.Ordering,
+        AwaitingTicket or CompanyNotMapped or TicketTypeNotMapped or RequestTypeUnusable or UserNotMapped or UserInactive or UserNotInDepartment
+            or ChannelNotConfigured or ServiceAccountNotConfigured or PriorityNotConfigured => QueueingFailureClass.Configuration,
+        ConcurrentUpdate => QueueingFailureClass.Transient,
+        _ => QueueingFailureClass.Unexplained
+    };
+}
+
+/// <summary>How an unresolved event is retried (see <see cref="QueueingOutcomeCodes.Classify"/>).</summary>
+public enum QueueingFailureClass : byte
+{
+    /// <summary>An earlier event of the same queue ticket is unresolved: released in order when it settles, no retry or attempt of its own (the sweep picks it up only if it was orphaned by a race).</summary>
+    Ordering = 1,
+
+    /// <summary>Recoverable by configuration, or by the missing ticket-creation event arriving (a mapping, an employee, a setting): retried indefinitely at a capped exponential backoff; monitoring alerts.</summary>
+    Configuration = 2,
+
+    /// <summary>A race with another writer: retried at the backoff, bounded.</summary>
+    Transient = 3,
+
+    /// <summary>Not understood (an unexpected exception, an operation TigerCS refuses): bounded retries, then <see cref="QueueingEventStatus.Failed"/>; only an administrator's audited reprocess restarts it.</summary>
+    Unexplained = 4
 }
