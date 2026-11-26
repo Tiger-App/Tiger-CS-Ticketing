@@ -13,17 +13,18 @@ public enum ActivationProblem
     None,
     Invalid,
     Inactive,
+    TooManyAttempts,
     Unavailable
 }
 
 /// <summary>
-/// Activates a tablet: the administrator's one-time code is checked with the Api and, only if the Api accepts it, stored in the tablet's
-/// HttpOnly cookie. The code can also arrive in the link's <c>#fragment</c> (never sent to any server or log); the page's script moves it
-/// into the form. Re-activating a tablet simply replaces the previous cookie.
+/// Activates a tablet: the administrator's 8-character, 24-hour, single-use code is redeemed with the Api, which answers with a separate,
+/// long device token. Only that token is stored (in the tablet's HttpOnly cookie) — the code is never kept. The code can also arrive in the
+/// link's <c>#fragment</c> (never sent to any server or log); the page's script moves it into the form. Re-activating replaces the cookie.
 /// </summary>
 public sealed class ActivateModel(EmployeeReviewTabletApiClient tabletApi) : PageModel
 {
-    [BindProperty, StringLength(128)]
+    [BindProperty, StringLength(ActivationCode.Length)]
     public string? Code { get; set; }
 
     public ActivationProblem Problem { get; private set; }
@@ -41,30 +42,40 @@ public sealed class ActivateModel(EmployeeReviewTabletApiClient tabletApi) : Pag
         ApplyNoStore();
         Language = TabletText.Normalize(lang ?? Request.Cookies[TabletModel.LanguageCookie]);
 
-        var code = Code?.Trim();
-        if (!DeviceToken.IsWellFormed(code))
+        // Cheap shape check first: anything that is not exactly 8 characters from the code alphabet cannot be a code, so it never reaches the Api.
+        var code = ActivationCode.Normalize(Code);
+        if (!ActivationCode.IsWellFormed(code))
         {
             Problem = ActivationProblem.Invalid;
             return Page();
         }
 
-        var session = await tabletApi.GetSessionAsync(code!, cancellationToken);
-        switch (session?.Status)
+        var result = await tabletApi.ActivateAsync(code!, HttpContext.Connection.RemoteIpAddress?.ToString(), cancellationToken);
+        switch (result?.Outcome)
         {
             case null:
                 Problem = ActivationProblem.Unavailable;
                 return Page();
-            case TabletSessionStatus.Invalid:
+            case ActivateTabletOutcome.InvalidCode:
                 Problem = ActivationProblem.Invalid;
                 return Page();
-            case TabletSessionStatus.Inactive:
+            case ActivateTabletOutcome.Inactive:
                 Problem = ActivationProblem.Inactive;
                 return Page();
+            case ActivateTabletOutcome.TooManyAttempts:
+                Problem = ActivationProblem.TooManyAttempts;
+                return Page();
+        }
+
+        if (!DeviceToken.IsWellFormed(result.DeviceToken))
+        {
+            Problem = ActivationProblem.Unavailable;
+            return Page();
         }
 
         var options = TabletModel.CookieOptions(Request);
         options.MaxAge = TimeSpan.FromDays(3650);
-        Response.Cookies.Append(TabletModel.TokenCookie, code!, options);
+        Response.Cookies.Append(TabletModel.TokenCookie, result.DeviceToken!, options);
         return Redirect("/EmployeeReviews/Tablet");
     }
 

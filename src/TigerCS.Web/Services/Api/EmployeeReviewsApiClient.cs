@@ -25,8 +25,8 @@ public sealed class EmployeeReviewsApiClient(HttpClient httpClient, ILogger<Empl
     public Task<ApiResult<IReadOnlyList<EligibleReviewEmployeeDto>>> GetEligibleEmployeesAsync(CancellationToken cancellationToken) =>
         GetAsync<IReadOnlyList<EligibleReviewEmployeeDto>>($"{Admin}/eligible-employees", cancellationToken);
 
-    public Task<ApiResult<EmployeeReviewDeviceCredentialDto>> RegisterAsync(RegisterEmployeeReviewDeviceRequestDto request, CancellationToken cancellationToken) =>
-        PostAsync<RegisterEmployeeReviewDeviceRequestDto, EmployeeReviewDeviceCredentialDto>(Admin, request, cancellationToken);
+    public Task<ApiResult<EmployeeReviewActivationCodeDto>> RegisterAsync(RegisterEmployeeReviewDeviceRequestDto request, CancellationToken cancellationToken) =>
+        PostAsync<RegisterEmployeeReviewDeviceRequestDto, EmployeeReviewActivationCodeDto>(Admin, request, cancellationToken);
 
     public Task<ApiResult<EmployeeReviewDeviceDto>> UpdateAsync(Guid deviceId, UpdateEmployeeReviewDeviceRequestDto request, CancellationToken cancellationToken) =>
         PutAsync<UpdateEmployeeReviewDeviceRequestDto, EmployeeReviewDeviceDto>($"{Admin}/{deviceId}", request, cancellationToken);
@@ -35,8 +35,9 @@ public sealed class EmployeeReviewsApiClient(HttpClient httpClient, ILogger<Empl
         PostAsync<SetEmployeeReviewDeviceActiveRequestDto, EmployeeReviewDeviceDto>(
             $"{Admin}/{deviceId}/activation", new SetEmployeeReviewDeviceActiveRequestDto(isActive), cancellationToken);
 
-    public Task<ApiResult<EmployeeReviewDeviceCredentialDto>> RegenerateAsync(Guid deviceId, CancellationToken cancellationToken) =>
-        PostAsync<object, EmployeeReviewDeviceCredentialDto>($"{Admin}/{deviceId}/credential", new { }, cancellationToken);
+    public Task<ApiResult<EmployeeReviewActivationCodeDto>> RegenerateAsync(Guid deviceId, bool confirmReplaceActiveCredential, CancellationToken cancellationToken) =>
+        PostAsync<IssueEmployeeReviewActivationCodeRequestDto, EmployeeReviewActivationCodeDto>(
+            $"{Admin}/{deviceId}/credential", new IssueEmployeeReviewActivationCodeRequestDto(confirmReplaceActiveCredential), cancellationToken);
 
     public Task<ApiResult<EmployeeReviewDeviceDto>> RevokeAsync(Guid deviceId, CancellationToken cancellationToken) =>
         DeleteAsync<EmployeeReviewDeviceDto>($"{Admin}/{deviceId}/credential", cancellationToken);

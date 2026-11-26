@@ -10,6 +10,7 @@
     {
         TigerCS.Web.Pages.EmployeeReviews.ActivationProblem.Invalid => "activate-invalid",
         TigerCS.Web.Pages.EmployeeReviews.ActivationProblem.Inactive => "activate-inactive",
+        TigerCS.Web.Pages.EmployeeReviews.ActivationProblem.TooManyAttempts => "activate-too-many",
         TigerCS.Web.Pages.EmployeeReviews.ActivationProblem.Unavailable => "activate-unavailable",
         _ => null
     };
@@ -31,7 +32,7 @@
             @* A plain form (works without script). The script only pre-fills the code from the link's #fragment. *@
             <form method="post" class="tablet-activate__form" data-activate-form>
                 <label class="tablet-comment-label" for="activation-code">@T("activate-label")</label>
-                <input id="activation-code" name="Code" class="tablet-code" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" maxlength="128" required />
+                <input id="activation-code" name="Code" class="tablet-code" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="text" maxlength="8" minlength="8" pattern="[A-Za-z0-9]{8}" required />
                 <button type="submit" class="tablet-submit">@T("activate-button")</button>
             </form>
         </div>

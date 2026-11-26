@@ -7,8 +7,9 @@ namespace TigerCS.Web.Pages.Admin;
 
 /// <summary>
 /// Administration → Review Tablets: register a tablet for an existing Customer Service employee, change who it is assigned to, switch it
-/// on or off, replace or revoke its credential. A credential is shown exactly once, in the response to the post that created it (never
-/// redirected, stored in TempData or logged); the Api keeps only its hash. Reassigning a tablet affects future reviews only.
+/// on or off, issue a new activation code or revoke its credential. An 8-character activation code (valid 24 hours, one use) is shown exactly
+/// once, in the response to the post that created it (never redirected, stored in TempData or logged); the Api keeps only a salted hash. The
+/// tablet's own long device token is created when the tablet redeems the code and is never shown here. Reassigning affects future reviews only.
 /// </summary>
 public sealed class EmployeeReviewDevicesModel(EmployeeReviewsApiClient api) : AdminPageModel
 {
@@ -18,14 +19,15 @@ public sealed class EmployeeReviewDevicesModel(EmployeeReviewsApiClient api) : A
 
     public string? LoadError { get; private set; }
 
-    /// <summary>The credential just issued and the tablet it belongs to; <c>null</c> on every other response.</summary>
-    public EmployeeReviewDeviceCredentialDto? Issued { get; private set; }
+    /// <summary>The activation code just issued and the tablet it belongs to; <c>null</c> on every other response.</summary>
+    public EmployeeReviewActivationCodeDto? Issued { get; private set; }
 
     [BindProperty] public RegisterInput Register { get; set; } = new();
 
     [BindProperty] public EditInput Edit { get; set; } = new();
 
-    public string ActivationUrl(string token) => $"{Request.Scheme}://{Request.Host}/EmployeeReviews/Activate#code={token}";
+    /// <summary>The link carries the code in the <c>#fragment</c>, which browsers never send to a server and which web logs therefore never see.</summary>
+    public string ActivationUrl(string code) => $"{Request.Scheme}://{Request.Host}/EmployeeReviews/Activate#code={code}";
 
     public async Task OnGetAsync(CancellationToken cancellationToken) => await LoadAsync(cancellationToken);
 
@@ -35,7 +37,7 @@ public sealed class EmployeeReviewDevicesModel(EmployeeReviewsApiClient api) : A
         if (result.IsSuccess)
         {
             Issued = result.Value;
-            StatusMessage = $"Tablet '{result.Value!.Device.DeviceName}' registered. Copy its activation code now — it is shown only once.";
+            StatusMessage = $"Tablet '{result.Value!.Device.DeviceName}' registered. Copy its 8-character activation code now — it is shown only once and expires in 24 hours.";
             return await ShowAsync(cancellationToken);
         }
 
@@ -57,24 +59,25 @@ public sealed class EmployeeReviewDevicesModel(EmployeeReviewsApiClient api) : A
             DescribeFailure(result, "The tablet could not be changed."), cancellationToken);
     }
 
-    public async Task<IActionResult> OnPostRegenerateAsync(Guid deviceId, CancellationToken cancellationToken)
+    /// <summary><paramref name="confirmReplace"/> is the administrator's tick on an already-activated tablet; the Api refuses without it, whatever this page does.</summary>
+    public async Task<IActionResult> OnPostRegenerateAsync(Guid deviceId, bool confirmReplace, CancellationToken cancellationToken)
     {
-        var result = await api.RegenerateAsync(deviceId, cancellationToken);
+        var result = await api.RegenerateAsync(deviceId, confirmReplace, cancellationToken);
         if (result.IsSuccess)
         {
             Issued = result.Value;
-            StatusMessage = $"A new credential was issued for '{result.Value!.Device.DeviceName}'. The old one no longer works. Copy the new code now — it is shown only once.";
+            StatusMessage = $"A new activation code was issued for '{result.Value!.Device.DeviceName}'. The tablet's previous credential no longer works. Copy the new code now — it is shown only once and expires in 24 hours.";
             return await ShowAsync(cancellationToken);
         }
 
-        ErrorMessage = DescribeFailure(result, "The credential could not be regenerated.");
+        ErrorMessage = DescribeFailure(result, "The activation code could not be issued.");
         return await ShowAsync(cancellationToken);
     }
 
     public async Task<IActionResult> OnPostRevokeAsync(Guid deviceId, CancellationToken cancellationToken)
     {
         var result = await api.RevokeAsync(deviceId, cancellationToken);
-        return await FinishAsync(result.IsSuccess, $"Tablet '{result.Value?.DeviceName}' revoked. It can no longer collect reviews until a new credential is issued.",
+        return await FinishAsync(result.IsSuccess, $"Tablet '{result.Value?.DeviceName}' revoked. It can no longer collect reviews until a new activation code is issued and used.",
             DescribeFailure(result, "The credential could not be revoked."), cancellationToken);
     }
 

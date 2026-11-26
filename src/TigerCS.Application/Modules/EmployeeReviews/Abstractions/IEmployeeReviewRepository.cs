@@ -33,6 +33,30 @@ public interface IEmployeeReviewRepository
     /// <summary>The tracked device whose credential hashes to <paramref name="tokenHash"/>, or <c>null</c>.</summary>
     Task<EmployeeReviewDevice?> GetDeviceByTokenHashAsync(byte[] tokenHash, CancellationToken cancellationToken = default);
 
+    /// <summary>Tablets holding an activation code that has not expired at <paramref name="nowUtc"/> (untracked). The redeemer checks the submitted code against each.</summary>
+    Task<IReadOnlyList<EmployeeReviewDevice>> ListRedeemableActivationDevicesAsync(DateTime nowUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Redeems an activation code: stores <paramref name="newTokenHash"/> and erases the code, but only while the row still holds
+    /// <paramref name="expectedCodeHash"/>, the code has not expired, and the tablet is switched on. The code's hash is a concurrency token, so the
+    /// write itself is conditional in the database. Returns <c>false</c> when nothing was changed — which is how two simultaneous redemptions of one
+    /// code are resolved: exactly one of them wins.
+    /// </summary>
+    Task<bool> TryRedeemActivationAsync(Guid deviceId, byte[] expectedCodeHash, byte[] newTokenHash, DateTime nowUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Counts one activation attempt against <paramref name="key"/> (<b>before</b> the code is checked) and returns how many attempts the key has made
+    /// inside the current window; a window that ended is restarted first. The count is guarded by a concurrency token and re-applied on conflict, so
+    /// concurrent attempts each add exactly one. If the count cannot be stored the result is <see cref="int.MaxValue"/> — the caller then refuses.
+    /// </summary>
+    Task<int> RegisterActivationAttemptAsync(string key, TimeSpan window, DateTime nowUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>Forgets a key's attempts (a successful activation by that client).</summary>
+    Task ClearActivationAttemptsAsync(string key, CancellationToken cancellationToken = default);
+
+    /// <summary>Gives back one attempt of a shared counter (a successful activation must not eat the shared budget).</summary>
+    Task RefundActivationAttemptAsync(string key, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<DeviceListRow>> ListDevicesAsync(CancellationToken cancellationToken = default);
 
     /// <summary>Active Customer Service employees: members of the Customer Service department or holders of the CS Agent / CS Supervisor roles.</summary>

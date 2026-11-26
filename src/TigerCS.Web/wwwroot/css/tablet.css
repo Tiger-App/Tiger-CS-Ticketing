@@ -176,7 +176,7 @@ html, body { height: 100%; }
     align-self: stretch; text-align: center; font-size: .72em; letter-spacing: .18em; text-transform: uppercase; color: var(--tb-muted);
 }
 [dir="rtl"] .tablet-activate .tablet-comment-label { letter-spacing: 0; text-transform: none; font-size: .85em; }
-.tablet-activate .tablet-code { min-height: clamp(54px, 8vh, 68px); padding: 12px 20px; text-align: center; font-size: 1.1em; letter-spacing: .2em; border-radius: 14px; }
+.tablet-activate .tablet-code { min-height: clamp(54px, 8vh, 68px); padding: 12px 20px; text-align: center; font-size: 1.1em; letter-spacing: .2em; border-radius: 14px; text-transform: uppercase; font-family: ui-monospace, Menlo, Consolas, monospace; }
 .tablet-activate .tablet-submit { width: 100%; }
 .tablet-activate .tablet-error { align-self: stretch; }
 

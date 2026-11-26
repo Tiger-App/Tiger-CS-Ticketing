@@ -153,7 +153,7 @@ public sealed class InteractionEndReceivedAtScriptSqlServerTests : IDisposable
 
         using var context = new TigerCsDbContext(new DbContextOptionsBuilder<TigerCsDbContext>().UseSqlServer(ConnectionString).Options);
         // Only the migration that comes after this one in the release (AddEmployeeReviews, deployed by its own script) is still pending.
-        Assert.Equal(["20261124071552_AddEmployeeReviews"], context.Database.GetPendingMigrations());
+        Assert.Equal(["20261124071552_AddEmployeeReviews", "20261126154428_AddEmployeeReviewActivationCodes"], context.Database.GetPendingMigrations());
     }
 
     [VisibilitySqlServerFact]

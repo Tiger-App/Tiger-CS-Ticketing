@@ -216,27 +216,29 @@ public class EfModelAndMigrationConsistencyTests(ITestOutputHelper output)
         // AddCustomerProfileAuditAndProperties (the append-only CustomerProfileChanges history, manual CustomerPropertyAssociations and the profile detail columns on CustomerProfileOverrides) is the newest and is deployed by its own script.
         // AddAssignmentHistoryPreviousDepartment (one nullable int column on TicketAssignmentHistory: the department a Genesys-handled ticket was in before a department-changing entry) is the newest and is deployed by its own script.
         // AddInteractionEndReceivedAt (one nullable datetime2 column on TicketInteractions: when TigerCS received a conversation's end - the voice no-answer window anchor) is the newest and is deployed by its own script.
-        // AddEmployeeReviews (two new tables: review tablets and the customer star ratings they collect) is the newest and is deployed by its own script.
-        Assert.Equal("20261124071552_AddEmployeeReviews", migrations[^1]);
-        Assert.Equal("20261120074059_AddInteractionEndReceivedAt", migrations[^2]);
-        Assert.Equal("20261119120249_AddAssignmentHistoryPreviousDepartment", migrations[^3]);
-        Assert.Equal("20261119081103_AddCustomerProfileAuditAndProperties", migrations[^4]);
-        Assert.Equal("20261118124858_AddTicketAiAgentOwner", migrations[^5]);
-        Assert.Equal("20261118120000_AddCustomerProfileOverrides", migrations[^6]);
-        Assert.Equal("20261117101035_AddQueueingIntegration", migrations[^7]);
-        Assert.Equal("20261112071745_AddTicketAssignmentSupersededAt", migrations[^8]);
-        Assert.Equal("20261112065853_AddGenesysAssignmentHistorySource", migrations[^9]);
-        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^10]);
-        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^11]);
-        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^12]);
-        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^13]);
-        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^14]);
-        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^15]);
-        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^16]);
-        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^17]);
-        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^18]);
-        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^19]);
-        Assert.Equal(FourPendingMigrations, migrations.SkipLast(19).TakeLast(4));
+        // AddEmployeeReviews (two new tables: review tablets and the customer star ratings they collect) was added after that and is deployed by its own script.
+        // AddEmployeeReviewActivationCodes (three nullable columns on EmployeeReviewDevices plus the activation-attempt counter table: 8-character, 24-hour, single-use tablet activation codes) is the newest and is deployed by its own script.
+        Assert.Equal("20261126154428_AddEmployeeReviewActivationCodes", migrations[^1]);
+        Assert.Equal("20261124071552_AddEmployeeReviews", migrations[^2]);
+        Assert.Equal("20261120074059_AddInteractionEndReceivedAt", migrations[^3]);
+        Assert.Equal("20261119120249_AddAssignmentHistoryPreviousDepartment", migrations[^4]);
+        Assert.Equal("20261119081103_AddCustomerProfileAuditAndProperties", migrations[^5]);
+        Assert.Equal("20261118124858_AddTicketAiAgentOwner", migrations[^6]);
+        Assert.Equal("20261118120000_AddCustomerProfileOverrides", migrations[^7]);
+        Assert.Equal("20261117101035_AddQueueingIntegration", migrations[^8]);
+        Assert.Equal("20261112071745_AddTicketAssignmentSupersededAt", migrations[^9]);
+        Assert.Equal("20261112065853_AddGenesysAssignmentHistorySource", migrations[^10]);
+        Assert.Equal("20261111132429_AddOriginalAgentWorkflowCutoff", migrations[^11]);
+        Assert.Equal("20261111073632_AddTicketOriginalHumanAgent", migrations[^12]);
+        Assert.Equal("20261110070152_AddUserTransferDepartments", migrations[^13]);
+        Assert.Equal("20261109123253_AddManualGenesysDispatchItemFields", migrations[^14]);
+        Assert.Equal("20261109120816_AddCollectionsExceptionInclusions", migrations[^15]);
+        Assert.Equal("20261109074858_AddCollectionsGenesysDeliveryStats", migrations[^16]);
+        Assert.Equal("20261106044011_AddDirectSendInstalments", migrations[^17]);
+        Assert.Equal("20261105094644_AddCustomerContactDetails", migrations[^18]);
+        Assert.Equal("20261104130835_AddCollectionsTowerAssignments", migrations[^19]);
+        Assert.Equal("20261102065459_AddUserPermissionOverrides", migrations[^20]);
+        Assert.Equal(FourPendingMigrations, migrations.SkipLast(20).TakeLast(4));
     }
 
     [Fact]

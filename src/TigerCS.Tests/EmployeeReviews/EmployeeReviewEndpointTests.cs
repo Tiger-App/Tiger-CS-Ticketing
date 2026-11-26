@@ -37,8 +37,24 @@ public sealed class EmployeeReviewEndpointTests : IClassFixture<TigerCsApiFactor
         var (_, _, agent) = await _factory.SeedEmployeeAsync(Roles.CsAgent);
         var response = await admin.PostAsJsonAsync(Devices, new RegisterEmployeeReviewDeviceRequestDto("Desk " + Guid.NewGuid().ToString("N")[..6], agent));
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
-        var credential = (await response.Content.ReadFromJsonAsync<EmployeeReviewDeviceCredentialDto>())!;
-        return (credential.Token, credential.Device.Id, agent, admin);
+        var issued = (await response.Content.ReadFromJsonAsync<EmployeeReviewActivationCodeDto>())!;
+        return (await ActivateAsync(issued.ActivationCode), issued.Device.Id, agent, admin);
+    }
+
+    /// <summary>What a tablet does: trades the administrator's code for its own device token, over the anonymous Api.</summary>
+    private async Task<string> ActivateAsync(string code)
+    {
+        var response = await Activate(code);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        return (await response.Content.ReadFromJsonAsync<ActivateTabletResultDto>())!.DeviceToken!;
+    }
+
+    /// <summary>Posts to the activation endpoint as a client of its own (so one test's attempts never count against another's).</summary>
+    private async Task<HttpResponseMessage> Activate(string? code, string? client = null)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, Tablet + "/activate") { Content = JsonContent.Create(new ActivateTabletRequestDto(code)) };
+        request.Headers.TryAddWithoutValidation("X-Client-Address", client ?? Guid.NewGuid().ToString("N"));
+        return await _factory.CreateClient().SendAsync(request);
     }
 
     private static async Task<HttpResponseMessage> Post(HttpClient client, string url, string? token, object? body = null)
@@ -178,13 +194,14 @@ public sealed class EmployeeReviewEndpointTests : IClassFixture<TigerCsApiFactor
         var (token, deviceId, _, admin) = await RegisteredTabletAsync();
         var anonymous = _factory.CreateClient();
 
-        var regenerated = (await (await admin.PostAsync($"{Devices}/{deviceId}/credential", null)).Content.ReadFromJsonAsync<EmployeeReviewDeviceCredentialDto>())!;
+        var reissued = (await (await admin.PostAsJsonAsync($"{Devices}/{deviceId}/credential", new IssueEmployeeReviewActivationCodeRequestDto(true))).Content.ReadFromJsonAsync<EmployeeReviewActivationCodeDto>())!;
         Assert.Equal(HttpStatusCode.Unauthorized, (await Post(anonymous, Tablet + "/submit", token, Review())).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await Post(anonymous, Tablet + "/submit", regenerated.Token, Review())).StatusCode);
+        var newToken = await ActivateAsync(reissued.ActivationCode);
+        Assert.Equal(HttpStatusCode.OK, (await Post(anonymous, Tablet + "/submit", newToken, Review())).StatusCode);
 
         var revoke = await admin.DeleteAsync($"{Devices}/{deviceId}/credential");
         Assert.Equal(HttpStatusCode.OK, revoke.StatusCode);
-        Assert.Equal(HttpStatusCode.Unauthorized, (await Post(anonymous, Tablet + "/submit", regenerated.Token, Review())).StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Post(anonymous, Tablet + "/submit", newToken, Review())).StatusCode);
     }
 
     [Fact]
@@ -237,7 +254,7 @@ public sealed class EmployeeReviewEndpointTests : IClassFixture<TigerCsApiFactor
         Assert.Equal(HttpStatusCode.OK, (await admin.PostAsJsonAsync($"{Devices}/{deviceId}/activation", new SetEmployeeReviewDeviceActiveRequestDto(true))).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync("/api/employee-reviews")).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await admin.GetAsync($"/api/employee-reviews/employees/{employeeId}")).StatusCode);
-        Assert.Equal(HttpStatusCode.OK, (await admin.PostAsync($"{Devices}/{deviceId}/credential", null)).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await admin.PostAsJsonAsync($"{Devices}/{deviceId}/credential", new IssueEmployeeReviewActivationCodeRequestDto(true))).StatusCode);
         Assert.Equal(HttpStatusCode.OK, (await admin.DeleteAsync($"{Devices}/{deviceId}/credential")).StatusCode);
         Assert.NotNull(token);
     }
@@ -273,6 +290,192 @@ public sealed class EmployeeReviewEndpointTests : IClassFixture<TigerCsApiFactor
         Assert.Equal(HttpStatusCode.BadRequest, (await admin.PostAsJsonAsync(Devices, new RegisterEmployeeReviewDeviceRequestDto("Nope", Guid.NewGuid()))).StatusCode);
     }
 
+    // ---------------------------------------------------------------- activation over HTTP
+
+    private async Task<(string Code, Guid DeviceId)> PendingCodeAsync()
+    {
+        var (admin, _) = await SignedInAsync(Roles.SystemAdministrator);
+        var (_, _, agent) = await _factory.SeedEmployeeAsync(Roles.CsAgent);
+        var response = await admin.PostAsJsonAsync(Devices, new RegisterEmployeeReviewDeviceRequestDto("Desk " + Guid.NewGuid().ToString("N")[..6], agent));
+        var issued = (await response.Content.ReadFromJsonAsync<EmployeeReviewActivationCodeDto>())!;
+        return (issued.ActivationCode, issued.Device.Id);
+    }
+
+    [Fact]
+    public async Task Register_ReturnsAnEightCharacterCode_NoTokenAndNoCredentialYet()
+    {
+        var (admin, _) = await SignedInAsync(Roles.SystemAdministrator);
+        var (_, _, agent) = await _factory.SeedEmployeeAsync(Roles.CsAgent);
+
+        var response = await admin.PostAsJsonAsync(Devices, new RegisterEmployeeReviewDeviceRequestDto("Desk " + Guid.NewGuid().ToString("N")[..6], agent));
+        var raw = await response.Content.ReadAsStringAsync();
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var issued = System.Text.Json.JsonSerializer.Deserialize<EmployeeReviewActivationCodeDto>(raw, new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web))!;
+        Assert.Equal(8, issued.ActivationCode.Length);
+        Assert.DoesNotContain("tgr-", raw);                       // no device token is ever shown to the administrator
+        Assert.False(issued.Device.HasCredential);
+        Assert.True(issued.Device.ActivationPending);
+        Assert.InRange(issued.ExpiresAtUtc - DateTime.UtcNow, TimeSpan.FromHours(23.9), TimeSpan.FromHours(24.1));
+
+        // Listing it later never shows the code again.
+        var list = await admin.GetStringAsync(Devices);
+        Assert.DoesNotContain(issued.ActivationCode, list);
+    }
+
+    [Fact]
+    public async Task Activate_ReturnsALongDeviceToken_Uncached_AndTheCodeNeverWorksTwice()
+    {
+        var (code, _) = await PendingCodeAsync();
+
+        var first = await Activate(code);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Contains("no-store", first.Headers.CacheControl?.ToString());
+        var token = (await first.Content.ReadFromJsonAsync<ActivateTabletResultDto>())!.DeviceToken!;
+        Assert.Equal(47, token.Length);
+        Assert.StartsWith("tgr-", token);
+        Assert.NotEqual(code, token);
+
+        var session = await Post(_factory.CreateClient(), Tablet + "/session", token);
+        Assert.Equal(TabletSessionStatus.Ready, (await session.Content.ReadFromJsonAsync<TabletSessionDto>())!.Status);
+
+        var again = await Activate(code);
+        Assert.Equal(HttpStatusCode.Unauthorized, again.StatusCode);
+        Assert.Null((await again.Content.ReadFromJsonAsync<ActivateTabletResultDto>())!.DeviceToken);
+    }
+
+    [Theory]
+    [InlineData("AAAAAAAA")]                // well formed, never issued
+    [InlineData("ACDE-FGH")]                // hyphen
+    [InlineData("SHORT")]
+    [InlineData("tgr-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
+    [InlineData("")]
+    public async Task Activate_WithAnUnusableCode_Is401_WithTheSameAnswerWhateverTheReason(string code)
+    {
+        var response = await Activate(code);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        var body = (await response.Content.ReadFromJsonAsync<ActivateTabletResultDto>())!;
+        Assert.Equal(ActivateTabletOutcome.InvalidCode, body.Outcome);
+        Assert.Null(body.DeviceToken);
+    }
+
+    [Fact]
+    public async Task Activate_WithNoBody_IsNotAServerError()
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, Tablet + "/activate") { Content = JsonContent.Create(new { }) };
+        request.Headers.TryAddWithoutValidation("X-Client-Address", Guid.NewGuid().ToString("N"));
+
+        var response = await _factory.CreateClient().SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Activate_BruteForce_Gets429_AfterTheLimit_EvenWithTheCorrectCode_ButAnotherClientIsUnaffected()
+    {
+        var (code, deviceId) = await PendingCodeAsync();
+        var attacker = "attacker-" + Guid.NewGuid().ToString("N")[..8];
+        var wrong = code[0] == 'A' ? "CCCCCCCC" : "AAAAAAAA";
+
+        for (var i = 0; i < TigerCS.Application.Modules.EmployeeReviews.Services.EmployeeReviewActivationService.MaxAttemptsPerClient; i++)
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, (await Activate(wrong, attacker)).StatusCode);
+        }
+
+        var locked = await Activate(code, attacker);
+        Assert.Equal(HttpStatusCode.TooManyRequests, locked.StatusCode);
+        Assert.Null((await locked.Content.ReadFromJsonAsync<ActivateTabletResultDto>())!.DeviceToken);
+
+        // The code was not used up by the refused attempt: the real kiosk (another client) can still use it.
+        Assert.Equal(HttpStatusCode.OK, (await Activate(code)).StatusCode);
+    }
+
+    [Fact]
+    public async Task Activate_IsRateLimitedInFrontOfTheService_ForAClientThatHammersIt()
+    {
+        var client = "hammer-" + Guid.NewGuid().ToString("N")[..8];
+        var statuses = new List<HttpStatusCode>();
+
+        for (var i = 0; i < 45; i++)
+        {
+            statuses.Add((await Activate("AAAAAAAA", client)).StatusCode);
+        }
+
+        Assert.Equal(HttpStatusCode.Unauthorized, statuses[0]);
+        Assert.Equal(HttpStatusCode.TooManyRequests, statuses[^1]);
+        Assert.DoesNotContain(statuses, s => s == HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task SeveralTablets_BehindOneOfficeAddress_AreAllActivated_WithoutTheRateLimiterOrAttemptLimitInterfering()
+    {
+        const string office = "office-198.51.100.7";
+        var codes = new List<string>();
+        for (var i = 0; i < 6; i++)
+        {
+            codes.Add((await PendingCodeAsync()).Code);
+        }
+
+        // Six tablets, one typo each, all from the same address within the same minute: 12 requests.
+        var tokens = new List<string>();
+        foreach (var code in codes)
+        {
+            Assert.Equal(HttpStatusCode.Unauthorized, (await Activate(code[0] == 'A' ? "CCCCCCCC" : "AAAAAAAA", office)).StatusCode);
+            var response = await Activate(code, office);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            tokens.Add((await response.Content.ReadFromJsonAsync<ActivateTabletResultDto>())!.DeviceToken!);
+        }
+
+        Assert.Equal(6, tokens.Distinct().Count());
+        var anonymous = _factory.CreateClient();
+        foreach (var token in tokens)
+        {
+            Assert.Equal(HttpStatusCode.OK, (await Post(anonymous, Tablet + "/submit", token, Review())).StatusCode);
+        }
+    }
+
+    [Fact]
+    public async Task ReActivatingAnActivatedTablet_NeedsConfirmation_OverHttp_AndTheOldTokenKeepsWorkingUntilThen()
+    {
+        var (token, deviceId, _, admin) = await RegisteredTabletAsync();
+        var anonymous = _factory.CreateClient();
+
+        var withoutBody = await admin.PostAsync($"{Devices}/{deviceId}/credential", null);
+        var notConfirmed = await admin.PostAsJsonAsync($"{Devices}/{deviceId}/credential", new IssueEmployeeReviewActivationCodeRequestDto(false));
+
+        Assert.Equal(HttpStatusCode.Conflict, withoutBody.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, notConfirmed.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await Post(anonymous, Tablet + "/submit", token, Review())).StatusCode);   // untouched
+
+        var confirmed = await admin.PostAsJsonAsync($"{Devices}/{deviceId}/credential", new IssueEmployeeReviewActivationCodeRequestDto(true));
+        Assert.Equal(HttpStatusCode.OK, confirmed.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, (await Post(anonymous, Tablet + "/submit", token, Review())).StatusCode);
+    }
+
+    [Fact]
+    public async Task IssuingACode_ForAPendingTablet_NeedsNoBodyAndNoConfirmation()
+    {
+        var (_, deviceId) = await PendingCodeAsync();
+        var (admin, _) = await SignedInAsync(Roles.SystemAdministrator);
+
+        var response = await admin.PostAsync($"{Devices}/{deviceId}/credential", null);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Activate_NeedsNoLogin_AndAnExpiredTabletsCodeIsStillRefusedWithoutDetails()
+    {
+        var (code, deviceId) = await PendingCodeAsync();
+        var (admin, _) = await SignedInAsync(Roles.SystemAdministrator);
+        await admin.DeleteAsync($"{Devices}/{deviceId}/credential");   // revoking discards the pending code
+
+        var response = await Activate(code);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
     // ---------------------------------------------------------------- the dashboard
 
     [Fact]
@@ -282,11 +485,11 @@ public sealed class EmployeeReviewEndpointTests : IClassFixture<TigerCsApiFactor
         var (agentClient, agentId) = await SignedInAsync(Roles.CsAgent);
         var (admin, _) = await SignedInAsync(Roles.SystemAdministrator);
         var (_, _, colleague) = await _factory.SeedEmployeeAsync(Roles.CsAgent);
-        var ownTablet = (await (await admin.PostAsJsonAsync(Devices, new RegisterEmployeeReviewDeviceRequestDto("Own " + Guid.NewGuid().ToString("N")[..5], agentId))).Content.ReadFromJsonAsync<EmployeeReviewDeviceCredentialDto>())!;
-        var colleagueTablet = (await (await admin.PostAsJsonAsync(Devices, new RegisterEmployeeReviewDeviceRequestDto("Other " + Guid.NewGuid().ToString("N")[..5], colleague))).Content.ReadFromJsonAsync<EmployeeReviewDeviceCredentialDto>())!;
+        var ownCode = (await (await admin.PostAsJsonAsync(Devices, new RegisterEmployeeReviewDeviceRequestDto("Own " + Guid.NewGuid().ToString("N")[..5], agentId))).Content.ReadFromJsonAsync<EmployeeReviewActivationCodeDto>())!;
+        var colleagueCode = (await (await admin.PostAsJsonAsync(Devices, new RegisterEmployeeReviewDeviceRequestDto("Other " + Guid.NewGuid().ToString("N")[..5], colleague))).Content.ReadFromJsonAsync<EmployeeReviewActivationCodeDto>())!;
         var anonymous = _factory.CreateClient();
-        await Post(anonymous, Tablet + "/submit", ownTablet.Token, Review(5, "mine"));
-        await Post(anonymous, Tablet + "/submit", colleagueTablet.Token, Review(1, "theirs"));
+        await Post(anonymous, Tablet + "/submit", await ActivateAsync(ownCode.ActivationCode), Review(5, "mine"));
+        await Post(anonymous, Tablet + "/submit", await ActivateAsync(colleagueCode.ActivationCode), Review(1, "theirs"));
 
         var own = (await agentClient.GetFromJsonAsync<EmployeeReviewsOverviewDto>("/api/employee-reviews"))!;
         Assert.Equal(agentId, Assert.Single(own.Employees).EmployeeId);

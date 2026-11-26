@@ -79,7 +79,8 @@ INSERT @Repo (MigrationId) VALUES
     (N'20261119081103_AddCustomerProfileAuditAndProperties'),
     (N'20261119120249_AddAssignmentHistoryPreviousDepartment'),
     (N'20261120074059_AddInteractionEndReceivedAt'),
-    (N'20261124071552_AddEmployeeReviews');
+    (N'20261124071552_AddEmployeeReviews'),
+    (N'20261126154428_AddEmployeeReviewActivationCodes');
 
 -- 1. Pending: in the repository, not applied in production
 SELECT r.MigrationId AS PendingMigration FROM @Repo r
@@ -125,7 +126,11 @@ FROM (VALUES
     (N'AddAssignmentHistoryPreviousDepartment', N'column TicketAssignmentHistory.PreviousDepartmentId', N'TicketAssignmentHistory', N'PreviousDepartmentId'),
     (N'AddInteractionEndReceivedAt', N'column TicketInteractions.EndReceivedAtUtc', N'TicketInteractions', N'EndReceivedAtUtc'),
     (N'AddEmployeeReviews',        N'table EmployeeReviewDevices',              N'EmployeeReviewDevices', NULL),
-    (N'AddEmployeeReviews',        N'table EmployeeReviews',                    N'EmployeeReviews', NULL)
+    (N'AddEmployeeReviews',        N'table EmployeeReviews',                    N'EmployeeReviews', NULL),
+    (N'AddEmployeeReviewActivationCodes', N'column EmployeeReviewDevices.ActivationCodeHash', N'EmployeeReviewDevices', N'ActivationCodeHash'),
+    (N'AddEmployeeReviewActivationCodes', N'column EmployeeReviewDevices.ActivationCodeSalt', N'EmployeeReviewDevices', N'ActivationCodeSalt'),
+    (N'AddEmployeeReviewActivationCodes', N'column EmployeeReviewDevices.ActivationCodeExpiresAtUtc', N'EmployeeReviewDevices', N'ActivationCodeExpiresAtUtc'),
+    (N'AddEmployeeReviewActivationCodes', N'table EmployeeReviewActivationThrottles', N'EmployeeReviewActivationThrottles', NULL)
 ) x(Migration, Object, Tbl, Col)
 ORDER BY Present, x.Migration;
 
