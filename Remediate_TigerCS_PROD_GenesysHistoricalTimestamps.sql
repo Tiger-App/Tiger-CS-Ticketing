@@ -120,9 +120,10 @@ BEGIN
       AND CHARINDEX(N'TicketInteractionId=', a.BeforeValue) > 0 AND CHARINDEX(N'InteractionStartedAtUtc=', a.BeforeValue) > 0 AND CHARINDEX(N'InteractionStartedAtUtc=', a.AfterValue) > 0
       AND (@TicketId IS NULL OR TRY_CAST(a.EntityId AS bigint) = @TicketId);
 
+    DECLARE @RbCount int = (SELECT COUNT(*) FROM @Rb);
     IF @RbAuditRows = 0
         THROW 50340, 'ABORTED: no GenesysTimestampCorrected audit rows exist for that @RollbackRunId. Nothing was changed.', 1;
-    IF @TicketId IS NULL AND (SELECT COUNT(*) FROM @Rb) <> @RbAuditRows
+    IF @TicketId IS NULL AND @RbCount <> @RbAuditRows
         THROW 50341, 'ABORTED: an audit row of that run could not be read back (unexpected format). Nothing was changed.', 1;
 
     SELECT 'ROLLBACK PLAN' AS ResultSet, r.TicketId, r.TicketInteractionId, i.InteractionStartedAtUtc AS StartNow, r.CorrectedStartUtc AS StartWrittenByThatRun, r.OriginalStartUtc AS StartWillBeRestoredTo,
@@ -141,7 +142,7 @@ BEGIN
         UPDATE i SET i.InteractionStartedAtUtc = r.OriginalStartUtc
         FROM dbo.TicketInteractions i JOIN @Rb r ON r.TicketInteractionId = i.TicketInteractionId
         WHERE i.InteractionStartedAtUtc = r.CorrectedStartUtc;                                   -- optimistic: only if still exactly the corrected value
-        IF @@ROWCOUNT <> (SELECT COUNT(*) FROM @Rb)
+        IF @@ROWCOUNT <> @RbCount
             THROW 50342, 'ABORTED: a conversation no longer holds the corrected start (changed since), or an audit row was not matched. Rolled back.', 1;
 
         INSERT dbo.AuditEntries (ActorEmployeeId, Action, EntityType, EntityId, BeforeValue, AfterValue, CorrelationId, OccurredAtUtc)
@@ -154,7 +155,7 @@ BEGIN
         FROM @Rb r;
 
         COMMIT TRANSACTION;
-        PRINT N'ROLLED BACK: ' + CAST((SELECT COUNT(*) FROM @Rb) AS nvarchar(10)) + N' conversation start(s) restored to the original value from run ' + CAST(@RollbackRunId AS nvarchar(40)) + N'.';
+        PRINT N'ROLLED BACK: ' + CAST(@RbCount AS nvarchar(10)) + N' conversation start(s) restored to the original value from run ' + CAST(@RollbackRunId AS nvarchar(40)) + N'.';
     END TRY
     BEGIN CATCH
         IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION;
