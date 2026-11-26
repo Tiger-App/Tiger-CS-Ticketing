@@ -161,7 +161,7 @@ public sealed class CustomerProfileAuditSqlServerTests : IDisposable
         // The database the script produced is exactly the one EF expects: nothing left to migrate except the migrations that came AFTER this one
         // (AddAssignmentHistoryPreviousDepartment, AddInteractionEndReceivedAt and AddEmployeeReviews, each deployed by its own script), and the model works against it.
         using var context = CreateContext();
-        Assert.Equal(["20261119120249_AddAssignmentHistoryPreviousDepartment", "20261120074059_AddInteractionEndReceivedAt", "20261124071552_AddEmployeeReviews"], context.Database.GetPendingMigrations());
+        Assert.Equal(["20261119120249_AddAssignmentHistoryPreviousDepartment", "20261120074059_AddInteractionEndReceivedAt", "20261124071552_AddEmployeeReviews", "20261126154428_AddEmployeeReviewActivationCodes"], context.Database.GetPendingMigrations());
         context.Database.Migrate();
         Assert.Equal(2, context.CustomerProfileOverrides.Count());
         var customer = context.CustomerProfileOverrides.Single(o => o.CustomerKey == "crm:101");
