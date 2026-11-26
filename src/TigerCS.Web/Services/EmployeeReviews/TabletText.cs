@@ -38,11 +38,12 @@ public static class TabletText
         ["unavailable-sub"] = ("Trying again automatically…", "جارٍ إعادة المحاولة تلقائياً…"),
         ["language-toggle"] = ("العربية", "English"),
         ["activate-title"] = ("Activate this tablet", "تفعيل هذا الجهاز"),
-        ["activate-sub"] = ("Enter the activation code given by your administrator.", "أدخل رمز التفعيل الذي زوّدك به المسؤول."),
+        ["activate-sub"] = ("Enter the 8-character activation code given by your administrator.", "أدخل رمز التفعيل المكوّن من 8 خانات الذي زوّدك به المسؤول."),
         ["activate-label"] = ("Activation code", "رمز التفعيل"),
         ["activate-button"] = ("Activate", "تفعيل"),
-        ["activate-invalid"] = ("This code is not valid. Check it and try again.", "الرمز غير صالح. تحقق منه وحاول مجدداً."),
+        ["activate-invalid"] = ("This code is not valid, has expired or was already used. Check it, or ask your administrator for a new one.", "الرمز غير صالح أو منتهي أو سبق استخدامه. تحقق منه أو اطلب رمزاً جديداً من المسؤول."),
         ["activate-inactive"] = ("This tablet has been switched off by the administrator.", "تم إيقاف هذا الجهاز من قبل المسؤول."),
+        ["activate-too-many"] = ("Too many attempts. Please wait a few minutes before trying again.", "محاولات كثيرة جداً. يرجى الانتظار بضع دقائق قبل المحاولة مجدداً."),
         ["activate-unavailable"] = ("The service could not be reached. Please try again.", "تعذّر الوصول إلى الخدمة. يرجى المحاولة مجدداً.")
     };
 

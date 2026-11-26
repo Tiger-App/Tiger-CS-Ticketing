@@ -70,6 +70,7 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         "POST /api/public/ticket-reviews/submit",
 
         // Employee Reviews: the anonymous review tablet, tablet administration (System Administrator) and the role-scoped dashboard.
+        "POST /api/public/employee-reviews/activate",
         "POST /api/public/employee-reviews/session",
         "POST /api/public/employee-reviews/submit",
         "GET /api/admin/employee-review-devices",

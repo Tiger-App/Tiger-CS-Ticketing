@@ -373,9 +373,11 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
         // the authenticated Genesys service account, and the session it
         // yields is the mapped user's ordinary one (GenesysScreenPopEndpointsTests).
         //
-        // /api/public/employee-reviews/{session,submit} are anonymous because they serve the customer review tablet, which has no login. The
+        // /api/public/employee-reviews/{activate,session,submit} are anonymous because they serve the customer review tablet, which has no login. The
         // credential is the tablet's random 256-bit device token (only its hash is stored; an administrator can revoke or replace it), sent in a
         // header; the employee reviewed is always resolved from the tablet's own assignment, never from the request (EmployeeReviewEndpointTests).
+        // /activate is the one door that has no token yet: its credential is the administrator's 8-character, 24-hour, single-use code, and it is
+        // guarded by strict per-client and overall attempt limits (EmployeeReviewActivationTests, EmployeeReviewEndpointTests).
         //
         // /api/public/ticket-reviews/{lookup,submit} are anonymous because they serve the customer satisfaction review
         // page, opened from an email link by a customer with no login. The credential is a random 256-bit single-ticket
@@ -396,6 +398,7 @@ public class ProtectedEndpointInventoryTests : IClassFixture<TigerCsApiFactory>
             [
                 "/api/auth/login",
                 "/api/auth/screen-pop/redeem",
+                "/api/public/employee-reviews/activate",
                 "/api/public/employee-reviews/session",
                 "/api/public/employee-reviews/submit",
                 "/api/public/ticket-reviews/lookup",

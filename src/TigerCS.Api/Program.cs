@@ -45,6 +45,19 @@ builder.Services.AddRateLimiter(options =>
                 QueueLimit = 0
             });
     });
+
+    // Tablet activation: someone typing an 8-character code needs a request or two, but an office may set several tablets up behind one address,
+    // so this per-minute ceiling is generous. Partitioned by the client address (forwarded by TigerCS.Web, else the caller). It is only the first,
+    // cheap gate against floods; the strict, database-backed attempt limits live in EmployeeReviewActivationService.
+    options.AddPolicy(TigerCS.Api.Controllers.PublicEmployeeReviewsController.ActivationRateLimitPolicy, httpContext =>
+        System.Threading.RateLimiting.RateLimitPartition.GetFixedWindowLimiter(
+            "activate:" + TigerCS.Api.Controllers.PublicEmployeeReviewsController.ClientAddress(httpContext),
+            _ => new System.Threading.RateLimiting.FixedWindowRateLimiterOptions
+            {
+                PermitLimit = 30,
+                Window = TimeSpan.FromMinutes(1),
+                QueueLimit = 0
+            }));
 });
 
 // Every expected failure path in this Api already returns a structured

@@ -239,29 +239,32 @@ public sealed class EmployeeReviewSubmissionTests : IDisposable
         using (var context = _fx.CreateContext())
         {
             await _fx.CreateAdminService(context).UpdateAsync(_fx.Admin, deviceId, new("Desk 1", _fx.Bilal));
-            await _fx.CreateAdminService(context).RegenerateTokenAsync(_fx.Admin, deviceId);
+            await _fx.CreateAdminService(context).IssueActivationCodeAsync(_fx.Admin, deviceId, confirmReplaceActiveCredential: true);
         }
 
         using var check = _fx.CreateContext();
         var entries = check.AuditEntries.Where(a => a.EntityType == "EmployeeReviewDevice").ToList();
         Assert.Contains(entries, a => a.Action == "AdminRegisterReviewDevice");
         Assert.Contains(entries, a => a.Action == "AdminReassignReviewDevice" && a.BeforeValue!.Contains(_fx.Amal.ToString()) && a.AfterValue!.Contains(_fx.Bilal.ToString()));
-        Assert.Contains(entries, a => a.Action == "AdminRegenerateReviewDeviceToken");
+        Assert.Contains(entries, a => a.Action == "AdminReactivateReviewDevice");
         Assert.DoesNotContain(entries, a => (a.AfterValue ?? "").Contains(token) || (a.BeforeValue ?? "").Contains(token));
     }
 
     [Fact]
-    public async Task RegeneratingTheCredential_StopsTheOldTokenAtOnce_AndTheNewOneWorks()
+    public async Task IssuingANewActivationCode_StopsTheOldTokenAtOnce_AndTheNewlyActivatedTokenWorks()
     {
         var (deviceId, oldToken) = await _fx.RegisterAsync("Desk 1", _fx.Amal);
-        string newToken;
+        string code;
         using (var context = _fx.CreateContext())
         {
-            newToken = (await _fx.CreateAdminService(context).RegenerateTokenAsync(_fx.Admin, deviceId)).Value!.Token;
+            code = (await _fx.CreateAdminService(context).IssueActivationCodeAsync(_fx.Admin, deviceId, confirmReplaceActiveCredential: true)).Value!.ActivationCode;
         }
 
-        Assert.NotEqual(oldToken, newToken);
+        // Re-provisioning cuts the old credential immediately, before the new code is even used.
         Assert.Equal(SubmitEmployeeReviewOutcome.InvalidDevice, await Submit(oldToken));
+
+        var newToken = (await _fx.ActivateAsync(code)).DeviceToken!;
+        Assert.NotEqual(oldToken, newToken);
         Assert.Equal(SubmitEmployeeReviewOutcome.Submitted, await Submit(newToken));
     }
 
@@ -280,9 +283,10 @@ public sealed class EmployeeReviewSubmissionTests : IDisposable
         var reactivate = await admin.SetActiveAsync(_fx.Admin, deviceId, true);
         Assert.Equal(TigerCS.Application.Modules.Administration.Dto.AdminOutcome.Conflict, reactivate.Outcome);
 
-        var reissued = (await admin.RegenerateTokenAsync(_fx.Admin, deviceId)).Value!;
-        Assert.True(reissued.Device.IsActive && reissued.Device.HasCredential);
-        Assert.Equal(SubmitEmployeeReviewOutcome.Submitted, await Submit(reissued.Token));
+        var reissued = (await admin.IssueActivationCodeAsync(_fx.Admin, deviceId)).Value!;
+        Assert.True(reissued.Device.IsActive && reissued.Device.ActivationPending && !reissued.Device.HasCredential);
+        var activated = await _fx.ActivateAsync(reissued.ActivationCode);
+        Assert.Equal(SubmitEmployeeReviewOutcome.Submitted, await Submit(activated.DeviceToken));
     }
 
     [Fact]

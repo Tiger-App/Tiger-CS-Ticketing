@@ -33,6 +33,46 @@ public sealed class EmployeeReviewTabletApiClient(HttpClient httpClient, ILogger
 {
     public const string TokenHeader = "X-Device-Token";
 
+    /// <summary>Carries the tablet user's address to the Api so its attempt limit is per person, not per Web server.</summary>
+    public const string ClientAddressHeader = "X-Client-Address";
+
+    /// <summary>
+    /// Redeems an activation code. Returns the Api's answer (the device token only when it is <see cref="ActivateTabletOutcome.Activated"/>), or
+    /// <c>null</c> when the Api could not be reached or failed — the code is then neither confirmed nor refused, so the page asks to try again.
+    /// </summary>
+    public async Task<ActivateTabletResultDto?> ActivateAsync(string code, string? clientAddress, CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "api/public/employee-reviews/activate")
+            {
+                Content = JsonContent.Create(new ActivateTabletRequestDto(code), options: ApiJson.Options)
+            };
+            if (!string.IsNullOrWhiteSpace(clientAddress))
+            {
+                request.Headers.TryAddWithoutValidation(ClientAddressHeader, clientAddress);
+            }
+
+            using var response = await httpClient.SendAsync(request, cancellationToken);
+            switch (response.StatusCode)
+            {
+                case HttpStatusCode.TooManyRequests:
+                    // Either the Api's own limiter (no body) or the service's attempt limit: the same thing to the person at the tablet.
+                    return new ActivateTabletResultDto(ActivateTabletOutcome.TooManyAttempts);
+                case HttpStatusCode.OK or HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden:
+                    return await response.Content.ReadFromJsonAsync<ActivateTabletResultDto>(ApiJson.Options, cancellationToken);
+                default:
+                    logger.LogWarning("Employee review tablet activation failed with status {Status}.", (int)response.StatusCode);
+                    return null;
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException or JsonException || ex is TaskCanceledException && !cancellationToken.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Employee review tablet activation could not reach or read the Api.");
+            return null;
+        }
+    }
+
     /// <summary>The tablet's session, or <c>null</c> when the Api could not be reached.</summary>
     public async Task<TabletSessionDto?> GetSessionAsync(string token, CancellationToken cancellationToken)
     {
