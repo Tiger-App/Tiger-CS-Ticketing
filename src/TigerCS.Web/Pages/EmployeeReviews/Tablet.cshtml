@@ -21,29 +21,39 @@
         <form method="post" class="tablet-af">@Html.AntiForgeryToken()</form>
 
         <section class="tablet-body" data-view="form">
+            <div class="tablet-heading">
+                <h1 class="tablet-question" id="tablet-question-label" @TabletText.Attrs("question")>@T("question")</h1>
+                <p class="tablet-subtitle" @TabletText.Attrs("review-subtitle")>@T("review-subtitle")</p>
+            </div>
+
             <div class="tablet-employee">
-                <p class="tablet-served" @TabletText.Attrs("served-by")>@T("served-by")</p>
-                <p class="tablet-employee__name" data-employee-name>@Model.EmployeeName</p>
+                <svg class="tablet-employee__icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 21c0-4.2 3.6-7 8-7s8 2.8 8 7" /></svg>
+                <div class="tablet-employee__text">
+                    <p class="tablet-served" @TabletText.Attrs("served-by")>@T("served-by")</p>
+                    <p class="tablet-employee__name" data-employee-name>@Model.EmployeeName</p>
+                </div>
             </div>
 
-            <h1 class="tablet-question" id="tablet-question-label" @TabletText.Attrs("question")>@T("question")</h1>
-
-            <div class="tablet-stars" role="radiogroup" aria-labelledby="tablet-question-label" dir="ltr" data-stars>
-                @for (var star = 1; star <= 5; star++)
-                {
-                    <button type="button" class="tablet-star" role="radio" aria-checked="false" data-star="@star" aria-label="@star">
-                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6.1 6.6.9-4.8 4.6 1.2 6.6L12 17.4l-5.9 3.3 1.2-6.6L2.5 9.5l6.6-.9L12 2.5z" /></svg>
-                    </button>
-                }
+            <div class="tablet-rating">
+                <div class="tablet-stars" role="radiogroup" aria-labelledby="tablet-question-label" dir="ltr" data-stars>
+                    @for (var star = 1; star <= 5; star++)
+                    {
+                        <button type="button" class="tablet-star" role="radio" aria-checked="false" data-star="@star" aria-label="@star">
+                            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2.5l2.9 6.1 6.6.9-4.8 4.6 1.2 6.6L12 17.4l-5.9 3.3 1.2-6.6L2.5 9.5l6.6-.9L12 2.5z" /></svg>
+                        </button>
+                    }
+                </div>
+                <p class="tablet-rating-label" data-rating-label aria-live="polite" @TabletText.Attrs("rating-hint")>@T("rating-hint")</p>
             </div>
-            <p class="tablet-rating-label" data-rating-label aria-live="polite" @TabletText.Attrs("rating-hint")>@T("rating-hint")</p>
 
-            <label class="tablet-comment-label" for="tablet-comment" @TabletText.Attrs("comment-label")>@T("comment-label")</label>
-            <textarea id="tablet-comment" class="tablet-comment" rows="3" maxlength="1000" data-comment
-                      placeholder="@T("comment-placeholder")"
-                      data-i18n-placeholder="comment-placeholder"
-                      data-placeholder-en="@TabletText.Get("comment-placeholder", TabletText.English)"
-                      data-placeholder-ar="@TabletText.Get("comment-placeholder", TabletText.Arabic)"></textarea>
+            <div class="tablet-comment-wrap">
+                <label class="tablet-comment-label" for="tablet-comment" @TabletText.Attrs("comment-label")>@T("comment-label")</label>
+                <textarea id="tablet-comment" class="tablet-comment" rows="2" maxlength="1000" data-comment
+                          placeholder="@T("comment-placeholder")"
+                          data-i18n-placeholder="comment-placeholder"
+                          data-placeholder-en="@TabletText.Get("comment-placeholder", TabletText.English)"
+                          data-placeholder-ar="@TabletText.Get("comment-placeholder", TabletText.Arabic)"></textarea>
+            </div>
 
             <p class="tablet-error" role="alert" data-error hidden></p>
 
