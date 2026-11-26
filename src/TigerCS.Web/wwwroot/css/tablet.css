@@ -137,6 +137,7 @@ html, body { height: 100%; }
 }
 .tablet-comment { height: clamp(64px, 11vh, 96px); }
 .tablet-comment::placeholder { color: #A59D88; }
+.tablet-code { text-align: center; text-transform: uppercase; letter-spacing: .35em; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 1.6rem; }
 .tablet-comment:focus, .tablet-code:focus { outline: none; border-color: var(--tb-gold); box-shadow: 0 0 0 3px rgba(197, 161, 90, .28); }
 
 .tablet-error { margin: 0; padding: 10px 16px; border: 1px solid #e3b4af; border-radius: 10px; background: #fdf1f0; color: var(--tb-error); font-size: .85em; }

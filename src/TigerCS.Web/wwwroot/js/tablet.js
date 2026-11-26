@@ -35,7 +35,7 @@
     // ---- activation page: move the code from the link's #fragment into the form (a fragment is never sent to any server) ----
     var activate = document.querySelector('[data-activate-form]');
     if (activate) {
-        var match = /(?:^#|&)code=([A-Za-z0-9_-]+)/.exec(window.location.hash || '');
+        var match = /(?:^#|&)code=([A-Za-z0-9]{8})(?:&|$)/.exec(window.location.hash || '');
         if (match) {
             activate.querySelector('input[name="Code"]').value = match[1];
             if (window.history && window.history.replaceState) {

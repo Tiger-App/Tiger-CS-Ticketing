@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore.Diagnostics;
 using Microsoft.AspNetCore.Identity;
 using TigerCS.Application.Abstractions;
 using TigerCS.Application.Authorization;
+using TigerCS.Application.Modules.EmployeeReviews.Dto;
 using TigerCS.Application.Modules.EmployeeReviews.Services;
 using TigerCS.Domain.Modules.ClassificationAndRouting;
 using TigerCS.Domain.Modules.IdentityAndAccess;
@@ -94,19 +95,38 @@ public sealed class EmployeeReviewFixture : IDisposable
 
     public EmployeeReviewTabletService CreateTabletService(TigerCsDbContext context) => new(CreateRepository(context), Time);
 
+    public EmployeeReviewActivationService CreateActivationService(TigerCsDbContext context) =>
+        new(CreateRepository(context), new DbAuditWriter(context), Time);
+
     public EmployeeReviewDeviceAdminService CreateAdminService(TigerCsDbContext context) =>
         new(CreateRepository(context), new DbAuditWriter(context), Time);
 
     public EmployeeReviewQueryAppService CreateQueryService(TigerCsDbContext context) =>
         new(CreateRepository(context), new UserDepartmentAssignmentRepository(context), Time);
 
-    /// <summary>Registers a tablet through the real admin service and returns the device id with its one-time token.</summary>
-    public async Task<(Guid DeviceId, string Token)> RegisterAsync(string name, Guid employeeId)
+    /// <summary>Registers a tablet through the real admin service and returns the device id with its one-time activation code (not yet redeemed).</summary>
+    public async Task<(Guid DeviceId, string Code)> RegisterPendingAsync(string name, Guid employeeId)
     {
         using var context = CreateContext();
         var result = await CreateAdminService(context).RegisterAsync(Admin, new(name, employeeId));
         Assert.True(result.IsSuccess, string.Join("; ", result.Errors ?? []));
-        return (result.Value!.Device.Id, result.Value.Token);
+        return (result.Value!.Device.Id, result.Value.ActivationCode);
+    }
+
+    /// <summary>Redeems <paramref name="code"/> through the real activation service. Each call is its own client unless one is given.</summary>
+    public async Task<ActivateTabletResultDto> ActivateAsync(string? code, string? client = null)
+    {
+        using var context = CreateContext();
+        return await CreateActivationService(context).ActivateAsync(client ?? Guid.NewGuid().ToString("N"), code);
+    }
+
+    /// <summary>Registers a tablet and activates it, as a real tablet would: returns the device id with the tablet's permanent device token.</summary>
+    public async Task<(Guid DeviceId, string Token)> RegisterAsync(string name, Guid employeeId)
+    {
+        var (deviceId, code) = await RegisterPendingAsync(name, employeeId);
+        var activated = await ActivateAsync(code);
+        Assert.Equal(ActivateTabletOutcome.Activated, activated.Outcome);
+        return (deviceId, activated.DeviceToken!);
     }
 
     /// <summary>Stores a review through the real tablet service at <paramref name="atUtc"/>.</summary>

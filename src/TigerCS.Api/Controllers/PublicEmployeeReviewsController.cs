@@ -20,10 +20,54 @@ namespace TigerCS.Api.Controllers;
 [EnableRateLimiting(RateLimitPolicy)]
 [Tags(OpenApiTags.EmployeeReviews)]
 [NoPermissionRequired("Anonymous customer review tablet: the device token is the credential.")]
-public class PublicEmployeeReviewsController(EmployeeReviewTabletService tabletService) : ControllerBase
+public class PublicEmployeeReviewsController(
+    EmployeeReviewTabletService tabletService,
+    EmployeeReviewActivationService activationService) : ControllerBase
 {
     public const string TokenHeader = "X-Device-Token";
     public const string RateLimitPolicy = "employee-review-tablet";
+
+    /// <summary>A much tighter ceiling for activation, in front of (not instead of) the database-backed attempt limits in the service.</summary>
+    public const string ActivationRateLimitPolicy = "employee-review-activation";
+
+    /// <summary>The address of the person at the tablet, as seen by TigerCS.Web (the Api itself only sees Web's address). Used only to key the attempt limit.</summary>
+    public const string ClientAddressHeader = "X-Client-Address";
+
+    /// <summary>
+    /// Trades an administrator's 8-character activation code for the tablet's own permanent device token (returned in the body, once, never cached).
+    /// The code is valid for 24 hours and a single use. Attempts are limited per client and overall; over a limit the code is not checked at all.
+    /// </summary>
+    /// <response code="200">Activated; <c>deviceToken</c> is the tablet's new credential.</response>
+    /// <response code="401">The code is not redeemable (wrong, malformed, expired, already used or replaced — deliberately indistinguishable).</response>
+    /// <response code="403">The code is right but the tablet or its employee is switched off.</response>
+    /// <response code="429">Too many attempts.</response>
+    [HttpPost("activate")]
+    [EnableRateLimiting(ActivationRateLimitPolicy)]
+    [ProducesResponseType<ActivateTabletResultDto>(StatusCodes.Status200OK)]
+    [ProducesResponseType<ActivateTabletResultDto>(StatusCodes.Status401Unauthorized)]
+    [ProducesResponseType<ActivateTabletResultDto>(StatusCodes.Status403Forbidden)]
+    [ProducesResponseType<ActivateTabletResultDto>(StatusCodes.Status429TooManyRequests)]
+    public async Task<IActionResult> Activate([FromBody] ActivateTabletRequestDto request, CancellationToken cancellationToken)
+    {
+        Response.Headers.CacheControl = "no-store";
+        var result = await activationService.ActivateAsync(ClientAddress(HttpContext), request?.Code, cancellationToken);
+        return result.Outcome switch
+        {
+            ActivateTabletOutcome.Activated => Ok(result),
+            ActivateTabletOutcome.Inactive => StatusCode(StatusCodes.Status403Forbidden, result),
+            ActivateTabletOutcome.TooManyAttempts => StatusCode(StatusCodes.Status429TooManyRequests, result),
+            _ => StatusCode(StatusCodes.Status401Unauthorized, result)
+        };
+    }
+
+    /// <summary>The client address that keys the activation limits: the forwarded one from TigerCS.Web when present, else the direct caller.</summary>
+    public static string ClientAddress(HttpContext context)
+    {
+        var forwarded = context.Request.Headers[ClientAddressHeader].ToString();
+        return string.IsNullOrWhiteSpace(forwarded) || forwarded.Length > 64
+            ? context.Connection.RemoteIpAddress?.ToString() ?? "unknown"
+            : forwarded;
+    }
 
     /// <summary>Checks the tablet's credential and returns the names to show (tablet and employee). Read-only apart from the tablet's "last seen" time.</summary>
     /// <response code="200">The session's status — <c>Ready</c>, <c>Inactive</c> or <c>Invalid</c> — and, when ready, the tablet and employee names.</response>

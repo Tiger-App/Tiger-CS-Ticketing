@@ -132,6 +132,8 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
 
     public DbSet<EmployeeReview> EmployeeReviews => Set<EmployeeReview>();
 
+    public DbSet<EmployeeReviewActivationThrottle> EmployeeReviewActivationThrottles => Set<EmployeeReviewActivationThrottle>();
+
     public DbSet<Workflow> Workflows => Set<Workflow>();
 
     public DbSet<WorkflowTemplate> WorkflowTemplates => Set<WorkflowTemplate>();
@@ -311,6 +313,7 @@ public class TigerCsDbContext(DbContextOptions<TigerCsDbContext> options)
         builder.ApplyConfiguration(new TicketReviewConfiguration());
         builder.ApplyConfiguration(new EmployeeReviewDeviceConfiguration());
         builder.ApplyConfiguration(new EmployeeReviewConfiguration());
+        builder.ApplyConfiguration(new EmployeeReviewActivationThrottleConfiguration());
 
         builder.ApplyConfiguration(new WorkflowConfiguration());
         builder.ApplyConfiguration(new WorkflowTemplateConfiguration());

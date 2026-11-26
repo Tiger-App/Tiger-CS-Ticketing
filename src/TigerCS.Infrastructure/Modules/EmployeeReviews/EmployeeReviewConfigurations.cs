@@ -19,6 +19,15 @@ public class EmployeeReviewDeviceConfiguration : IEntityTypeConfiguration<Employ
 
         // SHA-256 of the random device token; the token itself is never stored. NULL once the credential is revoked.
         builder.Property(d => d.TokenHash).HasColumnType("varbinary(32)");
+
+        // The short activation code is never stored: only its salted PBKDF2 hash, the salt and the expiry. All three are NULL once the code is
+        // redeemed, expired-and-replaced or revoked, so a used code leaves nothing to match.
+        // The hash is also the single-use guard: redemption saves with "WHERE ActivationCodeHash = <the hash that was read>", so when two requests
+        // redeem one code at the same time the database lets exactly one through (DbUpdateConcurrencyException for the other).
+        builder.Property(d => d.ActivationCodeHash).HasColumnType("varbinary(32)").IsConcurrencyToken();
+        builder.Property(d => d.ActivationCodeSalt).HasColumnType("varbinary(16)");
+        builder.Property(d => d.ActivationCodeExpiresAtUtc);
+
         builder.Property(d => d.IsActive).IsRequired();
         builder.Property(d => d.CreatedAtUtc).IsRequired();
         builder.Property(d => d.UpdatedAtUtc).IsRequired();
@@ -35,6 +44,21 @@ public class EmployeeReviewDeviceConfiguration : IEntityTypeConfiguration<Employ
             .HasFilter("[TokenHash] IS NOT NULL")
             .HasDatabaseName("UX_EmployeeReviewDevices_TokenHash");
         builder.HasIndex(d => d.EmployeeId).HasDatabaseName("IX_EmployeeReviewDevices_EmployeeId");
+    }
+}
+
+public class EmployeeReviewActivationThrottleConfiguration : IEntityTypeConfiguration<EmployeeReviewActivationThrottle>
+{
+    public void Configure(EntityTypeBuilder<EmployeeReviewActivationThrottle> builder)
+    {
+        builder.ToTable("EmployeeReviewActivationThrottles");
+
+        // A hashed client address, or the shared "global" row. Holds no code, token or address in the clear.
+        builder.HasKey(t => t.Key);
+        builder.Property(t => t.Key).IsRequired().HasMaxLength(EmployeeReviewActivationThrottle.KeyMaxLength);
+        // Optimistic concurrency: two attempts that read the same count cannot both write count + 1 (the loser reloads and counts again).
+        builder.Property(t => t.AttemptCount).IsRequired().IsConcurrencyToken();
+        builder.Property(t => t.WindowStartUtc).IsRequired();
     }
 }
 

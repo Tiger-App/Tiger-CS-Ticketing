@@ -558,6 +558,7 @@ public static class InfrastructureServiceCollectionExtensions
         services.AddScoped<TigerCS.Application.Modules.EmployeeReviews.Abstractions.IEmployeeReviewRepository, TigerCS.Infrastructure.Modules.EmployeeReviews.EmployeeReviewRepository>();
         services.AddScoped<TigerCS.Application.Modules.EmployeeReviews.Services.EmployeeReviewDeviceAdminService>();
         services.AddScoped<TigerCS.Application.Modules.EmployeeReviews.Services.EmployeeReviewTabletService>();
+        services.AddScoped<TigerCS.Application.Modules.EmployeeReviews.Services.EmployeeReviewActivationService>();
         services.AddScoped<TigerCS.Application.Modules.EmployeeReviews.Services.EmployeeReviewQueryAppService>();
         services.AddScoped<IOutboxEventHandler, TicketAcknowledgementHandler>();
         services.AddScoped<IOutboxEventHandler, TicketResolvedNotificationHandler>();

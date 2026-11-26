@@ -28,11 +28,11 @@
         <div class="panel er-issued" data-issued-credential>
             <h2 class="er-h er-h--pad">Activation code for “@issued.Device.DeviceName”</h2>
             <div class="er-issued__body">
-                <p class="page-subtitle">Open <strong>/EmployeeReviews/Activate</strong> on the tablet and enter this code (or open the link below on the tablet). It is shown only once and cannot be recovered — generate a new one if it is lost.</p>
+                <p class="page-subtitle">Open <strong>/EmployeeReviews/Activate</strong> on the tablet and enter this 8-character code (or open the link below on the tablet). It works <strong>once</strong> and expires on <strong>@Uae(issued.ExpiresAtUtc)</strong> (UAE time, 24 hours). It is shown only once and cannot be recovered — issue a new one if it is lost or expires.</p>
                 <label class="field-label" for="issued-code">Activation code</label>
-                <input id="issued-code" class="field-input er-secret" type="text" readonly value="@issued.Token" />
+                <input id="issued-code" class="field-input er-secret" type="text" readonly maxlength="8" size="8" autocomplete="off" spellcheck="false" value="@issued.ActivationCode" />
                 <label class="field-label" for="issued-link">Activation link</label>
-                <input id="issued-link" class="field-input er-secret" type="text" readonly value="@Model.ActivationUrl(issued.Token)" />
+                <input id="issued-link" class="field-input er-secret" type="text" readonly value="@Model.ActivationUrl(issued.ActivationCode)" />
             </div>
         </div>
     }
@@ -58,11 +58,15 @@
                             <tbody>
                                 @foreach (var d in Model.Devices)
                                 {
-                                    var statusText = !d.HasCredential ? "Revoked" : d.IsActive ? (d.EmployeeIsActive ? "Active" : "Employee inactive") : "Inactive";
+                                    var statusText = d.HasCredential
+                                        ? (d.IsActive ? (d.EmployeeIsActive ? "Active" : "Employee inactive") : "Inactive")
+                                        : d.ActivationPending ? "Awaiting activation"
+                                        : d.ActivationCodeExpiresAtUtc is not null ? "Activation code expired"
+                                        : "Revoked";
                                     <tr data-device="@d.DeviceName">
                                         <td>@d.DeviceName</td>
                                         <td>@d.EmployeeName<br /><small class="text-secondary">@(d.Department ?? "—")</small></td>
-                                        <td>@statusText</td>
+                                        <td>@statusText@if (d.ActivationPending){<br /><small class="text-secondary">code valid until @Uae(d.ActivationCodeExpiresAtUtc)</small>}</td>
                                         <td class="er-nowrap">@Uae(d.LastSeenAtUtc)</td>
                                         <td>
                                             <div class="er-actions">
@@ -98,10 +102,26 @@
                                                         <button type="submit" class="btn btn-sm">@(d.IsActive ? "Deactivate" : "Activate")</button>
                                                     </form>
                                                 }
-                                                <form method="post" asp-page-handler="Regenerate">
-                                                    <input type="hidden" name="deviceId" value="@d.Id" />
-                                                    <button type="submit" class="btn btn-sm">@(d.HasCredential ? "New credential" : "Issue credential")</button>
-                                                </form>
+                                                @if (d.HasCredential)
+                                                {
+                                                    @* An activated tablet is switched off the moment a new code is issued, so this is a deliberate, confirmed action. *@
+                                                    <details data-reactivate>
+                                                        <summary class="btn btn-sm">Re-activate…</summary>
+                                                        <form method="post" asp-page-handler="Regenerate" class="er-device-form">
+                                                            <input type="hidden" name="deviceId" value="@d.Id" />
+                                                            <p class="text-secondary">This tablet is activated and collecting reviews. Issuing a new activation code <strong>switches it off immediately</strong>: it collects nothing until the new code is entered on it. Reviews already collected are not affected.</p>
+                                                            <label class="field-label"><input type="checkbox" name="confirmReplace" value="true" required /> Yes, switch “@d.DeviceName” off and issue a new code</label>
+                                                            <button type="submit" class="btn btn-sm btn-gold">Issue new activation code</button>
+                                                        </form>
+                                                    </details>
+                                                }
+                                                else
+                                                {
+                                                    <form method="post" asp-page-handler="Regenerate">
+                                                        <input type="hidden" name="deviceId" value="@d.Id" />
+                                                        <button type="submit" class="btn btn-sm">Issue activation code</button>
+                                                    </form>
+                                                }
                                                 @if (d.HasCredential)
                                                 {
                                                     <form method="post" asp-page-handler="Revoke">

@@ -102,7 +102,7 @@ public sealed class EmployeeReviewAdminTests : IDisposable
 
         Assert.Equal(AdminOutcome.NotFound, (await admin.UpdateAsync(_fx.Admin, id, new("x", _fx.Amal))).Outcome);
         Assert.Equal(AdminOutcome.NotFound, (await admin.SetActiveAsync(_fx.Admin, id, true)).Outcome);
-        Assert.Equal(AdminOutcome.NotFound, (await admin.RegenerateTokenAsync(_fx.Admin, id)).Outcome);
+        Assert.Equal(AdminOutcome.NotFound, (await admin.IssueActivationCodeAsync(_fx.Admin, id)).Outcome);
         Assert.Equal(AdminOutcome.NotFound, (await admin.RevokeAsync(_fx.Admin, id)).Outcome);
     }
 
@@ -119,5 +119,72 @@ public sealed class EmployeeReviewAdminTests : IDisposable
         Assert.Equal("Customer Service", device.Department);
         Assert.True(device.IsActive && device.HasCredential && device.EmployeeIsActive);
         Assert.Null(device.LastSeenAtUtc);
+    }
+
+    [Fact]
+    public async Task IssuingACodeForAnActivatedTablet_WithoutConfirmation_IsRefused_AndSilentlyChangesNothing()
+    {
+        var (deviceId, token) = await _fx.RegisterAsync("Desk 1", _fx.Amal);
+        using var context = _fx.CreateContext();
+        var admin = _fx.CreateAdminService(context);
+        var auditBefore = context.AuditEntries.Count();
+
+        var refused = await admin.IssueActivationCodeAsync(_fx.Admin, deviceId);
+
+        Assert.Equal(TigerCS.Application.Modules.Administration.Dto.AdminOutcome.Conflict, refused.Outcome);
+        Assert.Contains("Confirm", string.Join(' ', refused.Errors ?? []));
+        using var check = _fx.CreateContext();
+        var device = await check.EmployeeReviewDevices.AsNoTracking().SingleAsync(d => d.Id == deviceId);
+        Assert.Equal(TigerCS.Application.Modules.EmployeeReviews.DeviceToken.Hash(token), device.TokenHash);   // still activated
+        Assert.Null(device.ActivationCodeHash);                                                                // no code was created
+        Assert.True(device.IsActive);
+        Assert.Equal(auditBefore, check.AuditEntries.Count());                                                 // and nothing was audited
+        Assert.Equal(TigerCS.Application.Modules.EmployeeReviews.Dto.TabletSessionStatus.Ready, (await _fx.CreateTabletService(check).GetSessionAsync(token)).Status);
+    }
+
+    [Fact]
+    public async Task IssuingACodeForAnActivatedTablet_WithConfirmation_SwitchesItsCredentialOff_AndIsAuditedAsAReactivation()
+    {
+        var (deviceId, token) = await _fx.RegisterAsync("Desk 1", _fx.Amal);
+        using var context = _fx.CreateContext();
+
+        var result = await _fx.CreateAdminService(context).IssueActivationCodeAsync(_fx.Admin, deviceId, confirmReplaceActiveCredential: true);
+
+        Assert.True(result.IsSuccess);
+        Assert.False(result.Value!.Device.HasCredential);
+        Assert.True(result.Value.Device.ActivationPending);
+        using var check = _fx.CreateContext();
+        Assert.Equal(TigerCS.Application.Modules.EmployeeReviews.Dto.TabletSessionStatus.Invalid, (await _fx.CreateTabletService(check).GetSessionAsync(token)).Status);
+        var entry = Assert.Single(check.AuditEntries.Where(a => a.Action == "AdminReactivateReviewDevice").ToList());
+        Assert.Equal("credential active", entry.BeforeValue);
+        Assert.DoesNotContain(token, entry.AfterValue ?? "");
+        Assert.DoesNotContain(result.Value.ActivationCode, entry.AfterValue ?? "");
+    }
+
+    [Fact]
+    public async Task IssuingACode_ForATabletWithNoCredential_NeedsNoConfirmation_BecauseNothingIsSwitchedOff()
+    {
+        var (pendingId, _) = await _fx.RegisterPendingAsync("Pending desk", _fx.Amal);
+        var (revokedId, _) = await _fx.RegisterAsync("Revoked desk", _fx.Bilal);
+        using var context = _fx.CreateContext();
+        var admin = _fx.CreateAdminService(context);
+        await admin.RevokeAsync(_fx.Admin, revokedId);
+
+        Assert.True((await admin.IssueActivationCodeAsync(_fx.Admin, pendingId)).IsSuccess);     // replaces a code nobody has used yet
+        Assert.True((await admin.IssueActivationCodeAsync(_fx.Admin, revokedId)).IsSuccess);     // brings a revoked tablet back
+    }
+
+    [Fact]
+    public void TheDomain_RefusesToDropAnActiveCredential_WithoutBeingTold()
+    {
+        var device = new TigerCS.Domain.Modules.EmployeeReviews.EmployeeReviewDevice(
+            "Desk", _fx.Amal, new byte[32], EmployeeReviewFixture.Now);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            device.IssueActivationCode(new byte[32], new byte[16], EmployeeReviewFixture.Now.AddHours(24), replaceActiveCredential: false, EmployeeReviewFixture.Now));
+        Assert.NotNull(device.TokenHash);
+
+        device.IssueActivationCode(new byte[32], new byte[16], EmployeeReviewFixture.Now.AddHours(24), replaceActiveCredential: true, EmployeeReviewFixture.Now);
+        Assert.Null(device.TokenHash);
     }
 }

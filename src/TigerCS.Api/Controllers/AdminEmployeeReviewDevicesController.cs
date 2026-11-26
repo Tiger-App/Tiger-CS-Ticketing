@@ -9,8 +9,8 @@ using TigerCS.Infrastructure.Modules.IdentityAndAccess.Authorization;
 namespace TigerCS.Api.Controllers;
 
 /// <summary>
-/// Review tablet administration — System Administrator only (enforced here; the Web only hides the menu). A tablet's credential is
-/// returned exactly once, by register or regenerate, and never again.
+/// Review tablet administration — System Administrator only (enforced here; the Web only hides the menu). A tablet's 8-character activation
+/// code is returned exactly once, by register or by issuing a new code, and never again. The tablet's own device token is never shown to anyone.
 /// </summary>
 [Route("api/admin/employee-review-devices")]
 [Authorize(Policy = PolicyNames.SystemAdministrator)]
@@ -30,13 +30,13 @@ public class AdminEmployeeReviewDevicesController(EmployeeReviewDeviceAdminServi
     public async Task<IActionResult> EligibleEmployees(CancellationToken cancellationToken) =>
         Ok(await devices.ListEligibleEmployeesAsync(cancellationToken));
 
-    /// <summary>Registers a tablet for an existing Customer Service employee and returns its one-time credential.</summary>
-    /// <response code="201">The tablet and its token — shown once.</response>
+    /// <summary>Registers a tablet for an existing Customer Service employee and returns its one-time 8-character activation code (valid 24 hours, one use).</summary>
+    /// <response code="201">The tablet and its activation code and expiry — shown once.</response>
     /// <response code="400">The name is missing or the employee is not an active Customer Service employee.</response>
     /// <response code="409">A tablet with this name already exists.</response>
     [HttpPost]
     [RequirePermission(Permissions.AdminConfigurationEdit)]
-    [ProducesResponseType<EmployeeReviewDeviceCredentialDto>(StatusCodes.Status201Created)]
+    [ProducesResponseType<EmployeeReviewActivationCodeDto>(StatusCodes.Status201Created)]
     public async Task<IActionResult> Register([FromBody] RegisterEmployeeReviewDeviceRequestDto request, CancellationToken cancellationToken) =>
         FromResult(await devices.RegisterAsync(CallerEmployeeId, request, cancellationToken), created => StatusCode(StatusCodes.Status201Created, created));
 
@@ -54,14 +54,20 @@ public class AdminEmployeeReviewDevicesController(EmployeeReviewDeviceAdminServi
     public async Task<IActionResult> SetActive(Guid deviceId, [FromBody] SetEmployeeReviewDeviceActiveRequestDto request, CancellationToken cancellationToken) =>
         FromResult(await devices.SetActiveAsync(CallerEmployeeId, deviceId, request.IsActive, cancellationToken));
 
-    /// <summary>Replaces the tablet's credential; the old one stops working immediately. The new token is returned once.</summary>
+    /// <summary>
+    /// Issues a new activation code, returned once. For a tablet with no credential (never activated, expired, revoked) that is all it does. For a tablet
+    /// that is already activated it switches the current credential off immediately, so it needs <c>confirmReplaceActiveCredential: true</c>.
+    /// </summary>
+    /// <response code="200">The device and its new code and expiry — shown once.</response>
+    /// <response code="409">The tablet is already activated and the re-activation was not confirmed; nothing changed.</response>
     [HttpPost("{deviceId:guid}/credential")]
     [RequirePermission(Permissions.AdminConfigurationEdit)]
-    [ProducesResponseType<EmployeeReviewDeviceCredentialDto>(StatusCodes.Status200OK)]
-    public async Task<IActionResult> Regenerate(Guid deviceId, CancellationToken cancellationToken) =>
-        FromResult(await devices.RegenerateTokenAsync(CallerEmployeeId, deviceId, cancellationToken));
+    [ProducesResponseType<EmployeeReviewActivationCodeDto>(StatusCodes.Status200OK)]
+    public async Task<IActionResult> Regenerate(
+        Guid deviceId, [FromBody] IssueEmployeeReviewActivationCodeRequestDto? request, CancellationToken cancellationToken) =>
+        FromResult(await devices.IssueActivationCodeAsync(CallerEmployeeId, deviceId, request?.ConfirmReplaceActiveCredential ?? false, cancellationToken));
 
-    /// <summary>Revokes the tablet's credential and switches it off.</summary>
+    /// <summary>Revokes the tablet's credential and any pending activation code, and switches it off.</summary>
     [HttpDelete("{deviceId:guid}/credential")]
     [RequirePermission(Permissions.AdminConfigurationEdit)]
     [ProducesResponseType<EmployeeReviewDeviceDto>(StatusCodes.Status200OK)]

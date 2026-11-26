@@ -37,6 +37,27 @@ public enum SubmitEmployeeReviewOutcome
 
 public sealed record SubmitEmployeeReviewResultDto(SubmitEmployeeReviewOutcome Outcome);
 
+/// <summary>The activation code typed (or carried by the link) on the tablet. Exactly 8 characters; the server validates, never the browser.</summary>
+public sealed record ActivateTabletRequestDto(string? Code);
+
+public enum ActivateTabletOutcome
+{
+    /// <summary>The code was valid: the response carries the tablet's new permanent device token (the only time it is ever sent).</summary>
+    Activated,
+
+    /// <summary>Not a code that can be redeemed: wrong, malformed, expired, already used or replaced. These are deliberately indistinguishable.</summary>
+    InvalidCode,
+
+    /// <summary>The code is right but the tablet (or its employee) is switched off. The code is not used up.</summary>
+    Inactive,
+
+    /// <summary>Too many attempts from this client, or too many overall. The code was not even checked.</summary>
+    TooManyAttempts
+}
+
+/// <summary><see cref="DeviceToken"/> is set only when <see cref="Outcome"/> is <see cref="ActivateTabletOutcome.Activated"/>.</summary>
+public sealed record ActivateTabletResultDto(ActivateTabletOutcome Outcome, string? DeviceToken = null);
+
 // ---- administration ----
 
 public sealed record EmployeeReviewDeviceDto(
@@ -50,7 +71,9 @@ public sealed record EmployeeReviewDeviceDto(
     bool HasCredential,
     DateTime CreatedAtUtc,
     DateTime UpdatedAtUtc,
-    DateTime? LastSeenAtUtc);
+    DateTime? LastSeenAtUtc,
+    bool ActivationPending = false,
+    DateTime? ActivationCodeExpiresAtUtc = null);
 
 public sealed record EligibleReviewEmployeeDto(Guid EmployeeId, string DisplayName, string? Department);
 
@@ -60,8 +83,14 @@ public sealed record UpdateEmployeeReviewDeviceRequestDto(string? DeviceName, Gu
 
 public sealed record SetEmployeeReviewDeviceActiveRequestDto(bool IsActive);
 
-/// <summary>The new device plus its credential — the only time the token is ever returned.</summary>
-public sealed record EmployeeReviewDeviceCredentialDto(EmployeeReviewDeviceDto Device, string Token);
+/// <summary>
+/// Issuing a new activation code for a tablet that is ALREADY activated switches its current credential off immediately, so the administrator must
+/// say so explicitly. For a tablet with no credential (never activated, expired code, revoked) nothing is switched off and no confirmation is needed.
+/// </summary>
+public sealed record IssueEmployeeReviewActivationCodeRequestDto(bool ConfirmReplaceActiveCredential = false);
+
+/// <summary>The device plus its new 8-character activation code — the only time the code is ever returned. It is not the device token.</summary>
+public sealed record EmployeeReviewActivationCodeDto(EmployeeReviewDeviceDto Device, string ActivationCode, DateTime ExpiresAtUtc);
 
 // ---- reporting ----
 

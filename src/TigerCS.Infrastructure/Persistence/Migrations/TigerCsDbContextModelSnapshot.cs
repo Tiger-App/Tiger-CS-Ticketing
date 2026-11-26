@@ -1918,10 +1918,38 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         });
                 });
 
+            modelBuilder.Entity("TigerCS.Domain.Modules.EmployeeReviews.EmployeeReviewActivationThrottle", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<int>("AttemptCount")
+                        .IsConcurrencyToken()
+                        .HasColumnType("int");
+
+                    b.Property<DateTime>("WindowStartUtc")
+                        .HasColumnType("datetime2");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("EmployeeReviewActivationThrottles", (string)null);
+                });
+
             modelBuilder.Entity("TigerCS.Domain.Modules.EmployeeReviews.EmployeeReviewDevice", b =>
                 {
                     b.Property<Guid>("Id")
                         .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTime?>("ActivationCodeExpiresAtUtc")
+                        .HasColumnType("datetime2");
+
+                    b.Property<byte[]>("ActivationCodeHash")
+                        .IsConcurrencyToken()
+                        .HasColumnType("varbinary(32)");
+
+                    b.Property<byte[]>("ActivationCodeSalt")
+                        .HasColumnType("varbinary(16)");
 
                     b.Property<DateTime>("CreatedAtUtc")
                         .HasColumnType("datetime2");

@@ -32,6 +32,13 @@ public sealed class EmployeeReviewWebTests : IDisposable
     private static readonly string InactiveToken = "tgr-" + new string('I', 43);
     private static readonly string RevokedToken = "tgr-" + new string('R', 43);
     private static readonly string DownToken = "tgr-" + new string('D', 43);
+
+    // Activation codes the fake Api understands (each is a well-formed 8-character code).
+    private const string GoodCode = "K7K7K7K7";
+    private const string UsedCode = "CCCCCCCC";
+    private const string InactiveCode = "HHHHHHHH";
+    private const string LockedCode = "MMMMMMMM";
+    private const string DownCode = "NNNNNNNN";
     private static readonly Guid ViewerId = Guid.NewGuid();
     private static readonly Guid AmalId = Guid.NewGuid();
 
@@ -287,38 +294,10 @@ public sealed class EmployeeReviewWebTests : IDisposable
 
     // ---------------------------------------------------------------- activation
 
-    [Fact]
-    public async Task Activate_IsAnonymous_AndAcceptsAValidCode_BySettingAnHttpOnlyStrictCookie()
+    private async Task<(HttpResponseMessage Response, FakeApi Api)> PostActivationAsync(string code)
     {
-        var kiosk = Kiosk();
-        var page = await kiosk.GetAsync("/EmployeeReviews/Activate");
-        var html = await page.Content.ReadAsStringAsync();
-        Assert.Equal(HttpStatusCode.OK, page.StatusCode);
-        var antiforgery = Regex.Match(html, "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value;
-        var antiforgeryCookie = string.Join("; ", page.Headers.GetValues("Set-Cookie").Select(c => c.Split(';')[0]));
-
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/EmployeeReviews/Activate")
-        {
-            Content = new FormUrlEncodedContent(new Dictionary<string, string> { ["Code"] = GoodToken, ["__RequestVerificationToken"] = antiforgery })
-        };
-        request.Headers.Add("Cookie", antiforgeryCookie);
-        request.Headers.Add("X-Test-Anonymous", "1");
-        var response = await kiosk.SendAsync(request);
-
-        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
-        Assert.Equal("/EmployeeReviews/Tablet", response.Headers.Location?.OriginalString);
-        var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"), c => c.StartsWith("tigercs_review_tablet=", StringComparison.Ordinal));
-        Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains(GoodToken, cookie);
-    }
-
-    [Theory]
-    [InlineData("not-a-code", "activate-invalid")]
-    [InlineData("tgr-GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG", "activate-invalid")] // wrong length
-    public async Task Activate_RejectsABadCode_WithoutSettingAnyCookie(string code, string expectedText)
-    {
-        var kiosk = Kiosk();
+        var api = new FakeApi(Roles.SystemAdministrator);
+        var kiosk = Kiosk(api: api);
         var page = await kiosk.GetAsync("/EmployeeReviews/Activate");
         var antiforgery = Regex.Match(await page.Content.ReadAsStringAsync(), "name=\"__RequestVerificationToken\"[^>]*value=\"([^\"]+)\"").Groups[1].Value;
         using var request = new HttpRequestMessage(HttpMethod.Post, "/EmployeeReviews/Activate")
@@ -327,13 +306,82 @@ public sealed class EmployeeReviewWebTests : IDisposable
         };
         request.Headers.Add("Cookie", string.Join("; ", page.Headers.GetValues("Set-Cookie").Select(c => c.Split(';')[0])));
         request.Headers.Add("X-Test-Anonymous", "1");
+        return (await kiosk.SendAsync(request), api);
+    }
 
-        var response = await kiosk.SendAsync(request);
+    [Fact]
+    public async Task Activate_Page_AsksForAnEightCharacterCode_NotAPassword()
+    {
+        var html = Dec(await Kiosk().GetStringAsync("/EmployeeReviews/Activate"));
+
+        var input = Regex.Match(html, "<input[^>]*id=\"activation-code\"[^>]*>").Value;
+        Assert.Contains("maxlength=\"8\"", input);
+        Assert.Contains("minlength=\"8\"", input);
+        Assert.Contains("type=\"text\"", input);
+        Assert.DoesNotContain("maxlength=\"128\"", input);
+    }
+
+    [Theory]
+    [InlineData(GoodCode)]
+    [InlineData("k7k7k7k7")]   // a tablet keyboard that starts in lower case
+    public async Task Activate_IsAnonymous_AndAcceptsAValidCode_StoringTheDeviceTokenNotTheCode_InAnHttpOnlyStrictCookie(string typed)
+    {
+        var (response, api) = await PostActivationAsync(typed);
+
+        Assert.Equal(HttpStatusCode.Redirect, response.StatusCode);
+        Assert.Equal("/EmployeeReviews/Tablet", response.Headers.Location?.OriginalString);
+        var cookie = Assert.Single(response.Headers.GetValues("Set-Cookie"), c => c.StartsWith("tigercs_review_tablet=", StringComparison.Ordinal));
+        Assert.Contains("httponly", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("samesite=strict", cookie, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(GoodToken, cookie);               // the long token the Api minted...
+        Assert.DoesNotContain(GoodCode, cookie);          // ...never the short code
+        Assert.Equal(GoodCode, Assert.Single(api.ActivationCodes));   // the Api received it normalized
+    }
+
+    [Theory]
+    [InlineData("not-a-code")]
+    [InlineData("tgr-GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG")] // an old long token
+    [InlineData("K7K7-K7K")]    // hyphen
+    [InlineData("K7K7K7K")]     // 7 characters
+    [InlineData("K7K7K7K7K")]   // 9 characters
+    [InlineData("K7K7K7K0")]    // ambiguous character
+    public async Task Activate_RejectsAMalformedCode_WithoutCallingTheApi_OrSettingAnyCookie(string code)
+    {
+        var (response, api) = await PostActivationAsync(code);
+        var html = Dec(await response.Content.ReadAsStringAsync());
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.Contains(TabletText.Get("activate-invalid", "en"), html);
+        Assert.Empty(api.ActivationCodes);
+        Assert.DoesNotContain(response.Headers.TryGetValues("Set-Cookie", out var set) ? set : [], c => c.StartsWith("tigercs_review_tablet=", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(UsedCode, "activate-invalid")]          // wrong, expired or already used: one message for all
+    [InlineData(InactiveCode, "activate-inactive")]
+    [InlineData(LockedCode, "activate-too-many")]
+    [InlineData(DownCode, "activate-unavailable")]
+    public async Task Activate_ShowsTheApisRefusal_WithoutSettingAnyCookie(string code, string expectedText)
+    {
+        var (response, api) = await PostActivationAsync(code);
         var html = Dec(await response.Content.ReadAsStringAsync());
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains(TabletText.Get(expectedText, "en"), html);
+        Assert.Equal(code, Assert.Single(api.ActivationCodes));
         Assert.DoesNotContain(response.Headers.TryGetValues("Set-Cookie", out var set) ? set : [], c => c.StartsWith("tigercs_review_tablet=", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task AdminPage_OffersAnActivatedTabletOnlyAConfirmedReactivation()
+    {
+        var html = Dec(await Client(Roles.SystemAdministrator).GetStringAsync("/Admin/EmployeeReviewDevices"));
+
+        Assert.Contains("data-reactivate", html);
+        Assert.Contains("Re-activate", html);
+        Assert.Contains("switches it off immediately", html);
+        Assert.Matches("<input[^>]*type=\"checkbox\"[^>]*name=\"confirmReplace\"[^>]*required|<input[^>]*name=\"confirmReplace\"[^>]*type=\"checkbox\"[^>]*required", html);
+        Assert.DoesNotContain(">New activation code<", html);   // no one-click replacement for a tablet that is working
     }
 
     // ---------------------------------------------------------------- the dashboard and the admin page
@@ -461,6 +509,8 @@ public sealed class EmployeeReviewWebTests : IDisposable
     {
         public List<(string Token, string Body)> Submissions { get; } = [];
 
+        public List<string> ActivationCodes { get; } = [];
+
         private static readonly EmployeeReviewFiltersDto Filters = new(
             new DateOnly(2026, 8, 12), new DateOnly(2026, 9, 10), null, null, null,
             [new ReviewEmployeeOptionDto(AmalId, "Amal Agent")], [new ReviewOptionDto(1, "Customer Service")]);
@@ -488,6 +538,20 @@ public sealed class EmployeeReviewWebTests : IDisposable
                     : token == InactiveToken ? new TabletSessionDto(TabletSessionStatus.Inactive)
                     : new TabletSessionDto(TabletSessionStatus.Invalid);
                 return Json(session);
+            }
+
+            if (path == "/api/public/employee-reviews/activate")
+            {
+                var code = (await request.Content!.ReadFromJsonAsync<ActivateTabletRequestDto>(cancellationToken))!.Code!;
+                ActivationCodes.Add(code);
+                return code switch
+                {
+                    GoodCode => Json(new ActivateTabletResultDto(ActivateTabletOutcome.Activated, GoodToken)),
+                    InactiveCode => new HttpResponseMessage(HttpStatusCode.Forbidden) { Content = JsonContent.Create(new ActivateTabletResultDto(ActivateTabletOutcome.Inactive)) },
+                    LockedCode => new HttpResponseMessage(HttpStatusCode.TooManyRequests),
+                    DownCode => new HttpResponseMessage(HttpStatusCode.BadGateway),
+                    _ => new HttpResponseMessage(HttpStatusCode.Unauthorized) { Content = JsonContent.Create(new ActivateTabletResultDto(ActivateTabletOutcome.InvalidCode)) }
+                };
             }
 
             if (path == "/api/public/employee-reviews/submit")

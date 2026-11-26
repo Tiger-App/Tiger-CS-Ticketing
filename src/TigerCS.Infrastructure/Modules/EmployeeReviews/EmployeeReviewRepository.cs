@@ -22,6 +22,86 @@ public sealed class EmployeeReviewRepository(TigerCsDbContext dbContext, IServic
     public Task<EmployeeReviewDevice?> GetDeviceByTokenHashAsync(byte[] tokenHash, CancellationToken cancellationToken = default) =>
         dbContext.EmployeeReviewDevices.FirstOrDefaultAsync(d => d.TokenHash == tokenHash, cancellationToken);
 
+    public async Task<IReadOnlyList<EmployeeReviewDevice>> ListRedeemableActivationDevicesAsync(DateTime nowUtc, CancellationToken cancellationToken = default) =>
+        await dbContext.EmployeeReviewDevices.AsNoTracking()
+            .Where(d => d.ActivationCodeHash != null && d.ActivationCodeSalt != null && d.ActivationCodeExpiresAtUtc > nowUtc)
+            .ToListAsync(cancellationToken);
+
+    public async Task<bool> TryRedeemActivationAsync(
+        Guid deviceId, byte[] expectedCodeHash, byte[] newTokenHash, DateTime nowUtc, CancellationToken cancellationToken = default)
+    {
+        var device = await dbContext.EmployeeReviewDevices.FirstOrDefaultAsync(d => d.Id == deviceId, cancellationToken);
+        if (device is null || !device.TryRedeemActivationCode(expectedCodeHash, newTokenHash, nowUtc))
+        {
+            return false;
+        }
+
+        try
+        {
+            await dbContext.SaveChangesAsync(cancellationToken);
+            return true;
+        }
+        catch (DbUpdateConcurrencyException)
+        {
+            // Someone redeemed or replaced the code between our read and our write: this caller lost the race.
+            dbContext.Entry(device).State = EntityState.Detached;
+            return false;
+        }
+    }
+
+    /// <summary>More than enough retries for the handful of requests that can ever collide on one counter; if it is still contended, fail closed.</summary>
+    private const int MaxCounterRetries = 25;
+
+    public async Task<int> RegisterActivationAttemptAsync(string key, TimeSpan window, DateTime nowUtc, CancellationToken cancellationToken = default)
+    {
+        var count = 0;
+        var saved = await ChangeThrottleAsync(key, nowUtc, row => count = row.Register(nowUtc, window), createIfMissing: true, cancellationToken);
+
+        // Out of retries means the counter is being hammered and the count was never stored: report "over every limit" so the caller refuses.
+        // (Never return the unsaved count - it would be a number some other request has already moved past.)
+        return saved ? count : int.MaxValue;
+    }
+
+    public Task ClearActivationAttemptsAsync(string key, CancellationToken cancellationToken = default) =>
+        ChangeThrottleAsync(key, DateTime.UtcNow, row => row.Clear(), createIfMissing: false, cancellationToken);
+
+    public Task RefundActivationAttemptAsync(string key, CancellationToken cancellationToken = default) =>
+        ChangeThrottleAsync(key, DateTime.UtcNow, row => row.Refund(), createIfMissing: false, cancellationToken);
+
+    /// <summary>Applies <paramref name="change"/> to a counter row and saves it, reloading and re-applying it whenever another request changed the row first.</summary>
+    private async Task<bool> ChangeThrottleAsync(
+        string key, DateTime nowUtc, Action<EmployeeReviewActivationThrottle> change, bool createIfMissing, CancellationToken cancellationToken)
+    {
+        for (var attempt = 0; attempt < MaxCounterRetries; attempt++)
+        {
+            var row = await dbContext.EmployeeReviewActivationThrottles.FirstOrDefaultAsync(t => t.Key == key, cancellationToken);
+            if (row is null)
+            {
+                if (!createIfMissing)
+                {
+                    return true;
+                }
+
+                row = new EmployeeReviewActivationThrottle(key, nowUtc);
+                dbContext.EmployeeReviewActivationThrottles.Add(row);
+            }
+
+            change(row);
+            try
+            {
+                await dbContext.SaveChangesAsync(cancellationToken);
+                return true;
+            }
+            catch (Exception ex) when (ex is DbUpdateConcurrencyException || ex is DbUpdateException dbEx && IsDuplicate(dbEx))
+            {
+                // Another request created or changed the row first. Forget our stale copy and apply the change to the current one.
+                dbContext.Entry(row).State = EntityState.Detached;
+            }
+        }
+
+        return false;
+    }
+
     public async Task<IReadOnlyList<DeviceListRow>> ListDevicesAsync(CancellationToken cancellationToken = default)
     {
         var devices = await dbContext.EmployeeReviewDevices.AsNoTracking().ToListAsync(cancellationToken);
