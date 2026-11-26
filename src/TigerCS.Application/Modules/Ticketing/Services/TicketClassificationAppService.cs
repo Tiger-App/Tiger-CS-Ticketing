@@ -70,7 +70,8 @@ public sealed class TicketClassificationAppService(
     ITicketWorkflowEventRepository? workflowEventRepository = null,
     DefaultClassificationService? defaultClassification = null,
     TigerCS.Application.Modules.Collections.TowerAssignments.CollectionsTicketRoutingService? collectionsRouting = null,
-    CollectionsTransferGuard? collectionsGuard = null)
+    CollectionsTransferGuard? collectionsGuard = null,
+    TigerCS.Application.Modules.QueueingIntegration.QueueingIntegrationOptions? queueingOptions = null)
 {
     public async Task<TicketMutationResult> ClassifyAsync(
         Guid callerEmployeeId,
@@ -107,6 +108,14 @@ public sealed class TicketClassificationAppService(
         if (ticket.TicketStatus == TicketStatus.Closed)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.TicketClosed);
+        }
+
+        // Queue-managed ticket: its TigerCS classification (the mapped request type, or the department's General) is internal and fixed - a manual
+        // reclassification would re-pin another workflow, re-apply another SLA and enable another request type's approvals
+        // (QueueingIntegration:ManualChangePolicy). A normal ticket never reaches this branch.
+        if (TigerCS.Application.Modules.QueueingIntegration.QueueManagedTicketGuard.Blocks(ticket, queueingOptions))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.QueueManagedTicket);
         }
 
         // A priority DECREASE on a ticket that already carries a priority is

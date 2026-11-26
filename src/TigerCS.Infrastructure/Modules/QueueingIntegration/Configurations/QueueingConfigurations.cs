@@ -56,6 +56,7 @@ public class QueueingTicketLinkConfiguration : IEntityTypeConfiguration<Queueing
         builder.Property(l => l.QueueNumber).HasMaxLength(Ticket.ExternalReferenceMaxLength);
         builder.Property(l => l.CompanyId).HasMaxLength(QueueingTicketLink.ExternalIdMaxLength);
         builder.Property(l => l.ExternalTicketTypeId).HasMaxLength(QueueingTicketLink.ExternalIdMaxLength);
+        builder.Property(l => l.ExternalTicketTypeName).HasMaxLength(QueueingTicketLink.ExternalTicketTypeNameMaxLength);
         builder.Property(l => l.CounterId).HasMaxLength(QueueingTicketLink.ExternalIdMaxLength);
         builder.Property(l => l.AssignedExternalUserId).HasMaxLength(QueueingTicketLink.ExternalIdMaxLength);
         builder.Property(l => l.State).HasConversion<byte>().IsRequired();

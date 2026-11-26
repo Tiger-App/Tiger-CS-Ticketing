@@ -150,6 +150,10 @@ public sealed record TicketListResultDto(IReadOnlyList<TicketSummaryDto> Items, 
 /// <param name="ViewerCanTransferAnyTicket">True when the caller holds an explicit Transfer Any Ticket grant (Call Center employee) and the ticket is open: they may transfer it to any active department even though it is outside their departments, and the ticket opens read-only for them otherwise. Populated on detail reads.</param>
 /// <param name="IsReadOnlyAccess">True when the caller may open this ticket but change nothing on it: they created it, it is outside their department, and they hold no other grant on it. The server refuses every modification (403) regardless; the UI uses this to hide the actions. Populated on detail reads.</param>
 /// <param name="CreatedByEmployeeId">The employee who created the ticket. Populated on detail reads.</param>
+/// <param name="IntegrationSource">The external system that owns the ticket's lifecycle (<c>QueueingSystem</c>), or null for an ordinary TigerCS ticket. Populated on detail reads.</param>
+/// <param name="QueueingServiceName">Queue tickets only: the Queueing System's own service name, exactly as it sent it. Null when the creating event carried none (the ticket type id is shown instead). The ticket's TigerCS request type is only an internal classification.</param>
+/// <param name="QueueingTicketTypeId">Queue tickets only: the Queueing System's ticket type id, preserved from the creating event.</param>
+/// <param name="QueueingCompanyId">Queue tickets only: the Queueing System's company id, preserved from the creating event.</param>
 /// <param name="IsDefaultClassification">True when the ticket carries the approved default classification (Customer Services / General / General) - read from the stored category and request type, never inferred from a name. The UI shows "Customer Services / General" and keeps Reclassify available.</param>
 /// <param name="CanCorrectClassification">True when the caller is the CS Agent this ticket is assigned to and it is not closed: they may review and correct its Department, Category and Request Type through the classification action (the owner, SLA, status and history are preserved).</param>
 /// <param name="IsClassified">False while the ticket has no Category yet — an inquiry captured before anyone read the request. The UI shows "Unclassified" and offers the classify action rather than rendering a missing category.</param>
@@ -238,7 +242,11 @@ public sealed record TicketDetailDto(
     bool IsAiVirtualAgent = false,
     bool ViewerCanTransferAnyTicket = false,
     Guid? LastResponsibleEmployeeId = null,
-    string? LastResponsibleName = null);
+    string? LastResponsibleName = null,
+    string? IntegrationSource = null,
+    string? QueueingServiceName = null,
+    string? QueueingTicketTypeId = null,
+    string? QueueingCompanyId = null);
 
 public enum TicketQueryOutcome
 {

@@ -15,7 +15,7 @@ namespace TigerCS.Application.Modules.QueueingIntegration.Dto;
 /// <param name="EventSequence">Position of the event in the queue ticket's own history (1, 2, 3 ...). A state-changing event is never allowed to overwrite a newer one.</param>
 /// <param name="QueueNumber">The number the customer was shown (e.g. A-017). Required on TicketCreated.</param>
 /// <param name="CompanyId">Queueing System company. Mapped to a TigerCS department. Required on TicketCreated.</param>
-/// <param name="TicketTypeId">Queueing System ticket type. Mapped to a TigerCS request type. Required on TicketCreated.</param>
+/// <param name="TicketTypeId">Queueing System ticket type. Optionally mapped to a TigerCS request type (an explicit mapping overrides the department's General request type). Required on TicketCreated.</param>
 /// <param name="CustomerName">Optional. Display only.</param>
 /// <param name="CustomerPhone">The customer's mobile number. Used for the CRM lookup. Optional.</param>
 /// <param name="CustomerEmail">Optional. Display only.</param>
@@ -25,6 +25,7 @@ namespace TigerCS.Application.Modules.QueueingIntegration.Dto;
 /// <param name="Comment">The comment text. Required on TicketCommentAdded.</param>
 /// <param name="Reason">Why (reassigned, returned, recalled, closed, cancelled). Optional; recorded as the history note.</param>
 /// <param name="OccurredAtUtc">When the event happened in the Queueing System (UTC). Preserved on every record TigerCS writes for it.</param>
+/// <param name="TicketTypeName">Optional. The Queueing System's own name for the service (ticket type), kept and shown by TigerCS exactly as sent. Display only: it never routes, and it is not part of the event's idempotency identity. Read from <c>TicketCreated</c> only. Max 200.</param>
 public sealed record QueueingEventRequest(
     string? EventId,
     string? EventType,
@@ -41,20 +42,30 @@ public sealed record QueueingEventRequest(
     string? CounterId = null,
     string? Comment = null,
     string? Reason = null,
-    DateTime? OccurredAtUtc = null)
+    DateTime? OccurredAtUtc = null,
+    string? TicketTypeName = null)
 {
     private static readonly JsonSerializerOptions Canonical = new(JsonSerializerDefaults.Web)
     {
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
     };
 
-    /// <summary>The request in one stable form, stored with the event and compared on redelivery: the same EventId with a different body is a conflict, never a silent overwrite.</summary>
-    public string ToCanonicalJson() => JsonSerializer.Serialize(this with
+    /// <summary>The request in one stable form, stored with the event: the retry sweep and a redelivery re-read it, so it carries every field the Queueing System sent.</summary>
+    public string ToCanonicalJson() => JsonSerializer.Serialize(Normalised(), Canonical);
+
+    /// <summary>
+    /// The request in the form its idempotency hash is taken over: <see cref="ToCanonicalJson"/> without the display-only <see cref="TicketTypeName"/>. The same EventId with a
+    /// different body is a conflict, never a silent overwrite - and for every request that carries no name this is byte-for-byte the canonical JSON every event stored before the
+    /// field existed was hashed from, so those hashes stay valid. Any other changed field still changes this string.
+    /// </summary>
+    public string ToIdentityJson() => JsonSerializer.Serialize(Normalised() with { TicketTypeName = null }, Canonical);
+
+    private QueueingEventRequest Normalised() => this with
     {
         EventId = EventId?.Trim(),
         ExternalTicketId = ExternalTicketId?.Trim(),
         OccurredAtUtc = OccurredAtUtc is { } at ? QueueingEventValidator.AsUtc(at) : null
-    }, Canonical);
+    };
 }
 
 /// <summary>A request that passed <see cref="QueueingEventValidator"/>: typed, trimmed, every required field present.</summary>
@@ -74,7 +85,8 @@ public sealed record QueueingEventMessage(
     string? PerformedByUserId,
     string? CounterId,
     string? Comment,
-    string? Reason);
+    string? Reason,
+    string? TicketTypeName = null);
 
 /// <summary>What happened to the event, as the Queueing System sees it. Serialised by name.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]

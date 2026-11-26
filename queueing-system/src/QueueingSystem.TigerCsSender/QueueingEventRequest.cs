@@ -36,6 +36,12 @@ public sealed record QueueingEventRequest
     /// <summary>The Queueing System's ticket type id. Required on TicketCreated. Mapped by TigerCS to a request type. Max 100.</summary>
     public string? TicketTypeId { get; init; }
 
+    /// <summary>
+    /// Optional. The Queueing System's own name for the service (ticket type), e.g. "Lease Renewal". TigerCS keeps and shows it exactly as sent. Display only: it never
+    /// routes a ticket, and it is not part of the event's idempotency identity, so adding it never turns an existing EventId into a conflict. Read on TicketCreated only. Max 200.
+    /// </summary>
+    public string? TicketTypeName { get; init; }
+
     /// <summary>Optional. Max 200.</summary>
     public string? CustomerName { get; init; }
 
@@ -131,6 +137,7 @@ public sealed record QueueingEventRequest
         Text(nameof(QueueNumber), QueueNumber, 100, required.Contains(nameof(QueueNumber)));
         Text(nameof(CompanyId), CompanyId, 100, required.Contains(nameof(CompanyId)));
         Text(nameof(TicketTypeId), TicketTypeId, 100, required.Contains(nameof(TicketTypeId)));
+        Text(nameof(TicketTypeName), TicketTypeName, 200, false);
         Text(nameof(CustomerName), CustomerName, 200, false);
         Text(nameof(CustomerPhone), CustomerPhone, 32, required.Contains(nameof(CustomerPhone)));
         if (!string.IsNullOrWhiteSpace(CustomerPhone) && !CustomerPhone.Any(char.IsAsciiDigit))

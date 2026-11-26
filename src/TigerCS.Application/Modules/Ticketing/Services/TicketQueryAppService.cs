@@ -41,7 +41,8 @@ public sealed class TicketQueryAppService(
     ITicketUnassignedWorkRepository? unassignedWorkRepository = null,
     Microsoft.Extensions.Logging.ILogger<TicketQueryAppService>? logger = null,
     IUserPermissionOverrideRepository? permissionOverrides = null,
-    ITicketAssignmentRepository? ticketAssignmentRepository = null)
+    ITicketAssignmentRepository? ticketAssignmentRepository = null,
+    Application.Modules.QueueingIntegration.Abstractions.IQueueingStore? queueingStore = null)
 {
     /// <summary>Whether the caller may use the supervisor escalation-review filter (<c>escalated=true</c>).</summary>
     public static bool CanReviewEscalations(IReadOnlyCollection<string> callerRoles) =>
@@ -297,6 +298,22 @@ public sealed class TicketQueryAppService(
         }
 
         // Whether the stored category + request type ARE the default classification (resolved from configuration, not from names on the ticket).
+        // A queue ticket shows the Queueing System's own service, company and ticket type exactly as they were received - never the TigerCS request type, which
+        // is only its internal classification.
+        if (ticket.IsQueueManaged)
+        {
+            detail = detail with { IntegrationSource = ticket.IntegrationSource };
+            if (queueingStore is not null && await queueingStore.GetLinkAsync(ticket.TicketId, cancellationToken) is { } queueLink)
+            {
+                detail = detail with
+                {
+                    QueueingServiceName = queueLink.ExternalTicketTypeName,
+                    QueueingTicketTypeId = queueLink.ExternalTicketTypeId,
+                    QueueingCompanyId = queueLink.CompanyId
+                };
+            }
+        }
+
         if (defaultClassification is not null)
         {
             detail = detail with { IsDefaultClassification = await defaultClassification.IsDefaultAsync(ticket.CategoryId, ticket.RequestTypeId, cancellationToken) };

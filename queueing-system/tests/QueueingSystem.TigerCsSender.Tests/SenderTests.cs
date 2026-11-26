@@ -28,6 +28,34 @@ public sealed class QueueingEventFactoryTests
     }
 
     [Fact]
+    public async Task TicketTypeName_IsOptional_OmittedFromTheWireWhenAbsent_AndSentExactlyAsGivenWhenPresent()
+    {
+        var factory = Factory();
+
+        // Existing callers (no name): the wire body is byte-for-byte what it was before the field existed.
+        var without = await factory.CreatedAsync("QT-1", "A-017", "company-a", "type-complaint", "+971500000123");
+        Assert.Null(without.TicketTypeName);
+        Assert.DoesNotContain("TicketTypeName", without.ToJson(), StringComparison.Ordinal);
+        Assert.Empty(without.Validate(Now));
+
+        var with = await factory.CreatedAsync("QT-2", "A-018", "company-a", "type-complaint", "+971500000124", ticketTypeName: "Lease Renewal");
+        Assert.Equal("Lease Renewal", with.TicketTypeName);
+        Assert.Equal("Lease Renewal", JsonNode.Parse(with.ToJson())!["TicketTypeName"]!.GetValue<string>());
+        Assert.Empty(with.Validate(Now));
+    }
+
+    [Fact]
+    public async Task TicketTypeName_LongerThan200Characters_IsRejectedBeforeSending_ButNeverRequired()
+    {
+        var factory = Factory();
+        var tooLong = (await factory.CreatedAsync("QT-3", "A-019", "company-a", "type-complaint", "+971500000125")) with { TicketTypeName = new string('x', 201) };
+        Assert.Contains(nameof(QueueingEventRequest.TicketTypeName), tooLong.Validate(Now).Keys);
+
+        var blank = (await factory.CreatedAsync("QT-4", "A-020", "company-a", "type-complaint", "+971500000126")) with { TicketTypeName = "  " };
+        Assert.Empty(blank.Validate(Now));
+    }
+
+    [Fact]
     public async Task TicketCreated_MustBeTheFirstEvent()
     {
         var sequences = new InMemoryEventSequenceProvider();

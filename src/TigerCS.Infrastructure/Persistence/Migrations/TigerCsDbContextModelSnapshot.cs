@@ -2457,6 +2457,10 @@ namespace TigerCS.Infrastructure.Persistence.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
+                    b.Property<string>("ExternalTicketTypeName")
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
                     b.Property<DateTime>("LastAppliedOccurredAtUtc")
                         .HasColumnType("datetime2");
 

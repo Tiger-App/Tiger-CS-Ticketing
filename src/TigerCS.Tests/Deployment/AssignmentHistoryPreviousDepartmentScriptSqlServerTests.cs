@@ -139,9 +139,9 @@ public sealed class AssignmentHistoryPreviousDepartmentScriptSqlServerTests : ID
         Assert.Equal(2, Scalar<int>("SELECT COUNT(*) FROM TicketAssignmentHistory"));
 
         using var context = CreateContext();
-        // After THIS script only the migrations that come later in the release are still pending (AddInteractionEndReceivedAt and AddEmployeeReviews, each deployed by its own script);
+        // After THIS script only the migrations that come later in the release are still pending (AddInteractionEndReceivedAt, AddEmployeeReviews and AddQueueingTicketTypeName, each deployed by its own script);
         // nothing earlier, and nothing unknown.
-        Assert.Equal(["20261120074059_AddInteractionEndReceivedAt", "20261124071552_AddEmployeeReviews", "20261126154428_AddEmployeeReviewActivationCodes"], context.Database.GetPendingMigrations());
+        Assert.Equal(["20261120074059_AddInteractionEndReceivedAt", "20261124071552_AddEmployeeReviews", "20261126154428_AddEmployeeReviewActivationCodes", "20261126175759_AddQueueingTicketTypeName"], context.Database.GetPendingMigrations());
         context.Database.Migrate();
         Assert.Equal(2, context.TicketAssignmentHistory.Count());
     }

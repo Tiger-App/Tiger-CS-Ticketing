@@ -1359,6 +1359,15 @@ else
                     <div class="facts-row"><dt>Category</dt><dd>@(t.CategoryId is null ? "Not yet classified" : Model.CategoryName ?? "Classified")</dd></div>
                     <div class="facts-row"><dt>Request type</dt><dd>@(t.RequestTypeName ?? (t.CategoryId is null ? "Not yet classified" : "Not specified"))</dd></div>
                 }
+                @if (!string.IsNullOrWhiteSpace(t.QueueingServiceName) || !string.IsNullOrWhiteSpace(t.QueueingTicketTypeId))
+                {
+                    @* A Queueing System ticket: the service the customer queued for, exactly as the Queueing System named it (the request type above is only the internal classification). *@
+                    <div class="facts-row"><dt>Queueing service</dt><dd>@(!string.IsNullOrWhiteSpace(t.QueueingServiceName) ? t.QueueingServiceName : "Ticket type " + t.QueueingTicketTypeId)</dd></div>
+                    @if (!string.IsNullOrWhiteSpace(t.QueueingCompanyId))
+                    {
+                        <div class="facts-row"><dt>Queueing company</dt><dd>@t.QueueingCompanyId</dd></div>
+                    }
+                }
                 @if (t.OriginatingChannelId is not null)
                 {
                     @* The channel the ticket ENTERED on, resolved from channel configuration by id (still named once deactivated). *@
