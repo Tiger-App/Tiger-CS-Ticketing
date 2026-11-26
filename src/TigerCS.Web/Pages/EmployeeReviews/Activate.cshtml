@@ -16,22 +16,25 @@
     };
 }
 
-<main class="tablet tablet--notice">
+<main class="tablet tablet--notice tablet--activate">
     <header class="tablet-head">
         <img class="tablet-logo" src="~/img/tiger-logo.png" alt="Tiger Group" />
     </header>
     <section class="tablet-body tablet-activate">
-        <h1>@T("activate-title")</h1>
-        <p>@T("activate-sub")</p>
-        @if (problemKey is not null)
-        {
-            <p class="tablet-error" role="alert" data-activation-problem="@Model.Problem">@T(problemKey)</p>
-        }
-        @* A plain form (works without script). The script only pre-fills the code from the link's #fragment. *@
-        <form method="post" class="tablet-activate__form" data-activate-form>
-            <label class="tablet-comment-label" for="activation-code">@T("activate-label")</label>
-            <input id="activation-code" name="Code" class="tablet-code" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="text" maxlength="8" minlength="8" pattern="[A-Za-z0-9]{8}" required />
-            <button type="submit" class="tablet-submit">@T("activate-button")</button>
-        </form>
+        <div class="tablet-activate__card">
+            <svg class="tablet-activate__key" viewBox="0 0 32 32" aria-hidden="true"><circle cx="11" cy="16" r="6"/><path d="M17 16h12M25 16v5M21 16v3"/></svg>
+            <h1>@T("activate-title")</h1>
+            <p class="tablet-activate__sub">@T("activate-sub")</p>
+            @if (problemKey is not null)
+            {
+                <p class="tablet-error" role="alert" data-activation-problem="@Model.Problem">@T(problemKey)</p>
+            }
+            @* A plain form (works without script). The script only pre-fills the code from the link's #fragment. *@
+            <form method="post" class="tablet-activate__form" data-activate-form>
+                <label class="tablet-comment-label" for="activation-code">@T("activate-label")</label>
+                <input id="activation-code" name="Code" class="tablet-code" type="text" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false" inputmode="text" maxlength="8" minlength="8" pattern="[A-Za-z0-9]{8}" required />
+                <button type="submit" class="tablet-submit">@T("activate-button")</button>
+            </form>
+        </div>
     </section>
 </main>
