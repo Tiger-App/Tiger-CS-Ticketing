@@ -1,14 +1,20 @@
-/* Customer review tablet — Tiger Group branding (gold #C5A15A). Same-origin CSS only: the Web app's CSP forbids inline styles.
-   Built for a kiosk: large touch targets, no scrolling in normal use, landscape and portrait layouts, RTL for Arabic. */
+/* Customer review tablet — Tiger Group: gold, ivory and dark charcoal. Same-origin CSS only: the Web app's CSP forbids inline styles.
+   Built for a kiosk: large touch targets, no scrolling in normal use, landscape-first with a portrait layout, RTL for Arabic.
+   System fonts only (the tablet may be offline). */
 :root {
     --tb-gold: #C5A15A;
-    --tb-gold-dark: #7A5206;
-    --tb-gold-soft: #f6efdd;
-    --tb-ink: #1f2933;
-    --tb-muted: #6b6552;
-    --tb-line: #e4e0d3;
+    --tb-gold-light: #E3C888;
+    --tb-gold-dark: #8A6314;
+    --tb-charcoal: #1E1C19;
+    --tb-charcoal-2: #2B2823;
+    --tb-ivory: #FBF8F1;
+    --tb-ivory-2: #F3EDDD;
+    --tb-ink: #26231E;
+    --tb-muted: #7A7260;
+    --tb-line: #E2D9C2;
     --tb-error: #8b2d24;
-    --tb-bg: #F7F7F8;
+    --tb-serif: Georgia, "Times New Roman", serif;
+    --tb-sans: "Segoe UI", Tahoma, Arial, Helvetica, sans-serif;
 }
 
 * { box-sizing: border-box; }
@@ -17,10 +23,10 @@ html, body { height: 100%; }
 
 .tablet-page {
     margin: 0;
-    background: var(--tb-bg);
+    background: radial-gradient(120% 90% at 50% 0%, #FFFDF8 0%, var(--tb-ivory-2) 100%);
     color: var(--tb-ink);
-    font-family: "Segoe UI", Tahoma, Arial, Helvetica, sans-serif;
-    font-size: clamp(18px, 2.4vmin, 26px);
+    font-family: var(--tb-sans);
+    font-size: clamp(16px, 2.3vmin, 24px);
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
     overscroll-behavior: none;
@@ -30,88 +36,161 @@ html, body { height: 100%; }
 
 .tablet-page textarea, .tablet-page input { -webkit-user-select: text; user-select: text; }
 
+/* The page is one centred card: charcoal brand bar on top, ivory content below. */
 .tablet {
     display: flex;
     flex-direction: column;
+    width: min(100%, 980px);
     min-height: 100%;
-    max-width: 1100px;
     margin: 0 auto;
-    padding: clamp(12px, 3vmin, 32px);
-    background: #fff;
-    border-inline: 2px solid var(--tb-gold);
+    background: var(--tb-ivory);
+    box-shadow: 0 0 0 1px var(--tb-line), 0 24px 60px rgba(30, 28, 25, .14);
 }
 
-.tablet-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-bottom: 12px; border-bottom: 2px solid var(--tb-gold); }
-.tablet-logo { height: clamp(40px, 8vmin, 80px); width: auto; }
+@media (min-width: 1000px) and (min-height: 700px) {
+    .tablet-page { padding: clamp(0px, 2.5vh, 24px) 0; }
+    .tablet { min-height: calc(100% - 0px); border-radius: 18px; overflow: hidden; }
+}
+
+/* Brand bar: the official logo centred; the language switch is pinned to the physical top-right in both English and Arabic. */
+.tablet-head {
+    position: relative; display: flex; align-items: center; justify-content: center;
+    padding: clamp(10px, 1.8vh, 18px) clamp(96px, 14vw, 150px);
+    background: linear-gradient(180deg, var(--tb-charcoal-2), var(--tb-charcoal));
+    border-bottom: 3px solid var(--tb-gold);
+}
+.tablet-logo { height: clamp(64px, 11vh, 108px); width: auto; max-width: 100%; display: block; }
 .tablet-lang {
-    min-width: 120px; min-height: 52px; padding: 8px 22px;
-    border: 2px solid var(--tb-gold); border-radius: 26px; background: #fff; color: var(--tb-gold-dark);
-    font: inherit; font-size: 1em; font-weight: 700; cursor: pointer;
+    position: absolute; top: 50%; right: clamp(14px, 3vmin, 32px); left: auto; transform: translateY(-50%);
+    min-width: 116px; min-height: 48px; padding: 6px 22px;
+    border: 1px solid var(--tb-gold); border-radius: 999px; background: transparent; color: var(--tb-gold-light);
+    font: inherit; font-size: .9em; font-weight: 600; letter-spacing: .02em; cursor: pointer;
+    transition: background .15s, color .15s;
 }
-.tablet-lang:active { background: var(--tb-gold-soft); }
+.tablet-lang:active { background: var(--tb-gold); color: var(--tb-charcoal); }
+.tablet-lang:focus-visible { outline: 3px solid var(--tb-gold-light); outline-offset: 3px; }
 
-.tablet-body { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: clamp(8px, 2vmin, 20px); padding: clamp(8px, 2vmin, 24px) 0; text-align: center; }
+.tablet-body {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: clamp(10px, 2vh, 20px);
+    padding: clamp(12px, 2.6vh, 28px) clamp(20px, 5vmin, 56px);
+    text-align: center;
+}
 .tablet-body[hidden], [hidden] { display: none !important; }
 
-.tablet-employee { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 28px; background: var(--tb-gold-soft); border-radius: 14px; }
-.tablet-served { margin: 0; font-size: .75em; color: var(--tb-muted); }
-.tablet-employee__name { margin: 0; font-size: 1.7em; font-weight: 700; color: var(--tb-gold-dark); line-height: 1.2; }
-
-.tablet-question { margin: 0; font-size: 1.55em; line-height: 1.3; font-weight: 700; max-width: 22em; }
-
-.tablet-stars { display: flex; justify-content: center; gap: clamp(6px, 2vmin, 24px); }
-.tablet-star { width: clamp(64px, 14vmin, 130px); height: clamp(64px, 14vmin, 130px); padding: 4px; border: 0; background: transparent; cursor: pointer; }
-.tablet-star svg { width: 100%; height: 100%; fill: #e1dccb; stroke: #c9c2a8; stroke-width: 1; stroke-linejoin: round; transition: fill .12s, transform .12s; }
-.tablet-star.is-on svg { fill: var(--tb-gold); stroke: var(--tb-gold-dark); }
-.tablet-star:active svg { transform: scale(1.12); }
-.tablet-star:focus-visible { outline: 3px solid var(--tb-gold-dark); outline-offset: 2px; border-radius: 12px; }
-
-.tablet-rating-label { margin: 0; min-height: 1.4em; font-size: 1.1em; font-weight: 700; color: var(--tb-gold-dark); }
-
-.tablet-comment-label { align-self: stretch; margin: 0; text-align: start; font-size: .8em; color: var(--tb-muted); }
-.tablet-comment, .tablet-code {
-    width: 100%; max-width: 760px; padding: 12px 16px;
-    border: 2px solid var(--tb-line); border-radius: 12px; background: #fff; color: var(--tb-ink);
-    font: inherit; font-size: .9em; resize: none;
+/* ---- headline ---- */
+.tablet-heading { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.tablet-question {
+    margin: 0; font-family: var(--tb-serif); font-size: clamp(1.7em, 5.2vh, 2.3em); line-height: 1.2; font-weight: 700;
+    color: var(--tb-charcoal); letter-spacing: .005em;
 }
-.tablet-comment:focus, .tablet-code:focus { outline: none; border-color: var(--tb-gold); }
+[dir="rtl"] .tablet-question { font-family: var(--tb-sans); letter-spacing: 0; }
+.tablet-subtitle { margin: 0; font-size: .95em; color: var(--tb-muted); }
+
+/* ---- employee card ---- */
+.tablet-employee {
+    display: flex; align-items: center; gap: clamp(12px, 2.4vmin, 20px);
+    width: min(100%, 560px); padding: clamp(10px, 1.8vh, 16px) clamp(18px, 3vmin, 28px);
+    background: linear-gradient(135deg, var(--tb-charcoal-2), var(--tb-charcoal));
+    border: 1px solid var(--tb-gold); border-radius: 16px;
+    box-shadow: 0 10px 24px rgba(30, 28, 25, .18), inset 0 0 0 3px rgba(197, 161, 90, .12);
+    text-align: start;
+}
+.tablet-employee__icon {
+    flex: none; width: clamp(44px, 7vh, 60px); height: clamp(44px, 7vh, 60px); padding: 10px;
+    border: 1.5px solid var(--tb-gold); border-radius: 50%; background: rgba(197, 161, 90, .1);
+    fill: none; stroke: var(--tb-gold-light); stroke-width: 1.5; stroke-linecap: round;
+}
+.tablet-employee__text { min-width: 0; flex: 1; }
+.tablet-served { margin: 0 0 2px; font-size: .68em; letter-spacing: .14em; text-transform: uppercase; color: var(--tb-gold); }
+[dir="rtl"] .tablet-served { letter-spacing: 0; text-transform: none; font-size: .78em; }
+.tablet-employee__name {
+    margin: 0; font-family: var(--tb-serif); font-size: clamp(1.35em, 4.4vh, 1.9em); font-weight: 700; line-height: 1.2;
+    color: #FFF6E0; overflow-wrap: anywhere;
+}
+[dir="rtl"] .tablet-employee__name { font-family: var(--tb-sans); }
+
+/* ---- rating ---- */
+.tablet-rating { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.tablet-stars { display: flex; justify-content: center; gap: clamp(4px, 1.4vmin, 16px); }
+.tablet-star {
+    width: clamp(60px, 11vh, 104px); height: clamp(60px, 11vh, 104px); padding: 4px;
+    border: 0; border-radius: 16px; background: transparent; cursor: pointer;
+}
+.tablet-star svg {
+    width: 100%; height: 100%; fill: #EFE8D3; stroke: #CDBF98; stroke-width: 1; stroke-linejoin: round;
+    transition: fill .14s, stroke .14s, transform .14s, filter .14s;
+}
+.tablet-star.is-on svg { fill: var(--tb-gold); stroke: var(--tb-gold-dark); filter: drop-shadow(0 3px 6px rgba(197, 161, 90, .55)); }
+.tablet-star:active svg { transform: scale(1.14); }
+.tablet-star:focus-visible { outline: 3px solid var(--tb-gold-dark); outline-offset: 2px; }
+.tablet-rating-label { margin: 0; min-height: 1.4em; font-size: 1.05em; font-weight: 600; letter-spacing: .01em; color: var(--tb-gold-dark); }
+
+/* ---- comments ---- */
+.tablet-comment-wrap { width: min(100%, 720px); display: flex; flex-direction: column; gap: 6px; }
+.tablet-comment-label { margin: 0; text-align: start; font-size: .8em; font-weight: 600; color: var(--tb-muted); }
+.tablet-comment, .tablet-code {
+    width: 100%; padding: 12px 16px;
+    border: 1px solid var(--tb-line); border-radius: 12px; background: #fff; color: var(--tb-ink);
+    font: inherit; font-size: .9em; resize: none; box-shadow: inset 0 1px 2px rgba(30, 28, 25, .05);
+    transition: border-color .15s, box-shadow .15s;
+}
+.tablet-comment { height: clamp(64px, 11vh, 96px); }
+.tablet-comment::placeholder { color: #A59D88; }
+.tablet-comment:focus, .tablet-code:focus { outline: none; border-color: var(--tb-gold); box-shadow: 0 0 0 3px rgba(197, 161, 90, .28); }
 
 .tablet-error { margin: 0; padding: 10px 16px; border: 1px solid #e3b4af; border-radius: 10px; background: #fdf1f0; color: var(--tb-error); font-size: .85em; }
 
+/* ---- submit ---- */
 .tablet-submit {
-    min-width: min(100%, 320px); min-height: 64px; padding: 14px 40px;
-    border: 0; border-radius: 32px; background: var(--tb-gold); color: #3a2b06;
-    font: inherit; font-size: 1.15em; font-weight: 700; cursor: pointer;
+    width: min(100%, 460px); min-height: clamp(58px, 9vh, 72px); padding: 12px 40px;
+    border: 0; border-radius: 999px;
+    background: linear-gradient(180deg, #D8B76F 0%, var(--tb-gold) 55%, #B58F44 100%); color: var(--tb-charcoal);
+    font: inherit; font-size: 1.15em; font-weight: 700; letter-spacing: .03em; cursor: pointer;
+    box-shadow: 0 8px 20px rgba(138, 99, 20, .32), inset 0 1px 0 rgba(255, 255, 255, .45);
+    transition: transform .1s, box-shadow .1s, filter .1s;
 }
-.tablet-submit:active { background: #b39551; }
-.tablet-submit:disabled { opacity: .55; cursor: default; }
+[dir="rtl"] .tablet-submit { letter-spacing: 0; }
+.tablet-submit:active { transform: translateY(1px) scale(.99); filter: brightness(.94); box-shadow: 0 3px 8px rgba(138, 99, 20, .3); }
+.tablet-submit:focus-visible { outline: 3px solid var(--tb-charcoal); outline-offset: 3px; }
+.tablet-submit:disabled { opacity: .6; cursor: default; }
 
-.tablet-thanks h1, .tablet--notice h1 { margin: 0; font-size: 1.9em; line-height: 1.3; }
+/* ---- thank-you and notice screens ---- */
+.tablet-thanks h1, .tablet--notice h1 { margin: 0; font-family: var(--tb-serif); font-size: 2em; line-height: 1.25; color: var(--tb-charcoal); }
+[dir="rtl"] .tablet-thanks h1, [dir="rtl"].tablet--notice h1, [dir="rtl"] .tablet--notice h1 { font-family: var(--tb-sans); }
 .tablet-thanks p, .tablet--notice p { margin: 0; color: var(--tb-muted); }
-.tablet-check { width: clamp(80px, 18vmin, 160px); height: clamp(80px, 18vmin, 160px); fill: var(--tb-gold-soft); stroke: var(--tb-gold-dark); stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.tablet-check {
+    width: clamp(88px, 18vh, 150px); height: clamp(88px, 18vh, 150px);
+    fill: var(--tb-charcoal); stroke: var(--tb-gold); stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round;
+    filter: drop-shadow(0 10px 18px rgba(30, 28, 25, .22));
+}
 .tablet-pending { font-size: .8em; }
 
 .tablet-activate { max-width: 560px; margin: 0 auto; }
 .tablet-activate__form { display: flex; flex-direction: column; align-items: center; gap: 14px; width: 100%; }
 
-/* Landscape tablets and wide screens: employee and question on the left, rating and comment on the right. */
-@media (orientation: landscape) and (min-width: 900px) {
-    .tablet-body[data-view="form"] {
-        display: grid; grid-template-columns: 1fr 1.25fr; align-content: center; align-items: center; column-gap: 40px; row-gap: 12px; text-align: start;
-    }
-    .tablet-body[data-view="form"] > .tablet-employee { grid-column: 1; grid-row: 1; justify-self: start; }
-    .tablet-body[data-view="form"] > .tablet-question { grid-column: 1; grid-row: 2; }
-    .tablet-body[data-view="form"] > .tablet-stars { grid-column: 2; grid-row: 1; }
-    .tablet-body[data-view="form"] > .tablet-rating-label { grid-column: 2; grid-row: 2; text-align: center; }
-    .tablet-body[data-view="form"] > .tablet-comment-label { grid-column: 1 / -1; grid-row: 3; }
-    .tablet-body[data-view="form"] > .tablet-comment { grid-column: 1 / -1; grid-row: 4; max-width: none; }
-    .tablet-body[data-view="form"] > .tablet-error { grid-column: 1 / -1; grid-row: 5; }
-    .tablet-body[data-view="form"] > .tablet-submit { grid-column: 1 / -1; grid-row: 6; justify-self: center; }
+/* ---- portrait tablets: a little more air, bigger stars, full-width fields ---- */
+@media (orientation: portrait) {
+    .tablet-body { gap: clamp(14px, 2.4vh, 28px); }
+    .tablet-star { width: clamp(64px, 13vw, 112px); height: clamp(64px, 13vw, 112px); }
+    .tablet-comment { height: clamp(110px, 14vh, 170px); }
+    .tablet-submit { min-height: clamp(64px, 8vh, 84px); }
+    .tablet-employee { padding-block: clamp(14px, 2.2vh, 22px); }
+    .tablet-question { font-size: clamp(1.8em, 4.4vh, 2.4em); }
 }
 
-/* Short landscape phones: keep everything on one screen. */
+/* ---- short landscape screens (small tablets, phones): keep everything on one screen ---- */
+@media (orientation: landscape) and (max-height: 760px) {
+    .tablet-head { padding-block: 6px; }
+    .tablet-logo { height: 56px; }
+    .tablet-body { gap: 8px; padding-block: 8px; }
+    .tablet-star { width: 58px; height: 58px; }
+    .tablet-comment { height: 56px; }
+    .tablet-submit { min-height: 54px; }
+    .tablet-employee { padding-block: 8px; }
+    .tablet-served { display: none; }
+}
 @media (max-height: 520px) {
-    .tablet { padding: 8px 16px; }
-    .tablet-question { font-size: 1.2em; }
-    .tablet-star { width: 52px; height: 52px; }
+    .tablet-subtitle { display: none; }
+    .tablet-star { width: 50px; height: 50px; }
 }

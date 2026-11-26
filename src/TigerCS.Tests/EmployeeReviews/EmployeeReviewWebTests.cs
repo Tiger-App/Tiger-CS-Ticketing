@@ -83,7 +83,7 @@ public sealed class EmployeeReviewWebTests : IDisposable
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.Contains("data-employee-name>Amal Agent<", html);
-        Assert.Contains("How satisfied are you with our employee's service?", html);
+        Assert.Contains("How was your experience?", html);
         Assert.Equal(5, Regex.Matches(html, "data-star=\"[1-5]\"").Count);
         Assert.Contains("maxlength=\"1000\"", html);
         Assert.Contains("tiger-logo.png", html);
@@ -103,7 +103,7 @@ public sealed class EmployeeReviewWebTests : IDisposable
         var html = Dec(await (await Kiosk(GoodToken).GetAsync("/EmployeeReviews/Tablet")).Content.ReadAsStringAsync());
 
         Assert.Contains("<html lang=\"en\" dir=\"ltr\">", html);
-        Assert.Contains(">Submit<", html);
+        Assert.Contains(">Submit Feedback<", html);
         Assert.Contains("Comments (optional)", html);
     }
 
@@ -115,10 +115,10 @@ public sealed class EmployeeReviewWebTests : IDisposable
             var html = Dec(await (await Kiosk(GoodToken, language).GetAsync(path)).Content.ReadAsStringAsync());
 
             Assert.Contains("<html lang=\"ar\" dir=\"rtl\">", html);
-            Assert.Contains("ما مدى رضاك عن خدمة موظفنا؟", html);
-            Assert.Contains(">إرسال<", html);
+            Assert.Contains("كيف كانت تجربتك؟", html);
+            Assert.Contains(">إرسال التقييم<", html);
             Assert.Contains("ملاحظات (اختياري)", html);
-            Assert.DoesNotContain("How satisfied are you", html.Replace("data-en=\"How satisfied are you with our employee's service?\"", ""));
+            Assert.DoesNotContain("How was your experience", html.Replace("data-en=\"How was your experience?\"", ""));
         }
     }
 
@@ -128,7 +128,7 @@ public sealed class EmployeeReviewWebTests : IDisposable
         var html = Dec(await (await Kiosk(GoodToken).GetAsync("/EmployeeReviews/Tablet")).Content.ReadAsStringAsync());
 
         Assert.Contains("data-lang-toggle", html);
-        Assert.Contains("data-i18n=\"question\" data-en=\"How satisfied are you with our employee's service?\" data-ar=\"ما مدى رضاك عن خدمة موظفنا؟\"", html);
+        Assert.Contains("data-i18n=\"question\" data-en=\"How was your experience?\" data-ar=\"كيف كانت تجربتك؟\"", html);
         Assert.Contains("data-placeholder-ar=", html);
         // The employee's name is data, not a translatable string.
         Assert.DoesNotContain("data-i18n=\"employee", html);

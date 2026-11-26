@@ -15,8 +15,9 @@ public static class TabletText
 
     public static readonly IReadOnlyDictionary<string, (string En, string Ar)> Texts = new Dictionary<string, (string, string)>
     {
-        ["served-by"] = ("You are being served by", "يخدمك اليوم"),
-        ["question"] = ("How satisfied are you with our employee's service?", "ما مدى رضاك عن خدمة موظفنا؟"),
+        ["served-by"] = ("Your service representative", "ممثل خدمتك اليوم"),
+        ["question"] = ("How was your experience?", "كيف كانت تجربتك؟"),
+        ["review-subtitle"] = ("Please rate the service you received from", "يرجى تقييم الخدمة التي قدّمها لك"),
         ["star-1"] = ("Poor", "ضعيف"),
         ["star-2"] = ("Fair", "مقبول"),
         ["star-3"] = ("Good", "جيد"),
@@ -25,7 +26,7 @@ public static class TabletText
         ["rating-hint"] = ("Tap a star to rate", "اضغط على نجمة للتقييم"),
         ["comment-label"] = ("Comments (optional)", "ملاحظات (اختياري)"),
         ["comment-placeholder"] = ("Tell us more about your experience…", "أخبرنا المزيد عن تجربتك…"),
-        ["submit"] = ("Submit", "إرسال"),
+        ["submit"] = ("Submit Feedback", "إرسال التقييم"),
         ["sending"] = ("Sending…", "جارٍ الإرسال…"),
         ["choose-rating"] = ("Please choose a star rating first.", "يرجى اختيار عدد النجوم أولاً."),
         ["thanks-title"] = ("Thank you for your feedback!", "شكراً لملاحظاتك!"),
