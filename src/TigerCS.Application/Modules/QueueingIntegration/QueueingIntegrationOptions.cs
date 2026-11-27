@@ -1,12 +1,16 @@
 namespace TigerCS.Application.Modules.QueueingIntegration;
 
-/// <summary>What happens when a person changes a queue-managed ticket's assignment, status or closure in TigerCS.</summary>
+/// <summary>
+/// What happens when a person changes a queue-managed ticket's assignment, status or closure in TigerCS. <b>Since the strict one-way mirror decision this is
+/// always <see cref="Block"/></b>: the setting is still read (so an existing configuration file keeps binding) but <see cref="Allow"/> has no effect -
+/// <see cref="QueueManagedTicketGuard"/> ignores it. TigerCS is a read-only mirror of the Queueing System, which is the only source of truth.
+/// </summary>
 public enum QueueingManualChangePolicy
 {
-    /// <summary>Refused with a clear message: the Queueing System is the source of truth for assignment, status and closure. Comments, notes and attachments stay open. (Default.)</summary>
+    /// <summary>Refused with a clear message: the Queueing System is the source of truth for assignment, status and closure. Comments, notes and attachments stay open. (The only behaviour.)</summary>
     Block = 0,
 
-    /// <summary>Allowed, but it is only a local edit: the next Queueing System event overwrites it. Use only while the Queueing System cannot yet be driven from the ticket.</summary>
+    /// <summary>Ignored (kept only so older configuration still binds). It no longer allows a local edit.</summary>
     Allow = 1
 }
 
@@ -47,8 +51,15 @@ public sealed class QueueingIntegrationOptions
 
     public QueueingManualChangePolicy ManualChangePolicy { get; set; } = QueueingManualChangePolicy.Block;
 
-    /// <summary>How many times an unresolved event is retried before it is marked Failed (needs a person; a redelivery restarts it).</summary>
+    /// <summary>
+    /// How many attempts a <b>bounded</b> failure gets before the event is marked Failed: a transient race or an unexplained error (see <c>QueueingFailureClass</c>).
+    /// It does NOT apply to a configuration hold (a mapping / employee / setting is missing) - that is retried indefinitely at the capped backoff and alerted on - nor to an
+    /// event held behind an earlier one (which has no retry of its own). A Failed event stays blocking until an administrator reprocesses it.
+    /// </summary>
     public int MaxRetryAttempts { get; set; } = 12;
+
+    /// <summary>How long (minutes) a ticket's oldest unresolved event may stay blocked before monitoring reports it as an alert. Default 15.</summary>
+    public int BlockedAlertAfterMinutes { get; set; } = 15;
 
     /// <summary>The first retry delay; each further attempt doubles it, capped at <see cref="MaxRetryDelaySeconds"/>.</summary>
     public int RetryBaseDelaySeconds { get; set; } = 30;

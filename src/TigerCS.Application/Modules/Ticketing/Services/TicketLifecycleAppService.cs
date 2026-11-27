@@ -848,6 +848,150 @@ public sealed class TicketLifecycleAppService(
     }
 
     /// <summary>
+    /// Integration-controlled reopen of a closed / cancelled <b>queue-managed</b> ticket, driven only by the Queueing System (it is the source of
+    /// truth). No approval, reopen window or auto-assignment applies: the ticket goes back to Open, unowned, with a new Resolution SLA cycle, and the
+    /// assignment event that caused it assigns it next. <paramref name="beforeCommit"/> stages the integration's own state in the same transaction.
+    /// </summary>
+    public async Task<TicketMutationResult> ReopenForQueueingAsync(
+        Guid integrationEmployeeId, long ticketId, string reason, Action<DateTime>? beforeCommit, CancellationToken cancellationToken = default)
+    {
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
+        if (ticket is null)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        var currentResolution = await ticketResolutionRepository.GetCurrentAsync(ticketId, cancellationToken);
+        if (!ticket.IsQueueManaged || ticket.TicketStatus != TicketStatus.Closed || currentResolution is null)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.NotEligibleForReopen);
+        }
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var correlationId = Guid.NewGuid();
+        var previousOutcome = currentResolution.ResolutionOutcome;
+        var previousSlaState = ticket.SlaState;
+        var trimmed = Truncate(reason.Trim(), ReopenReasonMaxLength);
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+
+        ticket.ReopenForQueue();
+        if (slaPauseService is not null)
+        {
+            await slaPauseService.CloseOpenPauseAsync(ticket, now, integrationEmployeeId, correlationId, cancellationToken);
+        }
+
+        ticket.RestartSlaClockForReopen();
+        currentResolution.Archive();
+        await slaDueDateService.StartReopenResolutionCycleAsync(ticket, now, integrationEmployeeId, correlationId, cancellationToken);
+
+        await statusHistoryRepository.AddAsync(
+            new TicketStatusHistory(
+                ticketId, TicketStatusDimension.TicketStatus, (byte)TicketStatus.Closed, (byte)TicketStatus.Open,
+                actorEmployeeId: null, actorIsSystem: true, note: trimmed, correlationId, now),
+            cancellationToken);
+        if (ticket.SlaState != previousSlaState)
+        {
+            await statusHistoryRepository.AddAsync(
+                new TicketStatusHistory(
+                    ticketId, TicketStatusDimension.SlaState, (byte)previousSlaState, (byte)ticket.SlaState,
+                    actorEmployeeId: null, actorIsSystem: true, note: "New Resolution SLA cycle opened on reopen.", correlationId, now),
+                cancellationToken);
+        }
+
+        await auditWriter.WriteAsync(
+            integrationEmployeeId, "QueueingReopen", "Ticket", ticketId.ToString(),
+            beforeValue: $"{TicketStatus.Closed};ResolutionOutcome={previousOutcome}",
+            afterValue: $"{TicketStatus.Open};ReopenCount={ticket.ReopenCount};DepartmentId={ticket.CurrentDepartmentId};Reason={trimmed}",
+            correlationId, cancellationToken);
+
+        beforeCommit?.Invoke(now);
+
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.ConcurrencyConflict);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
+    }
+
+    /// <summary>
+    /// Mirrors the Queueing System closing, as served, a queue ticket it had earlier cancelled (CANCELED -&gt; CLOSED): the TigerCS ticket stays Closed and ownerless, the
+    /// resolution outcome changes Cancelled -&gt; Resolved. Nothing is overwritten: the Cancelled resolution row is archived (kept), a new Resolved row is added, the status
+    /// history records the outcome change, the audit trail records who/when, and the Resolution SLA clock is settled at the event's time exactly as a normal Resolved closure
+    /// does. It is the same closure cycle, so <c>ReopenCount</c> is untouched and no second TicketClosed lifecycle event is queued (that event is keyed by the cycle, and a
+    /// queue ticket's customer messages are suppressed anyway). Only for a closed queue-managed ticket whose current outcome is Cancelled.
+    /// </summary>
+    public async Task<TicketMutationResult> ChangeQueueClosureOutcomeAsync(
+        Guid integrationEmployeeId, long ticketId, string reason, string detail, Action<DateTime>? beforeCommit,
+        CancellationToken cancellationToken = default, Guid? closedByEmployeeId = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(reason);
+
+        var ticket = await ticketRepository.GetByIdAsync(ticketId, cancellationToken);
+        if (ticket is null)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        var currentResolution = await ticketResolutionRepository.GetCurrentAsync(ticketId, cancellationToken);
+        if (!ticket.IsQueueManaged || ticket.TicketStatus != TicketStatus.Closed
+            || currentResolution is null || currentResolution.ResolutionOutcome != ResolutionOutcome.Cancelled)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.NotEligibleForResolution);
+        }
+
+        var now = timeProvider.GetUtcNow().UtcDateTime;
+        var correlationId = Guid.NewGuid();
+        var trimmed = Truncate(reason.Trim(), ReopenReasonMaxLength);
+        var actor = closedByEmployeeId ?? integrationEmployeeId;
+
+        await using var transaction = await unitOfWork.BeginTransactionAsync(cancellationToken);
+
+        ticket.ChangeQueueClosureOutcome(ResolutionOutcome.Resolved);
+        currentResolution.Archive();
+        await ticketResolutionRepository.AddAsync(
+            new TicketResolution(ticketId, ResolutionOutcome.Resolved, trimmed, reasonCode: null, duplicateOfTicketId: null, actor, now),
+            cancellationToken);
+
+        await statusHistoryRepository.AddAsync(
+            new TicketStatusHistory(
+                ticketId, TicketStatusDimension.ResolutionOutcome, (byte)ResolutionOutcome.Cancelled, (byte)ResolutionOutcome.Resolved,
+                actorEmployeeId: closedByEmployeeId, actorIsSystem: closedByEmployeeId is null, trimmed, correlationId, now),
+            cancellationToken);
+
+        await auditWriter.WriteAsync(
+            actor, TicketClosureAuditActions.ClosedByQueueingSystem, "Ticket", ticketId.ToString(),
+            beforeValue: $"{TicketStatus.Closed};ResolutionOutcome={ResolutionOutcome.Cancelled}",
+            afterValue: $"{TicketStatus.Closed};ResolutionOutcome={ResolutionOutcome.Resolved};Reason={trimmed};{detail};ClosedByEmployeeId={closedByEmployeeId?.ToString() ?? "(none)"};AtUtc={now:O}",
+            correlationId, cancellationToken);
+
+        // The Resolved outcome settles the Resolution SLA clock (a Cancelled closure never did) - at the event's own time, preserving every earlier SLA result.
+        await breachProcessor.ProcessDeadlineAsync(
+            ticket, SlaDeadlineType.Resolution, now, correlationId, cancellationToken,
+            resolutionAchievedAtUtc: now, settlingClosure: true);
+
+        beforeCommit?.Invoke(now);
+
+        try
+        {
+            await unitOfWork.SaveChangesAsync(cancellationToken);
+        }
+        catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.ConcurrencyConflict);
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return TicketMutationResult.Success(TicketQueryAppService.ToDetailDto(ticket));
+    }
+
+    /// <summary>
     /// Brings the SLA pause state in line with the ticket's just-updated
     /// status. A no-op where no <see cref="SlaPauseService"/> is composed
     /// (unit-test compositions that do not exercise SLA pausing).
@@ -915,6 +1059,12 @@ public sealed class TicketLifecycleAppService(
         if (ticket is null)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        // A mirrored queue ticket is closed only by the Queueing System; the inactivity job (or anything else) must never close it.
+        if (TigerCS.Application.Modules.QueueingIntegration.QueueManagedTicketGuard.Blocks(ticket, queueingOptions))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.QueueManagedTicket);
         }
 
         if (ticket.TicketStatus == TicketStatus.Closed)
@@ -1140,6 +1290,13 @@ public sealed class TicketLifecycleAppService(
         if (ticket is null)
         {
             return TicketMutationResult.Failure(TicketMutationOutcome.NotFound);
+        }
+
+        // Every system closure (document delivery, AI completion, AI-only timeout, external system) goes through here: a mirrored queue ticket is closed only while the
+        // Queueing System integration is applying its own event (the guard is open inside an IntegrationEventScope), never by a job or another integration.
+        if (TigerCS.Application.Modules.QueueingIntegration.QueueManagedTicketGuard.Blocks(ticket, queueingOptions))
+        {
+            return TicketMutationResult.Failure(TicketMutationOutcome.QueueManagedTicket);
         }
 
         if (ticket.TicketStatus == TicketStatus.Closed)

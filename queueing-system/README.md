@@ -46,7 +46,7 @@ It is optional (max 200), omitted from the JSON when null, and not part of the e
 | `SendDisposition` | HTTP | Do |
 |---|---|---|
 | `Delivered` | 200 / 201 | Mark sent. Never resend. (Includes `Duplicate`, `Superseded`, `Rejected` - TigerCS has the event and decided.) |
-| `Accepted` | 202 | Mark sent. **Do not resend** - TigerCS stored it and retries it itself (its ticket does not exist yet, or a mapping / employee is missing). Alert the business if `Outcome` is a mapping problem. |
+| `Accepted` | 202 | Mark sent. **Do not resend** - TigerCS stored it and retries it itself (its ticket does not exist yet, a mapping / employee is missing, or an earlier event of the same queue ticket is still unresolved - `AWAITING_PREVIOUS_EVENT`: TigerCS applies a queue ticket's events strictly in sequence order and holds every later one behind it). Alert the business if `Outcome` is a mapping problem; a `Failed` event is reprocessed by a TigerCS administrator, never by resending. |
 | `RetryLater` | network, 408, 425, 429, 5xx (503 incl.) after `MaxAttempts` | Leave it in the outbox; resend later (e.g. every minute, then growing), **unchanged**. |
 | `Unauthorized` | 401 / 403 | Stop sending, alert, keep every event. Resume when the key is fixed. |
 | `PermanentFailure` | 400, 409, other 4xx | Move to a dead-letter store and alert: the event itself is wrong (validation, `EventId` reused with different content, wrong URL). Resending it as is cannot work. |

@@ -303,7 +303,7 @@ public sealed class QueueingTicketTypeNameTests(QueueingFixture f) : IClassFixtu
     }
 
     [Fact]
-    public async Task TheClassificationGuard_NeverBlocksAnOrdinaryTicket_AndYieldsToTheAllowPolicy()
+    public async Task TheClassificationGuard_NeverBlocksAnOrdinaryTicket_AndIgnoresTheLegacyAllowPolicy()
     {
         var ordinary = Ticket.CreateUnverified("TCK-GUARD-1", f.DepartmentId, 1, 2, "An ordinary TigerCS ticket", DateTime.UtcNow, null, null);
         Assert.False(QueueManagedTicketGuard.Blocks(ordinary, f.Options));                       // normal tickets: classification behaves exactly as before
@@ -316,7 +316,7 @@ public sealed class QueueingTicketTypeNameTests(QueueingFixture f) : IClassFixtu
         f.Options.ManualChangePolicy = QueueingManualChangePolicy.Allow;
         try
         {
-            Assert.False(QueueManagedTicketGuard.Blocks(queueTicket, f.Options));
+            Assert.True(QueueManagedTicketGuard.Blocks(queueTicket, f.Options));                // one-way mirror: the legacy Allow policy no longer unblocks a queue-managed ticket
         }
         finally
         {

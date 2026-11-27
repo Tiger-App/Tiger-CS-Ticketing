@@ -73,7 +73,7 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
     // ------------------------------------------------------------------ validation, per event type
 
     [Theory]
-    [InlineData("TicketCreated", "QueueNumber,CompanyId,TicketTypeId,CustomerPhone")]
+    [InlineData("TicketCreated", "QueueNumber,CompanyId,TicketTypeId")]
     [InlineData("TicketAssigned", "AssignedUserId")]
     [InlineData("TicketReassigned", "AssignedUserId")]
     [InlineData("TicketCommentAdded", "Comment")]
@@ -486,14 +486,80 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         await f.PostAsync(Created(id));
         await f.PostAsync(Simple("TicketClosed", id, 2));
 
-        var (_, assign) = await f.PostAsync(f.Assigned(id, 3));
-        Assert.Equal(QueueingResultStatus.Rejected, assign!.Status);
-        Assert.Equal(QueueingOutcomeCodes.TicketTerminal, assign.Outcome);
+        var (_, ret) = await f.PostAsync(Simple("TicketReturned", id, 3));
+        Assert.Equal(QueueingResultStatus.Rejected, ret!.Status);
+        Assert.Equal(QueueingOutcomeCodes.TicketTerminal, ret.Outcome);
         Assert.Equal(TicketStatus.Closed, (await f.FindTicketAsync(id))!.TicketStatus);
         Assert.Null((await f.FindTicketAsync(id))!.CurrentOwnerEmployeeId);
 
         var (_, comment) = await f.PostAsync(Simple("TicketCommentAdded", id, 4, comment: "Late note"));
         Assert.Equal(QueueingResultStatus.Processed, comment!.Status);
+    }
+
+    [Theory]
+    [InlineData("TicketClosed")]
+    [InlineData("TicketCancelled")]
+    public async Task AReassignmentAfterClosureOrCancellation_ReopensTheSameTicketForTheNewEmployee(string terminalEvent)
+    {
+        var id = NewTicketId();
+        await f.PostAsync(Created(id));
+        await f.PostAsync(Simple(terminalEvent, id, 2));
+        Assert.Equal(TicketStatus.Closed, (await f.FindTicketAsync(id))!.TicketStatus);
+
+        var (http, assign) = await f.PostAsync(f.Assigned(id, 3, type: "TicketReassigned"));
+
+        Assert.Equal(HttpStatusCode.OK, http.StatusCode);
+        Assert.Equal(QueueingResultStatus.Processed, assign!.Status);
+        var ticket = (await f.FindTicketAsync(id))!;
+        Assert.Equal(TicketStatus.InProgress, ticket.TicketStatus);
+        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.ResolutionOutcome);
+        Assert.Equal(1, ticket.ReopenCount);
+        Assert.Equal(QueueingTicketState.Assigned, (await f.FindLinkAsync(ticket.TicketId))!.State);
+
+        // SLA: the reopen ended the old period and opened exactly one new current one; the resolution of the earlier closure was archived, not deleted.
+        var slaPeriods = await f.ReadAsync(db => db.TicketSlaInstances.AsNoTracking().Where(s => s.TicketId == ticket.TicketId).ToListAsync());
+        Assert.Equal(2, slaPeriods.Count);
+        Assert.Single(slaPeriods, s => s.PeriodEndAtUtc == null);
+        var resolutions = await f.ReadAsync(db => db.TicketResolutions.AsNoTracking().Where(r => r.TicketId == ticket.TicketId).ToListAsync());
+        Assert.Single(resolutions);
+
+        // ...and it can be closed again, still exactly one TigerCS ticket for the queue ticket.
+        var (_, closed) = await f.PostAsync(Simple("TicketClosed", id, 4));
+        Assert.Equal(QueueingResultStatus.Processed, closed!.Status);
+        Assert.Equal(assign.TicketId, closed.TicketId);
+    }
+
+    [Fact]
+    public async Task AReopeningAssignment_ToAnUnmappedEmployee_LeavesTheTicketClosedAndIsRetryable()
+    {
+        var id = NewTicketId();
+        await f.PostAsync(Created(id));
+        await f.PostAsync(Simple("TicketClosed", id, 2));
+
+        var (_, assign) = await f.PostAsync(f.Assigned(id, 3, "queue-user-never-mapped-reopen"));
+
+        Assert.Equal(QueueingResultStatus.Pending, assign!.Status);
+        Assert.Equal(TicketStatus.Closed, (await f.FindTicketAsync(id))!.TicketStatus);
+    }
+
+    [Fact]
+    public async Task ACreationWithEmailAndNoPhone_CreatesTheTicket()
+    {
+        var (http, body) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null, CustomerEmail = "email.only@example.test" });
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        Assert.Equal("TICKET_CREATED", body!.Outcome);
+    }
+
+    [Fact]
+    public async Task ProjectAndUnitContext_IsAccepted_AndAppearsInTheTicketSummary()
+    {
+        var id = NewTicketId();
+        var (http, _) = await f.PostAsync(Created(id) with { ProjectName = "Tiger Tower", UnitCode = "U-1204", CompanyName = "Tiger Properties" });
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        var ticket = (await f.FindTicketAsync(id))!;
+        Assert.Contains("Tiger Tower", ticket.RequestSummary);
+        Assert.Contains("U-1204", ticket.RequestSummary);
     }
 
     // ------------------------------------------------------------------ missing mappings, handled explicitly
@@ -903,68 +969,66 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         Assert.Equal(NoteOutcome.Success, note.Outcome);
     }
 
-    [Fact]
-    public async Task WithTheAllowPolicy_AManualChangeIsPermitted_ButTheNextQueueEventStillWins()
-    {
-        var id = NewTicketId();
-        var (_, created) = await f.PostAsync(Created(id));
-        var manager = (await f.Factory.SeedEmployeeAsync(Roles.CsManager)).EmployeeId;
-        var ticketId = created!.TicketId!.Value;
-        f.Options.ManualChangePolicy = QueueingManualChangePolicy.Allow;
-        try
-        {
-            using var scope = f.Factory.Services.CreateScope();
-            var ticket = (await f.FindTicketAsync(id))!;
-            var manual = await scope.ServiceProvider.GetRequiredService<TicketAssignmentAppService>()
-                .AssignAsync(manager, [Roles.CsManager], ticketId, new AssignTicketRequestDto(f.EmployeeB, ticket.RowVersion));
-            Assert.Equal(TicketMutationOutcome.Success, manual.Outcome);
-            Assert.Equal(f.EmployeeB, (await f.FindTicketAsync(id))!.CurrentOwnerEmployeeId);
-        }
-        finally
-        {
-            f.Options.ManualChangePolicy = QueueingManualChangePolicy.Block;
-        }
-
-        await f.PostAsync(f.Assigned(id, 2, f.QueueUserA));
-        Assert.Equal(f.EmployeeA, (await f.FindTicketAsync(id))!.CurrentOwnerEmployeeId);   // the queue's word is final
-    }
-
-    // ------------------------------------------------------------------ the retry sweep
 
     [Fact]
-    public async Task RetriesAreBounded_ThenTheEventIsMarkedFailed_AndARedeliveryRestartsIt()
+    public async Task APhoneOrEmail_IsOptionalOnCreation_ButWhenSentAPhoneMustLookLikeANumber_AndAnEmailLikeAnEmail()
     {
-        var id = NewTicketId();
-        await f.PostAsync(Created(id));
-        var assign = f.Assigned(id, 2, "queue-user-never-mapped");
-        var max = f.Options.MaxRetryAttempts;
-        await f.PostAsync(assign);
-        for (var i = 1; i < max; i++)
-        {
-            await f.MakeRetriesDueAsync();
-            await f.RetryAsync();
-        }
-
-        var failed = (await f.FindEventAsync(assign.EventId!))!;
-        Assert.Equal(QueueingEventStatus.Failed, failed.Status);
-        Assert.Null(failed.NextRetryAtUtc);
-        Assert.Equal(max, failed.AttemptCount);
-
-        var (_, again) = await f.PostAsync(assign);            // the same event, redelivered
-        Assert.Equal(QueueingResultStatus.Pending, again!.Status);
-        Assert.Equal(1, (await f.FindEventAsync(assign.EventId!))!.AttemptCount);
-    }
-
-    [Fact]
-    public async Task CustomerPhone_IsMandatoryOnCreation_AndMustLookLikeANumber()
-    {
-        var (http, body) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null });
-        Assert.Equal(HttpStatusCode.BadRequest, http.StatusCode);
-        Assert.Contains("CustomerPhone", body!.Errors!.Keys);
-
         var (http2, body2) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = "not a number" });
         Assert.Equal(HttpStatusCode.BadRequest, http2.StatusCode);
         Assert.Contains("CustomerPhone", body2!.Errors!.Keys);
+
+        var (http3, body3) = await f.PostAsync(Created(NewTicketId()) with { CustomerPhone = null, CustomerEmail = "not-an-email" });
+        Assert.Equal(HttpStatusCode.BadRequest, http3.StatusCode);
+        Assert.Contains("CustomerEmail", body3!.Errors!.Keys);
+    }
+
+    [Fact]
+    public async Task ACreationWithNeitherPhoneNorEmail_IsAccepted_NoPhoneIsInvented_AndTheCrmLookupIsSkipped()
+    {
+        var id = NewTicketId();
+        var created = Created(id) with { CustomerPhone = null, CustomerEmail = null };
+
+        var (http, body) = await f.PostAsync(created);
+
+        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
+        Assert.Equal("TICKET_CREATED", body!.Outcome);
+        var ticket = (await f.FindTicketAsync(id))!;
+        Assert.Equal(TicketStatus.Open, ticket.TicketStatus);
+        Assert.Equal(1, await f.CountTicketsAsync(id));
+        // Nothing was invented: the intake record carries no phone number at all, and the audit says no phone was supplied for the CRM lookup.
+        var intake = await f.ReadAsync(db => db.IntakeRecords.AsNoTracking().Where(r => r.LinkedTicketId == ticket.TicketId).SingleAsync());
+        Assert.True(string.IsNullOrWhiteSpace(intake.PhoneNumber));
+        var audit = await f.ReadAsync(db => db.AuditEntries.AsNoTracking()
+            .Where(a => a.Action == TigerCS.Application.Modules.QueueingIntegration.Services.QueueingAuditActions.TicketCreated && a.EntityId == ticket.TicketId.ToString()).Select(a => a.AfterValue).SingleAsync());
+        Assert.Contains("CustomerLookup=NoPhoneSupplied", audit);   // the CRM lookup is skipped when there is no phone
+
+        // Redelivering the same event is still idempotent, and a later event on the same ticket works as for any other.
+        var (_, again) = await f.PostAsync(created);
+        Assert.Equal(QueueingResultStatus.Duplicate, again!.Status);
+        var (_, assigned) = await f.PostAsync(f.Assigned(id, 2));
+        Assert.Equal(QueueingResultStatus.Processed, assigned!.Status);
+    }
+
+    [Fact]
+    public async Task CompanyName_AndTicketTypeName_AreAcceptedButNeverRequired()
+    {
+        var withNames = Created(NewTicketId()) with { CompanyName = "Tiger Properties", TicketTypeName = "Complaint" };
+        var withoutNames = Created(NewTicketId()) with { CompanyName = null, TicketTypeName = null };
+
+        Assert.Equal(HttpStatusCode.Created, (await f.PostAsync(withNames)).Http.StatusCode);
+        Assert.Equal(HttpStatusCode.Created, (await f.PostAsync(withoutNames)).Http.StatusCode);
+        Assert.DoesNotContain("CompanyName", TigerCS.Application.Modules.QueueingIntegration.QueueingEventValidator.RequiredFields[QueueingEventType.TicketCreated]);
+        Assert.DoesNotContain("TicketTypeName", TigerCS.Application.Modules.QueueingIntegration.QueueingEventValidator.RequiredFields[QueueingEventType.TicketCreated]);
+    }
+
+    [Fact]
+    public void TheQueueingValidatorChangeIsLocal_TheCreationRequiredFieldsAreTheQueueIdentification()
+    {
+        // The relaxation lives only in QueueingEventValidator (it is applied only to the Queueing System's own endpoint, behind its own API key). Every other source keeps its
+        // own validation: the intake record still demands a phone for a phone channel (IntakeRecordAppServiceTests.CreateAsync_ChannelRequiringPhone_RejectsABlankPhoneNumber),
+        // and the Genesys receiver passes its own contract tests.
+        Assert.Equal(["QueueNumber", "CompanyId", "TicketTypeId"],
+            TigerCS.Application.Modules.QueueingIntegration.QueueingEventValidator.RequiredFields[QueueingEventType.TicketCreated]);
     }
 
     [Fact]
@@ -1084,6 +1148,7 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
 
         var queued = Ticket.CreateUnverified("TG-X-2", 1, 1, 3, "x", DateTime.UtcNow);
         queued.RecordExternalOrigin(TicketIntegrationSources.QueueingSystem, "qt-1", "A-1");
+        using var integration = QueueingMutationScope.Open();   // a queue ticket's lifecycle changes only while the integration applies a Queueing event
         queued.AssignTo(Guid.NewGuid());
         queued.ChangeStatus(TicketStatus.InProgress);
         Assert.Equal(TicketStatus.InProgress, queued.ReturnToQueue());

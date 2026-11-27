@@ -890,6 +890,7 @@ public class Ticket
     /// <summary>MVP-API-Contracts.md §3.5 / §2.12 — sets the current owner and appends a superseding <see cref="TicketAssignment"/> row is the caller's job (this method only updates the ticket's own denormalized pointer).</summary>
     public void AssignTo(Guid employeeId)
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (employeeId == Guid.Empty)
@@ -907,6 +908,7 @@ public class Ticket
     /// </summary>
     public bool AssignToAiAgent(Guid aiAgentEmployeeId)
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (aiAgentEmployeeId == Guid.Empty)
@@ -930,6 +932,7 @@ public class Ticket
     /// </summary>
     public void ReleaseOwner()
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
         CurrentOwnerEmployeeId = null;
     }
@@ -943,6 +946,7 @@ public class Ticket
     /// </param>
     public void TransferToDepartment(int targetDepartmentId, bool preserveOwner = false, bool keepAiAgentOwner = false)
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (targetDepartmentId == CurrentDepartmentId)
@@ -991,6 +995,7 @@ public class Ticket
     /// </summary>
     public void ChangeStatus(TicketStatus newStatus)
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (!TicketStatusTransitions.IsChangeStatusAllowed(TicketStatus, newStatus))
@@ -1027,6 +1032,7 @@ public class Ticket
     /// </summary>
     public void Resolve(ResolutionOutcomeValue outcome, long? duplicateOfTicketId)
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (TicketStatus is not (TicketStatus.InProgress or TicketStatus.PendingCustomer))
@@ -1061,6 +1067,7 @@ public class Ticket
     /// </summary>
     public TicketStatus CloseForCustomerInactivity()
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (TicketStatus is not (TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer)
@@ -1086,6 +1093,7 @@ public class Ticket
     /// </summary>
     public TicketStatus ReturnToQueue()
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (!IsQueueManaged)
@@ -1129,6 +1137,7 @@ public class Ticket
     /// </summary>
     public TicketStatus CloseForDocumentDelivery(ResolutionOutcomeValue outcome)
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (outcome is not (ResolutionOutcomeValue.Resolved or ResolutionOutcomeValue.Cancelled)
@@ -1162,6 +1171,7 @@ public class Ticket
     /// </summary>
     public TicketStatus CloseForAiCompletion()
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (TicketStatus is not (TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer)
@@ -1180,6 +1190,7 @@ public class Ticket
     /// </summary>
     public TicketStatus CloseForAiOnlyTimeout()
     {
+        EnsureQueueMutationAllowed();
         EnsureNotClosed();
 
         if (TicketStatus is not (TicketStatus.Open or TicketStatus.InProgress or TicketStatus.PendingCustomer)
@@ -1194,6 +1205,8 @@ public class Ticket
     /// <summary>MVP-API-Contracts.md §3.10 — the final, CS-layer-only close, distinct from Resolve. Requires a current TicketResolutions row (enforced by the caller — this method only enforces the TicketStatus precondition).</summary>
     public void Close()
     {
+        EnsureQueueMutationAllowed();
+
         // Closing an already-Closed ticket is closed-ticket immutability
         // (PR correction), not "not yet resolved" — a genuinely different
         // condition from the check below, which is why this method checks
@@ -1267,6 +1280,8 @@ public class Ticket
     /// <exception cref="ClosedTicketIsTerminalException">The ticket is Closed: <b>always</b> thrown (Closed is terminal - no reopening by a person, approval, API or job).</exception>
     public void Reopen(int targetDepartmentId, bool closedForCustomerInactivity = false)
     {
+        EnsureQueueMutationAllowed();
+
         if (TicketStatus is not TicketStatus.Closed)
         {
             throw new TicketNotEligibleForReopenException(TicketId, TicketStatus);
@@ -1297,6 +1312,69 @@ public class Ticket
         if (SlaState == SlaState.Met)
         {
             SlaState = SlaState.Running;
+        }
+    }
+
+    /// <summary>
+    /// Integration-controlled reopen of a <b>queue-managed</b> ticket: the Queueing System (source of truth) legitimately took a closed or
+    /// cancelled queue ticket back into service. Allowed only for a Closed queue-managed ticket, whatever its Resolved / Cancelled outcome (the
+    /// generic <see cref="Reopen"/> keeps its own rules for everybody else). The ticket returns to <see cref="TicketStatus.Open"/>, unowned, in its
+    /// current department; the assignment that follows takes it to InProgress through the normal transition.
+    /// </summary>
+    public void ReopenForQueue()
+    {
+        EnsureQueueMutationAllowed();
+
+        if (!IsQueueManaged)
+        {
+            throw new InvalidOperationException("Only a queue-managed ticket can be reopened by the Queueing System.");
+        }
+
+        if (TicketStatus is not TicketStatus.Closed)
+        {
+            throw new TicketNotEligibleForReopenException(TicketId, TicketStatus);
+        }
+
+        TicketStatus = TicketStatus.Open;
+        ResolutionOutcome = null;
+        CurrentOwnerEmployeeId = null;
+        ReopenCount++;
+    }
+
+    /// <summary>
+    /// Mirrors a Queueing System transition between the two terminal outcomes of a closed queue ticket (Cancelled -&gt; Closed/Resolved: the queue ticket was
+    /// cancelled and was then closed as served). The ticket stays <see cref="TicketStatus.Closed"/> and ownerless; only the resolution outcome changes. It is
+    /// the same closure cycle, so <see cref="ReopenCount"/> is untouched. Only for a closed queue-managed ticket currently Cancelled.
+    /// </summary>
+    public void ChangeQueueClosureOutcome(ResolutionOutcomeValue newOutcome)
+    {
+        EnsureQueueMutationAllowed();
+
+        if (!IsQueueManaged)
+        {
+            throw new InvalidOperationException("Only a queue-managed ticket's closure can be mirrored from the Queueing System.");
+        }
+
+        if (TicketStatus is not TicketStatus.Closed
+            || ResolutionOutcome != (byte)ResolutionOutcomeValue.Cancelled
+            || newOutcome != ResolutionOutcomeValue.Resolved)
+        {
+            throw new TicketNotEligibleForResolutionException(TicketId, TicketStatus);
+        }
+
+        ResolutionOutcome = (byte)newOutcome;
+    }
+
+    /// <summary>
+    /// The one-way mirror's last line of defence: a queue-managed ticket's lifecycle and assignment change only while the Queueing System integration is applying one
+    /// of its events (<see cref="QueueingIntegration.QueueingMutationScope"/>). Called first by every lifecycle / assignment mutator, so a job, a service or a screen that
+    /// forgot its own guard still cannot change a mirrored ticket. Nothing has changed when it throws.
+    /// </summary>
+    public void EnsureQueueMutationAllowed()
+    {
+        if (IsQueueManaged && !QueueingIntegration.QueueingMutationScope.IsOpen)
+        {
+            throw new QueueManagedTicketMutationException(TicketId);
         }
     }
 

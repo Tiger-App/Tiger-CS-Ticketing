@@ -1,0 +1,38 @@
+$kind: http-request
+description: "Sequence 3 arrives after the ticket is at sequence 6: recorded for the audit trail, the ticket is unchanged."
+url: "{{baseUrl}}/api/integrations/queueing/events"
+method: POST
+headers:
+  Content-Type: application/json
+  X-Queueing-Api-Key: "{{apiKey}}"
+body:
+  type: json
+  content: |-
+    {
+      "EventId": "{{eventId}}",
+      "EventType": "TicketAssigned",
+      "ExternalTicketId": "{{externalTicketId}}",
+      "EventSequence": {{sequence}},
+      "AssignedUserId": "{{queueUserA}}",
+      "CounterId": "counter-3",
+      "OccurredAtUtc": "{{occurredAtUtc}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      // A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.
+      if (!pm.collectionVariables.get('redeliver')) {
+        pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));
+        pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());
+      }
+      pm.collectionVariables.unset('redeliver');
+      pm.collectionVariables.set('sequence', '3');
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+      const b = pm.response.json();
+      pm.test('status = Superseded', () => pm.expect(b.status).to.eql('Superseded'));
+      pm.test('outcome = STALE_EVENT', () => pm.expect(b.outcome).to.eql('STALE_EVENT'));
+    language: text/javascript
+order: 9000

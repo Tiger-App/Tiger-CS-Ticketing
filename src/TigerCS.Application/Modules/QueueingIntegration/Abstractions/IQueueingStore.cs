@@ -29,6 +29,17 @@ public interface IQueueingStore
 
     Task AddLinkAsync(QueueingTicketLink link, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The lowest-sequence <b>unsettled</b> state-changing event (Received, Unresolved or Failed) of the same queue ticket with a sequence lower than
+    /// <paramref name="beforeSequence"/>, ignoring <paramref name="exceptEventId"/> itself - or null. The strict-ordering gate: while one exists, no later event of that ticket is applied.
+    /// Comments and recalls never block.
+    /// </summary>
+    Task<QueueingEvent?> FindEarlierUnsettledAsync(string externalTicketId, long beforeSequence, string exceptEventId, CancellationToken cancellationToken = default);
+
+    /// <summary>Read-only health snapshot: counts per status, held / failed events by outcome, blocked queue tickets (alerting past <paramref name="alertAfter"/>), and the first <paramref name="take"/> events that need attention.</summary>
+    Task<TigerCS.Application.Modules.QueueingIntegration.Dto.QueueingMonitoringSnapshot> GetMonitoringSnapshotAsync(
+        DateTime nowUtc, int take, TimeSpan alertAfter, CancellationToken cancellationToken = default);
+
     Task<QueueingCompanyMapping?> GetCompanyMappingAsync(string companyId, CancellationToken cancellationToken = default);
 
     Task<QueueingTicketTypeMapping?> GetTicketTypeMappingAsync(string companyId, string ticketTypeId, CancellationToken cancellationToken = default);

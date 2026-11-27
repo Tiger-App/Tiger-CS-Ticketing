@@ -234,6 +234,8 @@ public class SwaggerDocumentTests(SwaggerDocumentFixture fixture) : IClassFixtur
         // a ticket after creating it goes through the one PATCH.
         "POST /api/genesys/tickets",
         "POST /api/integrations/queueing/events",
+        "GET /api/integrations/queueing/monitoring",
+        "POST /api/admin/queueing/events/{eventId}/reprocess",
         "POST /api/genesys/documents/send-copy",
         "POST /api/genesys/verification/buyer-lookup",
         "POST /api/genesys/verification/otp/send",
