@@ -612,7 +612,7 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         Assert.Equal(QueueingEventStatus.Unresolved, (await f.FindEventAsync(request.EventId!))!.Status);
     }
 
-    // ---- routing: explicit (company, ticket type) mapping decides request type AND department; company mapping is only the default
+    // ---- routing: the company mapping is mandatory; an explicit (company, ticket type) mapping is an optional override that decides request type AND department
 
     private async Task<(int DepartmentId, int RequestTypeId)> SeedRoutableTypeAsync(string name)
     {
@@ -650,6 +650,8 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         var (departmentTwo, typeTwo) = await SeedRoutableTypeAsync("Multi Two");
         await MapTicketTypeAsync(company, "t-1", typeOne);
         await MapTicketTypeAsync(company, "t-2", typeTwo);
+        // The company mapping is mandatory (it names the company's own department); the explicit mappings override it per ticket type.
+        await f.ReadAsync(async db => { db.QueueingCompanyMappings.Add(new QueueingCompanyMapping(company, departmentOne, DateTime.UtcNow)); await db.SaveChangesAsync(); return 0; });
 
         var first = NewTicketId();
         var second = NewTicketId();
@@ -662,19 +664,8 @@ public sealed class QueueingEventEndpointTests(QueueingFixture f) : IClassFixtur
         Assert.Equal((typeTwo, departmentTwo), (two.RequestTypeId, two.CurrentDepartmentId));
     }
 
-    [Fact]
-    public async Task AnExplicitTicketTypeMapping_DoesNotNeedACompanyMapping()
-    {
-        var company = "company-explicit-only-" + Guid.NewGuid().ToString("N")[..6];
-        var (department, requestType) = await SeedRoutableTypeAsync("Explicit Only");
-        await MapTicketTypeAsync(company, "t-1", requestType);
-
-        var id = NewTicketId();
-        var (http, _) = await f.PostAsync(Created(id, companyId: company, ticketTypeId: "t-1"));
-
-        Assert.Equal(HttpStatusCode.Created, http.StatusCode);
-        Assert.Equal(department, (await f.FindTicketAsync(id))!.CurrentDepartmentId);
-    }
+    // AnExplicitTicketTypeMapping_DoesNotNeedACompanyMapping was retired: the company mapping is now mandatory (see
+    // QueueingTicketTypeNameTests.AnExplicitMapping_WithoutACompanyMapping_IsHeld_UntilTheCompanyIsMapped).
 
     [Fact]
     public async Task AnInactiveExplicitMapping_IsIgnored_AndTheCompanyDefaultApplies()

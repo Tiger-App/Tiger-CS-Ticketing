@@ -80,7 +80,8 @@ INSERT @Repo (MigrationId) VALUES
     (N'20261119120249_AddAssignmentHistoryPreviousDepartment'),
     (N'20261120074059_AddInteractionEndReceivedAt'),
     (N'20261124071552_AddEmployeeReviews'),
-    (N'20261126154428_AddEmployeeReviewActivationCodes');
+    (N'20261126154428_AddEmployeeReviewActivationCodes'),
+    (N'20261126175759_AddQueueingTicketTypeName');
 
 -- 1. Pending: in the repository, not applied in production
 SELECT r.MigrationId AS PendingMigration FROM @Repo r
@@ -130,7 +131,8 @@ FROM (VALUES
     (N'AddEmployeeReviewActivationCodes', N'column EmployeeReviewDevices.ActivationCodeHash', N'EmployeeReviewDevices', N'ActivationCodeHash'),
     (N'AddEmployeeReviewActivationCodes', N'column EmployeeReviewDevices.ActivationCodeSalt', N'EmployeeReviewDevices', N'ActivationCodeSalt'),
     (N'AddEmployeeReviewActivationCodes', N'column EmployeeReviewDevices.ActivationCodeExpiresAtUtc', N'EmployeeReviewDevices', N'ActivationCodeExpiresAtUtc'),
-    (N'AddEmployeeReviewActivationCodes', N'table EmployeeReviewActivationThrottles', N'EmployeeReviewActivationThrottles', NULL)
+    (N'AddEmployeeReviewActivationCodes', N'table EmployeeReviewActivationThrottles', N'EmployeeReviewActivationThrottles', NULL),
+    (N'AddQueueingTicketTypeName', N'column QueueingTicketLinks.ExternalTicketTypeName', N'QueueingTicketLinks', N'ExternalTicketTypeName')
 ) x(Migration, Object, Tbl, Col)
 ORDER BY Present, x.Migration;
 

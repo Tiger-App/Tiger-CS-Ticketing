@@ -152,8 +152,8 @@ public sealed class InteractionEndReceivedAtScriptSqlServerTests : IDisposable
         Assert.Equal(2, Scalar<int>("SELECT COUNT(*) FROM TicketInteractions"));
 
         using var context = new TigerCsDbContext(new DbContextOptionsBuilder<TigerCsDbContext>().UseSqlServer(ConnectionString).Options);
-        // Only the migration that comes after this one in the release (AddEmployeeReviews, deployed by its own script) is still pending.
-        Assert.Equal(["20261124071552_AddEmployeeReviews", "20261126154428_AddEmployeeReviewActivationCodes"], context.Database.GetPendingMigrations());
+        // Only the migration that comes after this one in the release (AddEmployeeReviews, AddEmployeeReviewActivationCodes and AddQueueingTicketTypeName, each deployed by its own script) are still pending.
+        Assert.Equal(["20261124071552_AddEmployeeReviews", "20261126154428_AddEmployeeReviewActivationCodes", "20261126175759_AddQueueingTicketTypeName"], context.Database.GetPendingMigrations());
     }
 
     [VisibilitySqlServerFact]

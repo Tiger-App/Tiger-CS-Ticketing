@@ -122,6 +122,7 @@ public static class QueueingEventValidator
         }
 
         var customerEmail = Text("CustomerEmail", request.CustomerEmail, 256, required: false);
+        var ticketTypeName = Text("TicketTypeName", request.TicketTypeName, QueueingTicketLink.ExternalTicketTypeNameMaxLength, required: false);
 
         if (problems.Count > 0 || type is null)
         {
@@ -133,7 +134,7 @@ public static class QueueingEventValidator
         errors = [];
         message = new QueueingEventMessage(
             eventId!, type.Value, externalTicketId!, request.EventSequence!.Value, AsUtc(request.OccurredAtUtc!.Value),
-            queueNumber, companyId, ticketTypeId, customerName, customerPhone, customerEmail, assignedUserId, performedBy, counterId, comment, reason);
+            queueNumber, companyId, ticketTypeId, customerName, customerPhone, customerEmail, assignedUserId, performedBy, counterId, comment, reason, ticketTypeName);
         return true;
     }
 }

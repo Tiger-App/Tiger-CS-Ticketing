@@ -70,7 +70,7 @@ public class QueueingEvent
 
     public QueueingEvent(
         string eventId, QueueingEventType eventType, string externalTicketId, long eventSequence, DateTime occurredAtUtc, string payload,
-        DateTime receivedAtUtc)
+        DateTime receivedAtUtc, string? identityPayload = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(eventId);
         ArgumentException.ThrowIfNullOrWhiteSpace(externalTicketId);
@@ -80,7 +80,7 @@ public class QueueingEvent
         EventSequence = eventSequence;
         OccurredAtUtc = occurredAtUtc;
         Payload = payload;
-        PayloadHash = HashOf(payload);
+        PayloadHash = HashOf(identityPayload ?? payload);
         ReceivedAtUtc = receivedAtUtc;
         Status = QueueingEventStatus.Received;
     }
@@ -88,7 +88,10 @@ public class QueueingEvent
     public static string HashOf(string payload) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(payload))).ToLowerInvariant();
 
-    /// <summary>True when <paramref name="canonicalPayload"/> is the content this EventId was first received with (compared by hash, so it works after a purge).</summary>
+    /// <summary>
+    /// True when <paramref name="canonicalPayload"/> is the content this EventId was first received with (compared by hash, so it works after a purge).
+    /// Pass the same <i>identity</i> form the event was constructed with (the canonical JSON without display-only fields such as <c>TicketTypeName</c>).
+    /// </summary>
     public bool HasSamePayloadAs(string canonicalPayload) => string.Equals(PayloadHash, HashOf(canonicalPayload), StringComparison.Ordinal);
 
     /// <summary>

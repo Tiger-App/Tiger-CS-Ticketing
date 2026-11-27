@@ -25,6 +25,12 @@ services.AddSingleton<QueueingEventFactory>();
 
 (`TigerCsEventSender` takes `HttpClient` + `TigerCsSenderOptions`; register it however your host prefers.)
 
+## Sending the service name (optional)
+
+`QueueingEventFactory.CreatedAsync(..., ticketTypeName: "Lease Renewal")` adds the Queueing System's own service name to `TicketCreated`. TigerCS keeps it and shows it on the
+ticket, its summary and its timeline exactly as sent; it **never routes by it** (routing uses `CompanyId`, an optional explicit `TicketTypeId` mapping, and the company's department).
+It is optional (max 200), omitted from the JSON when null, and not part of the event's idempotency identity - a resend of an event built before the field existed is still a duplicate, not a conflict.
+
 ## The three things the Queueing System must get right
 
 1. **Record the event when it happens, send it later, resend it unchanged.** Build the event with `QueueingEventFactory` inside the queue's own transaction and store it in an

@@ -631,7 +631,7 @@ public static class TicketActivityTimelineBuilder
                 case "QueueingTicketCreated":
                     entries.Add(Make(
                         audit.OccurredAtUtc, "QueueTicketCreated", "Queue ticket created", "Queueing", TimelineActorTypes.System, "Queueing System",
-                        $"Created from queue ticket {Pick(after, "QueueNumber")} (external id {Pick(after, "ExternalTicketId")}); request type mapping: {Pick(after, "RequestTypeMapping")}.",
+                        $"Created from queue ticket {Pick(after, "QueueNumber")} (external id {Pick(after, "ExternalTicketId")}) for service {Pick(after, "TicketTypeName", "ticket type " + Pick(after, "TicketTypeId"))} (company {Pick(after, "CompanyId")}); request type mapping: {Pick(after, "RequestTypeMapping")}.",
                         SourceAudit, rank: 3));
                     break;
 

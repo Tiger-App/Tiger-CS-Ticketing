@@ -1168,7 +1168,9 @@ public sealed class TicketDetailsModel(
             && (ticket.CategoryId is null || ticket.IsDefaultClassification || ticket.CanCorrectClassification)
             && !string.Equals(ticket.TicketStatus, nameof(TicketStatus.Closed), StringComparison.Ordinal)
             && Viewer is not null
-            && !TigerCS.Domain.Modules.IdentityAndAccess.Roles.IsReadOnlyCaller(Viewer.Roles);
+            && !TigerCS.Domain.Modules.IdentityAndAccess.Roles.IsReadOnlyCaller(Viewer.Roles)
+            // A queue ticket's classification is internal and fixed (the API refuses to change it): never offer the control.
+            && !string.Equals(ticket.IntegrationSource, TigerCS.Domain.Modules.Ticketing.TicketIntegrationSources.QueueingSystem, StringComparison.Ordinal);
         if (!CanClassify)
         {
             return;

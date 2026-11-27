@@ -23,6 +23,7 @@ public enum QueueingTicketState : byte
 public class QueueingTicketLink
 {
     public const int ExternalIdMaxLength = 100;
+    public const int ExternalTicketTypeNameMaxLength = 200;
 
     public long QueueingTicketLinkId { get; private set; }
     public long TicketId { get; private set; }
@@ -30,6 +31,12 @@ public class QueueingTicketLink
     public string? QueueNumber { get; private set; }
     public string? CompanyId { get; private set; }
     public string? ExternalTicketTypeId { get; private set; }
+
+    /// <summary>
+    /// The Queueing System's own name for the service (ticket type), exactly as the Queueing System sent it on <c>TicketCreated</c>. Display and audit only:
+    /// it never routes anything. Null for a ticket whose creating event carried no name (every ticket created before the field existed).
+    /// </summary>
+    public string? ExternalTicketTypeName { get; private set; }
 
     /// <summary>The highest <c>EventSequence</c> of a state-changing event applied to the ticket.</summary>
     public long LastAppliedSequence { get; private set; }
@@ -50,7 +57,7 @@ public class QueueingTicketLink
 
     public QueueingTicketLink(
         long ticketId, string externalTicketId, string? queueNumber, string? companyId, string? externalTicketTypeId,
-        long sequence, DateTime occurredAtUtc, DateTime createdAtUtc)
+        long sequence, DateTime occurredAtUtc, DateTime createdAtUtc, string? externalTicketTypeName = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(externalTicketId);
         TicketId = ticketId;
@@ -58,6 +65,7 @@ public class QueueingTicketLink
         QueueNumber = queueNumber;
         CompanyId = companyId;
         ExternalTicketTypeId = externalTicketTypeId;
+        ExternalTicketTypeName = string.IsNullOrWhiteSpace(externalTicketTypeName) ? null : externalTicketTypeName.Trim();
         LastAppliedSequence = sequence;
         LastAppliedOccurredAtUtc = occurredAtUtc;
         State = QueueingTicketState.Waiting;

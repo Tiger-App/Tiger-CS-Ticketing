@@ -35,10 +35,14 @@ public sealed class QueueingEventFactory(IEventSequenceProvider sequences, Func<
     private readonly Func<DateTime> _now = utcNow ?? (() => DateTime.UtcNow);
     private readonly Func<string> _newEventId = eventIds ?? (() => Guid.NewGuid().ToString());
 
-    /// <summary>A customer took a queue ticket. Must be the ticket's first event (sequence 1).</summary>
+    /// <summary>
+    /// A customer took a queue ticket. Must be the ticket's first event (sequence 1). <paramref name="ticketTypeName"/> (optional, last so every existing call keeps compiling)
+    /// is the Queueing System's own service name; TigerCS shows it and never routes by it.
+    /// </summary>
     public async Task<QueueingEventRequest> CreatedAsync(
         string externalTicketId, string queueNumber, string companyId, string ticketTypeId, string customerPhone,
-        string? customerName = null, string? customerEmail = null, DateTime? occurredAtUtc = null, CancellationToken cancellationToken = default)
+        string? customerName = null, string? customerEmail = null, DateTime? occurredAtUtc = null, CancellationToken cancellationToken = default,
+        string? ticketTypeName = null)
     {
         var sequence = await sequences.NextAsync(externalTicketId, cancellationToken);
         if (sequence != 1)
@@ -48,7 +52,7 @@ public sealed class QueueingEventFactory(IEventSequenceProvider sequences, Func<
 
         return await BuildAsync(QueueingEventType.TicketCreated, externalTicketId, sequence, occurredAtUtc, e => e with
         {
-            QueueNumber = queueNumber, CompanyId = companyId, TicketTypeId = ticketTypeId, CustomerPhone = customerPhone,
+            QueueNumber = queueNumber, CompanyId = companyId, TicketTypeId = ticketTypeId, TicketTypeName = ticketTypeName, CustomerPhone = customerPhone,
             CustomerName = customerName, CustomerEmail = customerEmail
         });
     }

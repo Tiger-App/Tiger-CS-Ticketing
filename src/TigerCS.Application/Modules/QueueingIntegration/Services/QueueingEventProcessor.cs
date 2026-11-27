@@ -92,13 +92,14 @@ public sealed class QueueingEventProcessor(
         }
 
         var payload = request.ToCanonicalJson();
+        var identity = request.ToIdentityJson();
 
         // Idempotency on EventId, first: a duplicate never reaches the ticket.
         var existing = await store.GetEventAsync(message!.EventId, cancellationToken);
         if (existing is null)
         {
             var row = new QueueingEvent(
-                message.EventId, message.EventType, message.ExternalTicketId, message.EventSequence, message.OccurredAtUtc, payload, now);
+                message.EventId, message.EventType, message.ExternalTicketId, message.EventSequence, message.OccurredAtUtc, payload, now, identity);
             await store.AddEventAsync(row, cancellationToken);
             try
             {
@@ -117,7 +118,7 @@ public sealed class QueueingEventProcessor(
             }
         }
 
-        if (!existing.HasSamePayloadAs(payload))
+        if (!existing.HasSamePayloadAs(identity))
         {
             return new QueueingEventResponse(message.EventId, message.ExternalTicketId, QueueingResultStatus.Conflict, "EVENT_ID_REUSED",
                 existing.TicketId, Detail: $"EventId '{message.EventId}' was already received with different content. Events are immutable; send a new EventId for a new event.");
@@ -370,12 +371,28 @@ public sealed class QueueingEventProcessor(
         }
 
         // Routing precedence:
-        //  1. An explicit, active (company, ticket type) mapping decides the request type AND, through it, the department. One company may therefore
-        //     serve ticket types of several departments; the company mapping is not consulted and need not exist.
-        //  2. Only when no active explicit mapping exists does the company mapping supply the default department, and the department's General
-        //     request type classifies the ticket.
+        //  0. The company mapping is MANDATORY: an event whose company has no active mapping to an active department is held (COMPANY_NOT_MAPPED) and retried
+        //     once the mapping exists. A department is never guessed, and no default department is used for an unmapped company.
+        //  1. An explicit, active (company, ticket type) mapping is an optional OVERRIDE: it decides the request type AND, through it, the department. One company
+        //     may therefore serve ticket types of several departments.
+        //  2. Without an active explicit mapping the ticket is classified with the company's department's own General request type - an internal classification
+        //     only. The Queueing System's own service name is preserved separately (QueueingTicketLink.ExternalTicketTypeName) and is what is shown.
         // An explicit mapping that exists but cannot be used (request type missing / inactive / no published workflow / inactive department / no
-        // category pairing) HOLDS the event: it never silently falls back to the company default, which would misroute the ticket.
+        // category pairing) HOLDS the event: it never silently falls back to General, which would misroute the ticket.
+        var companyMapping = await store.GetCompanyMappingAsync(message.CompanyId!, cancellationToken);
+        if (companyMapping is not { IsActive: true })
+        {
+            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.CompanyNotMapped,
+                $"Queueing company '{message.CompanyId}' is not mapped to a TigerCS department. Add it to QueueingCompanyMappings; the event is retried automatically and nothing is guessed.", null, cancellationToken);
+        }
+
+        var defaultDepartment = await departmentRepository.GetByIdAsync(companyMapping.DepartmentId, cancellationToken);
+        if (defaultDepartment is not { IsActive: true })
+        {
+            return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.CompanyNotMapped,
+                $"Queueing company '{message.CompanyId}' is mapped to department {companyMapping.DepartmentId}, which does not exist or is inactive.", null, cancellationToken);
+        }
+
         Department department;
         RequestType? requestType;
         int? categoryId;
@@ -410,25 +427,11 @@ public sealed class QueueingEventProcessor(
         }
         else
         {
-            var companyMapping = await store.GetCompanyMappingAsync(message.CompanyId!, cancellationToken);
-            if (companyMapping is not { IsActive: true })
-            {
-                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.CompanyNotMapped,
-                    $"Ticket type '{message.TicketTypeId}' of company '{message.CompanyId}' has no explicit request-type mapping and the company has no default department. Add the ticket type to QueueingTicketTypeMappings or the company to QueueingCompanyMappings; the event is retried automatically.", null, cancellationToken);
-            }
-
-            var defaultDepartment = await departmentRepository.GetByIdAsync(companyMapping.DepartmentId, cancellationToken);
-            if (defaultDepartment is not { IsActive: true })
-            {
-                return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.CompanyNotMapped,
-                    $"Queueing company '{message.CompanyId}' is mapped to department {companyMapping.DepartmentId}, which does not exist or is inactive.", null, cancellationToken);
-            }
-
             department = defaultDepartment;
 
-            // The company's default department is known (never guessed) but the ticket type has no usable request-type mapping: the ticket takes the
-            // department's own configured General request type - the existing default-classification rule - and the gap is logged and audited. A
-            // department with no General configured (or one the rule excludes) holds the event instead: no request type is ever invented.
+            // The company's department is known (never guessed) and the ticket type has no explicit mapping: the ticket takes the department's own
+            // configured General request type - the existing default-classification rule - as an internal classification. A department with no General
+            // configured (or one the rule excludes) holds the event instead: no request type is ever invented.
             var general = defaultClassification is null || DefaultClassificationService.IsExcluded(department)
                 ? null
                 : (await defaultClassification.ResolveForDepartmentAsync(department.DepartmentId, cancellationToken)).Value;
@@ -438,13 +441,13 @@ public sealed class QueueingEventProcessor(
                     "Queueing ticket type {TicketTypeId} of company {CompanyId} has no request-type mapping and department {DepartmentId} has no usable General request type; event {EventId} is held.",
                     message.TicketTypeId, message.CompanyId, department.DepartmentId, row.EventId);
                 return await UnresolveAsync(row.EventId, QueueingOutcomeCodes.TicketTypeNotMapped,
-                    $"Queueing ticket type '{message.TicketTypeId}' of company '{message.CompanyId}' is not mapped to a request type, and department '{department.Code}' has no usable General request type to fall back to. "
-                    + "Add the mapping to QueueingTicketTypeMappings (or configure the department's General request type); the event is retried automatically.",
+                    $"Queueing ticket type '{message.TicketTypeId}' of company '{message.CompanyId}' has no explicit request-type mapping, and department '{department.Code}' has no usable General request type to classify it with. "
+                    + "Configure the department's General request type (see Verify_QueueingDepartmentReadiness_ReadOnly.sql) or add an explicit mapping to QueueingTicketTypeMappings; the event is retried automatically.",
                     null, cancellationToken);
             }
 
-            logger.LogWarning(
-                "Queueing ticket type {TicketTypeId} of company {CompanyId} has no request-type mapping; ticket for {ExternalTicketId} uses department {DepartmentId}'s General request type.",
+            logger.LogDebug(
+                "Queueing ticket type {TicketTypeId} of company {CompanyId} has no explicit request-type mapping; ticket for {ExternalTicketId} is classified with department {DepartmentId}'s General request type.",
                 message.TicketTypeId, message.CompanyId, message.ExternalTicketId, department.DepartmentId);
             requestType = general.RequestType;
             categoryId = general.Category.CategoryId;
@@ -485,7 +488,7 @@ public sealed class QueueingEventProcessor(
             ContactReferenceId: null,
             CategoryId: categoryId,
             PriorityId: priority.PriorityId,
-            RequestSummary: BuildSummary(message, requestType, customerName),
+            RequestSummary: BuildSummary(message, customerName),
             DepartmentId: department.DepartmentId,
             RequestTypeId: requestType?.RequestTypeId,
             ExternalOrigin: new ExternalTicketOriginDto(TicketIntegrationSources.QueueingSystem, message.ExternalTicketId, message.QueueNumber));
@@ -499,7 +502,7 @@ public sealed class QueueingEventProcessor(
             created = newTicket;
             await store.AddLinkAsync(new QueueingTicketLink(
                 newTicket.TicketId, message.ExternalTicketId, message.QueueNumber, message.CompanyId, message.TicketTypeId,
-                message.EventSequence, message.OccurredAtUtc, Now()), token);
+                message.EventSequence, message.OccurredAtUtc, Now(), message.TicketTypeName), token);
 
             await SaveCustomerContactIfNewAsync(phone, customerName, message.CustomerEmail, serviceAccount, token);
 
@@ -507,6 +510,7 @@ public sealed class QueueingEventProcessor(
                 serviceAccount, QueueingAuditActions.TicketCreated, "Ticket", newTicket.TicketId.ToString(CultureInfo.InvariantCulture),
                 beforeValue: null,
                 afterValue: $"TicketId={newTicket.TicketId};{EventFacts(message)};QueueNumber={message.QueueNumber};CompanyId={message.CompanyId};TicketTypeId={message.TicketTypeId};"
+                    + (message.TicketTypeName is null ? string.Empty : $"TicketTypeName={message.TicketTypeName.Replace(';', ',')};")
                     + $"DepartmentId={department.DepartmentId};RequestTypeId={requestType?.RequestTypeId.ToString(CultureInfo.InvariantCulture) ?? "(none)"};"
                     + $"Channel={channel.Code};CustomerLookup={lookup.Status};{classificationNote ?? "RequestTypeMapping=Resolved"}",
                 Guid.NewGuid(), token);
@@ -791,7 +795,8 @@ public sealed class QueueingEventProcessor(
             ticket.TicketId, ticket.ExternalTicketId ?? message.ExternalTicketId, ticket.ExternalReference,
             message.CompanyId, message.TicketTypeId,
             message.EventType == QueueingEventType.TicketCreated ? message.EventSequence : 0,
-            message.EventType == QueueingEventType.TicketCreated ? message.OccurredAtUtc : ticket.CreatedAtUtc, Now());
+            message.EventType == QueueingEventType.TicketCreated ? message.OccurredAtUtc : ticket.CreatedAtUtc, Now(),
+            message.EventType == QueueingEventType.TicketCreated ? message.TicketTypeName : null);
         await store.AddLinkAsync(link, cancellationToken);
         return link;
     }
@@ -923,12 +928,17 @@ public sealed class QueueingEventProcessor(
             cancellationToken);
     }
 
-    private static string BuildSummary(QueueingEventMessage message, RequestType? requestType, string? customerName)
+    /// <summary>
+    /// The ticket's one-line summary. It names the <b>Queueing System's own service</b> (the name it sent, else its ticket type id), never the TigerCS request type: the
+    /// request type of a queue ticket is only an internal classification (an explicit mapping, or the department's General) and says nothing about what the customer queued for.
+    /// </summary>
+    private static string BuildSummary(QueueingEventMessage message, string? customerName)
     {
         var summary = $"Queue ticket {message.QueueNumber} (Queueing System)";
-        if (requestType is not null)
+        var service = FirstNonBlank(message.TicketTypeName) ?? (message.TicketTypeId is null ? null : $"ticket type {message.TicketTypeId.Trim()}");
+        if (service is not null)
         {
-            summary += $" - {requestType.Name}";
+            summary += $" - {service}";
         }
 
         if (!string.IsNullOrWhiteSpace(customerName))
