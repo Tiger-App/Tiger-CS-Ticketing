@@ -1,5 +1,7 @@
 # Ticket visibility — assignment-based access for employees, Genesys intake queue for CS Agents
 
+> **Update:** the Genesys intake queue and the Take Ownership pool (§2.5, §6) are **no longer visible to CS Agents**; a Call Agent sees only tickets currently assigned to them. The queue belongs to CS Manager / CS Supervisor. See `docs/Call-Center-Take-Ownership.md` and `CallAgentTicketAuthorizationTests`.
+
 **Status: implemented and tested in a build/test environment. NOT merged, NOT deployed. Nothing was run against UAT or Production.**
 Needs: `TigerCS.Api` deploy (no Web change, **no database migration, no schema or data change, no new permission**).
 

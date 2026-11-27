@@ -26,8 +26,9 @@ public class VoiceCallReconciliationRegistrationTests
 
         var options = scope.ServiceProvider.GetRequiredService<IOptionsMonitor<VoiceCallReconciliationOptions>>().CurrentValue;
         Assert.True(options.Enabled);
-        // Every environment ships OBSERVE-ONLY (DryRun = true: classify and log, write nothing) until the operator has reviewed the first day of logs and switches it to false.
-        Assert.True(options.DryRun);
+        // Every environment ships LIVE (DryRun = false). It used to ship observe-only (true) and was never switched: tickets then stayed assigned to the AI Agent in the
+        // Call Center queue for ever (P0). A dry-run default must never return - it silently disables the only job that gives a failed-AI voice call to a person.
+        Assert.False(options.DryRun);
         Assert.Equal(300, options.NoAnswerWindowSeconds);                                      // the documented, proposed window
         Assert.Equal(24, options.LookbackHours);
     }
