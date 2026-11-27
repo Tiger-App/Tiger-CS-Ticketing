@@ -8,8 +8,9 @@ namespace TigerCS.Tests.Deployment;
 
 /// <summary>
 /// The two historical-timestamp scripts (read-only diagnostic; remediation with DryRun on by default) executed on a REAL SQL Server against a fully migrated database that holds
-/// four kinds of historical conversation: one proven +4h, one that is correct, and two that only LOOK suspicious (single evidence). Only the proven one may ever move, only its
-/// four timestamp columns may change, and ticket status, owner, closure, SLA and every existing audit row must stay byte-for-byte as they were.
+/// historical conversations of several kinds: one PROVEN_START_OFFSET, one PROVEN_FULL_OFFSET, one that is correct, and several that only LOOK suspicious (single evidence).
+/// The remediation may move ONLY InteractionStartedAtUtc of the PROVEN_START_OFFSET conversation; the full-offset one is reported but never touched, and ticket dates, end dates,
+/// transcript lines, connect times, status, owner, closure, SLA and every existing audit row must stay byte-for-byte as they were. The original start is preserved in the audit row and restorable.
 /// </summary>
 public sealed class GenesysHistoricalTimestampScriptsSqlServerTests : IDisposable
 {
@@ -125,7 +126,13 @@ public sealed class GenesysHistoricalTimestampScriptsSqlServerTests : IDisposabl
     private void Handler(long interactionId, DateTime recorded, DateTime connected)
         => Insert("TicketInteractionHandlers", new() { ["TicketInteractionId"] = interactionId.ToString(), ["RecordedAtUtc"] = Lit(recorded), ["ConnectedAtUtc"] = Lit(connected) });
 
-    private (long Confirmed, long Correct, long SuspectStartOnly, long SuspectEndOnly) Seed()
+    private sealed record Seeded(long Full, long StartProven, long Correct, long SuspectLineMismatch, long SuspectEndOnly, long SuspectNoEvidence, long SuspectNot4h, long SuspectFourHourAlone)
+    {
+        public long[] Proven => [Full, StartProven];
+        public long[] NotProven => [Correct, SuspectLineMismatch, SuspectEndOnly, SuspectNoEvidence, SuspectNot4h, SuspectFourHourAlone];
+    }
+
+    private void CreateDatabase()
     {
         using (var master = new SqlConnection(_master))
         {
@@ -135,39 +142,86 @@ public sealed class GenesysHistoricalTimestampScriptsSqlServerTests : IDisposabl
             command.ExecuteNonQuery();
         }
 
-        using (var context = new TigerCsDbContext(new DbContextOptionsBuilder<TigerCsDbContext>().UseSqlServer(ConnectionString).Options))
-        {
-            context.Database.Migrate();
-        }
+        using var context = new TigerCsDbContext(new DbContextOptionsBuilder<TigerCsDbContext>().UseSqlServer(ConnectionString).Options);
+        context.Database.Migrate();
+    }
 
-        // 1. PROVEN +4h (the 1878 shape): TigerCS created the ticket at 08:00 and received "ended" at 08:10; the stored values are 12:00 / 12:10, lines 12:01 / 12:05, connect 12:01.
-        var confirmed = Ticket(T0.AddHours(4).AddMinutes(1));
-        var ci = Conversation(confirmed, "conv-confirmed", T0.AddSeconds(5), T0.AddHours(4), T0.AddHours(4).AddMinutes(10));
-        EndReceipt(confirmed, "conv-confirmed", T0.AddMinutes(10).AddSeconds(2));
-        Line(ci, 1, T0.AddHours(4).AddMinutes(1)); Line(ci, 2, T0.AddHours(4).AddMinutes(5));
-        Handler(ci, T0.AddMinutes(2), T0.AddHours(4).AddMinutes(1));
+    /// <summary>PROVEN_FULL_OFFSET (the 1878 shape): ticket created 08:00, "ended" received 08:10; stored start/end 12:00/12:10, lines 12:01/12:05, connect 12:01.</summary>
+    private long AddFull()
+    {
+        var full = Ticket(T0.AddHours(4).AddMinutes(1));
+        var fi = Conversation(full, "conv-full", T0.AddSeconds(5), T0.AddHours(4), T0.AddHours(4).AddMinutes(10));
+        EndReceipt(full, "conv-full", T0.AddMinutes(10).AddSeconds(2));
+        Line(fi, 1, T0.AddHours(4).AddMinutes(1)); Line(fi, 2, T0.AddHours(4).AddMinutes(5));
+        Handler(fi, T0.AddMinutes(2), T0.AddHours(4).AddMinutes(1));
         Insert("TicketSlaInstances", new()
         {
-            ["TicketId"] = confirmed.ToString(), ["PeriodStartAtUtc"] = Lit(T0), ["FirstResponseDueAtUtc"] = Lit(T0.AddHours(2)), ["FirstResponseBreached"] = "1",
+            ["TicketId"] = full.ToString(), ["PeriodStartAtUtc"] = Lit(T0), ["FirstResponseDueAtUtc"] = Lit(T0.AddHours(2)), ["FirstResponseBreached"] = "1",
         });
+        return full;
+    }
 
-        // 2. CORRECT (came as "Z" / already UTC): never touched.
+    /// <summary>
+    /// PROVEN_START_OFFSET (the 24 Nov 2026 shape): only the start is +4h. The conversation really started 07:40, its first line is 07:40:01, the ticket was created 08:02,
+    /// the end (08:12) and lines are correct; the stored start is 11:40 (UAE 15:40) - 3h38m after the ticket was created, 4h after the first line.
+    /// </summary>
+    private long AddStartProven(string conv = "conv-start-proven")
+    {
+        var t = Ticket(null);
+        var i = Conversation(t, conv, T0.AddMinutes(2), T0.AddHours(3).AddMinutes(40), T0.AddMinutes(12));
+        EndReceipt(t, conv, T0.AddMinutes(12).AddSeconds(1));
+        Line(i, 1, T0.AddMinutes(-20).AddSeconds(1)); Line(i, 2, T0.AddMinutes(5));
+        Handler(i, T0.AddMinutes(2), T0.AddMinutes(3));   // plausible connect time: no evidence, must be reported NOT PROPOSED
+        return t;
+    }
+
+    private long AddCorrect()
+    {
         var correct = Ticket(T0.AddMinutes(1));
         var ki = Conversation(correct, "conv-correct", T0.AddSeconds(3), T0, T0.AddMinutes(10));
         EndReceipt(correct, "conv-correct", T0.AddMinutes(10).AddSeconds(1));
         Line(ki, 1, T0.AddMinutes(1));
+        return correct;
+    }
 
-        // 3. SUSPECT: start looks +4h but there is no recorded end event to confirm it: single evidence, never touched.
-        var startOnly = Ticket(null);
-        var si = Conversation(startOnly, "conv-start-only", T0.AddSeconds(3), T0.AddHours(4), null);
+    private (long LineMismatch, long EndOnly, long NoEvidence, long Not4h, long FourHourAlone) AddSuspects()
+    {
+        // start looks +4h, a line exists but is itself 4h late and there is no end receipt: nothing independent proves the start
+        var lineMismatch = Ticket(null);
+        var si = Conversation(lineMismatch, "conv-line-mismatch", T0.AddSeconds(3), T0.AddHours(4), null);
         Line(si, 1, T0.AddHours(4).AddMinutes(1));
 
-        // 4. SUSPECT: the end looks +4h but the start is fine (mixed): single evidence, never touched.
+        // the end looks +4h but the start is fine (mixed): single evidence
         var endOnly = Ticket(null);
         var ei = Conversation(endOnly, "conv-end-only", T0.AddSeconds(3), T0, T0.AddHours(4).AddMinutes(10));
         EndReceipt(endOnly, "conv-end-only", T0.AddMinutes(10).AddSeconds(1));
         Line(ei, 1, T0.AddMinutes(1));
-        return (confirmed, correct, startOnly, endOnly);
+
+        // impossible start (after its own ticket) with NO transcript and NO end receipt: no independent evidence at all
+        var noEvidence = Ticket(null);
+        Conversation(noEvidence, "conv-no-evidence", T0.AddSeconds(3), T0.AddHours(3), null);
+
+        // later than its ticket by 6h: a 4h shift cannot explain it
+        var not4h = Ticket(null);
+        var ni = Conversation(not4h, "conv-not-4h", T0.AddSeconds(3), T0.AddHours(6), null);
+        Line(ni, 1, T0.AddHours(6).AddMinutes(1));
+
+        // exactly +4h later than its ticket, but the first line sits an hour after the would-be start and the end is plausible: "4h alone" is not proof
+        var alone = Ticket(null);
+        var ai = Conversation(alone, "conv-4h-alone", T0.AddSeconds(3), T0.AddHours(4), T0.AddHours(2));
+        EndReceipt(alone, "conv-4h-alone", T0.AddHours(2).AddSeconds(1));
+        Line(ai, 1, T0.AddHours(1));
+        return (lineMismatch, endOnly, noEvidence, not4h, alone);
+    }
+
+    private Seeded Seed()
+    {
+        CreateDatabase();
+        var full = AddFull();
+        var startProven = AddStartProven();
+        var correct = AddCorrect();
+        var (lineMismatch, endOnly, noEvidence, not4h, alone) = AddSuspects();
+        return new Seeded(full, startProven, correct, lineMismatch, endOnly, noEvidence, not4h, alone);
     }
 
     private string Snapshot(params string[] tables)
@@ -187,35 +241,81 @@ public sealed class GenesysHistoricalTimestampScriptsSqlServerTests : IDisposabl
 
     private string Diagnose() => File.ReadAllText(RepoFile("Diagnose_TigerCS_PROD_GenesysHistoricalTimestamps_ReadOnly.sql"));
 
+    private static string Cell(object?[] row, int i) => Convert.ToString(row[i]) ?? string.Empty;
+
     [VisibilitySqlServerFact]
-    public void TheDiagnostic_IsReadOnly_ClassifiesByEvidence_AndProposesOnlyTheProvenConversation()
+    public void TheDiagnostic_IsReadOnly_SeparatesProvenFromSuspectAndCorrect_AndCountsEachReason()
     {
-        var (confirmed, correct, startOnly, endOnly) = Seed();
+        var s = Seed();
         var before = Snapshot(Everything);
 
         var sets = Run(Diagnose());
         var dump = string.Join("\n", sets.Select((set, i) => $"[{i}] " + string.Join(" || ", set.Select(r => string.Join(",", r)))));
 
-        Assert.Equal(before, Snapshot(Everything));                                  // read-only in fact
-        var text = string.Join('|', sets.SelectMany(s => s).Select(r => string.Join(',', r)));
-        Assert.Contains("CONFIRMED_PLUS4H", text);
-        Assert.Contains("SUSPECT", text);
+        Assert.Equal(before, Snapshot(Everything));   // read-only in fact
 
-        // result set 2 (conversations): the proven one has a proposed value 4h earlier; nobody else does
-        var provenRows = sets[1].Where(r => r.Any(v => v is long l && l == confirmed)).ToList();
-        Assert.True(provenRows.Count == 1, dump);
-        var proven = provenRows[0];
-        Assert.Contains(proven, v => v is DateTime d && d == T0);   // the proposed start, 4h earlier than stored
-        Assert.DoesNotContain(sets[1], r => r.Any(v => v is long l && (l == correct || l == startOnly || l == endOnly)) && r.Any(v => v is DateTime d && d == T0.AddHours(-4)));
-        // transcript lines (3) belong only to the proven conversation
-        Assert.Equal(2, sets[2].Count);
-        // suspects (6) are exactly the two single-evidence tickets, never the correct one
-        Assert.Equal(2, sets[5].Count);
-        Assert.Contains(sets[5], r => r.Any(v => v is long l && l == startOnly));
-        Assert.Contains(sets[5], r => r.Any(v => v is long l && l == endOnly));
-        Assert.DoesNotContain(sets[5], r => r.Any(v => v is long l && l == correct));
-        // SLA review (5): the proven ticket's First Human Response came from a shifted line
-        Assert.Single(sets[4]);
+        // 1. summary: Classification, SubType, ReasonCode, Conversations, ProposedCorrections, Reason
+        int Conversations(string reason) => sets[0].Where(r => Cell(r, 2) == reason).Sum(r => Convert.ToInt32(r[3]));
+        int Proposed(string reason) => sets[0].Where(r => Cell(r, 2) == reason).Sum(r => Convert.ToInt32(r[4]));
+        Assert.True(Conversations("START_LATER_THAN_TICKET_AND_FIRST_LINE") == 1, dump);
+        Assert.Equal(1, Proposed("START_LATER_THAN_TICKET_AND_FIRST_LINE"));                       // start only: end and lines stay
+        Assert.Equal(1, Conversations("START_LATER_THAN_TICKET_AND_END_LATER_THAN_RECEIPT"));
+        Assert.Equal(5, Proposed("START_LATER_THAN_TICKET_AND_END_LATER_THAN_RECEIPT"));           // start + end + 2 lines + 1 connect
+        Assert.Equal(1, Conversations("NO_INCONSISTENCY_FOUND"));
+        Assert.Equal(0, Proposed("NO_INCONSISTENCY_FOUND"));
+        Assert.Equal(2, Conversations("START_IMPOSSIBLE_FIRST_LINE_DOES_NOT_CORROBORATE"));         // line mismatch + "4h alone"
+        Assert.Equal(1, Conversations("END_OR_LINE_IMPOSSIBLE_START_PLAUSIBLE"));
+        Assert.Equal(1, Conversations("START_IMPOSSIBLE_NO_TRANSCRIPT_NO_END_RECEIPT"));
+        Assert.Equal(1, Conversations("START_NOT_4H_SHAPED"));
+        Assert.All(sets[0].Where(r => Cell(r, 0) != "PROVEN"), r => Assert.Equal(0, Convert.ToInt32(r[4])));   // nothing suspect/correct is ever proposed
+
+        // 2. verdict
+        var v = Assert.Single(sets[1]);
+        Assert.Equal(8, Convert.ToInt32(v[0])); Assert.Equal(2, Convert.ToInt32(v[1])); Assert.Equal(5, Convert.ToInt32(v[2])); Assert.Equal(1, Convert.ToInt32(v[3]));
+        Assert.Equal(2, Convert.ToInt32(v[4])); Assert.Equal(6, Convert.ToInt32(v[5]));
+
+        // 3. inconsistency types are counted
+        Assert.Contains(sets[2], r => Cell(r, 0) == "START_AFTER_TICKET_CREATED" && Convert.ToInt32(r[1]) == 6);
+        Assert.Contains(sets[2], r => Cell(r, 0) == "START_AFTER_TICKET_CREATED_BY_MORE_THAN_4H" && Convert.ToInt32(r[1]) == 1);
+        Assert.Contains(sets[2], r => Cell(r, 0) == "END_AFTER_END_RECEIPT" && Convert.ToInt32(r[1]) == 2);
+
+        // 5. preview: proven tickets ONLY; exactly the two start values are the old -> proposed 4h earlier
+        Assert.Equal(6, sets[4].Count);
+        Assert.All(sets[4], r => Assert.Contains(Convert.ToInt64(r[0]), s.Proven));
+        var startPreview = Assert.Single(sets[4], r => Convert.ToInt64(r[0]) == s.StartProven);
+        Assert.Equal("TicketInteractions.InteractionStartedAtUtc", Cell(startPreview, 3));
+        Assert.Equal(T0.AddHours(3).AddMinutes(40), (DateTime)startPreview[5]!);
+        Assert.Equal(T0.AddMinutes(-20), (DateTime)startPreview[6]!);
+        Assert.Equal(T0.AddHours(4).AddMinutes(-20), (DateTime)startPreview[8]!);   // as the UI would show it (UAE = UTC+4)
+        Assert.False(string.IsNullOrWhiteSpace(Cell(startPreview, 9)));
+
+        // 6. suspects: the five not-proven ones, never the correct or proven tickets
+        Assert.Equal(5, sets[5].Count);
+        Assert.All(sets[5], r => Assert.DoesNotContain(Convert.ToInt64(r[0]), new[] { s.Correct, s.Full, s.StartProven }));
+        // 7. the plausible connect time of the proven start-only conversation is reported, not proposed
+        Assert.Single(sets[6], r => Convert.ToInt64(r[0]) == s.StartProven);
+    }
+
+    [VisibilitySqlServerFact]
+    public void NoProvenRecords_ReportsZeroSafeCorrections_AndProposesNothing()
+    {
+        CreateDatabase();
+        AddCorrect();
+        AddSuspects();
+
+        var sets = Run(Diagnose());
+
+        var v = Assert.Single(sets[1]);
+        Assert.Equal(0, Convert.ToInt32(v[1]));
+        Assert.Equal(0, Convert.ToInt32(v[4])); Assert.Equal(0, Convert.ToInt32(v[5]));
+        Assert.StartsWith("ZERO safe automatic corrections", Cell(v, 6));
+        Assert.Empty(sets[4]);                                                       // no preview rows
+
+        var dryRun = Run(Remediate(dryRun: true));
+        Assert.DoesNotContain(dryRun, set => set.Count > 0 && set[0][0] is "PLAN: conversations");
+        var before = Snapshot(Everything);
+        Run(Remediate(dryRun: false));
+        Assert.Equal(before, Snapshot(Everything));                                  // a real run with nothing proven writes nothing
     }
 
     [Fact]
@@ -225,62 +325,103 @@ public sealed class GenesysHistoricalTimestampScriptsSqlServerTests : IDisposabl
         Assert.DoesNotMatch(new Regex(@"\b(INSERT\s+(INTO\s+)?(dbo\.)?(?!@)\w+|UPDATE\s+(dbo\.)?\w+\s+SET|DELETE\s+(FROM\s+)?(dbo\.)|MERGE|DROP\s|ALTER\s|TRUNCATE|EXEC(UTE)?\s)", RegexOptions.IgnoreCase), sql);
     }
 
-    [VisibilitySqlServerFact]
-    public void DryRun_IsTheDefault_ShowsOldAndProposed_AndWritesNothing()
+    [Fact]
+    public void BothScripts_UseTheSameEvidenceBlock_AndNeverTreatFourHoursAsProof()
     {
-        var (confirmed, _, _, _) = Seed();
+        // the remediation's evidence block is a verbatim copy of the diagnostic's (only the table name differs)
+        string Block(string sql, string table)
+        {
+            var from = sql.IndexOf("DECLARE " + table + " TABLE", StringComparison.Ordinal);
+            var to = sql.IndexOf("CROSS APPLY (SELECT cl.Classification AS Classification", StringComparison.Ordinal);
+            Assert.True(from >= 0 && to > from);
+            return Regex.Replace(sql[from..to].Replace(table, "@X"), @"\s+", " ");
+        }
+
+        Assert.Equal(Block(Diagnose(), "@Plan"), Block(File.ReadAllText(RepoFile("Remediate_TigerCS_PROD_GenesysHistoricalTimestamps.sql")), "@All"));
+    }
+
+    private string InteractionsExceptStart()
+        => string.Join("\n", Run("SELECT TicketInteractionId, TicketId, GenesysConversationId, CreatedAtUtc, EndedAtUtc FROM dbo.TicketInteractions ORDER BY 1")[0].Select(r => string.Join(',', r)));
+
+    private DateTime StartOf(long ticketId) => Scalar<DateTime>($"SELECT InteractionStartedAtUtc FROM dbo.TicketInteractions WHERE TicketId = {ticketId}");
+
+    [VisibilitySqlServerFact]
+    public void DryRun_IsTheDefault_RevalidatesLiveData_ShowsOldAndProposedStart_ForProvenStartOnly_AndWritesNothing()
+    {
+        var s = Seed();
         var before = Snapshot(Everything);
 
         var sets = Run(Remediate(dryRun: true));
 
         Assert.Equal(before, Snapshot(Everything));
-        var plan = sets.First(s => s.Count > 0 && s[0].Length > 0 && s[0][0] is "PLAN: conversations");
-        var row = Assert.Single(plan);
-        Assert.Equal(confirmed, Convert.ToInt64(row[1]));
-        Assert.Equal(T0.AddHours(4), (DateTime)row[6]!);   // old
-        Assert.Equal(T0, (DateTime)row[7]!);               // proposed
-        Assert.Contains(sets, s => s.Count == 1 && s[0][0] is string h && h.StartsWith("SLA REVIEW"));
-        var rollback = sets.First(s => s.Count > 0 && s[0][0] is "ROLLBACK STATEMENTS");
-        Assert.Equal(4, rollback.Count);                   // conversation + 2 lines + 1 connect
+
+        // revalidation on the live data: Metric, Approved (diagnostic), Live, Status
+        var reval = sets.First(x => x.Count > 0 && x[0][0] is string h && h.StartsWith("REVALIDATION"));
+        Assert.Equal(6, reval.Count);
+        Assert.Equal(8, Convert.ToInt32(reval[0][3]));   // conversations
+        Assert.Equal(1, Convert.ToInt32(reval[1][3]));   // PROVEN_START_OFFSET
+        Assert.Equal(5, Convert.ToInt32(reval[2][3]));   // SUSPECT
+        Assert.Equal(1, Convert.ToInt32(reval[3][3]));   // CORRECT
+        Assert.Equal(1, Convert.ToInt32(reval[4][3]));   // PROVEN_FULL_OFFSET: reported, never corrected here
+        Assert.Equal(0, Convert.ToInt32(reval[5][3]));   // previous correction audit records
+
+        // the plan holds the start-only conversation and NOT the full-offset one
+        var plan = sets.First(x => x.Count > 0 && x[0].Length > 0 && x[0][0] is "PLAN: conversations");
+        var start = Assert.Single(plan);
+        Assert.Equal(s.StartProven, Convert.ToInt64(start[1]));
+        Assert.Equal(T0.AddHours(3).AddMinutes(40), (DateTime)start[6]!);   // old
+        Assert.Equal(T0.AddMinutes(-20), (DateTime)start[7]!);              // proposed
+        var preview = sets.First(x => x.Count > 0 && x[0][0] is "PLAN: column preview");
+        Assert.Equal("TicketInteractions.InteractionStartedAtUtc", Cell(Assert.Single(preview), 3));   // one value, one column
+        var rollback = sets.First(x => x.Count > 0 && x[0][0] is "ROLLBACK STATEMENTS");
+        Assert.Contains("SET InteractionStartedAtUtc = '2026-11-10T11:40:00", Cell(Assert.Single(rollback), 1));
+        Assert.DoesNotContain(sets, x => x.Count > 0 && x[0][0] is string h && h.StartsWith("SLA REVIEW"));
     }
 
     [VisibilitySqlServerFact]
-    public void RealRun_CorrectsOnlyTheProvenConversation_ChangesOnlyTimestamps_AppendsAudit_AndIsIdempotent()
+    public void DiagnosticPreview_AndRemediationPlan_AgreeValueForValue_ForTheStartOnlyConversation()
     {
-        var (confirmed, correct, startOnly, endOnly) = Seed();
-        var protectedBefore = Snapshot(ProtectedTables);
-        var auditBefore = Scalar<int>("SELECT COUNT(*) FROM dbo.AuditEntries");
-        var untouchedBefore = Snapshot("TicketInteractionHandlers"); // sanity: handlers other than the proven one do not exist
-        var othersBefore = Run($"SELECT TicketInteractionId, InteractionStartedAtUtc, EndedAtUtc FROM dbo.TicketInteractions WHERE TicketId <> {confirmed} ORDER BY 1")[0];
-        var otherLinesBefore = Run($"SELECT m.TicketInteractionMessageId, m.SentAtUtc FROM dbo.TicketInteractionMessages m JOIN dbo.TicketInteractions i ON i.TicketInteractionId = m.TicketInteractionId WHERE i.TicketId <> {confirmed} ORDER BY 1")[0];
+        var s = Seed();
+        var diagnostic = Run(Diagnose())[4]
+            .Where(r => Convert.ToInt64(r[0]) == s.StartProven && Cell(r, 3) == "TicketInteractions.InteractionStartedAtUtc")
+            .Select(r => $"{Cell(r, 0)}|{Cell(r, 3)}|{Cell(r, 4)}|{((DateTime)r[5]!):O}|{((DateTime)r[6]!):O}").ToList();
+        var plan = Run(Remediate(dryRun: true)).First(x => x.Count > 0 && x[0][0] is "PLAN: column preview")
+            .Select(r => $"{Cell(r, 1)}|{Cell(r, 3)}|{Cell(r, 4)}|{((DateTime)r[5]!):O}|{((DateTime)r[6]!):O}").ToList();
+
+        Assert.Single(diagnostic);
+        Assert.Equal(diagnostic, plan);
+    }
+
+    [VisibilitySqlServerFact]
+    public void RealRun_CorrectsOnlyTheProvenStart_ChangesNothingElse_PreservesTheOriginal_AndIsIdempotent()
+    {
+        var s = Seed();
+        var protectedBefore = Snapshot(ProtectedTables);                                         // ticket dates/status/owner, SLA, assignments, history, resolutions
+        var transcriptBefore = Snapshot("TicketInteractionMessages", "TicketInteractionHandlers");  // transcript lines and connect times
+        var interactionsBefore = InteractionsExceptStart();                                       // ends, creation dates, ids
+        var otherStartsBefore = Run($"SELECT TicketInteractionId, InteractionStartedAtUtc FROM dbo.TicketInteractions WHERE TicketId <> {s.StartProven} ORDER BY 1")[0].Select(r => string.Join(',', r)).ToList();
+        var maxAudit = Scalar<long>("SELECT ISNULL(MAX(AuditEntryId), 0) FROM dbo.AuditEntries");
+        var existingAuditBefore = Run($"SELECT * FROM dbo.AuditEntries WHERE AuditEntryId <= {maxAudit} ORDER BY 1 FOR JSON AUTO")[0].Select(r => (string?)r[0]).Aggregate("", (a, b) => a + b);
 
         Run(Remediate(dryRun: false));
 
-        // the proven conversation: every shifted value is exactly 4h earlier
-        var c = Run($"SELECT InteractionStartedAtUtc, EndedAtUtc FROM dbo.TicketInteractions WHERE TicketId = {confirmed}")[0].Single();
-        Assert.Equal(T0, (DateTime)c[0]!);
-        Assert.Equal(T0.AddMinutes(10), (DateTime)c[1]!);
-        var lines = Run($"SELECT m.SentAtUtc FROM dbo.TicketInteractionMessages m JOIN dbo.TicketInteractions i ON i.TicketInteractionId = m.TicketInteractionId WHERE i.TicketId = {confirmed} ORDER BY m.Sequence")[0];
-        Assert.Equal([T0.AddMinutes(1), T0.AddMinutes(5)], lines.Select(r => (DateTime)r[0]!).ToArray());
-        var connect = Run($"SELECT h.ConnectedAtUtc FROM dbo.TicketInteractionHandlers h JOIN dbo.TicketInteractions i ON i.TicketInteractionId = h.TicketInteractionId WHERE i.TicketId = {confirmed}")[0].Single();
-        Assert.Equal(T0.AddMinutes(1), (DateTime)connect[0]!);
-
-        // everyone else is untouched: the correct conversation and both single-evidence suspects
-        Assert.Equal(othersBefore.Select(r => string.Join(',', r)), Run($"SELECT TicketInteractionId, InteractionStartedAtUtc, EndedAtUtc FROM dbo.TicketInteractions WHERE TicketId <> {confirmed} ORDER BY 1")[0].Select(r => string.Join(',', r)));
-        Assert.Equal(otherLinesBefore.Select(r => string.Join(',', r)), Run($"SELECT m.TicketInteractionMessageId, m.SentAtUtc FROM dbo.TicketInteractionMessages m JOIN dbo.TicketInteractions i ON i.TicketInteractionId = m.TicketInteractionId WHERE i.TicketId <> {confirmed} ORDER BY 1")[0].Select(r => string.Join(',', r)));
-
-        // ticket status/owner/closure/SLA/assignments/history/resolutions: byte-for-byte (First Human Response and the SLA flag are reported, NOT recalculated)
+        Assert.Equal(T0.AddMinutes(-20), StartOf(s.StartProven));                                // the one proven start moved, 4h earlier
         Assert.Equal(protectedBefore, Snapshot(ProtectedTables));
-        Assert.Equal(T0.AddHours(4).AddMinutes(1), Scalar<DateTime>($"SELECT FirstHumanResponseAtUtc FROM dbo.Tickets WHERE TicketId = {confirmed}"));
+        Assert.Equal(transcriptBefore, Snapshot("TicketInteractionMessages", "TicketInteractionHandlers"));
+        Assert.Equal(interactionsBefore, InteractionsExceptStart());                             // no end date, creation date or id moved
+        Assert.Equal(otherStartsBefore, Run($"SELECT TicketInteractionId, InteractionStartedAtUtc FROM dbo.TicketInteractions WHERE TicketId <> {s.StartProven} ORDER BY 1")[0].Select(r => string.Join(',', r)).ToList());
+        Assert.Equal(T0.AddHours(4), StartOf(s.Full));                                           // PROVEN_FULL_OFFSET is reported, never corrected by this script
+        Assert.Equal(T0.AddHours(4).AddMinutes(1), Scalar<DateTime>($"SELECT FirstHumanResponseAtUtc FROM dbo.Tickets WHERE TicketId = {s.Full}"));
 
-        // audit: existing rows untouched, exactly one new row for the corrected ticket, with old and new values
-        Assert.Equal(auditBefore + 1, Scalar<int>("SELECT COUNT(*) FROM dbo.AuditEntries"));
-        var audit = Run("SELECT EntityId, BeforeValue, AfterValue FROM dbo.AuditEntries WHERE Action = N'GenesysTimestampCorrected'")[0].Single();
-        Assert.Equal(confirmed.ToString(), (string)audit[0]!);
-        Assert.Contains("InteractionStartedAtUtc=2026-11-10T12:00:00", (string)audit[1]!);
-        Assert.Contains("InteractionStartedAtUtc=2026-11-10T08:00:00", (string)audit[2]!);
-        Assert.Contains("ShiftHours=-4", (string)audit[2]!);
-        _ = (correct, startOnly, endOnly, untouchedBefore);
+        // audit: existing rows untouched, exactly one new row, holding the ORIGINAL and the new start
+        Assert.Equal(existingAuditBefore, Run($"SELECT * FROM dbo.AuditEntries WHERE AuditEntryId <= {maxAudit} ORDER BY 1 FOR JSON AUTO")[0].Select(r => (string?)r[0]).Aggregate("", (a, b) => a + b));
+        Assert.Equal(1, Scalar<int>($"SELECT COUNT(*) FROM dbo.AuditEntries WHERE AuditEntryId > {maxAudit}"));
+        var audit = Run($"SELECT BeforeValue, AfterValue FROM dbo.AuditEntries WHERE Action = N'GenesysTimestampCorrected' AND EntityId = N'{s.StartProven}'")[0].Single();
+        Assert.Contains("InteractionStartedAtUtc=2026-11-10T11:40:00", (string)audit[0]!);      // original
+        Assert.Contains("InteractionStartedAtUtc=2026-11-10T07:40:00", (string)audit[1]!);      // corrected
+        Assert.Contains("Proof=PROVEN_START_OFFSET", (string)audit[1]!);
+        Assert.Contains("Column=TicketInteractions.InteractionStartedAtUtc", (string)audit[1]!);
+        Assert.Equal(0, Scalar<int>($"SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action = N'GenesysTimestampCorrected' AND EntityId = N'{s.Full}'"));
 
         // idempotent: a second real run finds nothing left to correct and writes nothing
         var snapshot = Snapshot(Everything);
@@ -289,19 +430,73 @@ public sealed class GenesysHistoricalTimestampScriptsSqlServerTests : IDisposabl
     }
 
     [VisibilitySqlServerFact]
+    public void AConversationWithACorrectionAuditRow_IsNeverPlannedAgain_EvenIfItsStartLooksShiftedAgain()
+    {
+        var s = Seed();
+        Run(Remediate(dryRun: false, ticketId: s.StartProven));
+        Run($"UPDATE dbo.TicketInteractions SET InteractionStartedAtUtc = {Lit(T0.AddHours(3).AddMinutes(40))} WHERE TicketId = {s.StartProven}");   // looks proven again
+        var auditBefore = Scalar<int>("SELECT COUNT(*) FROM dbo.AuditEntries");
+
+        Run(Remediate(dryRun: false, ticketId: s.StartProven));
+
+        Assert.Equal(auditBefore, Scalar<int>("SELECT COUNT(*) FROM dbo.AuditEntries"));
+        Assert.Equal(T0.AddHours(3).AddMinutes(40), StartOf(s.StartProven));
+    }
+
+    [VisibilitySqlServerFact]
+    public void Rollback_RestoresTheOriginalStartFromTheAuditRows_Optimistically_AndIsNotCorrectedAgain()
+    {
+        var s = Seed();
+        var original = T0.AddHours(3).AddMinutes(40);
+        Run(Remediate(dryRun: false));
+        var runId = (Guid)Run("SELECT TOP (1) CorrelationId FROM dbo.AuditEntries WHERE Action = N'GenesysTimestampCorrected'")[0][0][0]!;
+        string Rollback(bool dryRun) => Remediate(dryRun).Replace("DECLARE @RollbackRunId uniqueidentifier = NULL;", $"DECLARE @RollbackRunId uniqueidentifier = '{runId}';", StringComparison.Ordinal);
+
+        var afterCorrection = Snapshot(Everything);
+        var plan = Run(Rollback(dryRun: true)).First(x => x.Count > 0 && x[0][0] is "ROLLBACK PLAN");
+        Assert.Equal("WILL RESTORE", Cell(Assert.Single(plan), 6));
+        Assert.Equal(afterCorrection, Snapshot(Everything));                                     // a rollback dry run writes nothing
+
+        Run(Rollback(dryRun: false));
+        Assert.Equal(original, StartOf(s.StartProven));
+        Assert.Equal(1, Scalar<int>("SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action = N'GenesysTimestampCorrectionRolledBack'"));
+        Assert.Equal(1, Scalar<int>("SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action = N'GenesysTimestampCorrected'"));   // the correction record is kept
+
+        var afterRollback = Snapshot(Everything);
+        var again = Assert.Throws<SqlException>(() => Run(Rollback(dryRun: false)));             // the row no longer holds the corrected value
+        Assert.Equal(50342, again.Number);
+        Assert.Equal(afterRollback, Snapshot(Everything));
+
+        Run(Remediate(dryRun: false));                                                           // a rolled-back conversation is not corrected again automatically
+        Assert.Equal(original, StartOf(s.StartProven));
+    }
+
+    [VisibilitySqlServerFact]
     public void PilotOnOneTicket_TouchesOnlyThatTicket()
     {
-        var (confirmed, _, _, _) = Seed();
-        // a second proven conversation that the pilot must NOT touch
-        var other = Ticket(T0.AddHours(4).AddMinutes(1));
-        var oi = Conversation(other, "conv-other", T0.AddSeconds(5), T0.AddHours(4), T0.AddHours(4).AddMinutes(10));
-        EndReceipt(other, "conv-other", T0.AddMinutes(10).AddSeconds(2));
-        Line(oi, 1, T0.AddHours(4).AddMinutes(1));
+        var s = Seed();
+        var other = AddStartProven("conv-start-proven-other");   // a second proven conversation that the pilot must NOT touch
 
-        Run(Remediate(dryRun: false, ticketId: confirmed));
+        Run(Remediate(dryRun: false, ticketId: s.StartProven));
 
-        Assert.Equal(T0, Scalar<DateTime>($"SELECT InteractionStartedAtUtc FROM dbo.TicketInteractions WHERE TicketId = {confirmed}"));
-        Assert.Equal(T0.AddHours(4), Scalar<DateTime>($"SELECT InteractionStartedAtUtc FROM dbo.TicketInteractions WHERE TicketId = {other}"));
+        Assert.Equal(T0.AddMinutes(-20), StartOf(s.StartProven));
+        Assert.Equal(T0.AddHours(3).AddMinutes(40), StartOf(other));
+        Assert.Equal(T0.AddHours(4), StartOf(s.Full));
+        Assert.Equal(1, Scalar<int>("SELECT COUNT(*) FROM dbo.AuditEntries WHERE Action = N'GenesysTimestampCorrected'"));
+    }
+
+    [VisibilitySqlServerFact]
+    public void RealRunOverAllTickets_Aborts_WhenMoreArePROVENThanWereApproved_AndWritesNothing()
+    {
+        Seed();
+        var before = Snapshot(Everything);
+        var script = Remediate(dryRun: false).Replace("@ApprovedProvenStart int = 1693", "@ApprovedProvenStart int = 0", StringComparison.Ordinal);
+        Assert.Contains("@ApprovedProvenStart int = 0", script);
+
+        var error = Assert.Throws<SqlException>(() => Run(script));
+
+        Assert.Equal(50330, error.Number);
+        Assert.Equal(before, Snapshot(Everything));
     }
 
     [VisibilitySqlServerFact]
@@ -317,17 +512,24 @@ public sealed class GenesysHistoricalTimestampScriptsSqlServerTests : IDisposabl
         Assert.Equal(before, Snapshot(Everything));
     }
 
-    [VisibilitySqlServerFact]
-    public void ARowChangedAfterThePlanWasRead_RollsEverythingBack()
+    [Fact]
+    public void TheRemediation_HasOptimisticChecks_ValidationAndRollbackOnEveryFailurePath_AndCanWriteOnlyTheStart()
     {
-        // simulate "something else touched the conversation" by making the plan unable to match: a tampered start that no longer equals the planned old value cannot be
-        // produced from outside one batch, so prove the validation guard instead: the script must contain the optimistic checks and the rollback on every failure path
         var script = File.ReadAllText(RepoFile("Remediate_TigerCS_PROD_GenesysHistoricalTimestamps.sql"));
-        Assert.Contains("THROW 50310", script);
-        Assert.Contains("THROW 50311", script);
-        Assert.Contains("THROW 50312", script);
-        Assert.Contains("THROW 50320", script);
+        foreach (var number in new[] { "50310", "50320", "50321", "50322", "50323", "50330", "50340", "50341", "50342" })
+            Assert.Contains($"THROW {number}", script);
         Assert.Contains("IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION", script);
         Assert.Contains("SET XACT_ABORT ON", script);
+        Assert.Contains("DECLARE @DryRun bit = 1;", script);
+        Assert.Contains("DECLARE @RollbackRunId uniqueidentifier = NULL;", script);
+
+        // the only column the script can write is InteractionStartedAtUtc (correction + rollback); the only table it can insert into is the append-only audit table
+        var sql = Regex.Replace(Regex.Replace(script, @"--[^\r\n]*", string.Empty), @"N?'(?:[^']|'')*'", "''");
+        var updates = Regex.Matches(sql, @"UPDATE\s+(\w+)\s+SET\s+([\w\.]+)\s*=", RegexOptions.IgnoreCase);
+        Assert.Equal(2, updates.Count);
+        Assert.All(updates, m => Assert.Equal("i.InteractionStartedAtUtc", m.Groups[2].Value));
+        Assert.DoesNotMatch(new Regex(@"\b(DELETE|MERGE|TRUNCATE|DROP|ALTER)\b", RegexOptions.IgnoreCase), sql);
+        Assert.All(Regex.Matches(sql, @"INSERT\s+(dbo\.\w+)", RegexOptions.IgnoreCase), m => Assert.Equal("dbo.AuditEntries", m.Groups[1].Value, ignoreCase: true));
+        Assert.DoesNotMatch(new Regex(@"SET\s+[\w\.]*\b(EndedAtUtc|SentAtUtc|ConnectedAtUtc|CreatedAtUtc|FirstHumanResponseAtUtc)\b\s*=", RegexOptions.IgnoreCase), sql);
     }
 }
