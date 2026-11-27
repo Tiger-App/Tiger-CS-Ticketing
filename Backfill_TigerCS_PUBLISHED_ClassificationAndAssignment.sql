@@ -77,16 +77,16 @@ SET ANSI_NULLS ON;
 SET LOCK_TIMEOUT 20000;
 
 -- ------------------------------------------------ PARAMETERS ----------------------------------------------------------------
-DECLARE @DryRun                       bit              = 0;      -- 1 = everything, then ROLL BACK (default).  0 = COMMIT.
+DECLARE @DryRun                       bit              = 1;      -- 1 = everything, then ROLL BACK (default).  0 = COMMIT.
 DECLARE @ExpectedDb                   sysname          = N'TigerCS_Ticketing_Prod';   -- confirmed Production name; the guard below refuses any other database
-DECLARE @RunClassification            bit              = 0;      -- phase switches (both on by default)
+DECLARE @RunClassification            bit              = 1;      -- phase switches (both on by default)
 DECLARE @RunAssignment                bit              = 1;
 DECLARE @IncludeCategoryOnly          bit              = 0;      -- DefaultClassificationBackfillOptions.IncludeCategoryOnly (default off)
 DECLARE @IncludeAiEndedWithoutHuman   bit              = 1;      -- CsAgentBackfillOptions.IncludeAiEndedWithoutHuman (default on)
 DECLARE @MinTicketAgeMinutes          int              = 3;      -- CsAgentBackfillOptions.MinTicketAgeMinutes
 DECLARE @StalePhoneAfterHours         int              = 6;      -- CsAgentBackfillOptions.StalePhoneAiAfterHours (approved rule). NULL or <= 0 = rule OFF: every live conversation stays ACTIVE_AI.
 DECLARE @ApprovedClassificationCount  int              = NULL;   -- commit gate: report 1 "ClassificationToApply"
-DECLARE @ApprovedAssignmentCount      int              = 181;   -- commit gate: report 1 "AssignmentToApply"
+DECLARE @ApprovedAssignmentCount      int              = NULL;   -- commit gate: report 1 "AssignmentToApply"
 DECLARE @ServiceIdsConfirmed          bit              = 0;      -- commit gate: 1 only after listing ALL service-account ids below
 DECLARE @NoServiceAccountsExist       bit              = 0;      -- commit gate alternative: 1 ONLY if confirmed that none exist (list stays empty)
 DECLARE @BatchId                      uniqueidentifier = NEWID();

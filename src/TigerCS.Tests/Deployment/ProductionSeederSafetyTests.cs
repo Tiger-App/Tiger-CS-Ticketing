@@ -4,13 +4,13 @@ namespace TigerCS.Tests.Deployment;
 
 public sealed class ProductionSeederSafetyTests
 {
-    private const string Target = "10.10.10.124/TigerCS_Ticketing_Prod";
+    private const string Target = "TGAESHJDBP02/TigerCS_Ticketing_Prod";
 
     [Theory]
     [InlineData("seed")]
     [InlineData("seed", "--target", "production")]
     [InlineData("seed", "--target", "production", "--confirm-production", Target)]                                   // no backup confirmation
-    [InlineData("seed", "--target", "production", "--confirm-production", "10.10.10.124/TigerCS_Ticketing_SeedTest", "--backup-confirmed")]
+    [InlineData("seed", "--target", "production", "--confirm-production", "TGAESHJDBP02/TigerCS_Ticketing_SeedTest", "--backup-confirmed")]
     [InlineData("seed", "--target", "production", "--confirm-seed-test", "--backup-confirmed")]
     [InlineData("seed", "--target", "seedtest")]
     [InlineData("seed", "--target", "other", "--confirm-seed-test")]
