@@ -75,10 +75,10 @@ public sealed class TicketsModel(
     public bool AvailableToTake { get; set; }
 
     /// <summary>
-    /// Whether the "Available to take" filter is offered: a CS Agent whose ticket list is the narrow per-ticket one (everyone else already sees,
-    /// or has no claim on, the pool). The Api decides what the filter returns; for a non-agent it can only narrow.
+    /// Whether the "Available to take" filter is offered. Never: a Call Agent sees only the tickets assigned to them and cannot take an
+    /// unassigned one (the Api refuses it regardless of this page), so the control is not rendered for anyone.
     /// </summary>
-    public bool OffersAvailableToTakeFilter => View == TicketsView.Queue && TicketVisibilityRule.IsRestrictedCsAgent(Viewer?.Roles ?? []);
+    public bool OffersAvailableToTakeFilter => false;
     public bool SlaBreached { get; set; }
     public bool DueToday { get; set; }
     public string? BacklogAge { get; set; }

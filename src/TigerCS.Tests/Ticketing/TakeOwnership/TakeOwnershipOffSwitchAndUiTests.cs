@@ -12,8 +12,8 @@ using TigerCS.Tests.IdentityAndAccess.Integration;
 namespace TigerCS.Tests.Ticketing.TakeOwnership;
 
 /// <summary>
-/// The operational off-switch (<c>TicketClaim:Enabled=false</c>, used for the window of the one-time Call Center backlog distribution): the
-/// whole feature goes away together - list scope, details flag, endpoint - and nothing else changes.
+/// The operational off-switch (<c>TicketClaim:Enabled=false</c>): still honoured - and since Call Agents may no longer take ownership at all
+/// (see <c>CallAgentTicketAuthorizationTests</c>) it is no longer the only thing keeping the pool closed. Nothing else changes.
 /// </summary>
 public sealed class TakeOwnershipOffSwitchTests : IDisposable
 {
@@ -98,14 +98,11 @@ public sealed class TakeOwnershipUiContractTests
     }
 
     [Fact]
-    public void TheListOffersTheAvailableToTakeFilter_OnlyToCallCenterStyleAgents_AndSendsItToTheApi()
+    public void TheListNeverOffersTheAvailableToTakeFilter_BecauseNoCallAgentMayTakeOwnership()
     {
         var model = Source(Path.Combine("TigerCS.Web", "Pages", "Tickets.cshtml.cs"));
-        var list = Source(Path.Combine("TigerCS.Web", "Pages", "Shared", "_TicketListView.cshtml"));
-        var client = Source(Path.Combine("TigerCS.Web", "Services", "Api", "TicketsApiClient.cs"));
 
-        Assert.Contains("OffersAvailableToTakeFilter", list, StringComparison.Ordinal);
-        Assert.Contains("TicketVisibilityRule.IsRestrictedCsAgent", model, StringComparison.Ordinal);
-        Assert.Contains("query[\"availableToTake\"]", client, StringComparison.Ordinal);
+        Assert.Contains("public bool OffersAvailableToTakeFilter => false;", model, StringComparison.Ordinal);
+        Assert.DoesNotContain("IsRestrictedCsAgent", model[model.IndexOf("OffersAvailableToTakeFilter", StringComparison.Ordinal)..][..200], StringComparison.Ordinal);
     }
 }

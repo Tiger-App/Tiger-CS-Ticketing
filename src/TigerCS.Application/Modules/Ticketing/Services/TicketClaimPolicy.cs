@@ -57,10 +57,25 @@ public sealed class TicketClaimPolicy(
         return callerRoles.Contains(Roles.CsAgent, StringComparer.Ordinal) && !Roles.IsReadOnlyCaller(callerRoles);
     }
 
-    /// <summary>True for an employee who may take ownership of tickets at all (see the type remarks) - independent of any ticket.</summary>
+    /// <summary>
+    /// Business rule: a Call Agent (CS Agent) may NOT take ownership of an unassigned ticket, and so may not see one either - the unassigned
+    /// pool, the Genesys intake queue and the department queue belong to the CS Manager and CS Supervisor, who assign work. An agent only ever
+    /// sees the tickets currently assigned to them. Every consumer of this policy (the list scope, the intake queue, the read-only open of an
+    /// unassigned ticket, the details <c>canTakeOwnership</c> flag and the Take Ownership endpoint) goes through
+    /// <see cref="IsEligibleClaimerAsync"/>, so this one switch closes all of them at the backend. It is deliberately NOT configuration
+    /// (unlike <see cref="TicketClaimOptions"/>): an environment variable must not be able to re-open a visibility hole.
+    /// </summary>
+    private static readonly bool SelfClaimPermitted = false;
+
+    /// <summary>True for an employee who may take ownership of tickets at all (see the type remarks) - independent of any ticket. Currently nobody: see <see cref="SelfClaimPermitted"/>.</summary>
     public async Task<bool> IsEligibleClaimerAsync(
         Guid callerEmployeeId, IReadOnlyCollection<string> callerRoles, CancellationToken cancellationToken = default)
     {
+        if (!SelfClaimPermitted)
+        {
+            return false;
+        }
+
         // The operational off-switch (TicketClaimOptions): off means off for the list scope, the details flag and the endpoint alike.
         if (options is { Enabled: false } || !HoldsClaimRole(callerRoles) || serviceIdentities?.IsServiceIdentity(callerEmployeeId) == true)
         {
