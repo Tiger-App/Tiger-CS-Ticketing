@@ -8,11 +8,11 @@ namespace TigerCS.Infrastructure.BackgroundJobs;
 
 public sealed record VoiceCallReconciliationRunResult(
     bool Ran, bool DryRun, int Examined, int Eligible, int AssignedAnsweringAgent, int AssignedLastOffered, int LeftUnassigned, int QueuedNoEligibleAgent, int MappingPending,
-    int WouldAct, int LostRace, int NoLongerApplicable, int Failed, bool LimitReached);
+    int WouldAct, int LostRace, int NoLongerApplicable, int Failed, bool LimitReached, int AssignedRoundRobin = 0);
 
 /// <summary>
 /// One voice-call reconciliation pass. It only sequences and isolates: <see cref="VoiceCallReconciler"/> owns every rule (the end-of-call window, who answered,
-/// flag-and-queue; never Round Robin). One DI scope (one DbContext) per ticket, so a lost race cannot poison the next one. Shares the single-flight lock with the other assignment jobs
+/// Round Robin for a call nobody answered; the answering agent for one somebody did). One DI scope (one DbContext) per ticket, so a lost race cannot poison the next one. Shares the single-flight lock with the other assignment jobs
 /// so runs never overlap. Logs ticket ids and numbers only - no customer data.
 /// </summary>
 public sealed class VoiceCallReconciliationJob(
@@ -40,7 +40,7 @@ public sealed class VoiceCallReconciliationJob(
         var limit = Math.Max(0, settings.MaxActionsPerRun);
         var pageSize = Math.Clamp(settings.BatchSize, 1, 1000);
         long after = 0;
-        int examined = 0, eligible = 0, answering = 0, assignedLastOffered = 0, leftUnassigned = 0, queued = 0, mapping = 0, would = 0, lost = 0, noLonger = 0, failed = 0, acted = 0;
+        int examined = 0, eligible = 0, roundRobin = 0, answering = 0, assignedLastOffered = 0, leftUnassigned = 0, queued = 0, mapping = 0, would = 0, lost = 0, noLonger = 0, failed = 0, acted = 0;
         var limitReached = false;
 
         for (var pageNumber = 0; pageNumber < MaxPagesPerRun && !limitReached; pageNumber++)
@@ -106,13 +106,18 @@ public sealed class VoiceCallReconciliationJob(
                             assignedLastOffered++;
                             logger.LogInformation("Voice call: ticket {TicketNumber} (#{TicketId}) ended unanswered and was given to the last agent it was offered to, employee {EmployeeId} (not Round Robin).", evidence.TicketNumber, evidence.TicketId, result.AssignedEmployeeId);
                             break;
+                        case VoiceReconcileOutcome.AssignedRoundRobin:
+                            roundRobin++;
+                            logger.LogInformation("Voice call: ticket {TicketNumber} (#{TicketId}) needed a person and nobody answered; dealt to employee {EmployeeId} by Round Robin.", evidence.TicketNumber, evidence.TicketId, result.AssignedEmployeeId);
+                            break;
                         case VoiceReconcileOutcome.LeftUnassignedForFollowUp:
                             leftUnassigned++;
-                            logger.LogInformation("Voice call: ticket {TicketNumber} (#{TicketId}) ended unanswered; no assignable offered agent - left unassigned, flagged and queued for follow-up (no Round Robin).", evidence.TicketNumber, evidence.TicketId);
+                            logger.LogWarning("Voice call: ticket {TicketNumber} (#{TicketId}) needs a person but no eligible Call Center CS Agent is available; it stays queued in the Call Center, flagged, and is retried every run.", evidence.TicketNumber, evidence.TicketId);
                             break;
                         case VoiceReconcileOutcome.QueuedNoEligibleAgent:
                             queued++;
-                            logger.LogWarning("Voice call: ticket {TicketNumber} (#{TicketId}) ended unanswered but no eligible Call Center CS Agent exists; it stays queued and is retried next run.", evidence.TicketNumber, evidence.TicketId);
+                            acted--;   // nothing was written: a ticket still waiting for an eligible agent must not use up this run's write budget
+                            logger.LogWarning("Voice call: ticket {TicketNumber} (#{TicketId}) needs a person but no eligible Call Center CS Agent (or no Call Center department) exists; it stays queued and is retried next run.", evidence.TicketNumber, evidence.TicketId);
                             break;
                         case VoiceReconcileOutcome.FlaggedMappingPending:
                             mapping++;
@@ -142,11 +147,11 @@ public sealed class VoiceCallReconciliationJob(
         if (examined > 0)
         {
             logger.LogInformation(
-                "Voice call reconciliation finished ({Mode}): examined {Examined}; acted {Eligible}; to answering agent {Answering}; last offered agent {LastOffered}; left unassigned {LeftUnassigned}; no Call Center department {Queued}; "
+                "Voice call reconciliation finished ({Mode}): examined {Examined}; acted {Eligible}; to answering agent {Answering}; Round Robin {RoundRobin}; last offered agent {LastOffered}; left queued (retry) {LeftUnassigned}; nothing written, no eligible agent {Queued}; "
                 + "mapping pending {Mapping}; would act {Would}; lost race {Lost}; no longer applicable {NoLonger}; failed {Failed}; limit reached {Limit}.",
-                settings.DryRun ? "DRY RUN" : "LIVE", examined, eligible, answering, assignedLastOffered, leftUnassigned, queued, mapping, would, lost, noLonger, failed, limitReached);
+                settings.DryRun ? "DRY RUN" : "LIVE", examined, eligible, answering, roundRobin, assignedLastOffered, leftUnassigned, queued, mapping, would, lost, noLonger, failed, limitReached);
         }
 
-        return new VoiceCallReconciliationRunResult(true, settings.DryRun, examined, eligible, answering, assignedLastOffered, leftUnassigned, queued, mapping, would, lost, noLonger, failed, limitReached);
+        return new VoiceCallReconciliationRunResult(true, settings.DryRun, examined, eligible, answering, assignedLastOffered, leftUnassigned, queued, mapping, would, lost, noLonger, failed, limitReached, roundRobin);
     }
 }

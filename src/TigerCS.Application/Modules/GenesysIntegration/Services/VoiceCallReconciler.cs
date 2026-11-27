@@ -68,6 +68,9 @@ public enum VoiceReconcileClass
     /// <summary>The call ended longer ago than the look-back: left alone (never a backlog sweep).</summary>
     OutsideLookback,
 
+    /// <summary>A person deliberately released the ticket to the queue (an audited Unassign by a person): left for them, never redistributed.</summary>
+    ReleasedByPerson,
+
     /// <summary>A person was involved (answered / handled / replied) - a human owner is NOT chosen by Round Robin here.</summary>
     HumanInvolved,
 
@@ -77,7 +80,10 @@ public enum VoiceReconcileClass
     /// <summary>The answering agent's mapping is now valid (or a recorded handler never got the ticket): give the ticket to THAT agent.</summary>
     AnsweringAgentResolvable,
 
-    /// <summary>The call ended, nobody answered, the window passed, the AI did not close the ticket: Round Robin.</summary>
+    /// <summary>
+    /// The call ended, nobody answered, the window passed (or the ticket was already flagged as needing a person), the AI did not close the ticket: the ticket is
+    /// dealt to an eligible Call Center agent by the existing Round Robin, and retried every run until somebody is eligible.
+    /// </summary>
     NoAnswerConcluded,
 }
 
@@ -110,6 +116,12 @@ public static class VoiceCallClassifier
             return Of(VoiceReconcileClass.PendingApproval);
         }
 
+        // A person deliberately released it to the queue: it is theirs to re-assign, never dealt again automatically.
+        if (e.ReleasedByPerson)
+        {
+            return Of(VoiceReconcileClass.ReleasedByPerson);
+        }
+
         // A person answered but the ticket was never given to them (unmapped id then, or an ineligible account): reconcile once the mapping is valid; until
         // then it stays flagged in the queue. NEVER Round Robin.
         if (e.FlaggedAnsweringGenesysUserId is not null)
@@ -136,7 +148,10 @@ public static class VoiceCallClassifier
             return Of(VoiceReconcileClass.CallInProgress);
         }
 
-        if (endReceived < nowUtc - options.Lookback)
+        // The look-back only stops a legacy backlog of AI-closed / AI-handled calls from being swept up. A ticket that is KNOWN to need a person (the interaction is
+        // flagged RequiresHumanFollowUp: Genesys asked for a human, or an earlier run concluded "nobody answered") and still has no owner is never abandoned however
+        // old: that is exactly a ticket stuck on the AI Agent, and it is retried every run until an eligible Call Center agent exists.
+        if (endReceived < nowUtc - options.Lookback && !e.RequiresHumanFollowUp)
         {
             return Of(VoiceReconcileClass.OutsideLookback);
         }
@@ -156,12 +171,18 @@ public enum VoiceReconcileOutcome
     AssignedToLastOfferedAgent,
 
     /// <summary>
-    /// Concluded unanswered and nobody can be assigned - no agent was ever offered the call, or the last offered agent cannot take it: the ticket is left UNASSIGNED,
-    /// flagged and queued in the Call Center for follow-up. Never Round Robin.
+    /// Concluded unanswered and dealt to the next eligible Call Center CS Agent by the existing Round Robin (or, for an explicit workflow department, by that
+    /// department's Round Robin). The AI Agent no longer owns the ticket; the agent can edit, follow up and close it without Take Ownership.
+    /// </summary>
+    AssignedRoundRobin,
+
+    /// <summary>
+    /// Concluded unanswered but nobody is eligible right now: the ticket is flagged and queued in the Call Center (the AI Agent stays the recorded owner, the queue
+    /// is claimable) and is retried on every run until an eligible agent exists.
     /// </summary>
     LeftUnassignedForFollowUp,
 
-    /// <summary>No active Call Center department is configured: nothing could be queued; retried next run.</summary>
+    /// <summary>No active Call Center department / no eligible agent exists: nothing was written; retried next run.</summary>
     QueuedNoEligibleAgent,
 
     /// <summary>The answering agent still cannot take the ticket (unmapped / ineligible): left flagged in the queue.</summary>
@@ -306,37 +327,57 @@ public sealed class VoiceCallReconciler(
                     beforeValue: null,
                     afterValue: $"TicketId={ticketId};Conversations={string.Join(',', phone.Select(i => i.GenesysConversationId ?? "(none)"))};"
                         + $"EndReceivedAtUtc={evidence.VoiceEndReceivedAtUtc:O};WindowSeconds={(int)options.NoAnswerWindow.TotalSeconds};ConcludedAtUtc={now:O};"
-                        + "Reason=The call ended, no person answered, the AI did not close the ticket and the reconciliation window passed; no agent is assigned from an offer and there is no Round Robin: queued and flagged for follow-up until Genesys confirms a connected agent",
+                        + "Reason=The call ended, no person answered, the AI did not close the ticket and the reconciliation window passed; the ticket needs a person: dealt to an eligible Call Center agent by Round Robin (never to an agent who was merely offered the call), or queued and retried until one is eligible",
                     correlationId, cancellationToken);
             }
 
-            // NO AUTOMATIC ASSIGNMENT (Genesys waiting-state rule): the absence of a Genesys confirmation is not evidence of who should own the ticket.
-            // The last agent the call was merely OFFERED to is never assigned - an offer / ringing is not an answer - and neither is Round Robin. The offer is
-            // recorded for diagnostics only; the ticket stays queued and flagged, and a person who is later CONFIRMED as connected (a late routing event, handled by
-            // the update path or the answered-but-unassigned branch above) takes it.
+            // An offer / ringing is not an answer: the agent a call was merely OFFERED to is never given the ticket because of the offer. The offer is recorded for
+            // diagnostics only. Who gets the ticket is decided below by the existing Round Robin.
             if (flagged && evidence.VoiceLastOfferedGenesysUserId is { } offeredGenesysId)
             {
                 await auditWriter.WriteAsync(
                     actorEmployeeId: null, GenesysAuditActions.VoiceLastOfferedAgentUnavailable, "Ticket", ticketId.ToString(),
                     beforeValue: null,
-                    afterValue: $"TicketId={ticketId};GenesysUserId={offeredGenesysId};Issue=OfferedNotConnected;Action=not assigned (an offer is not a confirmed connection); awaiting a Genesys update",
+                    afterValue: $"TicketId={ticketId};GenesysUserId={offeredGenesysId};Issue=OfferedNotConnected;Action=not assigned from the offer (an offer is not a confirmed connection); dealt by Round Robin instead",
                     correlationId, cancellationToken);
             }
 
-            const string reason = "Voice call ended unanswered - queued in the Call Center for follow-up (no assignment without a confirmed Genesys connection, no Round Robin)";
+            const string reason = "Voice call ended unanswered - human follow-up required: queued in the Call Center and dealt to an eligible agent by Round Robin";
+
+            // Queue routing first (Call Center first; an explicit workflow department / Collections keeps its own department). The AI Agent stays the recorded owner
+            // until a person actually receives the ticket below.
             var routed = ticket.CurrentDepartmentId != callCenter.DepartmentId
                 && await autoAssignment.RouteExistingTicketToCallCenterAsync(
                     ticket, now, correlationId, reason, cancellationToken, requiredRole: null, dealToAgent: false, voiceOwnership: true);
 
-            if (!flagged && !routed)
+            // Round Robin through the EXISTING engine (persisted, row-locked cursor; CS Agent role, active, not locked out, not a service identity, Call Center member;
+            // one current assignment row; AutoAssign audit; assignment history; "assigned to you" notification). Ticket.AssignTo clears the AI Agent as owner, so the
+            // employee owns it outright and needs no Take Ownership. The read-only eligibility pre-check means a run that finds nobody writes nothing, so a retry every
+            // minute leaves no audit noise.
+            Guid? assignedEmployeeId = null;
+            if (ticket.CurrentOwnerEmployeeId is null
+                && await autoAssignment.HasEligibleDepartmentEmployeeAsync(ticket.CurrentDepartmentId, cancellationToken))
             {
-                return new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.Skipped);   // already flagged and queued; nothing new
+                var dealt = ticket.CurrentDepartmentId == callCenter.DepartmentId
+                    ? await autoAssignment.AssignCallCenterIntakeAsync(ticket, now, correlationId, cancellationToken)
+                    : await autoAssignment.AssignDepartmentRoundRobinAsync(ticket, AutoAssignmentTrigger.Reconciler, now, correlationId, carriedOverOwnerEmployeeId: null, cancellationToken);
+                if (dealt.Outcome == AutoAssignmentOutcome.AssignedRoundRobin)
+                {
+                    assignedEmployeeId = dealt.AssignedEmployeeId;
+                }
+            }
+
+            if (!flagged && !routed && assignedEmployeeId is null)
+            {
+                return new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.QueuedNoEligibleAgent);   // already flagged and queued, still nobody eligible: retried next run
             }
 
             await unitOfWork.SaveChangesAsync(cancellationToken);
             await transaction.CommitAsync(cancellationToken);
 
-            return new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.LeftUnassignedForFollowUp);
+            return assignedEmployeeId is { } owner
+                ? new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.AssignedRoundRobin, owner)
+                : new VoiceReconcileResult(ticketId, classification.Class, VoiceReconcileOutcome.LeftUnassignedForFollowUp);
         }
         catch (Exception ex) when (ex is TicketConcurrentlyModifiedException or DuplicateWriteException)
         {

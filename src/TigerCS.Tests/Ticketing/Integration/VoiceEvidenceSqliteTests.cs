@@ -92,6 +92,37 @@ public sealed class VoiceEvidenceSqliteTests : IDisposable
     }
 
     [Fact]
+    public async Task AnOldUnownedCall_KnownToNeedAPerson_IsACandidate_HoweverOld_SoATicketStuckOnTheAiAgentIsRecovered()
+    {
+        long stuck;
+        long untouched;
+        using (var context = _db.CreateContext())
+        {
+            context.Departments.Add(new Department("Call Center", "CC"));
+            context.SaveChanges();
+
+            var needsPerson = _db.AddTicket(context, _db.CustomerServiceId, createdAtUtc: Now.AddDays(-9));
+            var flaggedCall = Call(needsPerson, WellKnownChannels.Phone, "v-stuck", Now.AddDays(-9));
+            flaggedCall.End(Now.AddDays(-9).AddMinutes(5), "CustomerDisconnect", receivedAtUtc: Now.AddDays(-9).AddMinutes(5));
+            flaggedCall.MarkRequiresHumanFollowUp();
+            context.TicketInteractions.Add(flaggedCall);
+
+            var aiOnly = _db.AddTicket(context, _db.CustomerServiceId, createdAtUtc: Now.AddDays(-9));
+            var aiCall = Call(aiOnly, WellKnownChannels.Phone, "v-ai-only", Now.AddDays(-9));
+            aiCall.End(Now.AddDays(-9).AddMinutes(5), "CustomerDisconnect", receivedAtUtc: Now.AddDays(-9).AddMinutes(5));
+            context.TicketInteractions.Add(aiCall);
+            context.SaveChanges();
+            (stuck, untouched) = (needsPerson.TicketId, aiOnly.TicketId);
+        }
+
+        using var read = _db.CreateContext();
+        var candidates = await new TicketUnassignedWorkRepository(read).ListVoiceCandidatesAsync(Now.AddHours(-24), 0, 100);
+
+        Assert.Contains(candidates, c => c.TicketId == stuck && c.RequiresHumanFollowUp);
+        Assert.DoesNotContain(candidates, c => c.TicketId == untouched);                      // an old AI-handled call nobody asked a person for is still never swept up
+    }
+
+    [Fact]
     public async Task TheEvidence_CarriesPhoneOnly_AndTheReceiptTimeOfTheEnd_NotTheSendersEventTime()
     {
         var ids = Seed(Guid.NewGuid(), "g-x");

@@ -2,6 +2,10 @@
 
 Supersedes §6–§7 of `Ticket-1878-AiEnded-Hotfix-Investigation.md` wherever they differ. Approved decisions of 20 Nov 2026.
 
+> **P0 update (27 Nov 2026) — superseded rules:** rule 3 below ("no automatic assignment, no Round Robin") and the shipped `DryRun = true` caused tickets to stay assigned to the AI Agent in the
+> Call Center queue for ever. A failed-AI call nobody answered is now dealt to an eligible Call Center CS Agent by the existing Round Robin and retried until one exists; the reconciler ships live
+> (`DryRun = false`). Wherever §2 rule 3, §3 or the "Round Robin is not used for voice calls" paragraph say otherwise, read `P0-AI-Owned-Ticket-Assignment-Fix.md`.
+
 ## 1. Scope — Phone only
 The new AI-ownership and answering-agent rules apply to **Phone** interactions only (`TicketInteraction.ChannelId == Phone`, or an inquiry with `channel = Phone`).
 WhatsApp, e-mail, web chat and every other digital channel keep the behaviour they had on `main` (before this PR) until their own requirements are final:
@@ -16,7 +20,7 @@ classification assigning an owner, `AssignStaleAi`, and the end-of-conversation 
 |---|---|---|
 | 1 | AI answers the call → the AI Agent owns the ticket (`Tickets.AiAgentOwnerEmployeeId`, no person owner). | `RecordAiAgentAssignmentAsync` (unchanged) |
 | 2 | AI resolves → an explicit, valid `closedByAi: true` closes it under the AI Agent; `ended` before `closedByAi` is supported. | `GenesysTicketUpdateAppService.ApplyClosedByAiAsync` |
-| 3 | AI failed + call ended + nobody answered + window passed → **no automatic assignment**: the ticket is flagged and queued in the Call Center for follow-up (an explicit workflow department keeps its own department). The last agent Genesys *offered* the call to is **not** assigned (an offer / ringing is not a confirmed connection) and there is **no Round Robin**; the offer is recorded in the audit for diagnostics only. A later **confirmed** connection (routing agent) assigns the agent who answered. |
+| 3 | AI failed + call ended + nobody answered + window passed → the ticket is flagged as needing a person and **dealt to the next eligible Call Center CS Agent by the existing Round Robin** (an explicit workflow department keeps its own department and is dealt by that department's Round Robin). The AI Agent stops being the owner. With nobody eligible the ticket stays queued in the Call Center (AI Agent still the recorded owner) and is **retried every run**. The agent Genesys merely *offered* the call to is never assigned because of the offer (an offer / ringing is not a confirmed connection); the offer is audited for diagnostics only. A later **confirmed** connection (routing agent) replaces the provisional Round Robin owner with the agent who answered. | `VoiceCallReconciler` |
 | 4 | Direct human call → the answering employee; AI→human transfer → the first human who actually answered (`routing.agentId` = connected). | `GenesysAnsweringAgentAssignmentService` |
 | 5 | A transferred call is **actually answered** by another human (`03-update-routing`, `routing.agentId` = connected) → the **existing ticket** is reassigned to that agent (history preserved: previous and new employee). A transfer nobody answers (ringing / offered / top-level `agentId` / handoff assignee) changes nothing: the current owner keeps it. Same ticket, never a duplicate. | `GenesysTicketUpdateAppService` (`allowOwnerTransfer`, same as digital: `Genesys:ReassignOnTransfer`) |
 | 6 | Closed tickets are never reopened, never re-owned, by any automated flow, on any channel. | see §5 |
@@ -45,9 +49,9 @@ Each distinct offer is appended to the ticket's event log (`GenesysAgentOffered`
 | Setting (`VoiceCallReconciliation:`) | Default | Meaning |
 |---|---|---|
 | `Enabled` | `true` | Registered whether or not Hangfire runs. Turn off only to stop the automatic handling of failed-AI voice calls (assignment to the last offered agent, flag-and-queue). |
-| `DryRun` | **`true`** (every environment) | `true` classifies and logs, writes nothing. The reconciler ships observe-only: the automatic assignment of a failed call to its last offered agent is switched on deliberately (`VoiceCallReconciliation__DryRun=false`) after a day of logs has been reviewed. |
+| `DryRun` | **`false`** (every environment, since the P0 fix) | `true` classifies and logs, writes nothing. It used to ship `true` and was never switched, which left failed-AI calls on the AI Agent. Use `true` only as a temporary emergency stop. |
 | **`NoAnswerWindowSeconds`** | **`300`** | Time after the end was **received** before "nobody answered" is concluded. Re-read every run — no deployment needed to change it. |
-| `LookbackHours` | `24` | Calls that ended longer ago are never swept up (no backlog assignment by this job). |
+| `LookbackHours` | `24` | AI-handled calls that ended longer ago are never swept up. **Exception:** a ticket whose interaction is flagged `RequiresHumanFollowUp` and that has no owner is processed however old (that is a ticket stuck on the AI Agent). |
 | `IntervalSeconds` | `60` | Run cadence (clamped 15–3600). |
 | `BatchSize` / `MaxActionsPerRun` | `100` / `50` | Page size / writes per run. |
 
@@ -63,7 +67,7 @@ human answer, so no Round Robin; it is assigned once the mapping is fixed, with 
 **One job per ticket.** Phone-only tickets are excluded from `CallCenterReconciliation` (class `HandledByVoiceReconciler`); `VoiceCallReconciliation` is the only job that assigns them.
 `CallCenterReconciliation`, `DefaultClassificationBackfill`, `StalePhoneAssignment` and `CsAgentBackfill` stay **disabled by default** (asserted by `ProductionConfigurationTests`).
 
-**Round Robin is not used for voice calls at all** (digital channels keep it): not at handoff request, not while a human answer is pending, not when a person answered but cannot be mapped, and not for an unanswered call — that goes to the last offered agent, or stays unassigned when nobody was offered it.
+**Round Robin for voice calls** runs only for a call that ended with nobody answering (after the window; or at any time for a ticket already flagged as needing a person). It is not used at handoff request time, not while a human answer is pending, and not when a person answered but cannot be mapped (that waits flagged for the mapping fix).
 
 ## 4. Unmapped (or ineligible) answering agent
 A connected agent whose Genesys User ID maps to nobody (or to an account that cannot take it): **no Round Robin**; the ticket stays queued in the Call Center, the failure is flagged
