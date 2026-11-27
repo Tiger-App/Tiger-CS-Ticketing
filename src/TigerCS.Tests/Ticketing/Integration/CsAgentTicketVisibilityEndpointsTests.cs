@@ -595,6 +595,8 @@ public sealed class CsAgentTicketVisibilityEndpointsTests(TigerCsApiFactory fact
         Assert.Contains(handoffId, await WorkListedAsync(agent));
         Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(agent, ticketId));          // listing the work opened nothing
         Assert.DoesNotContain(ticketId, await ListedIdsAsync(agent));
+        // The handoff claim is its own mechanism: seeing the work item never enables ordinary Take Ownership of the ticket behind it.
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.PostAsJsonAsync($"/api/tickets/{ticketId}/ownership", new { })).StatusCode);
 
         var claim = await agent.PostAsJsonAsync($"/api/pending-customer-interactions/{handoffId}/start", new { });
 
