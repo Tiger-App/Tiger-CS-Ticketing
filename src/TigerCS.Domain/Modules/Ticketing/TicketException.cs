@@ -161,3 +161,14 @@ public sealed class PriorityDowngradeRequiresApprovalException(long ticketId, by
     public byte CurrentPriorityId { get; } = currentPriorityId;
     public byte RequestedPriorityId { get; } = requestedPriorityId;
 }
+
+/// <summary>
+/// A queue-managed ticket is a read-only mirror of the Queueing System: its lifecycle and assignment change only while the integration applies a Queueing System event.
+/// Thrown by every lifecycle / assignment mutator of <see cref="Ticket"/> as the domain's last line of defence (the application guards answer first with a clean
+/// outcome). Nothing has changed when it is thrown.
+/// </summary>
+public sealed class QueueManagedTicketMutationException(long ticketId)
+    : TicketException($"Ticket {ticketId} is managed by the Queueing System; its status, assignment and closure change only when the Queueing System says so.")
+{
+    public long TicketId { get; } = ticketId;
+}

@@ -1,0 +1,40 @@
+$kind: http-request
+name: 2.4 Resend 2.3 unchanged -> Duplicate
+description: "Same EventId and same content as 2.3: the original outcome is returned and nothing is applied twice."
+url: "{{baseUrl}}/api/integrations/queueing/events"
+method: POST
+headers:
+  Content-Type: application/json
+  X-Queueing-Api-Key: "{{apiKey}}"
+body:
+  type: json
+  content: |-
+    {
+      "EventId": "{{eventId}}",
+      "EventType": "TicketAssigned",
+      "ExternalTicketId": "{{externalTicketId}}",
+      "EventSequence": {{sequence}},
+      "AssignedUserId": "{{queueUserA}}",
+      "PerformedByUserId": "{{queueUserA}}",
+      "CounterId": "counter-3",
+      "OccurredAtUtc": "{{occurredAtUtc}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      pm.collectionVariables.set('redeliver', 'yes');
+      // A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.
+      if (!pm.collectionVariables.get('redeliver')) {
+        pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));
+        pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());
+      }
+      pm.collectionVariables.unset('redeliver');
+      pm.collectionVariables.set('sequence', '2');
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('HTTP 200', () => pm.response.to.have.status(200));
+      const b = pm.response.json();
+      pm.test('status = Duplicate', () => pm.expect(b.status).to.eql('Duplicate'));
+    language: text/javascript
+order: 4000

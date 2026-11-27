@@ -22,14 +22,20 @@ public static class IntegrationEventScope
     {
         var previous = Current.Value;
         Current.Value = new ScopeState(DateTime.SpecifyKind(effectiveAtUtc, DateTimeKind.Utc), DateTime.SpecifyKind(realAtUtc, DateTimeKind.Utc));
-        return new Releaser(previous);
+        // The domain's own last line of defence (Ticket.EnsureQueueMutationAllowed) opens for exactly as long as this scope does.
+        var domain = TigerCS.Domain.Modules.QueueingIntegration.QueueingMutationScope.Open();
+        return new Releaser(previous, domain);
     }
 
     private sealed record ScopeState(DateTime EffectiveAtUtc, DateTime RealAtUtc);
 
-    private sealed class Releaser(ScopeState? previous) : IDisposable
+    private sealed class Releaser(ScopeState? previous, IDisposable domainScope) : IDisposable
     {
-        public void Dispose() => Current.Value = previous;
+        public void Dispose()
+        {
+            Current.Value = previous;
+            domainScope.Dispose();
+        }
     }
 }
 
@@ -52,9 +58,10 @@ public sealed class IntegrationAwareTimeProvider(TimeProvider inner) : TimeProvi
 /// <summary>The one rule behind refusing a person's manual change to a queue-managed ticket.</summary>
 public static class QueueManagedTicketGuard
 {
-    /// <summary>True when the change must be refused: the ticket belongs to the Queueing System, the policy is Block, and the caller is not the integration applying an event.</summary>
+    /// <summary>
+    /// True when the change must be refused: the ticket belongs to the Queueing System and the caller is not the integration applying an event. Always - the
+    /// former <c>ManualChangePolicy: Allow</c> is ignored (TigerCS is a one-way mirror; <paramref name="options"/> is kept only so existing call sites compile).
+    /// </summary>
     public static bool Blocks(TigerCS.Domain.Modules.Ticketing.Ticket ticket, QueueingIntegrationOptions? options) =>
-        ticket.IsQueueManaged
-        && !IntegrationEventScope.IsActive
-        && (options?.ManualChangePolicy ?? QueueingManualChangePolicy.Block) == QueueingManualChangePolicy.Block;
+        ticket.IsQueueManaged && !IntegrationEventScope.IsActive;
 }

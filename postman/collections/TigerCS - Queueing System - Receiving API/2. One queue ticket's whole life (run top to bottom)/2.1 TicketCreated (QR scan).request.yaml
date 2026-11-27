@@ -1,0 +1,47 @@
+$kind: http-request
+description: Creates exactly one unassigned TigerCS ticket (Walk in / Kiosk channel, mapped department and request type, SLA started at OccurredAtUtc).
+url: "{{baseUrl}}/api/integrations/queueing/events"
+method: POST
+headers:
+  Content-Type: application/json
+  X-Queueing-Api-Key: "{{apiKey}}"
+body:
+  type: json
+  content: |-
+    {
+      "EventId": "{{eventId}}",
+      "EventType": "TicketCreated",
+      "ExternalTicketId": "{{externalTicketId}}",
+      "EventSequence": {{sequence}},
+      "QueueNumber": "A-017",
+      "CompanyId": "{{companyId}}",
+      "TicketTypeId": "{{ticketTypeId}}",
+      "CustomerName": "Aisha Khan",
+      "CustomerPhone": "{{customerPhone}}",
+      "CustomerEmail": "aisha@example.test",
+      "OccurredAtUtc": "{{occurredAtUtc}}"
+    }
+scripts:
+  - type: beforeRequest
+    code: |-
+      // A fresh EventId and timestamp per send - unless this request is a deliberate redelivery of the previous one.
+      if (!pm.collectionVariables.get('redeliver')) {
+        pm.collectionVariables.set('eventId', pm.variables.replaceIn('{{$guid}}'));
+        pm.collectionVariables.set('occurredAtUtc', new Date(Date.now() - 60000).toISOString());
+      }
+      pm.collectionVariables.unset('redeliver');
+      pm.collectionVariables.set('sequence', '1');
+      // Every run of the collection is a new queue ticket.
+      pm.collectionVariables.set('externalTicketId', 'QT-' + Date.now());
+    language: text/javascript
+  - type: afterResponse
+    code: |-
+      pm.test('HTTP 201', () => pm.response.to.have.status(201));
+      const b = pm.response.json();
+      pm.test('status = Processed', () => pm.expect(b.status).to.eql('Processed'));
+      pm.test('outcome = TICKET_CREATED', () => pm.expect(b.outcome).to.eql('TICKET_CREATED'));
+      pm.collectionVariables.set('ticketId', b.ticketId);
+      pm.test('ticket number returned', () => pm.expect(b.ticketNumber).to.be.a('string'));
+      pm.test('created Open', () => pm.expect(b.ticketStatus).to.eql('Open'));
+    language: text/javascript
+order: 1000

@@ -132,6 +132,10 @@ builder.Services.AddHttpClient<ReportsApiClient>(client => client.BaseAddress = 
 builder.Services.AddHttpClient<RequestTypesApiClient>(client => client.BaseAddress = new Uri(apiBaseUrl))
     .AddHttpMessageHandler<BearerTokenHandler>();
 
+// Genesys Cloud embeds this site cross-origin, so its cookies are SameSite=None and therefore must be Secure (HTTPS). Development (local HTTP, and the
+// in-process test host, which runs as Development) keeps the request's own scheme; every other environment requires HTTPS.
+var embeddedCookieSecurePolicy = builder.Environment.IsDevelopment() ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
+
 builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationScheme)
     .AddCookie(options =>
     {
@@ -141,7 +145,10 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         // so this is the platform's own mechanism, not a custom scheme.
         options.Cookie.Name = "TigerCS.Web.Auth";
         options.Cookie.HttpOnly = true;
-        options.Cookie.SameSite = SameSiteMode.Strict;
+        // Genesys Cloud embeds this site from a different origin.
+        // Cross-site cookies require SameSite=None AND Secure (HTTPS).
+        options.Cookie.SameSite = SameSiteMode.None;
+        options.Cookie.SecurePolicy = embeddedCookieSecurePolicy;
         options.LoginPath = "/Login";
         options.AccessDeniedPath = "/AccessDenied";
         options.ExpireTimeSpan = TimeSpan.FromMinutes(60);
@@ -163,6 +170,16 @@ builder.Services.AddAuthorization(options =>
         new ViewerPermissionRequirement(TowerAssignmentsPolicy.AllowedRoles, Permissions.CollectionsEdit)));
 });
 
+builder.Services.AddAntiforgery(options =>
+{
+    options.Cookie.Name = "TigerCS.Web.Antiforgery";
+    options.Cookie.SameSite = SameSiteMode.None;
+    options.Cookie.SecurePolicy = embeddedCookieSecurePolicy;
+    options.Cookie.HttpOnly = true;
+});
+
+
+
 var app = builder.Build();
 
 if (!app.Environment.IsDevelopment())
@@ -170,21 +187,31 @@ if (!app.Environment.IsDevelopment())
     app.UseHsts();
 }
 
-// Strict CSP: same-origin only, no inline scripts/styles, no framing.
+// Permit embedding only from our own origin and the approved Genesys Cloud region.
+// X-Frame-Options: SAMEORIGIN is incompatible with cross-origin embedding.
+// This middleware controls app-generated headers; IIS or a proxy may still
+// inject headers later and must be checked separately after deployment.
+const string ticketingCsp =
+    "default-src 'self'; " +
+    "script-src 'self'; " +
+    "style-src 'self'; " +
+    "img-src 'self' data:; " +
+    "font-src 'self'; " +
+    "connect-src 'self'; " +
+    "object-src 'none'; " +
+    "base-uri 'none'; " +
+    "form-action 'self'; " +
+    "frame-ancestors 'self' https://apps.mypurecloud.de";
+
 app.Use(async (context, next) =>
 {
-    context.Response.Headers.Append(
-        "Content-Security-Policy",
-        "default-src 'self'; " +
-        "script-src 'self'; " +
-        "style-src 'self'; " +
-        "img-src 'self' data:; " +
-        "font-src 'self'; " +
-        "connect-src 'self'; " +
-        "object-src 'none'; " +
-        "base-uri 'none'; " +
-        "form-action 'self'; " +
-        "frame-ancestors 'none'");
+    context.Response.OnStarting(() =>
+    {
+        context.Response.Headers.Remove("X-Frame-Options");
+        context.Response.Headers["Content-Security-Policy"] = ticketingCsp;
+        return Task.CompletedTask;
+    });
+
     await next();
 });
 

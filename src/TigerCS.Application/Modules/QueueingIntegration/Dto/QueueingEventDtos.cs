@@ -25,7 +25,11 @@ namespace TigerCS.Application.Modules.QueueingIntegration.Dto;
 /// <param name="Comment">The comment text. Required on TicketCommentAdded.</param>
 /// <param name="Reason">Why (reassigned, returned, recalled, closed, cancelled). Optional; recorded as the history note.</param>
 /// <param name="OccurredAtUtc">When the event happened in the Queueing System (UTC). Preserved on every record TigerCS writes for it.</param>
+/// <param name="CompanyName">Optional display name of the company. Recorded in the audit.</param>
 /// <param name="TicketTypeName">Optional. The Queueing System's own name for the service (ticket type), kept and shown by TigerCS exactly as sent. Display only: it never routes, and it is not part of the event's idempotency identity. Read from <c>TicketCreated</c> only. Max 200.</param>
+/// <param name="ProjectCode">Optional project code (text only, not matched to a TigerCS unit).</param>
+/// <param name="ProjectName">Optional project name. Shown in the ticket summary.</param>
+/// <param name="UnitCode">Optional unit code. Shown in the ticket summary.</param>
 public sealed record QueueingEventRequest(
     string? EventId,
     string? EventType,
@@ -43,7 +47,11 @@ public sealed record QueueingEventRequest(
     string? Comment = null,
     string? Reason = null,
     DateTime? OccurredAtUtc = null,
-    string? TicketTypeName = null)
+    string? CompanyName = null,
+    string? TicketTypeName = null,
+    string? ProjectCode = null,
+    string? ProjectName = null,
+    string? UnitCode = null)
 {
     private static readonly JsonSerializerOptions Canonical = new(JsonSerializerDefaults.Web)
     {
@@ -86,7 +94,11 @@ public sealed record QueueingEventMessage(
     string? CounterId,
     string? Comment,
     string? Reason,
-    string? TicketTypeName = null);
+    string? CompanyName = null,
+    string? TicketTypeName = null,
+    string? ProjectCode = null,
+    string? ProjectName = null,
+    string? UnitCode = null);
 
 /// <summary>What happened to the event, as the Queueing System sees it. Serialised by name.</summary>
 [JsonConverter(typeof(JsonStringEnumConverter))]
@@ -147,3 +159,65 @@ public sealed record QueueingEventResponse(
     [JsonIgnore]
     public bool CreatedTicket { get; init; }
 }
+
+/// <summary>One held (Unresolved) or Failed event, for monitoring. Carries identifiers and the reason only - never the customer payload.</summary>
+public sealed record QueueingMonitoringEventDto(
+    string EventId,
+    string EventType,
+    string ExternalTicketId,
+    long EventSequence,
+    string Status,
+    string? OutcomeCode,
+    string? OutcomeDetail,
+    int AttemptCount,
+    DateTime ReceivedAtUtc,
+    DateTime? NextRetryAtUtc);
+
+/// <summary>A read-only snapshot of the integration's health: how many events are in each state and which ones need attention.</summary>
+public sealed record QueueingMonitoringSnapshot(
+    DateTime AsOfUtc,
+    IReadOnlyDictionary<string, int> CountsByStatus,
+    IReadOnlyDictionary<string, int> HeldOrFailedByOutcome,
+    DateTime? OldestUnresolvedReceivedAtUtc,
+    IReadOnlyList<QueueingMonitoringEventDto> Attention)
+{
+    /// <summary>How many queue tickets have an unresolved (held or Failed) state event, i.e. are blocked: their later events wait behind it.</summary>
+    public int BlockedTicketCount { get; init; }
+
+    /// <summary>How many of those are alerts: blocked longer than <c>QueueingIntegration:BlockedAlertAfterMinutes</c>, or Failed.</summary>
+    public int AlertCount { get; init; }
+
+    /// <summary>Age in seconds of the longest-blocked ticket's head event, or null when nothing is blocked.</summary>
+    public int? OldestBlockedAgeSeconds { get; init; }
+
+    /// <summary>One row per blocked queue ticket (oldest first), described by its head event. Identifiers and reasons only - never customer data.</summary>
+    public IReadOnlyList<QueueingBlockedTicketDto> BlockedTickets { get; init; } = [];
+}
+
+/// <summary>
+/// A queue ticket whose events are blocked, described by its HEAD event (the lowest-sequence unresolved one - everything behind it waits for it). FailureClass is
+/// Ordering / Configuration / Transient / Unexplained (how the head is retried, see <c>QueueingFailureClass</c>); HeldBehind is how many later events wait behind the head;
+/// Alert is true when the head has been blocked longer than the alert threshold, or has Failed.
+/// </summary>
+public sealed record QueueingBlockedTicketDto(
+    string ExternalTicketId,
+    string HeadEventId,
+    long HeadEventSequence,
+    string HeadStatus,
+    string? HeadOutcomeCode,
+    string FailureClass,
+    int AttemptCount,
+    DateTime HeadReceivedAtUtc,
+    int AgeSeconds,
+    int HeldBehind,
+    bool Alert);
+
+/// <summary>The result of an administrator's reprocess of one event: the event as it stands afterwards, and what the processor answered.</summary>
+public sealed record QueueingReprocessResult(
+    string EventId,
+    string ExternalTicketId,
+    string PreviousStatus,
+    string? PreviousOutcomeCode,
+    string Status,
+    string? OutcomeCode,
+    string? Detail);

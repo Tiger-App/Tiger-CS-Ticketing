@@ -407,12 +407,15 @@ public sealed class DashboardUiTests
     {
         // The fix must not have relaxed the policy: styles and scripts stay
         // self-hosted only, with no 'unsafe-inline' / 'unsafe-eval' anywhere.
+        // The one deliberate difference from the original policy: Genesys Cloud embeds the site, so frame-ancestors allows
+        // this origin and the approved Genesys region instead of 'none' (X-Frame-Options is removed for the same reason).
         var programCs = File.ReadAllText(SourceFile(Path.Combine("TigerCS.Web", "Program.cs")));
-        var policyStart = programCs.IndexOf("\"Content-Security-Policy\"", StringComparison.Ordinal);
-        Assert.True(policyStart > 0, "The Content-Security-Policy header is missing.");
-        var policy = programCs[policyStart..(programCs.IndexOf("await next();", policyStart, StringComparison.Ordinal))];
+        Assert.Contains("[\"Content-Security-Policy\"] = ticketingCsp", programCs, StringComparison.Ordinal);
+        var policyStart = programCs.IndexOf("const string ticketingCsp", StringComparison.Ordinal);
+        Assert.True(policyStart > 0, "The Content-Security-Policy policy is missing.");
+        var policy = programCs[policyStart..programCs.IndexOf("app.Use(", policyStart, StringComparison.Ordinal)];
 
-        foreach (var directive in new[] { "default-src 'self'", "script-src 'self'", "style-src 'self'", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'" })
+        foreach (var directive in new[] { "default-src 'self'", "script-src 'self'", "style-src 'self'", "object-src 'none'", "base-uri 'none'", "frame-ancestors 'self' https://apps.mypurecloud.de" })
         {
             Assert.Contains(directive, policy, StringComparison.Ordinal);
         }

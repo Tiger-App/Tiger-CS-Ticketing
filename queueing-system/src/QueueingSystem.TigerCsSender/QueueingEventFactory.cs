@@ -40,9 +40,9 @@ public sealed class QueueingEventFactory(IEventSequenceProvider sequences, Func<
     /// is the Queueing System's own service name; TigerCS shows it and never routes by it.
     /// </summary>
     public async Task<QueueingEventRequest> CreatedAsync(
-        string externalTicketId, string queueNumber, string companyId, string ticketTypeId, string customerPhone,
+        string externalTicketId, string queueNumber, string companyId, string ticketTypeId, string? customerPhone,
         string? customerName = null, string? customerEmail = null, DateTime? occurredAtUtc = null, CancellationToken cancellationToken = default,
-        string? ticketTypeName = null)
+        string? companyName = null, string? ticketTypeName = null, string? projectCode = null, string? projectName = null, string? unitCode = null)
     {
         var sequence = await sequences.NextAsync(externalTicketId, cancellationToken);
         if (sequence != 1)
@@ -52,8 +52,9 @@ public sealed class QueueingEventFactory(IEventSequenceProvider sequences, Func<
 
         return await BuildAsync(QueueingEventType.TicketCreated, externalTicketId, sequence, occurredAtUtc, e => e with
         {
-            QueueNumber = queueNumber, CompanyId = companyId, TicketTypeId = ticketTypeId, TicketTypeName = ticketTypeName, CustomerPhone = customerPhone,
-            CustomerName = customerName, CustomerEmail = customerEmail
+            QueueNumber = queueNumber, CompanyId = companyId, TicketTypeId = ticketTypeId, CustomerPhone = customerPhone,
+            CustomerName = customerName, CustomerEmail = customerEmail,
+            CompanyName = companyName, TicketTypeName = ticketTypeName, ProjectCode = projectCode, ProjectName = projectName, UnitCode = unitCode
         });
     }
 

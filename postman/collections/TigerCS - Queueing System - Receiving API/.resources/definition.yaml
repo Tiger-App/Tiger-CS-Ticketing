@@ -1,0 +1,16 @@
+$kind: collection
+name: TigerCS <-> Queueing System - Receiving API
+description: "The eight events the Queueing System sends to TigerCS (POST /api/integrations/queueing/events). Set baseUrl and apiKey (never commit the key) and the mapped ids in the environment. Folder 2 is one queue ticket's whole life: run it top to bottom - the collection generates the EventId, ExternalTicketId, sequence and timestamps as it goes."
+variables:
+  baseUrl: https://localhost:7001
+  apiKey: ""
+  companyId: company-a
+  ticketTypeId: type-complaint
+  queueUserA: queue-user-a
+  queueUserB: queue-user-b
+  customerPhone: "+971500000123"
+  externalTicketId: ""
+  eventId: ""
+  sequence: "0"
+  occurredAtUtc: ""
+  ticketId: ""

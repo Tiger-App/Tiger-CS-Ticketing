@@ -373,6 +373,10 @@ public sealed class GenesysExportService(
             logger.LogWarning("Genesys contact list read threw {ExceptionType}; the export uses the documented template.", ex.GetType().Name);
             return Template($"the {listLabel} contact list could not be read in Genesys (the request failed)", manual);
         }
+        //if (list.Outcome != GenesysUploadOutcome.Accepted)
+        //    return new([], false, null, $"The {listLabel} contact list could not be read in Genesys ({list.Error}), so its columns cannot be checked. Nothing was exported.");
+
+
         if (list.Outcome != GenesysUploadOutcome.Accepted)
         {
             logger.LogWarning("Genesys contact list {ListId} could not be read ({Outcome}, HTTP {Status}); the export uses the documented template.", listId, list.Outcome, list.HttpStatus);
