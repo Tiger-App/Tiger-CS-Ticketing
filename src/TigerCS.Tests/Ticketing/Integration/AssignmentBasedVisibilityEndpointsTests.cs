@@ -28,10 +28,9 @@ namespace TigerCS.Tests.Ticketing.Integration;
 /// </para>
 ///
 /// <para>
-/// The CS intake / classification queue: an eligible Call Center CS Agent also sees (read-only until they take ownership) the
-/// <b>unassigned, Genesys-originated</b> tickets in their default Queue - and nothing else unassigned - while employees, ineligible
-/// agents and unrelated workflows' unassigned tickets stay hidden. (The SQL translation of the same predicate is proven on SQLite in
-/// <c>GenesysIntakeSqliteTests</c>.)
+/// The CS intake / classification queue (unassigned, Genesys-originated tickets) is for CS Manager and CS Supervisor to assign from: a CS Agent
+/// - Call Center or not - never sees it and cannot take ownership of it (the full Call Agent matrix is in
+/// <c>CallAgentTicketAuthorizationTests</c>).
 /// </para>
 /// </summary>
 public sealed class AssignmentBasedVisibilityEndpointsTests(TigerCsApiFactory factory) : IClassFixture<TigerCsApiFactory>
@@ -463,70 +462,50 @@ public sealed class AssignmentBasedVisibilityEndpointsTests(TigerCsApiFactory fa
         });
 
     [Fact]
-    public async Task AnEligibleCallCenterAgent_SeesUnassignedGenesysTickets_InTheDefaultQueue_ReadOnly_AndNothingElseUnassigned()
+    public async Task ACallCenterAgent_NeverSeesUnassignedGenesysTickets_TheyAreForCsManagerAndSupervisorToAssign()
     {
         var d = await DepartmentsAsync();
+        var manager = await ManagerClientAsync();
         var (agent, agentId) = await ClientAsync(Roles.CsAgent, d.CallCenter);
         var genesysUnassigned = await GenesysIntakeTicketAsync(d.CallCenter);
         var genesysUnassignedOtherDepartment = await GenesysIntakeTicketAsync(d.Finance);
-        var manualUnassigned = await TicketAsync(d.Finance);                                   // an unrelated workflow's unassigned ticket
-        var activeAi = await TicketAsync(d.CallCenter, afterSave: (id, db) =>
-        {
-            db.TicketInteractions.Add(ClaimTestData.Genesys(id));                              // the chatbot is still handling it
-            return Task.CompletedTask;
-        });
+        var manualUnassigned = await TicketAsync(d.Finance);
         var (_, colleagueAgentId) = await ClientAsync(Roles.CsAgent, d.CallCenter);
         var assignedToColleague = await TicketAsync(d.CallCenter, colleagueAgentId, afterSave: (id, db) =>
         {
             db.TicketInteractions.Add(ClaimTestData.Genesys(id, requiresHuman: true));
             return Task.CompletedTask;
         });
-        var closedGenesys = await TicketAsync(d.CallCenter, shape: t => ClaimTestData.MakeClosedUnowned(t, agentId), afterSave: (id, db) =>
-        {
-            db.TicketInteractions.Add(ClaimTestData.Genesys(id, requiresHuman: true, ended: true));
-            return Task.CompletedTask;
-        });
 
         var queue = await IdsAsync(agent);
+        foreach (var hidden in new[] { genesysUnassigned, genesysUnassignedOtherDepartment, manualUnassigned, assignedToColleague })
+        {
+            Assert.DoesNotContain(hidden, queue);
+            Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(agent, hidden));
+        }
 
-        Assert.Contains(genesysUnassigned, queue);
-        Assert.Contains(genesysUnassignedOtherDepartment, queue);   // the intake queue is the Genesys-originated unassigned work, wherever it was created
-        Assert.DoesNotContain(manualUnassigned, queue);              // unrelated workflow: still hidden
-        Assert.DoesNotContain(activeAi, queue);                      // the bot's live conversation is not claimable work
-        Assert.DoesNotContain(assignedToColleague, queue);
-        Assert.DoesNotContain(closedGenesys, queue);
-
-        // Read-only until taken, and the UI is told the same thing the API enforces.
-        var detail = await DetailAsync(agent, genesysUnassigned);
-        Assert.True(detail.IsReadOnlyAccess);
-        Assert.True(detail.CanTakeOwnership);
-        Assert.Equal(HttpStatusCode.Forbidden, (await agent.PostAsJsonAsync($"/api/tickets/{genesysUnassigned}/notes", new CreateNoteRequestDto("x"))).StatusCode);
-
-        // Counts and the dashboard follow the list.
-        var page = await ListAsync(agent);
-        Assert.Equal(page.Items.Count, page.TotalCount);
-        var summary = (await agent.GetFromJsonAsync<DashboardSummaryDto>("/api/dashboard"))!;
-        // (The factory database is shared by every test in this class, so the expectation is derived from the agent's own list.)
-        var active = page.Items.Where(i => i.TicketStatus is "Open" or "InProgress" or "PendingCustomer" or "PendingThirdParty").ToList();
-        Assert.Equal(active.Count, summary.OpenTickets);
-        Assert.Equal(active.Count(i => i.CurrentOwnerEmployeeId is null), summary.Unassigned);
-        Assert.True(summary.Unassigned >= 2);   // at least the two Genesys intake tickets this test seeded
-        Assert.Equal(0, summary.MyTickets);
+        // The management role still sees the whole intake queue and assigns from it; the agent then sees exactly that ticket.
+        Assert.Contains(genesysUnassigned, await IdsAsync(manager));
+        var current = await DetailAsync(manager, genesysUnassigned);
+        Assert.Equal(HttpStatusCode.OK, (await manager.PostAsJsonAsync(
+            $"/api/tickets/{genesysUnassigned}/assignment",
+            new AssignTicketRequestDto(agentId, Convert.FromBase64String(current.RowVersion)))).StatusCode);
+        Assert.Contains(genesysUnassigned, await IdsAsync(agent));
+        Assert.False((await DetailAsync(agent, genesysUnassigned)).IsReadOnlyAccess);
     }
 
     [Fact]
-    public async Task OnceAssigned_ATicketLeavesTheIntakeQueue_AndAppearsInTheAssigneesMyTickets_RegardlessOfDepartment()
+    public async Task OnceAssigned_AnIntakeTicketIsInTheAssigneesMyTickets_RegardlessOfDepartment_AndAnAgentCannotTakeItFirst()
     {
         var d = await DepartmentsAsync();
         var manager = await ManagerClientAsync();
-        var (agent, agentId) = await ClientAsync(Roles.CsAgent, d.CallCenter);
-        var (otherAgent, otherAgentId) = await ClientAsync(Roles.CsAgent, d.CallCenter);
+        var (agent, _) = await ClientAsync(Roles.CsAgent, d.CallCenter);
         var (employee, employeeId) = await ClientAsync(Roles.DepartmentEmployee, d.Facilities);
         var ticket = await GenesysIntakeTicketAsync(d.CallCenter);
 
-        Assert.Contains(ticket, await IdsAsync(agent));
-        Assert.Contains(ticket, await IdsAsync(otherAgent));
-        Assert.DoesNotContain(ticket, await IdsAsync(employee));   // an employee never sees the unassigned intake queue
+        Assert.DoesNotContain(ticket, await IdsAsync(agent));
+        Assert.DoesNotContain(ticket, await IdsAsync(employee));
+        Assert.Equal(HttpStatusCode.Forbidden, (await agent.PostAsJsonAsync($"/api/tickets/{ticket}/ownership", new TakeOwnershipRequestDto(null))).StatusCode);
 
         // Transfer to Facilities and assign the employee in one step (the Call Center's classification hand-over).
         var current = await DetailAsync(manager, ticket);
@@ -534,34 +513,14 @@ public sealed class AssignmentBasedVisibilityEndpointsTests(TigerCsApiFactory fa
             $"/api/tickets/{ticket}/transfer",
             new TransferTicketRequestDto(d.Facilities, "Classified: Facilities.", Convert.FromBase64String(current.RowVersion), employeeId))).StatusCode);
 
-        // Assigned to the employee: in their My Tickets whatever its department, gone from every agent's intake queue.
         Assert.Contains(ticket, await IdsAsync(employee, $"&ownerEmployeeId={employeeId}"));
         Assert.Equal(HttpStatusCode.OK, await DetailStatusAsync(employee, ticket));
         Assert.DoesNotContain(ticket, await IdsAsync(agent));
-        Assert.DoesNotContain(ticket, await IdsAsync(otherAgent));
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket));
-        _ = (agentId, otherAgentId);
+        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(agent, ticket));
     }
 
     [Fact]
-    public async Task TakingOwnership_MovesAnIntakeTicketIntoTheAgentsMyTickets_AndOutOfEveryoneElsesQueue()
-    {
-        var d = await DepartmentsAsync();
-        var (agent, agentId) = await ClientAsync(Roles.CsAgent, d.CallCenter);
-        var (otherAgent, _) = await ClientAsync(Roles.CsAgent, d.CallCenter);
-        var ticket = await GenesysIntakeTicketAsync(d.CallCenter);
-
-        var taken = await agent.PostAsJsonAsync($"/api/tickets/{ticket}/ownership", new TakeOwnershipRequestDto(null));
-        Assert.Equal(HttpStatusCode.OK, taken.StatusCode);
-
-        Assert.Contains(ticket, await IdsAsync(agent, $"&ownerEmployeeId={agentId}"));
-        Assert.False((await DetailAsync(agent, ticket)).IsReadOnlyAccess);
-        Assert.DoesNotContain(ticket, await IdsAsync(otherAgent));
-        Assert.Equal(HttpStatusCode.Forbidden, await DetailStatusAsync(otherAgent, ticket));
-    }
-
-    [Fact]
-    public async Task TheIntakeQueue_IsNotOfferedToEmployees_ToAgentsOutsideTheCallCenter_OrToAServiceOnlyAgentWithoutClaimRights()
+    public async Task TheIntakeQueue_IsNotOfferedToEmployees_OrToAnyCsAgent_InsideTheCallCenterOrNot()
     {
         var d = await DepartmentsAsync();
         var ticket = await GenesysIntakeTicketAsync(d.CallCenter);

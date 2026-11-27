@@ -1,5 +1,7 @@
 # Call Center — Take Ownership of existing unassigned tickets
 
+> **SUPERSEDED for Call Agents.** Call Agents (CS Agent) may no longer see unassigned tickets or take ownership of them: `TicketClaimPolicy.IsEligibleClaimerAsync` now returns false for everyone, which closes the list scope, the Genesys intake queue, the read-only open, the `canTakeOwnership` flag and `POST /api/tickets/{id}/ownership` (403) together. A Call Agent sees only tickets assigned to them; CS Manager / CS Supervisor assign work. See `CallAgentTicketAuthorizationTests`. The text below describes the retired behaviour.
+
 **Status: implemented and tested in a build/test environment. NOT deployed. Nothing was run against Production.**
 Needs: `TigerCS.Api` + `TigerCS.Web` deploy. **No database migration, no schema change, no data change, no new permission.**
 
