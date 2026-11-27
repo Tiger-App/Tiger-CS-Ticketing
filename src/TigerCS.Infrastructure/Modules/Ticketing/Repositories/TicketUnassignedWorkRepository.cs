@@ -46,12 +46,15 @@ public sealed class TicketUnassignedWorkRepository(TigerCsDbContext db) : ITicke
     public async Task<IReadOnlyList<UnassignedTicketEvidence>> ListVoiceCandidatesAsync(DateTime endedSinceUtc, long afterTicketId, int limit, CancellationToken cancellationToken = default)
     {
         // Narrow on purpose (the voice reconciler runs every minute): an Open, unowned ticket with a Genesys PHONE interaction that ended inside the look-back window,
-        // or whose answering agent was flagged (a corrected mapping must be noticed however old the call is). Everything else is never read.
+        // or whose answering agent was flagged (a corrected mapping must be noticed however old the call is), or that is KNOWN to need a person (RequiresHumanFollowUp:
+        // Genesys asked for a human or an earlier run concluded "nobody answered") and still has no owner - however old, so a ticket stuck on the AI Agent is recovered
+        // and retried until an eligible Call Center agent exists. Everything else is never read.
         var tickets = await db.Tickets.AsNoTracking()
             .Where(t => t.TicketId > afterTicketId && t.TicketStatus == TicketStatus.Open && t.CurrentOwnerEmployeeId == null
                 && (t.IntegrationSource == null || t.IntegrationSource != TicketIntegrationSources.QueueingSystem)
                 && db.TicketInteractions.Any(i => i.TicketId == t.TicketId && i.Source == InteractionContextSource.Genesys && i.ChannelId == WellKnownChannels.Phone
                     && ((i.EndedAtUtc != null && (i.EndReceivedAtUtc ?? i.EndedAtUtc) >= endedSinceUtc)
+                        || (i.EndedAtUtc != null && i.RequiresHumanFollowUp)
                         || db.TicketWorkflowEvents.Any(e => e.TicketId == t.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired))))
             .OrderBy(t => t.TicketId)
             .Take(limit)
