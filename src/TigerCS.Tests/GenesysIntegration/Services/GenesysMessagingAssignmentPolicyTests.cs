@@ -1,6 +1,9 @@
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
+using TigerCS.Application.Modules.Ticketing.Dto;
 using TigerCS.Application.Modules.Ticketing.Services;
+using TigerCS.Domain.Modules.ClassificationAndRouting;
 using TigerCS.Domain.Modules.IdentityAndAccess;
+using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.GenesysIntegration.Fakes;
 
@@ -20,7 +23,7 @@ public class GenesysMessagingAssignmentPolicyTests
         GenesysChannel.WebsiteChat, GenesysChannel.WhatsApp, GenesysChannel.Instagram, GenesysChannel.Facebook, GenesysChannel.SocialMedia
     };
 
-    private sealed record World(GenesysServiceFixture F, Department Cs, (Guid Id, string GenesysId)[] Agents)
+    private sealed record World(GenesysServiceFixture F, Department Cs, Category CsCategory, (Guid Id, string GenesysId)[] Agents)
     {
         /// <summary>The agent Round Robin would deal next (so a provisional owner would be visible as this one).</summary>
         public (Guid Id, string GenesysId) RoundRobinNext => Agents[0];
@@ -34,13 +37,13 @@ public class GenesysMessagingAssignmentPolicyTests
     private static World NewWorld()
     {
         var f = new GenesysServiceFixture(callCenterFirst: true, strictAccounts: true, assignOnAnswer: true);
-        var (cs, _) = f.SeedGenesysDepartment("Customer Service", "CS");
+        var (cs, csCategory) = f.SeedGenesysDepartment("Customer Service", "CS");
         var agents = Enumerable.Range(1, 3)
             .Select(i => (GenesysId: $"g-msg-{i}", Id: f.AddAgent($"g-msg-{i}", $"Agent {i}")))
             .OrderBy(a => a.Id)
             .Select(a => (a.Id, a.GenesysId))
             .ToArray();
-        return new World(f, cs, agents);
+        return new World(f, cs, csCategory, agents);
     }
 
     private static async Task<long> IngestAsync(World w, GenesysChannel channel, string conversationId, string? agentId = null, bool? humanFollowUp = null)
@@ -400,6 +403,115 @@ public class GenesysMessagingAssignmentPolicyTests
             w.Ticket(ticketId), null, AutoAssignmentTrigger.CallCenterIntake, w.F.Clock.GetUtcNow().UtcDateTime, Guid.NewGuid());
         Assert.Equal(AutoAssignmentOutcome.AssignedRoundRobin, dealt.Outcome);
         Assert.Equal(w.RoundRobinNext.Id, w.Ticket(ticketId).CurrentOwnerEmployeeId);
+    }
+
+    // ---- Final-verification regression tests: different conversation, manual tickets, Queueing, ManualRetry reachability ----------------------------------
+
+    [Theory]
+    [MemberData(nameof(MessagingChannels))]
+    public async Task AnEventOfADifferentConversation_NeverChangesTheOwnerGenesysAlreadyAssigned(GenesysChannel channel)
+    {
+        var w = NewWorld();
+        var ticketId = await IngestAsync(w, channel, $"conv-{channel}-first", humanFollowUp: true);
+        await ConfirmAsync(w, ticketId, $"conv-{channel}-first", w.Confirmed.GenesysId);
+        AssertDirectlyAssigned(w, ticketId, w.Confirmed.Id);
+
+        // A second Genesys conversation reaches the SAME ticket (a new customer contact) and names a different, eligible agent.
+        var second = $"conv-{channel}-second";
+        await w.F.Interactions.AddAsync(TicketInteraction.CreateFromGenesys(
+            ticketId, OriginatingChannelId(w, ticketId), "+971500000003", second,
+            calledNumber: null, genesysQueueId: null, genesysQueueName: null, genesysAgentId: null, genesysAgentName: null,
+            interactionStartedAtUtc: DateTime.UtcNow, direction: null, createdAtUtc: DateTime.UtcNow));
+        var result = await ConfirmAsync(w, ticketId, second, w.Agents[1].GenesysId, connectedAtUtc: DateTime.UtcNow.AddMinutes(5));
+
+        Assert.Equal(GenesysTicketUpdateOutcome.Applied, result.Outcome);
+        Assert.Equal(w.Confirmed.Id, w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId);
+        Assert.Single(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticketId.ToString());
+    }
+
+    private static byte OriginatingChannelId(World w, long ticketId) =>
+        w.F.Interactions.All.First(i => i.TicketId == ticketId).ChannelId;
+
+    [Theory]
+    [InlineData(WellKnownChannels.WhatsApp)]
+    [InlineData(WellKnownChannels.LiveChat)]
+    [InlineData(WellKnownChannels.Instagram)]
+    [InlineData(WellKnownChannels.Facebook)]
+    [InlineData(WellKnownChannels.SocialMediaDirectMessage)]
+    public async Task AManuallyCreatedTicket_OnAMessagingChannel_IsNotAGenesysTicket_AndKeepsItsRoundRobin(byte channelId)
+    {
+        var w = NewWorld();
+        var category = w.CsCategory;
+        var creator = Guid.NewGuid();
+        var intake = new IntakeRecord(channelId, "+971500000044", w.Cs.DepartmentId, false, null, null, creator, DateTime.UtcNow);
+        await w.F.IntakeRecords.AddAsync(intake);
+
+        var result = await w.F.ManualTicketCreation.CreateAsync(
+            creator, new CreateTicketRequestDto(intake.IntakeRecordId, null, null, category.CategoryId, (byte)PriorityLevel.Medium, "Customer wrote on a social channel"),
+            callerRoles: [Roles.CsManager]);
+
+        Assert.Equal(TicketCreationOutcome.Success, result.Outcome);
+        var ticket = w.F.Tickets.All.Single();
+        // Not a Genesys conversation: the policy never matches, and the Call Center rotation deals the next CS Agent exactly as before.
+        Assert.False(await w.F.AutoAssignment.IsAwaitingGenesysMessagingAsync(ticket));
+        Assert.Equal(w.RoundRobinNext.Id, ticket.CurrentOwnerEmployeeId);
+        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticket.TicketId.ToString());
+    }
+
+    [Fact]
+    public async Task AQueueingTicket_IsNeverHeldOrDealtByTheMessagingPolicy()
+    {
+        var w = NewWorld();
+        var category = w.CsCategory;
+        var creator = Guid.NewGuid();
+        // The worst case: a Queueing-managed ticket whose intake channel is a messaging channel.
+        var intake = new IntakeRecord(WellKnownChannels.WhatsApp, "+971500000055", w.Cs.DepartmentId, false, null, null, creator, DateTime.UtcNow);
+        await w.F.IntakeRecords.AddAsync(intake);
+
+        var result = await w.F.ManualTicketCreation.CreateAsync(
+            creator, new CreateTicketRequestDto(
+                intake.IntakeRecordId, null, null, category.CategoryId, (byte)PriorityLevel.Medium, "Queue ticket",
+                ExternalOrigin: new ExternalTicketOriginDto("Queueing", "Q-100", null)),
+            callerRoles: [Roles.CsManager]);
+
+        Assert.Equal(TicketCreationOutcome.Success, result.Outcome);
+        var ticket = w.F.Tickets.All.Single();
+        // Unassigned by design (the Queueing System names the employee through its own events) - and the Genesys policy has no say in it.
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.False(await w.F.AutoAssignment.IsAwaitingGenesysMessagingAsync(ticket));
+        Assert.True(CursorUntouched(w));
+    }
+
+    [Fact]
+    public void ManualRetryIsOnlyReachableFromTheAuthorisedRetryAction_NeverFromAJobOrAGenesysEvent()
+    {
+        // ManualRetry is the one trigger the messaging guard lets through. It must stay a person's explicit action: the only production code that may name it is the
+        // service behind POST /api/tickets/{id}/assignment/retry (Tickets.Assign + CS Manager), and the enum/guard that define it.
+        var root = RepoRoot() ?? throw new InvalidOperationException("repo root not found");
+        var offenders = Directory.EnumerateFiles(Path.Combine(root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(f => !f.Contains($"{Path.DirectorySeparatorChar}TigerCS.Tests{Path.DirectorySeparatorChar}")
+                && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}")
+                && !f.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}"))
+            .Where(f => File.ReadAllText(f).Contains("AutoAssignmentTrigger.ManualRetry", StringComparison.Ordinal))
+            .Select(Path.GetFileName)
+            .Order()
+            .ToList();
+
+        Assert.Equal(["TicketAssignmentAppService.cs", "TicketAutoAssignmentService.cs"], offenders);
+    }
+
+    private static string? RepoRoot()
+    {
+        for (var dir = new DirectoryInfo(AppContext.BaseDirectory); dir is not null; dir = dir.Parent)
+        {
+            if (Directory.Exists(Path.Combine(dir.FullName, "src", "TigerCS.Application")))
+            {
+                return dir.FullName;
+            }
+        }
+
+        return null;
     }
 
     [Fact]
