@@ -783,7 +783,8 @@ public sealed class DispatchService(
         MoneyNormalizer.Format(item.Amount), item.DueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture),
         Callable: item.VoiceEligible && IsVoiceEligible(item.Phone),
         // Manual only: the eleven-column contact. Every value is one the item already holds (frozen at approval); nothing is looked up or invented here, and an Auto payload carries none of it.
-        Manual: manual ? new(item.UnitCode, item.ProjectName, item.TowerName, GenesysContactTemplate.ArabicMonthName(item.DueDate), item.TenantId) : null);
+        // ProjectName deliberately carries the same value as TowerName (the stored project code is not exported); a mapping-level rule only, so stored items and the schema are untouched.
+        Manual: manual ? new(item.UnitCode, item.TowerName, item.TowerName, GenesysContactTemplate.ArabicMonthName(item.DueDate), item.TenantId) : null);
 
     /// <summary>True when <paramref name="contactListId"/> is the dedicated Manual contact list (a missing or invalid Manual id means no list is the Manual list).</summary>
     public static bool IsManualListId(string contactListId, GenesysOutboundOptions settings)
