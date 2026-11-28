@@ -19,7 +19,8 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 ///
 /// Precedence: (1) an authorized manual assignment / supervisor override, (2) the confirmed Genesys handling agent (<c>routing.agentId</c> =
 /// connected; a phone inquiry's <c>agentId</c>; a mapped agent's <c>HumanAgent</c> transcript line), (3) the existing eligible CS Agent,
-/// (4) the shared sequential round robin. What Genesys does NOT deliver today - a transfer's offered / accepted / failed / cancelled state and
+/// (4) the shared sequential round robin - which a Genesys MESSAGING ticket never gets (GenesysMessagingAssignmentPolicy): it waits UNOWNED in the Call Center
+/// until Genesys confirms who handles it, and an unmapped / ineligible answerer is flagged, never replaced by the next name in a rotation. What Genesys does NOT deliver today - a transfer's offered / accepted / failed / cancelled state and
 /// whether the sender stays on the call (consult, conference) - is never guessed: a second connected agent is recorded as a handler and a visible
 /// call-transfer event; the agent Genesys connects next takes over only from an owner Genesys itself set, and a person's assignment is never moved.
 /// </summary>
@@ -73,6 +74,14 @@ public class GenesysOwnershipLifecycleTests
         else Assert.Equal(owner, Assert.Single(Current(w, id)).AssignedEmployeeId);   // exactly one current assignment, and it is the owner
     }
 
+    /// <summary>A LEGACY provisional owner (a ticket that already has one): an authorised retry deals the next Call Center CS Agent, bypassing the messaging guard.</summary>
+    private static async Task<Guid> GiveLegacyProvisionalOwnerAsync(World w, long ticketId)
+    {
+        var ticket = w.Ticket(ticketId);
+        await w.F.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.ManualRetry, DateTime.UtcNow, Guid.NewGuid());
+        return ticket.CurrentOwnerEmployeeId!.Value;
+    }
+
     private TicketAssignmentAppService AssignmentService(World w) =>
         new(w.F.Tickets, w.F.TicketAssignments, w.F.DepartmentAssignments, w.F.Departments, w.F.UnitOfWork, w.F.Audit, TimeProvider.System,
             w.F.DepartmentSettings, w.F.AutoAssignment, w.F.WorkflowEvents, requestTypeRepository: w.F.RequestTypes);
@@ -80,12 +89,12 @@ public class GenesysOwnershipLifecycleTests
     // ---- 1. Agent A answers and owns the ticket -------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task AgentAAnswers_OwnsTheTicket_NotTheRoundRobinNext()
+    public async Task AgentAAnswers_OwnsTheTicketDirectly_NoRoundRobinOwnerInBetween()
     {
         var w = NewWorld();
-        var chat = await ChatAsync(w, "c-a", humanFollowUp: true);                 // human required, nobody accepted: provisional round robin owner
-        var provisional = w.Ticket(chat.TicketId).CurrentOwnerEmployeeId;
-        var agentA = w.Agents.Last(a => a.Id != provisional);
+        var chat = await ChatAsync(w, "c-a", humanFollowUp: true);                 // human required, nobody accepted: queued, NO provisional owner
+        AssertOwner(w, chat.TicketId, null);
+        var agentA = w.Agents.Last();
 
         var result = await ConnectAsync(w, chat, agentA.GenesysId);
 
@@ -94,14 +103,31 @@ public class GenesysOwnershipLifecycleTests
         Assert.Equal(agentA.Id, Current(w, chat.TicketId).Single().AssigningActorEmployeeId);          // the agent's own act, i.e. confirmed human ownership
     }
 
-    // ---- 2. Round robin first, then Agent B accepts: the fallback is NOT a confirmed handler ------------------------------------------
+    // ---- 2. Nobody owns it while Genesys has not named anyone, then Agent B accepts ----------------------------------------------------
 
     [Fact]
-    public async Task TicketAssignedByRoundRobin_ThenAgentBAccepts_OwnershipSynchronizesToB_AndTheFallbackIsNeverRecordedAsAHandler()
+    public async Task TicketWaitingForGenesys_ThenAgentBAccepts_IsAssignedDirectlyToB_WithNoSupersededProvisionalOwner()
     {
         var w = NewWorld();
         var chat = await ChatAsync(w, "c-b", humanFollowUp: true);
-        var fallback = w.Ticket(chat.TicketId).CurrentOwnerEmployeeId!.Value;
+        AssertOwner(w, chat.TicketId, null);                                                            // no provisional owner, whatever the rotation holds
+        Assert.DoesNotContain(w.F.Handlers.All, h => h.TicketId == chat.TicketId);                      // nobody has accepted yet
+        var agentB = w.Agents[1];
+
+        await ConnectAsync(w, chat, agentB.GenesysId);
+
+        AssertOwner(w, chat.TicketId, agentB.Id);
+        Assert.Equal(agentB.Id, Assert.Single(w.F.Handlers.All, h => h.TicketId == chat.TicketId).HandledByUserId);   // only the agent who actually accepted
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == chat.TicketId);                   // B's row only: nothing was superseded
+        Assert.All(w.F.Rotation.Rows.Values, row => Assert.Null(row.LastAssignedEmployeeId));           // the shared rotation never moved
+    }
+
+    [Fact]
+    public async Task LegacyTicketWithAProvisionalOwner_ThenAgentBAccepts_OwnershipSynchronizesToB_AndTheFallbackIsNeverRecordedAsAHandler()
+    {
+        var w = NewWorld();
+        var chat = await ChatAsync(w, "c-b-legacy", humanFollowUp: true);
+        var fallback = await GiveLegacyProvisionalOwnerAsync(w, chat.TicketId);                         // a ticket that already has an automatic owner
         var agentB = w.Agents.First(a => a.Id != fallback);
         Assert.DoesNotContain(w.F.Handlers.All, h => h.TicketId == chat.TicketId);                      // nobody has accepted yet
 
@@ -121,8 +147,7 @@ public class GenesysOwnershipLifecycleTests
     {
         var w = NewWorld();
         var chat = await ChatAsync(w, "c-offer", humanFollowUp: true);
-        var fallback = w.Ticket(chat.TicketId).CurrentOwnerEmployeeId!.Value;
-        var offered = w.Agents.First(a => a.Id != fallback);
+        var offered = w.Agents[0];
 
         // Genesys names an agent as ASSIGNED / available (ringing, offered) - on the handoff and as the work item's assignee - but never "connected".
         await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Handoff: new GenesysHandoffUpdateDto(Required: true, AgentAvailable: true, AssignedAgentId: offered.GenesysId)));
@@ -130,7 +155,7 @@ public class GenesysOwnershipLifecycleTests
         await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Routing: new GenesysRoutingUpdateDto(QueueId: "q-1", QueueName: "Support")));
         await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, AgentId: offered.GenesysId, AgentName: "Offered Agent"));
 
-        AssertOwner(w, chat.TicketId, fallback);
+        AssertOwner(w, chat.TicketId, null);                                                            // still waiting: nobody is dealt, nobody accepted
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == chat.TicketId.ToString());
     }
 
@@ -144,9 +169,9 @@ public class GenesysOwnershipLifecycleTests
         Assert.Null(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);                                   // AI-handled: no agent needed yet
 
         await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Handoff: new GenesysHandoffUpdateDto(Required: true, Mode: "HumanTakeover", Trigger: "AiEscalated")));
-        var provisional = w.Ticket(chat.TicketId).CurrentOwnerEmployeeId;
-        Assert.NotNull(provisional);                                                                   // human work with nobody accepted: round robin
-        var acceptor = w.Agents.First(a => a.Id != provisional);
+        AssertOwner(w, chat.TicketId, null);                                                           // human work with nobody accepted: queued, no round robin
+        Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
+        var acceptor = w.Agents[0];
 
         await ConnectAsync(w, chat, acceptor.GenesysId);
 
@@ -165,13 +190,13 @@ public class GenesysOwnershipLifecycleTests
         var ticket = w.Ticket(chat.TicketId);
         Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);                        // Call Center first
         Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);
-        Assert.NotNull(ticket.CurrentOwnerEmployeeId);                                                 // provisional shared round robin owner
-        Assert.Single(Current(w, chat.TicketId));
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                                    // queued for a person; no provisional round robin owner
+        Assert.Empty(Current(w, chat.TicketId));
 
-        // Redelivery of the same end changes nothing (no second assignment, no second turn of the rotation).
+        // Redelivery of the same end changes nothing (no assignment, no turn of the rotation).
         var rotationBefore = w.F.Rotation.Rows.Values.Select(r => r.LastAssignedEmployeeId).ToList();
         await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, Ended: new GenesysConversationEndUpdateDto(DateTime.UtcNow, "CustomerDisconnect")));
-        Assert.Single(Current(w, chat.TicketId));
+        Assert.Empty(Current(w, chat.TicketId));
         Assert.Equal(rotationBefore, w.F.Rotation.Rows.Values.Select(r => r.LastAssignedEmployeeId).ToList());
     }
 
@@ -330,15 +355,15 @@ public class GenesysOwnershipLifecycleTests
     // ---- 8. Mapping problems ----------------------------------------------------------------------------------------------------------
 
     [Fact]
-    public async Task UnmappedAgent_NeverTakesTheTicket_IsFlagged_AndTheExistingCsAgentIsPreserved()
+    public async Task UnmappedAgent_NeverTakesTheTicket_IsFlagged_AndTheTicketStaysUnassigned_NotDealtToACsAgent()
     {
         var w = NewWorld();
         var chat = await ChatAsync(w, "c-unmapped", humanFollowUp: true);
 
         await ConnectAsync(w, chat, "g-not-in-tigercs");
 
-        // The unmapped person never becomes the owner; the ticket is never left without a CS Agent (an eligible CS Agent owns it).
-        Assert.Contains(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId, w.Agents.Select(a => (Guid?)a.Id));
+        // The unmapped person never becomes the owner, and the next CS Agent of a rotation is not dealt either: Genesys has not named a usable handler.
+        AssertOwner(w, chat.TicketId, null);
         Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == chat.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note!.Contains("g-not-in-tigercs"));
     }
 
@@ -353,7 +378,7 @@ public class GenesysOwnershipLifecycleTests
 
         await ConnectAsync(w, chat, "g-integration");
 
-        Assert.NotEqual(serviceUser, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
+        Assert.Null(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);                                   // neither the service account nor the next CS Agent
         Assert.DoesNotContain(w.F.Handlers.All, h => h.HandledByUserId == serviceUser);
         Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == chat.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired && e.Note!.Contains("service account"));
     }
@@ -386,18 +411,17 @@ public class GenesysOwnershipLifecycleTests
         var w = NewWorld();
         w.F.MapAgent("g-real-id", displayName: "Agent 1");                                              // same display name as a real agent, different id
         var chat = await ChatAsync(w, "c-name", humanFollowUp: true);
-        var fallback = w.Ticket(chat.TicketId).CurrentOwnerEmployeeId;
 
         // The event carries only a name that matches an agent's display name; no id => nothing is resolved.
         await UpdateAsync(w, chat, cid => new GenesysTicketUpdateDto(cid, AgentName: "Agent 1", Routing: new GenesysRoutingUpdateDto(AgentName: "Agent 1")));
 
-        AssertOwner(w, chat.TicketId, fallback);
+        AssertOwner(w, chat.TicketId, null);
     }
 
     // ---- department classification never costs the ticket its agent --------------------------------------------------------------------
 
     [Fact]
-    public async Task DepartmentTransfer_ReleasesTheConfirmedCsAgent_WhenNobodyIsEligible_AndALateGenesysEventDoesNotPullItBack()
+    public async Task DepartmentTransfer_ReleasesTheConfirmedCsAgent_WhenNobodyIsEligible_AndALateGenesysEventNeitherPullsItBackNorDealsAnOwner()
     {
         var w = NewWorld();
         var facilities = w.F.Departments.AddDepartment("Facilities Management", "FM");
@@ -416,11 +440,12 @@ public class GenesysOwnershipLifecycleTests
         Assert.NotEqual(owner, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "Unassign" && e.EntityId == chat.TicketId.ToString() && e.BeforeValue == owner.ToString());
 
-        // A later Genesys event does not pull it back to the Call Center; the agent who actually answers it (existing rule: the answering agent
-        // owns an unassigned ticket) becomes its single owner.
+        // A later Genesys event does not pull it back to the Call Center, and a person's transfer stands: the event is recorded as a handler but the
+        // ticket is neither assigned to the connecting agent nor dealt to the next CS Agent by the rotation (a messaging ticket has no Round Robin fallback).
         await ConnectAsync(w, chat, w.Agents[0].GenesysId);
         Assert.Equal(facilities.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
-        AssertOwner(w, chat.TicketId, w.Agents[0].Id);
+        AssertOwner(w, chat.TicketId, null);
+        Assert.All(w.F.Rotation.Rows.Values, row => Assert.Null(row.LastAssignedEmployeeId));
     }
 
     // ---- 9. Concurrency ----------------------------------------------------------------------------------------------------------------
@@ -430,8 +455,8 @@ public class GenesysOwnershipLifecycleTests
     {
         var w = NewWorld();
         var chat = await ChatAsync(w, "c-race", humanFollowUp: true);
-        var fallback = w.Ticket(chat.TicketId).CurrentOwnerEmployeeId!.Value;
-        var acceptor = w.Agents.First(a => a.Id != fallback);
+        AssertOwner(w, chat.TicketId, null);
+        var acceptor = w.Agents[0];
 
         // Another writer changed the ticket first: the acceptance's save loses on the row version.
         // Call 3 of a connect update is the first-handler record - the save two concurrent identical deliveries race on.

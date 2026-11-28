@@ -11,9 +11,9 @@ using TigerCS.Tests.Ticketing.Fakes;
 namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
-/// Call Center first on the Genesys entry points: a human handoff routes the ticket to the Call Center AND Round Robin assigns one agent;
-/// a human-follow-up inquiry enters the Call Center at creation and is not moved past it by system request-type routing; an AI-handled
-/// inquiry is untouched.
+/// Call Center first on the Genesys entry points: a human handoff routes the ticket to the Call Center queue and it WAITS there with no owner (Genesys
+/// messaging tickets are never dealt by Round Robin - Genesys confirms who handles them); a human-follow-up inquiry enters the Call Center at creation and
+/// is not moved past it by system request-type routing; an AI-handled inquiry is untouched.
 /// </summary>
 public class GenesysCallCenterFirstTests
 {
@@ -41,7 +41,7 @@ public class GenesysCallCenterFirstTests
     }
 
     [Fact]
-    public async Task Handoff_RoutesToCallCenter_AndRoundRobinAssignsOneAgent_PerTicket()
+    public async Task Handoff_RoutesToCallCenter_AndNobodyIsDealt_RotationNeverMoves_PerTicket()
     {
         var f = new GenesysServiceFixture(callCenterFirst: true);
         var (cs, _) = f.SeedGenesysDepartment("Customer Service", "CS");
@@ -67,18 +67,17 @@ public class GenesysCallCenterFirstTests
         Ticket Get(long id) => f.Tickets.All.Single(t => t.TicketId == id);
         Assert.All(new[] { t1, t2, t3 }, id => Assert.Equal(f.CallCenter!.DepartmentId, Get(id).CurrentDepartmentId));
         Assert.All(new[] { t1, t2, t3 }, id => Assert.Equal(cs.DepartmentId, Get(id).OriginatingDepartmentId));
-        Assert.Equal(agents[0], Get(t1).CurrentOwnerEmployeeId);
-        Assert.Equal(agents[1], Get(t2).CurrentOwnerEmployeeId);
-        Assert.Equal(agents[0], Get(t3).CurrentOwnerEmployeeId);
-        Assert.DoesNotContain(f.Tickets.All, t => t.CurrentOwnerEmployeeId == outsider);
-
-        // Single ownership: one current assignment per ticket.
-        Assert.Equal(3, f.TicketAssignments.Added.Count(a => a.IsCurrent));
-        Assert.Contains(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Trigger=CallCenterIntake"));
+        // Genesys messaging: the handoff REQUEST queues the ticket but names nobody (the eligible Call Center agents exist and are not dealt).
+        Assert.All(new[] { t1, t2, t3 }, id => Assert.Null(Get(id).CurrentOwnerEmployeeId));
+        Assert.All(new[] { t1, t2, t3 }, id => Assert.NotNull(Get(id).AiAgentOwnerEmployeeId));
+        Assert.DoesNotContain(f.Tickets.All, t => t.CurrentOwnerEmployeeId == outsider || agents.Any(a => a == t.CurrentOwnerEmployeeId));
+        Assert.All(f.Rotation.Rows.Values, row => Assert.Null(row.LastAssignedEmployeeId));
+        Assert.Empty(f.TicketAssignments.Added);
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign");
     }
 
     [Fact]
-    public async Task Handoff_WithNoEligibleCallCenterAgent_LeavesTheTicketUnassignedInTheCallCenterQueue()
+    public async Task Handoff_WithNoCallCenterAgent_LeavesTheTicketUnassignedInTheCallCenterQueue()
     {
         var f = new GenesysServiceFixture(callCenterFirst: true);
         var (cs, _) = f.SeedGenesysDepartment("Customer Service", "CS");
@@ -89,7 +88,7 @@ public class GenesysCallCenterFirstTests
         var ticket = f.Tickets.All.Single(t => t.TicketId == ticketId);
         Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Contains(f.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Status=Unassigned"));
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign");   // waiting for Genesys is not an assignment failure
     }
 
     [Fact]
@@ -105,7 +104,7 @@ public class GenesysCallCenterFirstTests
         var leasingEmployee = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(leasingEmployee, leasing.DepartmentId, true, DateTime.UtcNow, null));
         f.AssignmentRules.Add(RequestTypeAssignmentRule.ForSpecificEmployee(type.RequestTypeId, leasingEmployee));
-        var agent = AddCallCenterAgents(f, 1)[0];
+        var agent = f.AddAgent("g-cc-1", "Call Center Agent");
 
         var result = await f.Ingestion.IngestAsync(
             ServiceAccount,
@@ -115,8 +114,15 @@ public class GenesysCallCenterFirstTests
         Assert.Equal(GenesysIngestionOutcome.TicketCreated, result.Outcome);
         var ticket = f.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
         Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);   // the Call Center agent transfers it, not the system
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                              // Genesys messaging: nobody is dealt ...
         Assert.Equal(type.RequestTypeId, ticket.RequestTypeId);                 // still classified
+
+        // ... until Genesys confirms the agent who actually answers: assigned directly.
+        await f.TicketUpdate.UpdateAsync(
+            ServiceAccount, ticket.TicketId,
+            new GenesysTicketUpdateDto("conv-lease", Routing: new GenesysRoutingUpdateDto(AgentId: "g-cc-1", ConnectedAtUtc: DateTime.UtcNow)));
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
 
         // The agent can only transfer it to the request type's department.
         var assignment = new TicketAssignmentAppService(

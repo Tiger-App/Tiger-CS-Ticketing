@@ -8,8 +8,9 @@ using TigerCS.Tests.GenesysIntegration.Fakes;
 namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
-/// <b>WhatsApp conversation lifecycle (PR #292).</b> A WhatsApp ticket keeps the Digital assignment behaviour (Call Center first + ONE Round Robin agent) but only when a person is
-/// actually needed - never merely because a conversation is active or Genesys has not yet sent its next update. The conversation status is derived and separate from the
+/// <b>WhatsApp conversation lifecycle (PR #292).</b> A WhatsApp ticket is queued Call Center first when a person is actually needed - never merely because a conversation is
+/// active or Genesys has not yet sent its next update - and then WAITS with no owner: it is never dealt by Round Robin, the person Genesys confirms (routing.agentId
+/// connected) is assigned directly (GenesysMessagingAssignmentPolicy). The conversation status is derived and separate from the
 /// ticket status. Phone is untouched (see <see cref="VoiceOwnershipRulesTests"/>).
 /// </summary>
 public class WhatsAppConversationLifecycleTests
@@ -107,7 +108,7 @@ public class WhatsAppConversationLifecycleTests
     // ---- Genesys confirms a person is needed: the approved Digital workflow ----------------------------------------------------------
 
     [Fact]
-    public async Task WhenGenesysConfirmsAPersonIsNeeded_TheDigitalWorkflowRuns_CallCenterFirstThenOneRoundRobinAgent_AndTheStatusAwaitsConfirmation()
+    public async Task WhenGenesysConfirmsAPersonIsNeeded_TheTicketIsQueuedInTheCallCenter_WithNoOwner_AndTheStatusAwaitsConfirmation()
     {
         var w = NewWorld();
         var chat = await WhatsAppAsync(w, "wa-human");
@@ -116,8 +117,11 @@ public class WhatsAppConversationLifecycleTests
 
         var t = w.Ticket(chat.TicketId);
         Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);
-        Assert.Equal(w.Agents[0].Id, t.CurrentOwnerEmployeeId);                                // ONE agent, exactly as on main before the snapshot
-        Assert.Equal(GenesysConversationStatus.AwaitingGenesysUpdate, await StatusAsync(w, chat));   // owner is provisional: no connection confirmed yet
+        Assert.Null(t.CurrentOwnerEmployeeId);                                                 // nobody is dealt: Genesys names who handles it
+        Assert.NotNull(t.AiAgentOwnerEmployeeId);                                              // the AI Agent stays the recorded owner while it waits
+        Assert.True(w.RotationUntouched);
+        Assert.Empty(w.F.TicketAssignments.Added);
+        Assert.Equal(GenesysConversationStatus.AwaitingGenesysUpdate, await StatusAsync(w, chat));   // no connection confirmed yet
         Assert.Equal(TicketStatus.Open, t.TicketStatus);
     }
 
@@ -127,11 +131,13 @@ public class WhatsAppConversationLifecycleTests
         var w = NewWorld();
         var chat = await WhatsAppAsync(w, "wa-connect", humanFollowUp: true);
 
+        Assert.Null(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);                           // waiting for Genesys
         await UpdateAsync(w, chat, new GenesysTicketUpdateDto(chat.ConversationId, Routing: new GenesysRoutingUpdateDto(AgentId: w.Agents[2].GenesysId, ConnectedAtUtc: DateTime.UtcNow.AddSeconds(-5))));
         await UpdateAsync(w, chat, new GenesysTicketUpdateDto(chat.ConversationId, Routing: new GenesysRoutingUpdateDto(AgentId: w.Agents[2].GenesysId, ConnectedAtUtc: DateTime.UtcNow.AddSeconds(-5))));   // duplicate
 
         Assert.Equal(w.Agents[2].Id, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
-        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == chat.TicketId && a.AssignedEmployeeId == w.Agents[2].Id);   // idempotent
+        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == chat.TicketId);          // idempotent: the confirmed agent's row only, no provisional one
+        Assert.True(w.RotationUntouched);
         Assert.Equal(GenesysConversationStatus.Assigned, await StatusAsync(w, chat));
     }
 

@@ -7,9 +7,11 @@ using TigerCS.Tests.GenesysIntegration.Fakes;
 namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
-/// Business decision: automatic assignment in the Call Center (department code CC) goes to CS Agents ONLY - Round Robin and the confirmed
-/// Genesys answering agent alike - while every other department keeps its wider operational set (CS Agent, Department Employee, Department
-/// Head). Also: an internal note is human work, so a provisional owner who wrote one is not replaced by a confirmed agent.
+/// Business decision: automatic assignment in the Call Center (department code CC) goes to CS Agents ONLY - Round Robin (where it still runs: an
+/// authorised retry, a legacy provisional owner) and the confirmed Genesys answering agent alike - while every other department keeps its wider
+/// operational set (CS Agent, Department Employee, Department Head). Also: an internal note is human work, so a legacy provisional owner who wrote
+/// one is not replaced by a confirmed agent. A Genesys messaging ticket gets NO provisional owner of its own (GenesysMessagingAssignmentPolicy): the
+/// provisional owners below are created explicitly through an authorised retry.
 /// </summary>
 public class CallCenterCsAgentOnlyTests
 {
@@ -42,11 +44,15 @@ public class CallCenterCsAgentOnlyTests
             ServiceAccount, ticketId,
             new GenesysTicketUpdateDto(conversationId, Routing: new GenesysRoutingUpdateDto(AgentId: genesysAgentId, ConnectedAtUtc: DateTime.UtcNow)));
 
-    // ---- provisional Round Robin ---------------------------------------------------------------------------------------------------
+    /// <summary>A legacy provisional owner: an authorised retry (ManualRetry) bypasses the Genesys-messaging guard and deals the next Call Center CS Agent.</summary>
+    private static async Task<AutoAssignmentResult> RetryAsync(GenesysServiceFixture f, Ticket ticket) =>
+        await f.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.ManualRetry, DateTime.UtcNow, Guid.NewGuid());
+
+    // ---- Round Robin (authorised retry only, for Genesys messaging) ---------------------------------------------------------------------------------------------------
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task CallCenterRoundRobin_PicksCsAgentsOnly_NeverADepartmentEmployeeOrHead(GenesysChannel channel)
+    public async Task CallCenterRoundRobin_OnAnAuthorisedRetry_PicksCsAgentsOnly_NeverADepartmentEmployeeOrHead_AndCreationDealsNobody(GenesysChannel channel)
     {
         var (f, cs) = Build();
         var agents = new[] { f.AddAgent("g-a1", "Agent 1"), f.AddAgent("g-a2", "Agent 2") };
@@ -58,7 +64,10 @@ public class CallCenterCsAgentOnlyTests
         var owners = new List<Guid>();
         for (var i = 0; i < 9; i++)
         {
-            owners.Add((await IngestHumanRequiredAsync(f, cs, $"c-rr-{i}", channel)).CurrentOwnerEmployeeId!.Value);
+            var ticket = await IngestHumanRequiredAsync(f, cs, $"c-rr-{i}", channel);
+            Assert.Null(ticket.CurrentOwnerEmployeeId);                                          // Genesys messaging: creation never deals an owner
+            await RetryAsync(f, ticket);
+            owners.Add(ticket.CurrentOwnerEmployeeId!.Value);
         }
 
         var allowed = agents.Append(dual).ToHashSet();
@@ -75,6 +84,7 @@ public class CallCenterCsAgentOnlyTests
         f.AddAgent("g-sup", "Supervisor", roles: Roles.CsSupervisor);
 
         var ticket = await IngestHumanRequiredAsync(f, cs, "c-none", GenesysChannel.WhatsApp);
+        await RetryAsync(f, ticket);
 
         Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
@@ -116,7 +126,7 @@ public class CallCenterCsAgentOnlyTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task ConfirmedAgentWhoIsNotACsAgent_DoesNotTakeTheTicket_ItIsFlagged_AndAnEligibleCsAgentOwnsIt(GenesysChannel channel)
+    public async Task ConfirmedAgentWhoIsNotACsAgent_DoesNotTakeTheTicket_ItIsFlagged_AndStaysUnassigned_NotDealtToACsAgent(GenesysChannel channel)
     {
         var (f, cs) = Build();
         var csAgent = f.AddAgent("g-a1", "Agent 1");
@@ -127,7 +137,8 @@ public class CallCenterCsAgentOnlyTests
 
         Assert.Equal(f.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
         Assert.NotEqual(employee, ticket.CurrentOwnerEmployeeId);
-        Assert.Equal(csAgent, ticket.CurrentOwnerEmployeeId);                                    // the only eligible CS Agent, via the shared rotation - never unassigned
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                              // Genesys messaging: no fallback to the next CS Agent (even though one is eligible)
+        Assert.NotEqual(csAgent, ticket.CurrentOwnerEmployeeId);
         Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticket.TicketId.ToString());
         Assert.Contains(f.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired
             && e.Note!.Contains("CS Agent"));
@@ -135,12 +146,30 @@ public class CallCenterCsAgentOnlyTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task ConfirmedCsAgent_StillReplacesTheProvisionalCsAgent(GenesysChannel channel)
+    public async Task ConfirmedCsAgent_TakesTheTicketDirectly_NoProvisionalOwnerInBetween(GenesysChannel channel)
+    {
+        var (f, cs) = Build();
+        var a = f.AddAgent("g-a1", "Agent 1");
+        f.AddAgent("g-a2", "Agent 2");
+        var ticket = await IngestHumanRequiredAsync(f, cs, "c-direct", channel);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+
+        await ConnectAsync(f, ticket.TicketId, "c-direct", "g-a1");
+
+        Assert.Equal(a, ticket.CurrentOwnerEmployeeId);
+        Assert.Single(f.TicketAssignments.Added, x => x.TicketId == ticket.TicketId);              // one assignment row: the confirmed agent's, nothing superseded
+        Assert.DoesNotContain(f.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticket.TicketId.ToString());
+    }
+
+    [Theory]
+    [MemberData(nameof(AllChannels))]
+    public async Task ConfirmedCsAgent_StillReplacesALegacyProvisionalCsAgent(GenesysChannel channel)
     {
         var (f, cs) = Build();
         var a = f.AddAgent("g-a1", "Agent 1");
         var b = f.AddAgent("g-a2", "Agent 2");
         var ticket = await IngestHumanRequiredAsync(f, cs, "c-ok", channel);
+        await RetryAsync(f, ticket);                                                              // a legacy ticket that already HAS a provisional owner
         var provisional = ticket.CurrentOwnerEmployeeId!.Value;
         var confirmed = provisional == a ? "g-a2" : "g-a1";
 
@@ -153,7 +182,7 @@ public class CallCenterCsAgentOnlyTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task AnInternalNote_OnTheProvisionalOwnersTicket_BlocksReplacement_WhileNoNoteAllowsIt(GenesysChannel channel)
+    public async Task AnInternalNote_OnALegacyProvisionalOwnersTicket_BlocksReplacement_WhileNoNoteAllowsIt(GenesysChannel channel)
     {
         var (f, cs) = Build();
         var ids = new Dictionary<Guid, string> { [f.AddAgent("g-a1", "Agent 1")] = "g-a1", [f.AddAgent("g-a2", "Agent 2")] = "g-a2" };
@@ -161,6 +190,8 @@ public class CallCenterCsAgentOnlyTests
 
         var plain = await IngestHumanRequiredAsync(f, cs, "c-plain", channel);
         var noted = await IngestHumanRequiredAsync(f, cs, "c-noted", channel);
+        await RetryAsync(f, plain);                                                               // legacy provisional owners (created explicitly)
+        await RetryAsync(f, noted);
         var notedOwner = noted.CurrentOwnerEmployeeId!.Value;
         var plainOwner = plain.CurrentOwnerEmployeeId!.Value;
 
