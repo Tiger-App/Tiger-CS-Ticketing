@@ -93,7 +93,7 @@ public sealed class ManualGenesysTemplateTests
         Assert.Equal("2026-10-20", row["DueDate"]);
         Assert.Equal("أكتوبر", row["DueMonthAr"]);                      // October, from the due date
         Assert.Equal("TP140-1", row["UnitNumber"]);                     // the unit as the Manual page lists it
-        Assert.Equal("TP140", row["ProjectName"]);                      // the project as the review data holds it
+        Assert.Equal("Blue Wave", row["ProjectName"]);                  // ProjectName carries the same value as TowerName
         Assert.Equal("Blue Wave", row["TowerName"]);                    // the tower's real name
         Assert.Equal("T0001", row["TenantId"]);                         // the PACT tenant, not a CRM CustomerId (which is a number such as 1001)
     }
@@ -254,7 +254,7 @@ public sealed class ManualGenesysTemplateTests
         Assert.Null(auto.Manual);
         Assert.Equal(AutoTemplate.Order(), GenesysContactTemplate.ValuesOf(auto).Keys.Order());
         var manual = DispatchService.ToPayload(item, ManualList, h.Genesys, manual: true);
-        Assert.Equal(("TP140-1", "TP140", "Blue Wave", "أكتوبر", "T0001"), (manual.Manual!.UnitNumber, manual.Manual.ProjectName, manual.Manual.TowerName, manual.Manual.DueMonthAr, manual.Manual.TenantId));
+        Assert.Equal(("TP140-1", "Blue Wave", "Blue Wave", "أكتوبر", "T0001"), (manual.Manual!.UnitNumber, manual.Manual.ProjectName, manual.Manual.TowerName, manual.Manual.DueMonthAr, manual.Manual.TenantId));
         Assert.True(DispatchService.IsManualListId(ManualList, h.Genesys)); Assert.False(DispatchService.IsManualListId(CurrentMonthList, h.Genesys));
     }
 
