@@ -230,9 +230,9 @@ public sealed class GenesysServiceFixture
             ? new TicketAutoAssignmentService(
                 AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, Rotation, Departments,
                 roleReader: Accounts, accountManager: Accounts, serviceIdentities: ServiceIdentities, workflowEventRepository: WorkflowEvents,
-                ticketNoteRepository: TicketNotes, outboxWriter: outbox, assignmentHistoryRepository: AssignmentHistory)
+                ticketNoteRepository: TicketNotes, outboxWriter: outbox, assignmentHistoryRepository: AssignmentHistory, interactionRepository: Interactions)
             : new TicketAutoAssignmentService(
-                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, outboxWriter: outbox, assignmentHistoryRepository: AssignmentHistory);
+                AssignmentRules, DepartmentSettings, DepartmentAssignments, TicketAssignments, Audit, outboxWriter: outbox, assignmentHistoryRepository: AssignmentHistory, interactionRepository: Interactions);
         AutoAssignment = autoAssignment;
 
         DefaultClassification = new DefaultClassificationService(

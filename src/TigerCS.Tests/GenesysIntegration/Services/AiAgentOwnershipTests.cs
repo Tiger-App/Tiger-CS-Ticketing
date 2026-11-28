@@ -63,14 +63,22 @@ public class AiAgentOwnershipTests
     }
 
     [Fact]
-    public async Task AConversationThatNeedsAPersonFromTheStart_GoesToRoundRobin_NotToTheAi()
+    public async Task AMessagingConversationThatNeedsAPersonFromTheStart_KeepsTheAiAsOwner_UntilGenesysNamesThePerson_NoRoundRobin()
     {
         var (f, cs) = World();
-        f.AddAgent("g-rr", "RR Agent");
+        var agent = f.AddAgent("g-rr", "RR Agent");
 
         var ticket = await IngestAsync(f, cs, "conv-human", human: true);
 
-        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        // Queued for a person, but nobody is dealt it: the AI stays the recorded owner and the rotation does not move.
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.True(ticket.IsOwnedByAiAgent);
+        Assert.True(f.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null));
+
+        await f.TicketUpdate.UpdateAsync(AiAgent, ticket.TicketId, new GenesysTicketUpdateDto(
+            "conv-human", Routing: new GenesysRoutingUpdateDto(AgentId: "g-rr", ConnectedAtUtc: DateTime.UtcNow)));
+
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
         Assert.Null(ticket.AiAgentOwnerEmployeeId);
     }
 

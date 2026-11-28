@@ -58,13 +58,13 @@ public class TicketOwnershipChangeEventTests
         var ticket = await IngestWithRequestTypeAsync(w, "conv-routed");
 
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(financeOfficer, ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                 // a Genesys messaging ticket is not dealt to the rule's employee
         var routed = Assert.Single(w.F.WorkflowEvents.All, e => e.EventType == WorkflowEventType.TicketTransferred);
         Assert.Null(routed.ActorEmployeeId);                                        // the system, not an agent
         Assert.Equal((byte)TicketTransferReason.SystemRouting, routed.TransferReasonCode);
         Assert.Equal(w.Arrival.DepartmentId, routed.FromDepartmentId);
         Assert.Equal(w.Finance.DepartmentId, routed.ToDepartmentId);
-        Assert.Equal(financeOfficer, routed.ToEmployeeId);                          // where the configured rule landed it
+        Assert.Null(routed.ToEmployeeId);                                           // routed to the department queue only: nobody received it
         Assert.False(routed.IsEscalation);                                          // never an agent's judgement
     }
 

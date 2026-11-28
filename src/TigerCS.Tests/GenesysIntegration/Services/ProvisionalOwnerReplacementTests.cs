@@ -1,4 +1,5 @@
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
+using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.Ticketing;
 using TigerCS.Tests.GenesysIntegration.Fakes;
@@ -6,10 +7,12 @@ using TigerCS.Tests.GenesysIntegration.Fakes;
 namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
-/// The provisional-owner lifecycle on every supported channel: a human is required and nobody has accepted, so Call Center Round Robin gives
-/// the ticket to ONE eligible agent (a provisional owner); when Genesys later confirms a different eligible Call Center agent CONNECTED
-/// (<c>routing.agentId</c>) that agent becomes the owner - the provisional pick does not block it. Ownership stays put once a person has worked
-/// the ticket or intentionally transferred it, and history, audit and SLA data survive every transition.
+/// The LEGACY provisional-owner lifecycle on every supported messaging channel. TigerCS no longer deals a provisional owner to a Genesys messaging ticket by itself
+/// (see <see cref="DigitalChannelsAwaitGenesysConfirmationTests"/>), but a ticket that ALREADY has one (created before the rule, or by an authorised retry) keeps the
+/// replace-the-automatic-owner logic: here the provisional owner is created explicitly with <see cref="AutoAssignmentTrigger.ManualRetry"/>, which bypasses the
+/// "await Genesys" guard. When Genesys later confirms a different eligible Call Center agent CONNECTED (<c>routing.agentId</c>) that agent becomes the owner - the
+/// provisional pick does not block it. Ownership stays put once a person has worked the ticket or intentionally transferred it, and history, audit and SLA data
+/// survive every transition.
 /// </summary>
 public class ProvisionalOwnerReplacementTests
 {
@@ -47,6 +50,18 @@ public class ProvisionalOwnerReplacementTests
         return result.Ticket!.TicketId;
     }
 
+    /// <summary>A messaging ticket that already HAS a provisional automatic owner: ingested (it waits, unowned), then dealt by an authorised retry.</summary>
+    private static async Task<long> IngestWithProvisionalOwnerAsync(World w, string conversationId, GenesysChannel channel)
+    {
+        var ticketId = await IngestHumanRequiredAsync(w, conversationId, channel);
+        var ticket = w.Ticket(ticketId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                   // the new rule: nobody is dealt at creation
+        var dealt = await w.F.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.ManualRetry, DateTime.UtcNow, Guid.NewGuid());
+        Assert.NotNull(dealt.AssignedEmployeeId);
+        Assert.Equal(dealt.AssignedEmployeeId, ticket.CurrentOwnerEmployeeId);
+        return ticketId;
+    }
+
     private static Task<GenesysTicketUpdateResult> ConnectAsync(World w, long ticketId, string conversationId, string genesysAgentId) =>
         w.F.TicketUpdate.UpdateAsync(
             ServiceAccount, ticketId,
@@ -58,10 +73,10 @@ public class ProvisionalOwnerReplacementTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task ConfirmedAgent_ReplacesTheProvisionalRoundRobinOwner_KeepingHistoryAuditAndSla(GenesysChannel channel)
+    public async Task ConfirmedAgent_ReplacesALegacyProvisionalOwner_KeepingHistoryAuditAndSla(GenesysChannel channel)
     {
         var w = Build();
-        var ticketId = await IngestHumanRequiredAsync(w, "c-prov", channel);
+        var ticketId = await IngestWithProvisionalOwnerAsync(w, "c-prov", channel);
         var ticket = w.Ticket(ticketId);
         var provisional = ticket.CurrentOwnerEmployeeId!.Value;
         var confirmedGenesysId = AnotherAgent(w, provisional);
@@ -96,7 +111,7 @@ public class ProvisionalOwnerReplacementTests
     public async Task WhenTheProvisionalOwnerIsTheConfirmedAgent_NothingIsRewritten(GenesysChannel channel)
     {
         var w = Build();
-        var ticketId = await IngestHumanRequiredAsync(w, "c-same", channel);
+        var ticketId = await IngestWithProvisionalOwnerAsync(w, "c-same", channel);
         var provisional = w.Ticket(ticketId).CurrentOwnerEmployeeId!.Value;
         var rows = w.F.TicketAssignments.Added.Count;
         static bool IsOwnershipAudit(TigerCS.Tests.CustomerVerification.Fakes.RecordedAuditEntry e) => e.Action is "AutoAssign" or "AssignOnAnswer" or "Transfer" or "Assign";
@@ -133,7 +148,7 @@ public class ProvisionalOwnerReplacementTests
     public async Task OnceAPersonHasWorkedTheTicket_TheConfirmedAgentDoesNotTakeItOver(GenesysChannel channel, string work)
     {
         var w = Build();
-        var ticketId = await IngestHumanRequiredAsync(w, "c-worked", channel);
+        var ticketId = await IngestWithProvisionalOwnerAsync(w, "c-worked", channel);
         var ticket = w.Ticket(ticketId);
         var owner = ticket.CurrentOwnerEmployeeId!.Value;
 
@@ -165,7 +180,7 @@ public class ProvisionalOwnerReplacementTests
     public async Task AnIntentionalTransferByAPerson_IsNeverReversedByTheProvisionalOrConfirmedAgent(GenesysChannel channel)
     {
         var w = Build();
-        var ticketId = await IngestHumanRequiredAsync(w, "c-xfer", channel);
+        var ticketId = await IngestWithProvisionalOwnerAsync(w, "c-xfer", channel);
         var ticket = w.Ticket(ticketId);
         var provisional = ticket.CurrentOwnerEmployeeId!.Value;
 
@@ -179,9 +194,11 @@ public class ProvisionalOwnerReplacementTests
         await ConnectAsync(w, ticketId, "c-xfer", AnotherAgent(w, provisional));
 
         // The person's transfer stands: the department is unchanged and the connected agent does NOT take the ticket (no AssignOnAnswer). The setup
-        // above clears the owner, and the final rule is that a human-needed ticket is never left without a CS Agent, so the shared rotation gives it one.
+        // above clears the owner; on a Genesys messaging channel the shared rotation no longer fills the gap (the destination department's own
+        // assignment, run by the real transfer, is what deals it), so nobody is dealt here.
         Assert.Equal(w.Cs.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.NotNull(ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticketId.ToString());
     }
 
@@ -189,7 +206,7 @@ public class ProvisionalOwnerReplacementTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task RoundRobin_NeverPicksAnIneligibleCallCenterMember(GenesysChannel channel)
+    public async Task AnAuthorisedRetry_NeverPicksAnIneligibleCallCenterMember_WhileCreationDealsNobody(GenesysChannel channel)
     {
         var f = new GenesysServiceFixture(callCenterFirst: true, strictAccounts: true, assignOnAnswer: true);
         var (cs, _) = f.SeedGenesysDepartment("Customer Service", "CS");
@@ -213,7 +230,10 @@ public class ProvisionalOwnerReplacementTests
             var result = await f.Ingestion.IngestAsync(
                 ServiceAccount,
                 new GenesysInquiryDto($"c-elig-{i}", channel, CustomerPhone: "+971500000001", DepartmentId: cs.DepartmentId, HumanFollowUpRequired: true));
-            owners.Add(f.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId).CurrentOwnerEmployeeId!.Value);
+            var ticket = f.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
+            Assert.Null(ticket.CurrentOwnerEmployeeId);                                  // creation deals nobody on a messaging channel
+            var dealt = await f.AutoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.ManualRetry, DateTime.UtcNow, Guid.NewGuid());
+            owners.Add(dealt.AssignedEmployeeId!.Value);                                 // the authorised retry is the only thing that still rotates
         }
 
         var names = new Dictionary<Guid, string>
@@ -231,7 +251,7 @@ public class ProvisionalOwnerReplacementTests
     public async Task TwoConnectedEventsForDifferentAgents_LeaveExactlyOneOwnerAndOneCurrentRow_AndRedeliveryChangesNothing(GenesysChannel channel)
     {
         var w = Build();
-        var ticketId = await IngestHumanRequiredAsync(w, "c-race", channel);
+        var ticketId = await IngestWithProvisionalOwnerAsync(w, "c-race", channel);
         var provisional = w.Ticket(ticketId).CurrentOwnerEmployeeId!.Value;
         var contenders = w.Agents.Where(a => a.Id != provisional).Select(a => a.GenesysId).ToArray();
 

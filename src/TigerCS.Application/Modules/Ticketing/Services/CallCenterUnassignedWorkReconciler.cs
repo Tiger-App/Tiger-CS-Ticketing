@@ -168,6 +168,15 @@ public sealed class CallCenterUnassignedWorkReconciler(
             return new ReconcileResult(ticketId, classification.Class, ReconcileOutcome.Skipped);
         }
 
+        // A Genesys MESSAGING conversation (WhatsApp, web chat, Instagram, Facebook, social DM) is never dealt by a rotation: Genesys names who handles it
+        // (GenesysMessagingAssignmentPolicy). Enforced here and again inside the assignment service, whatever the job's configuration says.
+        if (classification.Action is UnassignedTicketAction.RoundRobinCallCenter or UnassignedTicketAction.RoundRobinDepartment
+            && await ticketRepository.GetByIdAsync(ticketId, cancellationToken) is { } waiting
+            && await autoAssignment.IsAwaitingGenesysMessagingAsync(waiting, cancellationToken))
+        {
+            return new ReconcileResult(ticketId, classification.Class, ReconcileOutcome.Skipped);
+        }
+
         if (classification.Action == UnassignedTicketAction.RoundRobinDepartment)
         {
             // A transfer left it unassigned in a department: that department's own Round Robin deals it once somebody there is eligible.

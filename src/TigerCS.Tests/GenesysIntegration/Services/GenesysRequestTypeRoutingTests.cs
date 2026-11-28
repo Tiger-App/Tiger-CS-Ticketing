@@ -104,7 +104,7 @@ public class GenesysRequestTypeRoutingTests
     // ---- Valid request type → configured department + existing auto-assignment ----
 
     [Fact]
-    public async Task ValidRequestType_AtIngestion_RoutesToTheConfiguredDepartment_AndAutoAssigns()
+    public async Task ValidRequestType_AtIngestion_RoutesToTheConfiguredDepartment_AndLeavesTheOwnerToGenesys()
     {
         var w = Build();
         var employee = AddFinanceEmployee(w);
@@ -120,13 +120,16 @@ public class GenesysRequestTypeRoutingTests
         Assert.NotNull(ticket.WorkflowTemplateId);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(w.Arrival.DepartmentId, ticket.OriginatingDepartmentId); // write-once
-        Assert.Equal(employee, ticket.CurrentOwnerEmployeeId);
         Assert.Equal(w.Finance.DepartmentId, result.Ticket!.CurrentDepartmentId);
 
-        // Classification, routing and assignment are each audited.
+        // A Genesys messaging ticket is never given a provisional owner by a request-type rule: Genesys names who handles it.
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        Assert.Empty(w.F.TicketAssignments.Added);
+
+        // Classification and routing are each audited; nobody was assigned, so there is no AutoAssign row.
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "ClassifyRequestType");
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "Transfer" && e.AfterValue!.Contains($"DepartmentId={w.Finance.DepartmentId}", StringComparison.Ordinal));
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains($"AssignedEmployeeId={employee}", StringComparison.Ordinal));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign");
 
         // A request type that classified the ticket means no human classification queue.
         Assert.Empty(w.F.Handoffs.All);
@@ -143,7 +146,7 @@ public class GenesysRequestTypeRoutingTests
 
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.StartsWith("DepartmentQueue", StringComparison.Ordinal));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign");   // a messaging ticket waits for Genesys: nothing is dealt or even attempted
     }
 
     // ---- Missing / unresolved request type → human classification queue ----
@@ -270,7 +273,7 @@ public class GenesysRequestTypeRoutingTests
         Assert.Equal("Classified", result.Classification!.Status);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(w.Arrival.DepartmentId, ticket.OriginatingDepartmentId);
-        Assert.Equal(employee, ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                       // the rule's employee is NOT given a Genesys messaging ticket
 
         // Classification raises no human work and leaves none behind.
         Assert.Empty(w.F.Handoffs.All);
@@ -392,15 +395,15 @@ public class GenesysRequestTypeRoutingTests
     // ---- First Response ----
 
     [Fact]
-    public async Task BotReplyAssignmentAndTransfer_DoNotCountAsFirstResponse_ButTheFirstHumanReplyDoes()
+    public async Task BotReplyAndRouting_DoNotCountAsFirstResponse_ButTheFirstHumanReplyDoes()
     {
         var w = Build();
         var employee = AddFinanceEmployee(w);
         w.F.AssignmentRules.Add(RequestTypeAssignmentRule.ForSpecificEmployee(w.RequestType.RequestTypeId, employee));
         var ticket = await IngestAsync(w, "conv-fr", new GenesysRequestTypeDto(w.RequestType.RequestTypeId));
 
-        // Routed and assigned...
-        Assert.Equal(employee, ticket.CurrentOwnerEmployeeId);
+        // Routed (a Genesys messaging ticket is not dealt to the rule's employee)...
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.FirstHumanResponseAtUtc);
 

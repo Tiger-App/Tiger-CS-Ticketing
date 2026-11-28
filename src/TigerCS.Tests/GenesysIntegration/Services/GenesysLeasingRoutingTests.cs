@@ -82,7 +82,7 @@ public class GenesysLeasingRoutingTests
             ServiceRequestId: "leasing-001", RequestType: new GenesysRequestTypeDto(Name: "Leasing"), HumanFollowUpRequired: true);
 
     [Fact]
-    public async Task TheUatLeasingRequest_CreatesASeparateTicket_RoutedToLeasing_AutoAssigned_AndOpenForHumanFollowUp()
+    public async Task TheUatLeasingRequest_CreatesASeparateTicket_RoutedToLeasing_NotDealtAnOwner_AndOpenForHumanFollowUp()
     {
         var w = Build();
         var documents = await w.F.Ingestion.IngestAsync(ServiceAccount, UatRequest() with
@@ -98,13 +98,13 @@ public class GenesysLeasingRoutingTests
         Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);       // by the configured request type, no id in code
         Assert.Equal(w.Bot.DepartmentId, ticket.OriginatingDepartmentId);
         Assert.Equal(w.LeasingType.RequestTypeId, ticket.RequestTypeId);
-        Assert.Equal(w.Employee, ticket.CurrentOwnerEmployeeId);                 // the existing assignment rule
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                              // the assignment rule does not deal a Genesys messaging ticket; Genesys names the handler
         Assert.Equal(TicketStatus.Open, ticket.TicketStatus);
         Assert.True(w.F.Interactions.All.Single(i => i.TicketId == ticket.TicketId).RequiresHumanFollowUp);
     }
 
     [Fact]
-    public async Task TheDedicatedLeasingInquiryType_RoutesFromGenesysByName_AtNormalPriority_AutoAssigned_AndOpenForHumanFollowUp()
+    public async Task TheDedicatedLeasingInquiryType_RoutesFromGenesysByName_AtNormalPriority_NotDealtAnOwner_AndOpenForHumanFollowUp()
     {
         var w = Build(requestTypeName: "Leasing Inquiry");
         var request = UatRequest() with { ServiceRequestId = "leasing-inquiry-001", RequestType = new GenesysRequestTypeDto(Name: "Leasing Inquiry") };
@@ -122,7 +122,7 @@ public class GenesysLeasingRoutingTests
         Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(w.LeasingType.RequestTypeId, ticket.RequestTypeId);
         Assert.Equal((byte)PriorityLevel.Medium, ticket.PriorityId);             // "Normal" is the Medium tier
-        Assert.Equal(w.Employee, ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                              // the assignment rule does not deal a Genesys messaging ticket
         Assert.True(w.F.Interactions.All.Single(i => i.TicketId == ticket.TicketId).RequiresHumanFollowUp);
 
         // a retry of the same (conversation, serviceRequestId) returns the same ticket; the old name no longer resolves
@@ -142,7 +142,7 @@ public class GenesysLeasingRoutingTests
         var ticket = w.F.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
         Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Null(ticket.CurrentOwnerEmployeeId);
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.StartsWith("DepartmentQueue", StringComparison.Ordinal));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign");   // nothing is dealt or attempted: Genesys names the handler
     }
 
     [Fact]

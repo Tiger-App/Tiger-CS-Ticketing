@@ -334,6 +334,12 @@ public sealed class CsAgentBackfillService(
                 result = await autoAssignment.EnsureCsAgentAsync(ticket, null, AutoAssignmentTrigger.Backfill, now, correlationId, cancellationToken);
             }
 
+            if (result.Outcome == AutoAssignmentOutcome.AwaitingGenesysConfirmation)
+            {
+                // A Genesys messaging conversation waits for Genesys to name who handles it: nothing was written, and the batch carries on (this is not a pool failure).
+                return new CsAgentBackfillTicketResult(ticketId, CsAgentBackfillOutcome.Skipped, cls);
+            }
+
             if (result.AssignedEmployeeId is not { } employeeId)
             {
                 // The engine has recorded the failure (audit + Manual Assignment Required, once); persist it and stop the caller.

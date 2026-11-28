@@ -208,7 +208,7 @@ public class GenesysHandoffAndClassificationRegressionTests
     }
 
     [Fact]
-    public async Task ClassificationChanges_WhileNoHumanHasWorkedTheTicket_KeepHistory_AndTransferWithOriginatingDepartmentUntouched()
+    public async Task ClassificationChanges_WhileNoHumanHasWorkedTheTicket_KeepHistory_AndTransferWithOriginatingDepartmentUntouched_WithoutDealingAnOwner()
     {
         var w = Build();
         var financeEmployee = Guid.NewGuid();
@@ -227,7 +227,7 @@ public class GenesysHandoffAndClassificationRegressionTests
         Assert.Equal(w.Receipt.RequestTypeId, ticket.RequestTypeId);
         Assert.Equal(w.Finance.DepartmentId, ticket.CurrentDepartmentId);          // transferred
         Assert.Equal(w.Arrival.DepartmentId, ticket.OriginatingDepartmentId);       // write-once, untouched
-        Assert.Equal(financeEmployee, ticket.CurrentOwnerEmployeeId);               // assignment re-run for the receiving department
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                 // a Genesys messaging ticket is not dealt to the rule's employee; Genesys names the handler
 
         // History: an append-only event and an audit entry name the previous and the new request type.
         var evt = Assert.Single(w.F.WorkflowEvents.All, e => e.EventType == WorkflowEventType.RequestTypeReclassified);

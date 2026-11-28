@@ -10,7 +10,7 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// "Whoever accepts owns it" holds on EVERY Genesys channel, not just Phone: Website Chat, WhatsApp, Instagram, Facebook and generic Social DM (Genesys normalizes Instagram
 /// and Facebook have their own channels; <see cref="GenesysChannel.SocialMedia"/> remains the generic fallback for other platforms). A mapped CS Agent reported as CONNECTED (routing.agentId) gets the ticket
 /// directly - no Round Robin turn is spent. An accepting agent who is not a CS Agent (or otherwise cannot take it) leaves the ticket in the Call
-/// Center queue, flagged. Nobody accepted but a person is required: Round Robin among CS Agents. AI-only chats and existing owners are untouched.
+/// Center queue, flagged. Nobody accepted but a person is required: the ticket is queued in the Call Center with NO owner - no Round Robin, Genesys names the handler. AI-only chats and existing owners are untouched.
 /// </summary>
 public class DigitalChannelAgentAcceptanceTests
 {
@@ -23,7 +23,7 @@ public class DigitalChannelAgentAcceptanceTests
 
     private sealed record World(GenesysServiceFixture F, Department Cs, (Guid Id, string GenesysId)[] Agents)
     {
-        /// <summary>The agent Round Robin would pick next.</summary>
+        /// <summary>The agent Round Robin would pick next (it must never be dealt a messaging ticket).</summary>
         public (Guid Id, string GenesysId) RoundRobinNext => Agents[0];
 
         /// <summary>Never the next in the rotation, so a direct assignment cannot be mistaken for Round Robin.</summary>
@@ -106,14 +106,17 @@ public class DigitalChannelAgentAcceptanceTests
         var conversation = $"conv-{channel}-created";
 
         // A top-level agentId on a digital inquiry is who is offered/assigned/queued - never proof of acceptance. The ticket needs a person, so it
-        // enters the Call Center and Round Robin picks a CS Agent (an automatic pre-assignment)...
+        // enters the Call Center queue and WAITS: no Round Robin, no provisional owner...
         var ticketId = await IngestAsync(w, channel, conversation, w.Accepting.GenesysId, humanFollowUp: true);
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        AssertSingleOwner(w, ticketId, w.RoundRobinNext.Id);
+        AssertSingleOwner(w, ticketId, null);
+        Assert.True(CursorUntouched(w));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticketId.ToString());
 
-        // ...and the agent owns it only once Genesys reports them CONNECTED; that replaces the automatic pick, leaving one owner, one row.
+        // ...and the agent owns it only once Genesys reports them CONNECTED: assigned directly, one owner, one row, still no rotation turn.
         await AcceptAsync(w, ticketId, conversation, w.Accepting.GenesysId);
         AssertSingleOwner(w, ticketId, w.Accepting.Id);
+        Assert.True(CursorUntouched(w));
     }
 
     [Theory]
@@ -133,7 +136,7 @@ public class DigitalChannelAgentAcceptanceTests
 
     [Theory]
     [MemberData(nameof(DigitalChannels))]
-    public async Task AcceptingAgentWhoIsNotACsAgent_IsFlagged_AndTheSharedRotationGivesTheTicketACsAgent(GenesysChannel channel)
+    public async Task AcceptingAgentWhoIsNotACsAgent_IsFlagged_AndTheTicketStaysUnassigned_NoRoundRobin(GenesysChannel channel)
     {
         var w = NewWorld();
         // A Call Center member with an operational role - but not CS Agent. Call Center tickets belong to CS Agents only.
@@ -143,20 +146,19 @@ public class DigitalChannelAgentAcceptanceTests
         await AcceptAsync(w, ticketId, $"conv-{channel}-ineligible", "g-dept-employee");
 
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        var owner = w.Ticket(ticketId).CurrentOwnerEmployeeId;
-        Assert.NotEqual(employee, owner);
-        Assert.Contains(owner, w.Agents.Select(a => (Guid?)a.Id));                           // an eligible CS Agent, never unassigned
-        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
+        Assert.NotEqual(employee, w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        AssertSingleOwner(w, ticketId, null);                                                 // flagged and unassigned: the next CS Agent in the rotation is NOT dealt it
+        Assert.True(CursorUntouched(w));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticketId.ToString());
         Assert.Equal(1, FlagCount(w, ticketId));
         Assert.Contains(w.F.Audit.Entries, e => e.Action == "AnswerAssignmentSkipped" && e.AfterValue!.Contains("Issue=NotCsAgent"));
     }
 
     [Theory]
     [MemberData(nameof(DigitalChannels))]
-    public async Task HumanRequiredButNobodyAccepted_UsesRoundRobin_AmongCsAgentsOnly(GenesysChannel channel)
+    public async Task HumanRequiredButNobodyAccepted_QueuesInTheCallCenter_NobodyIsDealt_NoRoundRobin(GenesysChannel channel)
     {
         var w = NewWorld();
-        w.F.AddAgent("g-cc-dept-employee", "CC Dept Employee", roles: [Roles.DepartmentEmployee]);   // in the Call Center, never dealt a ticket
         var ticketId = await IngestAsync(w, channel, $"conv-{channel}-rr");
 
         var handoff = await w.F.AgentHandoff.RequestAsync(
@@ -164,8 +166,10 @@ public class DigitalChannelAgentAcceptanceTests
 
         Assert.Equal(GenesysHandoffOutcome.HandoffRecorded, handoff.Outcome);
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        AssertSingleOwner(w, ticketId, w.RoundRobinNext.Id);
-        Assert.Contains(w.Agents, a => a.Id == w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        AssertSingleOwner(w, ticketId, null);
+        Assert.True(CursorUntouched(w));
+        Assert.NotNull(w.Ticket(ticketId).AiAgentOwnerEmployeeId);                           // the AI Agent stays the recorded owner while it waits
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticketId.ToString());
     }
 
     [Theory]

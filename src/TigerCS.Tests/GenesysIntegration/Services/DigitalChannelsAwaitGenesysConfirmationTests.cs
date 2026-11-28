@@ -7,12 +7,12 @@ using TigerCS.Tests.GenesysIntegration.Fakes;
 namespace TigerCS.Tests.GenesysIntegration.Services;
 
 /// <summary>
-/// <b>Digital-channel regression (PR #292 second pass).</b> The new AI-ownership / answering-agent rules are Phone-only. WhatsApp, web chat, Instagram, Facebook and social media keep
-/// the assignment behaviour they had before the PR - Call Center first with ONE Round Robin agent at creation / handoff / follow-up, the end-of-conversation promotion, the
-/// next-agent fallback and reassignment on transfer, no first response from a connect event, the Call-Center guard on AI closure - until their own requirements are final.
-/// Each scenario is the same one <see cref="VoiceOwnershipRulesTests"/> asserts for a call.
+/// <b>Genesys messaging channels wait for Genesys.</b> WhatsApp, web chat, Instagram, Facebook and social media never get a provisional human owner from TigerCS: the ticket is created and queued
+/// (Call Center first, the AI Agent as recorded owner) and then WAITS - no Round Robin at creation / handoff / follow-up / conversation end, no turn spent, no AutoAssign audit. A person owns it only
+/// when Genesys confirms who handles the conversation (<c>routing.agentId</c> connected). An answering agent who cannot take it is flagged and the ticket stays unassigned. Each scenario is the same
+/// one <see cref="VoiceOwnershipRulesTests"/> asserts for a call; the unchanged digital rules (no first response from a connect event, handling-state display, the Call-Center guard on AI closure) stay pinned too.
 /// </summary>
-public class DigitalChannelsKeepTheirPreviousBehaviourTests
+public class DigitalChannelsAwaitGenesysConfirmationTests
 {
     private static readonly Guid ServiceAccount = Guid.NewGuid();
 
@@ -54,9 +54,19 @@ public class DigitalChannelsKeepTheirPreviousBehaviourTests
             ServiceAccount, t.TicketId,
             new GenesysTicketUpdateDto(t.ConversationId, Routing: new GenesysRoutingUpdateDto(AgentId: genesysAgentId, ConnectedAtUtc: at ?? DateTime.UtcNow.AddSeconds(-5))));
 
+    private static bool CursorUntouched(World w) => w.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null);
+
+    private static void AssertAwaitingGenesys(World w, long ticketId)
+    {
+        Assert.Null(w.Ticket(ticketId).CurrentOwnerEmployeeId);                                 // nobody is dealt a provisional owner
+        Assert.DoesNotContain(w.F.TicketAssignments.Added, a => a.TicketId == ticketId);        // no assignment row
+        Assert.True(CursorUntouched(w));                                                        // no Round Robin turn was taken
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.EntityId == ticketId.ToString());
+    }
+
     [Theory]
     [MemberData(nameof(Digital))]
-    public async Task HumanFollowUpAtCreation_EntersTheCallCenter_WithOneRoundRobinAgent_AsOwner(GenesysChannel channel)
+    public async Task HumanFollowUpAtCreation_EntersTheCallCenter_WithNoOwner_AndTheAiAgentStaysRecordedOwner(GenesysChannel channel)
     {
         var w = NewWorld();
 
@@ -64,13 +74,13 @@ public class DigitalChannelsKeepTheirPreviousBehaviourTests
 
         var t = w.Ticket(chat.TicketId);
         Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);
-        Assert.Equal(w.Agents[0].Id, t.CurrentOwnerEmployeeId);                                // Round Robin, exactly as before the PR
-        Assert.Null(t.AiAgentOwnerEmployeeId);                                                 // a person owns it; the AI Agent no longer does
+        Assert.NotNull(t.AiAgentOwnerEmployeeId);                                              // the AI Agent stays the recorded owner until Genesys names a person
+        AssertAwaitingGenesys(w, chat.TicketId);
     }
 
     [Theory]
     [MemberData(nameof(Digital))]
-    public async Task AHandoffRequest_DealsOneAgentByRoundRobin_ImmediatelyAtHandoffTime(GenesysChannel channel)
+    public async Task AHandoffRequest_QueuesTheTicketInTheCallCenter_WithoutDealingAnyone(GenesysChannel channel)
     {
         var w = NewWorld();
         var chat = await ChatAsync(w, channel, "d-handoff");
@@ -79,13 +89,14 @@ public class DigitalChannelsKeepTheirPreviousBehaviourTests
             ServiceAccount, new GenesysHandoffRequestDto(chat.ConversationId, AgentAvailable: false, Mode: "HumanTakeover"));
 
         Assert.Equal(GenesysHandoffOutcome.HandoffRecorded, handoff.Outcome);
-        Assert.Equal(w.Agents[0].Id, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(chat.TicketId).CurrentDepartmentId);
+        Assert.NotNull(w.Ticket(chat.TicketId).AiAgentOwnerEmployeeId);
+        AssertAwaitingGenesys(w, chat.TicketId);
     }
 
     [Theory]
     [MemberData(nameof(Digital))]
-    public async Task AnAiConversationThatEndsUnresolved_IsPromotedToHumanWork_QueuedAndDealtByRoundRobin(GenesysChannel channel)
+    public async Task AnAiConversationThatEndsUnresolved_IsPromotedToHumanWork_QueuedButNotDealt(GenesysChannel channel)
     {
         var w = NewWorld();
         var chat = await ChatAsync(w, channel, "d-ended");
@@ -97,7 +108,7 @@ public class DigitalChannelsKeepTheirPreviousBehaviourTests
         var t = w.Ticket(chat.TicketId);
         Assert.True(w.F.InteractionFor(chat.ConversationId)!.RequiresHumanFollowUp);           // the previous behaviour: an unfinished AI end is human work
         Assert.Equal(w.F.CallCenter!.DepartmentId, t.CurrentDepartmentId);
-        Assert.Equal(w.Agents[0].Id, t.CurrentOwnerEmployeeId);
+        AssertAwaitingGenesys(w, chat.TicketId);                                                // queued for a person, but Genesys - not a rotation - names who
     }
 
     [Theory]
@@ -116,17 +127,16 @@ public class DigitalChannelsKeepTheirPreviousBehaviourTests
 
     [Theory]
     [MemberData(nameof(Digital))]
-    public async Task AnAnsweringAgentWhoCannotTakeIt_IsFlagged_AndTheSharedRotationStillGivesItACsAgent(GenesysChannel channel)
+    public async Task AnAnsweringAgentWhoCannotTakeIt_IsFlagged_AndTheTicketStaysUnassigned_NoRoundRobin(GenesysChannel channel)
     {
         var w = NewWorld();
         var chat = await ChatAsync(w, channel, "d-unmapped", humanFollowUp: true);
-        var provisional = w.Ticket(chat.TicketId).CurrentOwnerEmployeeId;
+        AssertAwaitingGenesys(w, chat.TicketId);
 
         await ConnectAsync(w, chat, "g-not-mapped-anywhere");
 
         Assert.Single(w.F.WorkflowEvents.All, e => e.TicketId == chat.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
-        Assert.NotNull(w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);                         // never left without a CS Agent (previous rule)
-        Assert.Equal(provisional, w.Ticket(chat.TicketId).CurrentOwnerEmployeeId);              // the existing eligible CS Agent is preserved
+        AssertAwaitingGenesys(w, chat.TicketId);                                                // flagged and unassigned: the next CS Agent in the rotation is NOT dealt the ticket
     }
 
     [Theory]

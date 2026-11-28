@@ -1,5 +1,6 @@
 using TigerCS.Application.Modules.GenesysIntegration.Dto;
 using TigerCS.Application.Modules.GenesysIntegration.Services;
+using TigerCS.Application.Modules.Ticketing.Services;
 using TigerCS.Domain.Modules.IdentityAndAccess;
 using TigerCS.Domain.Modules.SlaAndEscalation;
 using TigerCS.Domain.Modules.Ticketing;
@@ -14,10 +15,10 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// whole <c>POST /api/genesys/tickets</c> → <c>PATCH /api/genesys/tickets/{id}</c> journey, through the same services the endpoints call.
 ///
 /// <para>
-/// Pins, end to end: an AI-resolved ticket is never given to a person; an unresolved one enters the Call Center and gets ONE eligible agent
-/// by the existing Round Robin (or waits, visibly, in the Call Center queue when nobody is eligible); and none of it is repeated by a retry
-/// or a redelivery — no second ticket, no second hand-off, no second transfer, no second assignment. Request type validation, the Normal
-/// default priority and the SLA clock are unchanged by the hand-off.
+/// Pins, end to end: an AI-resolved ticket is never given to a person; an unresolved one enters the Call Center queue and WAITS there with the
+/// AI Agent as its recorded owner and no human owner - a Genesys messaging ticket is never dealt by Round Robin, Genesys confirms who handles it
+/// (GenesysMessagingAssignmentPolicy); and none of it is repeated by a retry or a redelivery — no second ticket, no second hand-off, no second
+/// transfer, no assignment. Request type validation, the Normal default priority and the SLA clock are unchanged by the hand-off.
 /// </para>
 /// </summary>
 public class GenesysAiUnresolvedHandoffAcceptanceTests
@@ -39,7 +40,8 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         var type = f.RequestTypes.Add(new RequestType(
             leasing.DepartmentId, "Handover", template.WorkflowId, (byte)PriorityLevel.Medium, false, true, true, true));
 
-        // A configured rule would hand an AI-classified ticket to this leasing employee (the automatic pre-assignment a hand-off releases).
+        // A configured rule that would have handed an AI-classified ticket to this leasing employee. A Genesys messaging ticket is no longer given it
+        // (the owner stays null), so nothing here may ever show up as an owner.
         var leasingEmployee = Guid.NewGuid();
         f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(leasingEmployee, leasing.DepartmentId, true, DateTime.UtcNow, null));
         f.AssignmentRules.Add(RequestTypeAssignmentRule.ForSpecificEmployee(type.RequestTypeId, leasingEmployee));
@@ -101,12 +103,15 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
     // ---- 2. the AI cannot resolve it: hand-off ----
 
     [Fact]
-    public async Task AiCannotResolve_Handoff_RoutesToCallCenter_AssignsOneAgentByRoundRobin_AndReleasesTheAutomaticPreAssignment()
+    public async Task AiCannotResolve_Handoff_RoutesToCallCenter_AssignsNobody_AndKeepsTheAiAgentAsOwner()
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "conv-fail", new GenesysRequestTypeDto(Name: "Handover"));
         var beforeEscalation = w.Ticket(ticketId);
         Assert.Equal(w.Leasing.DepartmentId, beforeEscalation.CurrentDepartmentId);       // AI-classified: routed by request type, AI still owns the chat
+        Assert.Null(beforeEscalation.CurrentOwnerEmployeeId);                              // the request-type rule's employee is NOT dealt for a messaging ticket
+        var aiOwner = beforeEscalation.AiAgentOwnerEmployeeId;
+        Assert.NotNull(aiOwner);
         var priorityBefore = beforeEscalation.PriorityId;
 
         var result = await EscalateAsync(w, ticketId, "conv-fail");
@@ -116,8 +121,10 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         var ticket = w.Ticket(ticketId);
         Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
         Assert.Equal(w.Cs.DepartmentId, ticket.OriginatingDepartmentId);                   // the originating department is never rewritten
-        Assert.Contains(ticket.CurrentOwnerEmployeeId, w.Agents.Cast<Guid?>());              // a SPECIFIC human, not a queue
-        Assert.Equal(1, CurrentAssignments(w, ticketId));                                  // single ownership
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                        // no provisional human: Genesys names who handles it
+        Assert.Equal(aiOwner, ticket.AiAgentOwnerEmployeeId);                              // the AI Agent stays the recorded owner
+        Assert.Equal(0, CurrentAssignments(w, ticketId));
+        Assert.True(w.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null));  // no Round Robin
         Assert.Equal(TicketStatus.Open, ticket.TicketStatus);
         Assert.Equal(priorityBefore, ticket.PriorityId);                                   // Normal, untouched by the hand-off
         Assert.Equal((byte)PriorityLevel.Medium, ticket.PriorityId);
@@ -127,7 +134,7 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
     }
 
     [Fact]
-    public async Task AiCannotResolve_RedeliveredHandoff_ChangesNothing_NoSecondTransfer_NoReassignment_NoSecondWorkItem()
+    public async Task AiCannotResolve_RedeliveredHandoff_ChangesNothing_NoSecondTransfer_NoAssignment_NoSecondWorkItem()
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "conv-retry");
@@ -143,9 +150,10 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         }
 
         Assert.Equal(owner, w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        Assert.Null(owner);
         Assert.Single(w.F.Handoffs.All);
         Assert.Equal(1, TransfersToCallCenter(w, ticketId));
-        Assert.Equal(1, CurrentAssignments(w, ticketId));
+        Assert.Equal(0, CurrentAssignments(w, ticketId));
         Assert.Single(w.F.Tickets.All);
         Assert.Equal(audit, w.F.Audit.Entries.Count);
         Assert.Equal(events, w.F.WorkflowEvents.All.Count);
@@ -165,14 +173,15 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         await EscalateAsync(w, ticketId, "conv-resume");
 
         Assert.Equal(owner, w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        Assert.Null(owner);
         Assert.Equal(1, TransfersToCallCenter(w, ticketId));
-        Assert.Equal(1, CurrentAssignments(w, ticketId));
+        Assert.Equal(0, CurrentAssignments(w, ticketId));
     }
 
     // ---- 3. missing request type ----
 
     [Fact]
-    public async Task MissingRequestType_TicketIsStillCreated_OnNormalPriority_AndAHandoffStillReachesAPerson()
+    public async Task MissingRequestType_TicketIsStillCreated_OnNormalPriority_AndAHandoffStillQueuesItForAPerson_WhoseNameGenesysConfirmsLater()
     {
         var w = Build();
 
@@ -188,7 +197,7 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         await EscalateAsync(w, ticket.TicketId, "conv-no-type");
 
         Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Contains(ticket.CurrentOwnerEmployeeId, w.Agents.Cast<Guid?>());
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                        // queued in the Call Center, nobody dealt
         Assert.Null(ticket.RequestTypeId);                                                 // still unclassified: a person classifies it
         Assert.Equal((byte)PriorityLevel.Medium, ticket.PriorityId);
     }
@@ -226,7 +235,7 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         var handoff = Assert.Single(w.F.Handoffs.All);
         Assert.Equal(AgentHandoffStatus.WaitingForAgent, handoff.Status);
         Assert.Equal(1, TransfersToCallCenter(w, ticketId));
-        Assert.Contains(w.F.Audit.Entries, e => e.Action == "AutoAssign" && e.AfterValue!.Contains("Status=Unassigned"));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign");           // waiting for Genesys is not an assignment failure
     }
 
     // ---- 5. duplicate requests ----
@@ -261,18 +270,22 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
 
         Assert.Equal(GenesysIngestionOutcome.AlreadyIngested, again.Outcome);
         Assert.Equal(owner, w.Ticket(ticketId).CurrentOwnerEmployeeId);
-        Assert.Equal(1, CurrentAssignments(w, ticketId));
+        Assert.Null(owner);
+        Assert.Equal(0, CurrentAssignments(w, ticketId));
         Assert.Single(w.F.Handoffs.All);
     }
 
     // ---- 6. an AI-resolved ticket is not left on a person just because a rule pre-assigned it ----
 
     [Fact]
-    public async Task AiResolved_AfterARuleAutoAssignedIt_TheAiCanStillCloseIt_BecauseNoPersonHasTouchedIt()
+    public async Task AiResolved_AfterALegacyAutomaticPreAssignment_TheAiCanStillCloseIt_BecauseNoPersonHasTouchedIt()
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "conv-pre-assigned", new GenesysRequestTypeDto(Name: "Handover"));
-        Assert.NotNull(w.Ticket(ticketId).CurrentOwnerEmployeeId);                         // the configured rule pre-assigned a leasing employee
+        Assert.Null(w.Ticket(ticketId).CurrentOwnerEmployeeId);                            // a messaging ticket is no longer pre-assigned by the rule
+        // A legacy ticket that already HAS an automatic pre-assignment: the system (authorised retry bypasses the Genesys-messaging guard) deals the leasing employee.
+        await w.F.AutoAssignment.AssignDepartmentRoundRobinAsync(w.Ticket(ticketId), AutoAssignmentTrigger.ManualRetry, DateTime.UtcNow, Guid.NewGuid());
+        Assert.NotNull(w.Ticket(ticketId).CurrentOwnerEmployeeId);
 
         var result = await w.F.TicketUpdate.UpdateAsync(ServiceAccount, ticketId, new GenesysTicketUpdateDto("conv-pre-assigned", ClosedByAi: true));
 
@@ -292,9 +305,8 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         var ticketId = await IngestAsync(w, "conv-person-owned", new GenesysRequestTypeDto(Name: "Handover"));
         var ticket = w.Ticket(ticketId);
         var person = Guid.NewGuid();
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                        // nothing was pre-assigned
         // A person (not the system) took it: the current assignment names them as the assigning actor.
-        var current = w.F.TicketAssignments.Added.Single(a => a.TicketId == ticketId && a.IsCurrent);
-        current.MarkSuperseded();
         w.F.TicketAssignments.Added.Add(new TicketAssignment(ticketId, person, ticket.CurrentDepartmentId, DateTime.UtcNow, assigningActorEmployeeId: person));
         ticket.AssignTo(person);
 
@@ -344,6 +356,6 @@ public class GenesysAiUnresolvedHandoffAcceptanceTests
         Assert.False(result.ClosedByAi);
         Assert.Equal(TicketStatus.Open, w.Ticket(ticketId).TicketStatus);
         Assert.Single(w.F.Handoffs.All);
-        Assert.Contains(w.Ticket(ticketId).CurrentOwnerEmployeeId, w.Agents.Cast<Guid?>());
+        Assert.Null(w.Ticket(ticketId).CurrentOwnerEmployeeId);                            // queued for a person, nobody dealt
     }
 }

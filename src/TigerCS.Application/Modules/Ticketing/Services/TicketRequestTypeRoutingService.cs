@@ -214,7 +214,8 @@ public sealed class TicketRequestTypeRoutingService(
         Guid correlationId,
         CancellationToken cancellationToken = default,
         bool reclassify = false,
-        bool voiceAiOwnership = false)
+        bool voiceAiOwnership = false,
+        bool awaitGenesysConfirmation = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         if (!resolution.IsValid || resolution.RequestType is null || resolution.PublishedWorkflow is null)
@@ -228,6 +229,10 @@ public sealed class TicketRequestTypeRoutingService(
         var previousRequestTypeId = ticket.RequestTypeId;
         // VOICE only: the AI classifying its own phone conversation routes the department and SLA but assigns nobody. Digital channels keep the previous behaviour.
         var aiHandled = voiceAiOwnership && source.StartsWith("Genesys", StringComparison.OrdinalIgnoreCase) && ticket.AiAgentOwnerEmployeeId is not null && ticket.CurrentOwnerEmployeeId is null;
+        // GENESYS MESSAGING: the same "classify and route, never assign" for an ownerless conversation Genesys will hand to a person (GenesysMessagingAssignmentPolicy).
+        // Unlike voice it does NOT change which tickets move: a ticket already in the Call Center still stays there (the previous digital routing), and the AI
+        // Agent keeps its recorded ownership through whatever department move does happen.
+        var awaitingGenesys = awaitGenesysConfirmation && source.StartsWith("Genesys", StringComparison.OrdinalIgnoreCase) && ticket.CurrentOwnerEmployeeId is null;
 
         if (reclassify)
         {
@@ -258,7 +263,7 @@ public sealed class TicketRequestTypeRoutingService(
         if (transferred)
         {
             // The AI classifying its own conversation routes the ticket's department (and SLA) - it does not hand the ticket to a person.
-            ticket.TransferToDepartment(requestType.DepartmentId, preserveOwner: true, keepAiAgentOwner: aiHandled);
+            ticket.TransferToDepartment(requestType.DepartmentId, preserveOwner: true, keepAiAgentOwner: aiHandled || (awaitingGenesys && ticket.AiAgentOwnerEmployeeId is not null));
 
             await auditWriter.WriteAsync(
                 actorEmployeeId, "Transfer", "Ticket", ticket.TicketId.ToString(),
@@ -281,7 +286,7 @@ public sealed class TicketRequestTypeRoutingService(
             assignmentOutcome = "CollectionsTower";
             assignedEmployeeId = ticket.CurrentOwnerEmployeeId;
         }
-        else if (aiHandled)
+        else if (aiHandled || awaitingGenesys)
         {
             // AI-handled: routed and SLA-applied above, but NOT assigned. The AI Agent stays the owner while it handles the customer; a person is
             // assigned only on a real acceptance / answer, or by an authorised person.

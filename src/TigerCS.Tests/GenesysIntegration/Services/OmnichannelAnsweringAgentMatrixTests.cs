@@ -71,6 +71,17 @@ public class OmnichannelAnsweringAgentMatrixTests
     private static Task<GenesysTicketUpdateResult> ConnectAsync(World w, long ticketId, string conversationId, string agentId) =>
         UpdateAsync(w, ticketId, new GenesysTicketUpdateDto(conversationId, Routing: new GenesysRoutingUpdateDto(AgentId: agentId, ConnectedAtUtc: DateTime.UtcNow)));
 
+    private static bool RotationUntouched(World w) => w.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null);
+
+    /// <summary>A Genesys messaging ticket waiting for Genesys: no owner, no assignment row, no Round Robin / AutoAssign trace, and the AI Agent is still the recorded owner.</summary>
+    private static void AssertAwaitingGenesys(World w, long ticketId)
+    {
+        AssertOneOwner(w, ticketId, null);
+        Assert.Equal(ServiceAccount, w.Ticket(ticketId).AiAgentOwnerEmployeeId);
+        Assert.True(RotationUntouched(w));
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action is "AutoAssign" or "AssignOnAnswer" && e.EntityId == ticketId.ToString());
+    }
+
     private static void AssertOneOwner(World w, long ticketId, Guid? expected)
     {
         Assert.Equal(expected, w.Ticket(ticketId).CurrentOwnerEmployeeId);
@@ -161,11 +172,10 @@ public class OmnichannelAnsweringAgentMatrixTests
         Assert.Equal(w.Cs.DepartmentId, w.Ticket(offered).CurrentDepartmentId);
         AssertOneOwner(w, offered, null);
 
-        // Offered agent AND a human is required: Call Center + Round Robin (the offered agent is not special-cased)...
+        // Offered agent AND a human is required: Call Center queue, nobody dealt - Genesys has not confirmed the agent (the offered agent is not special-cased)...
         var required = await IngestAsync(w, "c-required", channel, agentId: AnsweringGenesysId, humanFollowUp: true);
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(required).CurrentDepartmentId);
-        Assert.Contains(w.Ticket(required).CurrentOwnerEmployeeId!.Value, w.RoundRobinAgents);
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == required.ToString());
+        AssertAwaitingGenesys(w, required);
 
         // ...and only an update that reports the agent CONNECTED hands it to them.
         await ConnectAsync(w, required, "c-required", AnsweringGenesysId);
@@ -174,7 +184,7 @@ public class OmnichannelAnsweringAgentMatrixTests
 
     [Theory]
     [MemberData(nameof(DigitalChannels))]
-    public async Task AnAgentOnlyAssignedByTheHandoff_IsNotAcceptance_RoundRobinStillApplies(GenesysChannel channel)
+    public async Task AnAgentOnlyAssignedByTheHandoff_IsNotAcceptance_TheTicketWaitsInTheCallCenterQueue_NobodyIsDealt(GenesysChannel channel)
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-handoff", channel);
@@ -183,15 +193,14 @@ public class OmnichannelAnsweringAgentMatrixTests
             "c-handoff", Handoff: new GenesysHandoffUpdateDto(Required: true, AgentAvailable: true, Mode: "HumanTakeover")));
 
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        Assert.Contains(w.Ticket(ticketId).CurrentOwnerEmployeeId!.Value, w.RoundRobinAgents);
-        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AssignOnAnswer" && e.EntityId == ticketId.ToString());
+        AssertAwaitingGenesys(w, ticketId);
     }
 
-    // ---- 4. human required, nobody accepted -> Round Robin ----------------------------------------------------------------------
+    // ---- 4. human required, nobody accepted -> the ticket waits for Genesys (no Round Robin) ----------------------------------------------------------------------
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task HumanRequiredAtCreation_NobodyAccepted_GoesToCallCenter_AndRoundRobinWalksTheAgents(GenesysChannel channel)
+    public async Task HumanRequiredAtCreation_NobodyAccepted_GoesToCallCenter_AndNobodyIsDealt_RoundRobinDoesNotMove(GenesysChannel channel)
     {
         var w = Build();
 
@@ -199,15 +208,13 @@ public class OmnichannelAnsweringAgentMatrixTests
         var second = await IngestAsync(w, "c-rr-2", channel, humanFollowUp: true);
         var third = await IngestAsync(w, "c-rr-3", channel, humanFollowUp: true);
 
-        var owners = new[] { first, second, third }.Select(id => w.Ticket(id).CurrentOwnerEmployeeId!.Value).ToArray();
         Assert.All(new[] { first, second, third }, id => Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(id).CurrentDepartmentId));
-        Assert.Equal(3, owners.Distinct().Count());          // three eligible agents, three consecutive tickets: strictly one each
-        Assert.All(owners, o => Assert.Contains(o, w.RoundRobinAgents));
+        Assert.All(new[] { first, second, third }, id => AssertAwaitingGenesys(w, id));      // three eligible agents, three tickets: nobody dealt, the rotation never moved
     }
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task HumanRequiredReportedLater_RoutesTheTicket_ToCallCenter_WithOneAgent(GenesysChannel channel)
+    public async Task HumanRequiredReportedLater_RoutesTheTicket_ToCallCenter_WithoutAnOwner(GenesysChannel channel)
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-late", channel);
@@ -216,8 +223,7 @@ public class OmnichannelAnsweringAgentMatrixTests
         await UpdateAsync(w, ticketId, new GenesysTicketUpdateDto("c-late", HumanFollowUpRequired: true));
 
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        Assert.Contains(w.Ticket(ticketId).CurrentOwnerEmployeeId!.Value, w.RoundRobinAgents);
-        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
+        AssertAwaitingGenesys(w, ticketId);
     }
 
     // ---- 5. AI-only is preserved ---------------------------------------------------------------------------------------------------
@@ -246,12 +252,11 @@ public class OmnichannelAnsweringAgentMatrixTests
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-owned", channel, humanFollowUp: true);
-        var rotationOwner = w.Ticket(ticketId).CurrentOwnerEmployeeId!.Value;
-        var other = w.RoundRobinAgents.First(a => a != rotationOwner && a != w.Answering);
+        AssertOneOwner(w, ticketId, null);
+        var other = w.RoundRobinAgents.First(a => a != w.Answering);
 
         // Another agent takes the ticket themselves (a human act, not an automatic pre-assignment).
         var ticket = w.Ticket(ticketId);
-        w.F.TicketAssignments.Added.Single(a => a.TicketId == ticketId && a.IsCurrent).MarkSuperseded();
         ticket.AssignTo(other);
         await w.F.TicketAssignments.AddAsync(
             new TicketAssignment(ticketId, other, w.F.CallCenter!.DepartmentId, DateTime.UtcNow, assigningActorEmployeeId: other));
@@ -296,7 +301,7 @@ public class OmnichannelAnsweringAgentMatrixTests
 
     [Theory]
     [MemberData(nameof(AllChannels))]
-    public async Task ConnectedAgentWhoCannotTakeIt_IsFlagged_AndTheSharedRotationGivesItACsAgent(GenesysChannel channel)
+    public async Task ConnectedAgentWhoCannotTakeIt_IsFlagged_AndTheTicketStaysUnassigned_NoRotationFallback(GenesysChannel channel)
     {
         var w = Build();
         var ticketId = await IngestAsync(w, "c-cannot", channel, humanFollowUp: null);
@@ -306,10 +311,9 @@ public class OmnichannelAnsweringAgentMatrixTests
         await ConnectAsync(w, ticketId, "c-cannot", "g-finance-person");
 
         Assert.Equal(w.F.CallCenter!.DepartmentId, w.Ticket(ticketId).CurrentDepartmentId);
-        var owner = w.Ticket(ticketId).CurrentOwnerEmployeeId;
-        Assert.NotNull(owner);
-        Assert.NotEqual(outsider, owner);
-        Assert.Single(w.F.TicketAssignments.Added, a => a.TicketId == ticketId && a.IsCurrent);
+        Assert.NotEqual(outsider, w.Ticket(ticketId).CurrentOwnerEmployeeId);
+        AssertOneOwner(w, ticketId, null);                   // flagged and left in the queue - never dealt to the next CS Agent by the shared rotation
+        Assert.True(RotationUntouched(w));
         Assert.Contains(w.F.WorkflowEvents.All, e => e.TicketId == ticketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
     }
 }
