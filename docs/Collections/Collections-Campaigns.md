@@ -110,7 +110,7 @@ UTF-8 attachment with BOM. Financial responses and downloads set `Cache-Control:
 | Stage, CycleKey, ReadAtUtc | Communication stage, monthly cycle, and latest report-read timestamp |
 | Status, Reason, Use | Ready/review/preview/internal state, reasons, and intended use of the export |
 | VoiceEligible, SmsEligible, EmailEligible | Custom campaign columns to map/filter in Genesys; not claims that Genesys configured contactability |
-| TowerNumber, TowerName | **Review export only** (the Genesys file keeps the 22 columns above): the tower number and its real name, the same values the pages show; the name is empty when no source knows one (never invented) |
+| TowerNumber, TowerName, ProjectName | The tower number (**review file only**) and the real tower name, the same values the pages show. `ProjectName` always carries the **same value as `TowerName`** (never the project code such as TP130); both are empty when no source knows a real tower name (never invented). The review file ends `...,TowerNumber,TowerName,ProjectName`; the Genesys file keeps its 22 columns and ends `...,ProjectName,TowerName`. Appending columns is safe for the contact list: `LegacyExportColumnMap` matches the 22-column file by column name, and the six-column Auto contact list template is not changed |
 
 Numeric amount strings have at least two decimal places with no thousands separators for machine parsing; the display uses
 thousands separators. Preview may show source precision for review but cannot export it as Ready. If a unit has several

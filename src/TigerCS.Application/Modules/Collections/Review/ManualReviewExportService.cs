@@ -27,7 +27,7 @@ public sealed class ManualReviewExportService(
 
     private static readonly string[] Header =
     [
-        "Customer", "Phone", "Email", "Project", "Tower", "Unit", "Campaign", "Amount", "Currency", "EarliestDueDate", "Status", "Reasons", "PreviousDispatch", "ApprovalDataAsOf"
+        "Customer", "Phone", "Email", "Project", "Tower", "Unit", "Campaign", "Amount", "Currency", "EarliestDueDate", "Status", "Reasons", "PreviousDispatch", "ApprovalDataAsOf", "ProjectName", "TowerName"
     ];
 
     public async Task<CollectionsResult<ReviewExportDto>> ExportAsync(CollectionsCaller caller, ReviewFilter? filter, CancellationToken ct)
@@ -70,12 +70,14 @@ public sealed class ManualReviewExportService(
         foreach (var r in rows)
         {
             var tower = CollectionsTowerName.IsUsable(r.TowerName, r.TowerNumber) ? r.TowerName! : r.TowerNumber ?? "";
+            // ProjectName and TowerName (the last two columns) both carry the real tower name, never the project code and never the tower number.
+            var towerName = CollectionsTowerName.IsUsable(r.TowerName, r.TowerNumber) ? r.TowerName!.Trim() : "";
             string[] cells =
             [
                 r.CustomerName, r.Phone, r.Email, r.ProjectCode, tower, r.UnitCode, CampaignReminderTypes.StageName(Enum.Parse<CampaignReminderType>(r.ReminderType)),
                 r.RemainingAmount?.ToString("0.00", CultureInfo.InvariantCulture) ?? "", r.Currency, r.DueDate?.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "", r.ValidationStatus,
                 string.Join("; ", r.Reasons.Select(x => x.Explanation)),
-                r.PreviousDispatchStatus is null ? "" : $"{r.PreviousDispatchStatus} {(r.PreviousDispatchAtUtc is { } prev ? TigerCS.Domain.Common.UaeCalendar.ToUaeDate(prev).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "")}", run.AsOfDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)
+                r.PreviousDispatchStatus is null ? "" : $"{r.PreviousDispatchStatus} {(r.PreviousDispatchAtUtc is { } prev ? TigerCS.Domain.Common.UaeCalendar.ToUaeDate(prev).ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) : "")}", run.AsOfDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture), towerName, towerName
             ];
             // A review file is opened in a spreadsheet: every cell is neutralized, including the phone.
             text.Append(string.Join(',', cells.Select(v => CollectionsCampaignCsv.Cell(v, review: true, isPhone: false)))).Append("\r\n");

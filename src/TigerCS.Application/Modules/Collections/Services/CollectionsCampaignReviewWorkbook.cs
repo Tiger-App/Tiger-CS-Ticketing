@@ -8,7 +8,7 @@ namespace TigerCS.Application.Modules.Collections.Services;
 
 /// <summary>
 /// The employee-facing Campaigns review workbook (.xlsx): ONE row per customer/unit with only
-/// CompanyId, TenantId, CustomerName, Tower, UnitNumber, TotalAmount, DueAmount, OverdueAmount.
+/// CompanyId, TenantId, CustomerName, Tower, UnitNumber, TotalAmount, DueAmount, OverdueAmount, then ProjectName and TowerName (both the real tower name).
 /// It is a pure presentation of the already-validated preview items (same filters, same snapshot amounts);
 /// it recalculates nothing. Audit / eligibility fields (RecordId, CycleKey, ReadAtUtc, Status, Reason, channel flags ...)
 /// stay on the backend items and in the audit CSV. Written with System.IO.Compression only (no spreadsheet dependency).
@@ -18,9 +18,9 @@ public static class CollectionsCampaignReviewWorkbook
     public const string ContentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
     public static readonly IReadOnlyList<string> Headers =
-        ["CompanyId", "TenantId", "CustomerName", "Tower", "UnitNumber", "TotalAmount", "DueAmount", "OverdueAmount"];
+        ["CompanyId", "TenantId", "CustomerName", "Tower", "UnitNumber", "TotalAmount", "DueAmount", "OverdueAmount", "ProjectName", "TowerName"];
 
-    private static readonly double[] Widths = [11, 16, 34, 24, 14, 16, 16, 16];
+    private static readonly double[] Widths = [11, 16, 34, 24, 14, 16, 16, 16, 24, 24];
 
     /// <summary>The tower name where CRM/PACT holds a real one, else the tower code (never a made-up name).</summary>
     public static string TowerLabel(CollectionsCampaignContactDto c) =>
@@ -55,7 +55,7 @@ public static class CollectionsCampaignReviewWorkbook
                 """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>""");
             var lastRow = Math.Max(1, rows.Count + 1);
             Add(zip, "xl/workbook.xml",
-                $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Campaign Review" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'Campaign Review'!$A$1:$H${lastRow}</definedName></definedNames></workbook>""");
+                $"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Campaign Review" sheetId="1" r:id="rId1"/></sheets><definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'Campaign Review'!$A$1:$J${lastRow}</definedName></definedNames></workbook>""");
             Add(zip, "xl/_rels/workbook.xml.rels",
                 """<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>""");
             // Style 0 = default, 1 = bold header on a grey fill, 2 = number with two decimals and a thousands separator (#,##0.00).
@@ -70,7 +70,7 @@ public static class CollectionsCampaignReviewWorkbook
     {
         var xml = new StringBuilder();
         xml.Append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">""");
-        xml.Append($"<dimension ref=\"A1:H{lastRow}\"/>");
+        xml.Append($"<dimension ref=\"A1:J{lastRow}\"/>");
         xml.Append("""<sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/><selection pane="bottomLeft" activeCell="A2" sqref="A2"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="15"/>""");
         xml.Append("<cols>");
         for (var i = 0; i < Widths.Length; i++)
@@ -93,11 +93,15 @@ public static class CollectionsCampaignReviewWorkbook
             xml.Append(Number($"F{r}", c.TotalAmount, style: 2));
             xml.Append(Number($"G{r}", c.DueAmount, style: 2));
             xml.Append(Number($"H{r}", c.OverdueAmount, style: 2));
+            // ProjectName and TowerName both carry the real tower name (never the project code); empty when the tower has no real name.
+            var towerName = CollectionsTowerName.IsUsable(c.TowerName, c.TowerNumber) ? c.TowerName!.Trim() : "";
+            xml.Append(Text($"I{r}", towerName));
+            xml.Append(Text($"J{r}", towerName));
             xml.Append("</row>");
             r++;
         }
         xml.Append("</sheetData>");
-        xml.Append(CultureInfo.InvariantCulture, $"<autoFilter ref=\"A1:H{lastRow}\"/>");
+        xml.Append(CultureInfo.InvariantCulture, $"<autoFilter ref=\"A1:J{lastRow}\"/>");
         xml.Append("</worksheet>");
         return xml.ToString();
     }

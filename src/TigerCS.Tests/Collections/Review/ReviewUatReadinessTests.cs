@@ -155,8 +155,8 @@ public sealed class ReviewUatReadinessTests(ITestOutputHelper output)
     [Fact]
     public void TheReviewExport_IsNotTheContactListTemplate_AndItsColumnsMapExplicitly()
     {
-        // The internal review CSV (the 22 supplied columns + TowerNumber, TowerName; the Genesys file keeps the 22) vs the 6 contact-list columns.
-        var header = "RecordId,CustomerKey,CompanyId,TenantId,CustomerName,Phone,Email,UnitId,UnitCode,ProjectCode,Amount,Currency,DueDate,Stage,CycleKey,ReadAtUtc,Status,Reason,Use,VoiceEligible,SmsEligible,EmailEligible,TowerNumber,TowerName".Split(',');
+        // The internal review CSV (the 22 supplied columns + TowerNumber, TowerName, ProjectName; the Genesys file is the 22 + ProjectName, TowerName) vs the 6 contact-list columns.
+        var header = "RecordId,CustomerKey,CompanyId,TenantId,CustomerName,Phone,Email,UnitId,UnitCode,ProjectCode,Amount,Currency,DueDate,Stage,CycleKey,ReadAtUtc,Status,Reason,Use,VoiceEligible,SmsEligible,EmailEligible,TowerNumber,TowerName,ProjectName".Split(',');
         var report = new CollectionsCampaignPreviewDto(new DateOnly(2026, 10, 14), new DateOnly(2026, 10, 14), DateTime.UtcNow, "PACT", "OverdueReminder", "2026-10:OverdueReminder",
             [new DateOnly(2026, 10, 14)], true, true, false, true, 0, 0, 0, 1, 25, []);
         Assert.Equal(header, CollectionsCampaignCsv.Write(report, review: true).Split("\r\n")[0].Split(','));

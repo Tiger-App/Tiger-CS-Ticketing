@@ -120,9 +120,9 @@ public sealed class CollectionsCampaignAppServiceTests
         Assert.Equal(29, file.RowCount); Assert.Equal(2, h.Source.Reads);
         Assert.Contains(stableId, file.Csv);
         using var parser = new TextFieldParser(new StringReader(file.Csv)) { Delimiters = [","], HasFieldsEnclosedInQuotes = true };
-        Assert.Equal(22, parser.ReadFields()!.Length);
+        Assert.Equal(24, parser.ReadFields()!.Length);   // the 22 columns + ProjectName, TowerName
         var tenants = new List<string>();
-        while (!parser.EndOfData) { var cells = parser.ReadFields()!; tenants.Add(cells[3]); Assert.Equal("+971500003001", cells[5]); Assert.Equal(new[] { "true", "true", "true" }, cells[19..]); }
+        while (!parser.EndOfData) { var cells = parser.ReadFields()!; tenants.Add(cells[3]); Assert.Equal("+971500003001", cells[5]); Assert.Equal(new[] { "true", "true", "true" }, cells[19..22]); }
         Assert.Equal(29, tenants.Count); Assert.DoesNotContain("1", tenants);
     }
 
@@ -213,7 +213,7 @@ public sealed class CollectionsCampaignAppServiceTests
         using var parser = new TextFieldParser(new StringReader(file.Csv)) { Delimiters = [","], HasFieldsEnclosedInQuotes = true };
         parser.ReadFields(); var fields = parser.ReadFields()!;
         Assert.Equal("'=\"Example,\"\nCustomer", fields[4]); Assert.Equal("'+971500003001", fields[5]);
-        Assert.Equal("500.00", fields[10]); Assert.Equal(24, fields.Length); Assert.Equal(new[] { "false", "false", "false" }, fields[19..22]);   // the review file adds TowerNumber, TowerName
+        Assert.Equal("500.00", fields[10]); Assert.Equal(25, fields.Length); Assert.Equal(new[] { "false", "false", "false" }, fields[19..22]);   // the review file adds TowerNumber, TowerName, ProjectName
     }
 
     [Theory]
