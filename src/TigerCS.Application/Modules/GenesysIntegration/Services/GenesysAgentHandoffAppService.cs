@@ -351,6 +351,13 @@ public sealed class GenesysAgentHandoffAppService(
             return await answeringAgents.ResolveAsync(hinted, cancellationToken);
         }
 
+        // GENESYS MESSAGING: the handler recorded on the interaction may be only an OFFERED agent (the inquiry's top-level agentId is recorded as handler at
+        // creation). A confirmed connection is applied by the update that reports it (routing.agentId), so only the hint above counts here.
+        if (GenesysMessagingAssignmentPolicy.IsMessagingChannel(interaction.ChannelId))
+        {
+            return null;
+        }
+
         return interaction.HandledByUserId is { } handledBy && NullIfBlank(interaction.GenesysAgentUserId) is { } handlerGenesysId
             ? new Ticketing.Services.AnsweringAgent(handlerGenesysId, handledBy)
             : null;
