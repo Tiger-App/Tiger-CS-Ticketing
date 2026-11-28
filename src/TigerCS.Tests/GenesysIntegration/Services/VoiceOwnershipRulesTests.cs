@@ -10,7 +10,7 @@ namespace TigerCS.Tests.GenesysIntegration.Services;
 /// The approved VOICE business rules (PR #292, second pass), through the real ingestion / update / handoff services:
 /// AI answers -> the AI Agent owns it; AI resolves -> closed under the AI Agent; a human answers directly -> that employee; AI transfers -> the first human who actually
 /// answered; a later agent never replaces the original; call termination alone never closes, flags or assigns; Round Robin never runs at handoff time; first response is the
-/// real connect time. The same scenarios on a digital channel keep their previous behaviour (see <see cref="DigitalChannelsKeepTheirPreviousBehaviourTests"/>).
+/// real connect time. The same scenarios on a digital channel wait for Genesys to name the handler (see <see cref="DigitalChannelsAwaitGenesysConfirmationTests"/>).
 /// </summary>
 public class VoiceOwnershipRulesTests
 {
