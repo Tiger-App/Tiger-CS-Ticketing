@@ -299,7 +299,7 @@ public sealed class CollectionsCampaignVerificationTests
         var header = csv.Split("\r\n")[0].Split(',').ToList();
 
         Assert.Equal(documented, header);
-        Assert.Equal(24, header.Count);   // the Genesys file keeps its 22 columns; the internal review file adds TowerNumber, TowerName
+        Assert.Equal(25, header.Count);   // the 22 supplied columns + TowerNumber, TowerName, ProjectName (the Genesys file: the 22 + ProjectName, TowerName)
     }
 
     [Theory]
@@ -342,6 +342,31 @@ public sealed class CollectionsCampaignVerificationTests
         Assert.Equal("'+971500003001", review[5]);
         Assert.Equal("GenesysCampaign", genesys[18]);
         Assert.Equal("InternalReviewOnly", review[18]);
+    }
+
+    [Fact]
+    public async Task EveryCampaignCsv_CarriesProjectNameAndTowerName_AsTheSameRealTowerName_NeverTheProjectCode()
+    {
+        var h = new CollectionsCampaignAppServiceTests.Harness();
+        h.Campaign.FinancialSourceValidated = true;
+        h.Source.Items.Add(CollectionsCampaignAppServiceTests.Row(unit: 101) with { ProjectCode = "TP130", TowerId = 7, TowerNumber = "130", TowerName = "Guzel Towers" });
+        h.Source.Items.Add(CollectionsCampaignAppServiceTests.Row(unit: 102, tenant: "3002") with { ProjectCode = "TP130", TowerId = 8, TowerNumber = "131", TowerName = "TP131" });   // no real name: left empty, never invented
+
+        foreach (var mode in new[] { "review", "genesys" })
+        {
+            var rows = TigerCS.Application.Modules.Collections.Review.GenesysContactTemplate.ParseCsv((await h.Service.ExportAsync(h.Manager, "CurrentMonthReminder", mode)).Value!.Csv);
+            var header = rows[0];
+            Assert.Equal(mode == "review" ? 25 : 24, header.Count);
+            Assert.Equal(header.Count - 1, header.IndexOf(mode == "review" ? "ProjectName" : "TowerName"));   // appended last: every earlier column keeps its place
+            Assert.Equal("ProjectCode", header[9]);
+            var named = Assert.Single(rows.Skip(1), r => r[8] == "TP140-101");
+            Assert.Equal("TP130", named[9].TrimStart('\''));                        // ProjectCode itself is untouched
+            Assert.Equal("Guzel Towers", named[header.IndexOf("ProjectName")]);
+            Assert.Equal(named[header.IndexOf("TowerName")], named[header.IndexOf("ProjectName")]);
+            var unnamed = Assert.Single(rows.Skip(1), r => r[8] == "TP140-102");
+            Assert.Equal("", unnamed[header.IndexOf("ProjectName")]);
+            Assert.Equal("", unnamed[header.IndexOf("TowerName")]);
+        }
     }
 
     private static string[] Parse(string csv)

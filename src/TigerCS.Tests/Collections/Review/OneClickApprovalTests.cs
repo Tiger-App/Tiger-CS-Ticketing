@@ -221,6 +221,21 @@ public sealed class OneClickApprovalTests
     }
 
     [Fact]
+    public async Task AdminReportCsv_EndsWithProjectNameAndTowerName_BothTheRealTowerName()
+    {
+        var h = new ReviewHarness();
+        h.Campaign.AdminNotification.Recipients = [AdminA];
+        h.Source.Items.Add(ReviewHarness.Row(1, 101m) with { ProjectCode = "TP130", TowerId = 7, TowerNumber = "130", TowerName = "Guzel Towers" });
+        await h.RefreshAsync();
+        using var _ = h;
+        await ApproveAndSendAsync(h, Units(1));
+        var rows = GenesysContactTemplate.ParseCsv(Attachment(h.Email));
+        Assert.Equal(["ProjectName", "TowerName"], rows[0].TakeLast(2));
+        Assert.Equal(["Guzel Towers", "Guzel Towers"], rows[1].TakeLast(2));
+        Assert.Equal("Campaign", rows[0][0]);                                            // the earlier columns are unchanged
+    }
+
+    [Fact]
     public async Task MultipleRecipients_EachGetTheReport_AndSeparatorsInOneEntryAreSplit()
     {
         using var h = await SeededAsync(1, $"{AdminA}; {AdminB}", AdminA.ToUpperInvariant());

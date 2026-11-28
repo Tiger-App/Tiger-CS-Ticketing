@@ -215,6 +215,31 @@ public sealed class ManualGenesysTemplateTests
         Assert.Equal(ManualGenesysFile.Template, GenesysContactTemplate.ParseCsv(exported.Value!)[0]);
     }
 
+    [Fact]
+    public async Task TheDispatchAuditExport_CarriesTheRealTowerNameInBothProjectNameAndTowerName()
+    {
+        using var h = await SeededAsync(null, ReviewHarness.Row(1, 5000m, day: 20) with { ProjectCode = "TP130", TowerId = 7, TowerNumber = "130", TowerName = "Guzel Towers" });
+        await SendAsync(h);
+        using var scope = h.NewScope();
+        var exported = await scope.Dispatch.ExportContactsAsync(h.Manager, await DispatchPublicIdAsync(h, h.Scheduler.Dispatches.Single()), CancellationToken.None);
+        var row = Assert.Single(ManualGenesysFile.Records(exported.Value!));
+        Assert.Equal("Guzel Towers", row["ProjectName"]); Assert.Equal("Guzel Towers", row["TowerName"]);
+    }
+
+    [Fact]
+    public async Task TheManualReviewCsv_CarriesProjectNameAndTowerName_AsTheRealTowerName_AndKeepsItsOtherColumns()
+    {
+        using var h = await SeededAsync(null, ReviewHarness.Row(1, 5000m, day: 20) with { ProjectCode = "TP130", TowerId = 7, TowerNumber = "130", TowerName = "Guzel Towers" });
+        using var scope = h.NewScope();
+        var rows = GenesysContactTemplate.ParseCsv((await scope.ReviewExport.ExportAsync(h.Manager, Filter(), CancellationToken.None)).Value!.Csv);
+        var header = rows[0];
+        Assert.Equal(["ProjectName", "TowerName"], header.TakeLast(2));                      // appended: every earlier column keeps its place
+        Assert.Equal(14, header.IndexOf("ProjectName"));
+        var row = Assert.Single(rows.Skip(1));
+        Assert.Equal("Guzel Towers", row[header.IndexOf("ProjectName")]); Assert.Equal("Guzel Towers", row[header.IndexOf("TowerName")]);
+        Assert.Equal("TP130", row[header.IndexOf("Project")]); Assert.Equal("Guzel Towers", row[header.IndexOf("Tower")]);   // the existing columns are unchanged
+    }
+
     private static async Task<Guid> DispatchPublicIdAsync(ReviewHarness h, long dispatchId)
     {
         using var context = h.CreateContext();

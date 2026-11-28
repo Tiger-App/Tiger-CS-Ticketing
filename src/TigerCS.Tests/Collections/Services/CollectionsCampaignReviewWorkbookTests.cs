@@ -40,13 +40,16 @@ public sealed class CollectionsCampaignReviewWorkbookTests
     }
 
     [Fact]
-    public void Workbook_HasOnlyTheEightColumns_AndNoTechnicalFields()
+    public void Workbook_HasOnlyTheTenColumns_AndNoTechnicalFields()
     {
         var xlsx = CollectionsCampaignReviewWorkbook.Write(Report(Row("TP124-1001", "124", "Tiger Heights", 100.5m, 20m)));
         var sheet = Entry(xlsx, "xl/worksheets/sheet1.xml");
-        foreach (var header in new[] { "CompanyId", "TenantId", "CustomerName", "Tower", "UnitNumber", "TotalAmount", "DueAmount", "OverdueAmount" })
+        foreach (var header in new[] { "CompanyId", "TenantId", "CustomerName", "Tower", "UnitNumber", "TotalAmount", "DueAmount", "OverdueAmount", "ProjectName", "TowerName" })
             Assert.Contains($">{header}<", sheet);
-        Assert.Equal(8, System.Text.RegularExpressions.Regex.Matches(sheet, "<c r=\"[A-Z]1\"").Count);
+        Assert.Equal(10, System.Text.RegularExpressions.Regex.Matches(sheet, "<c r=\"[A-Z]1\"").Count);
+        // ProjectName (I) and TowerName (J) both carry the real tower name, never the project code.
+        Assert.Matches("<c r=\"I2\"[^>]*><is><t[^>]*>Tiger Heights</t>", sheet);
+        Assert.Matches("<c r=\"J2\"[^>]*><is><t[^>]*>Tiger Heights</t>", sheet);
         foreach (var technical in new[] { "RecordId", "CycleKey", "ReadAtUtc", "Reason", "rec-secret", "cycle-secret", "Eligible", "Qualifies", "+971500000000" })
             Assert.DoesNotContain(technical, sheet);
         Assert.Contains("A &amp; B &lt;Ltd&gt;", sheet);
@@ -54,15 +57,24 @@ public sealed class CollectionsCampaignReviewWorkbookTests
         Assert.Contains("<v>100.50</v>", sheet);
         Assert.Contains("<v>20.00</v>", sheet);
         Assert.Contains("state=\"frozen\"", sheet);
-        Assert.Contains("<autoFilter ref=\"A1:H2\"/>", sheet);
+        Assert.Contains("<autoFilter ref=\"A1:J2\"/>", sheet);
         Assert.Contains(">1001<", sheet);
         Assert.DoesNotContain("TP124", sheet);
+    }
+
+    [Fact]
+    public void Workbook_LeavesProjectNameAndTowerNameEmpty_WhenTheTowerHasNoRealName_AndKeepsTheTowerColumn()
+    {
+        var sheet = Entry(CollectionsCampaignReviewWorkbook.Write(Report(Row("TP124-1001", "124", "TP124", 1, 0))), "xl/worksheets/sheet1.xml");
+        Assert.Matches("<c r=\"D2\"[^>]*><is><t[^>]*>124</t>", sheet);                 // the existing Tower column still falls back to the code
+        Assert.Matches("<c r=\"I2\"[^>]*><is><t[^>]*></t>", sheet);
+        Assert.Matches("<c r=\"J2\"[^>]*><is><t[^>]*></t>", sheet);
     }
 
     [Fact]
     public void Workbook_WithNoRows_StillHasAHeaderRow()
     {
         var sheet = Entry(CollectionsCampaignReviewWorkbook.Write(Report()), "xl/worksheets/sheet1.xml");
-        Assert.Contains("<autoFilter ref=\"A1:H1\"/>", sheet);
+        Assert.Contains("<autoFilter ref=\"A1:J1\"/>", sheet);
     }
 }

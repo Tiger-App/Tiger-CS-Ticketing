@@ -486,7 +486,7 @@ public static class CollectionsCampaignCsv
     public static string Write(CollectionsCampaignPreviewDto report, bool review)
     {
         var text = new StringBuilder();
-        text.Append("RecordId,CustomerKey,CompanyId,TenantId,CustomerName,Phone,Email,UnitId,UnitCode,ProjectCode,Amount,Currency,DueDate,Stage,CycleKey,ReadAtUtc,Status,Reason,Use,VoiceEligible,SmsEligible,EmailEligible" + (review ? ",TowerNumber,TowerName" : "") + "\r\n");
+        text.Append("RecordId,CustomerKey,CompanyId,TenantId,CustomerName,Phone,Email,UnitId,UnitCode,ProjectCode,Amount,Currency,DueDate,Stage,CycleKey,ReadAtUtc,Status,Reason,Use,VoiceEligible,SmsEligible,EmailEligible" + (review ? ",TowerNumber,TowerName,ProjectName" : ",ProjectName,TowerName") + "\r\n");
         foreach (var c in report.Items)
         {
             var cells = new[] { c.RecordId, c.CustomerKey, c.CompanyId.ToString(CultureInfo.InvariantCulture), c.TenantId,
@@ -496,8 +496,10 @@ public static class CollectionsCampaignCsv
                 report.ReadAtUtc.ToString("O", CultureInfo.InvariantCulture), c.Status, c.Reason,
                 review ? "InternalReviewOnly" : "GenesysCampaign", !review && c.VoiceEligible ? "true" : "false",
                 !review && c.SmsEligible ? "true" : "false", !review && c.EmailEligible ? "true" : "false" };
-            // The internal review file also names the tower (the number and the name from the same source as the pages); the Genesys file keeps its established columns.
-            if (review) cells = [.. cells, c.TowerNumber ?? "", CollectionsTowerName.IsUsable(c.TowerName, c.TowerNumber) ? c.TowerName! : ""];
+            // Both files end with ProjectName and TowerName carrying the SAME real tower name (never the project code, e.g. TP130; empty when the tower has no real name). The internal review file also
+            // names the tower number before them. Every earlier column keeps its name, position and value; the contact-list template columns are matched by name (LegacyExportColumnMap), so appended columns are safe.
+            var tower = CollectionsTowerName.IsUsable(c.TowerName, c.TowerNumber) ? c.TowerName! : "";
+            cells = review ? [.. cells, c.TowerNumber ?? "", tower, tower] : [.. cells, tower, tower];
             text.Append(string.Join(',', cells.Select((v, index) => Cell(v, review, isPhone: index == 5)))).Append("\r\n");
         }
         return text.ToString();

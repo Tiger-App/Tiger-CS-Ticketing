@@ -195,7 +195,7 @@ public sealed class DispatchAdminReportService(
         {
             var batchRef = d.Batches.ToDictionary(b => b.CollectionsGenesysBatchId, b => b);
             var csv = new StringBuilder();
-            csv.Append(string.Join(',', "Campaign", "Customer", "Unit", "Phone", "Email", "Amount", "Currency", "DueDate", "Result", "Detail", "GenesysBatch", "GenesysBatchId", "GenesysContactList", "GenesysCampaignId", "GenesysContactId")).Append("\r\n");
+            csv.Append(string.Join(',', "Campaign", "Customer", "Unit", "Phone", "Email", "Amount", "Currency", "DueDate", "Result", "Detail", "GenesysBatch", "GenesysBatchId", "GenesysContactList", "GenesysCampaignId", "GenesysContactId", "ProjectName", "TowerName")).Append("\r\n");
             foreach (var i in items)
             {
                 batchRef.TryGetValue(i.CollectionsGenesysBatchId ?? 0, out var b);
@@ -204,7 +204,8 @@ public sealed class DispatchAdminReportService(
                     Cell(b?.StageName ?? CampaignReminderTypes.StageName(i.ReminderType)), Cell(i.CustomerName), Cell(i.UnitCode), Cell(MaskPhone(i.Phone)), Cell(MaskEmail(i.Email)),
                     Cell(i.Amount.ToString("0.00", CultureInfo.InvariantCulture)), Cell(i.Currency), Cell(i.DueDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture)),
                     Cell(ResultLabel(i.Status)), Cell(i.StatusReason), Cell(b is null ? "" : b.Sequence.ToString(CultureInfo.InvariantCulture)),
-                    Cell(b is null ? "" : b.CollectionsGenesysBatchId.ToString(CultureInfo.InvariantCulture)), Cell(b?.ContactListId), Cell(b?.GenesysCampaignId), Cell(i.GenesysContactId)
+                    Cell(b is null ? "" : b.CollectionsGenesysBatchId.ToString(CultureInfo.InvariantCulture)), Cell(b?.ContactListId), Cell(b?.GenesysCampaignId), Cell(i.GenesysContactId),
+                    Cell(i.TowerName), Cell(i.TowerName)   // ProjectName and TowerName: the same real tower name frozen on the item (never the project code)
                 })).Append("\r\n");
             }
             var bytes = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(csv.ToString())).ToArray();
