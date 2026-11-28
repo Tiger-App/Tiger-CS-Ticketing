@@ -144,7 +144,35 @@ public class GenesysHumanAcceptedCallRoutingTests
 
         Assert.Equal(s.Accounting.DepartmentId, bot.CurrentDepartmentId);
         Assert.Null(bot.CurrentOwnerEmployeeId);
-        AssertRoutedToCallCenterWithOneAgent(s, person);
+
+        // The human line (no Genesys user id on it) routes the ticket to the Call Center queue, but a messaging ticket is never dealt to a
+        // Round Robin pick: nobody is named, so nobody owns it.
+        Assert.Equal(s.F.CallCenter!.DepartmentId, person.CurrentDepartmentId);
+        Assert.Equal(s.Accounting.DepartmentId, person.OriginatingDepartmentId);
+        Assert.Null(person.CurrentOwnerEmployeeId);
+        Assert.DoesNotContain(s.F.TicketAssignments.Added, a => a.TicketId == person.TicketId);
+        Assert.True(s.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null));
+    }
+
+    [Fact]
+    public async Task HumanAgentTranscriptLine_FromAMappedPerson_AssignsThatPerson_AndFromAnUnmappedSenderAssignsNobody()
+    {
+        var s = Build();
+        var mapped = await IngestAsync(s, "tx-mapped", GenesysChannel.WebsiteChat);
+        var unmapped = await IngestAsync(s, "tx-unmapped", GenesysChannel.WebsiteChat);
+        var at = DateTime.UtcNow;
+
+        await UpdateAsync(s, mapped, new GenesysTicketUpdateDto(
+            "tx-mapped", Transcript: [new GenesysTranscriptMessageDto("HumanAgent", at, "Hello, this is Sara.", "Sara", SenderId: HumanGenesysId, ExternalMessageId: "m3")]));
+        await UpdateAsync(s, unmapped, new GenesysTicketUpdateDto(
+            "tx-unmapped", Transcript: [new GenesysTranscriptMessageDto("HumanAgent", at, "Hello, this is Omar.", "Omar", SenderId: "unmapped-sender", ExternalMessageId: "m4")]));
+
+        Assert.Equal(s.F.CallCenter!.DepartmentId, mapped.CurrentDepartmentId);
+        Assert.Equal(s.CallCenterAgents[^1], mapped.CurrentOwnerEmployeeId);            // the person who actually wrote to the customer
+        Assert.Single(s.F.TicketAssignments.Added, a => a.TicketId == mapped.TicketId && a.IsCurrent);
+        Assert.Null(unmapped.CurrentOwnerEmployeeId);                                   // an unknown sender id is never replaced by Round Robin
+        Assert.DoesNotContain(s.F.TicketAssignments.Added, a => a.TicketId == unmapped.TicketId);
+        Assert.True(s.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null));
     }
 
     [Fact]

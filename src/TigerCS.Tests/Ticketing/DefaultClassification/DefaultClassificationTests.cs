@@ -39,6 +39,7 @@ public class DefaultClassificationTests
         public required RequestType FinanceType { get; init; }
         public required Department Leasing { get; init; }
         public Guid[] Agents { get; init; } = [];
+        public string[] AgentGenesysIds { get; init; } = [];
     }
 
     private static World Build(bool callCenterFirst = false, bool seedDefault = true, int agents = 0)
@@ -62,17 +63,17 @@ public class DefaultClassificationTests
             (_, general, generalType) = f.SeedDefaultClassification(cs);
         }
 
-        var agentIds = Enumerable.Range(0, agents).Select(_ => Guid.NewGuid()).OrderBy(id => id).ToArray();
-        foreach (var id in agentIds)
-        {
-            f.DepartmentAssignments.Assignments.Add(
-                new UserDepartmentAssignment(id, f.CallCenter!.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
-        }
+        // Call Center CS Agents mapped to Genesys users: a messaging ticket is owned only by the agent Genesys reports as connected.
+        var people = Enumerable.Range(0, agents)
+            .Select(i => (GenesysId: $"g-dc-{i}", Id: f.AddAgent($"g-dc-{i}", $"Agent {i}")))
+            .OrderBy(a => a.Id)
+            .ToArray();
+        var agentIds = people.Select(a => a.Id).ToArray();
 
         return new World
         {
             F = f, Cs = cs, General = general!, GeneralType = generalType!, Finance = finance, FinanceCategory = financeCategory,
-            FinanceType = financeType, Leasing = leasing, Agents = agentIds
+            FinanceType = financeType, Leasing = leasing, Agents = agentIds, AgentGenesysIds = people.Select(a => a.GenesysId).ToArray()
         };
     }
 
@@ -88,6 +89,18 @@ public class DefaultClassificationTests
         Assert.Equal(GenesysIngestionOutcome.TicketCreated, result.Outcome);
         return (w.F.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId), result);
     }
+
+    /// <summary>Genesys reports an agent connected: the ticket is assigned directly to that CS Agent (no Round Robin, no provisional owner).</summary>
+    private static async Task AcceptAsync(World w, Ticket ticket, string conversationId, int agent = 0)
+    {
+        var result = await w.F.TicketUpdate.UpdateAsync(
+            ServiceAccount, ticket.TicketId,
+            new GenesysTicketUpdateDto(conversationId, Routing: new GenesysRoutingUpdateDto(AgentId: w.AgentGenesysIds[agent], ConnectedAtUtc: DateTime.UtcNow)));
+        Assert.Equal(GenesysTicketUpdateOutcome.Applied, result.Outcome);
+        Assert.Equal(w.Agents[agent], ticket.CurrentOwnerEmployeeId);
+    }
+
+    private static bool RotationUntouched(World w) => w.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null);
 
     private static void AssertIsDefault(World w, Ticket ticket)
     {
@@ -386,13 +399,12 @@ public class DefaultClassificationTests
     private static GenesysTicketUpdateDto UpdateWithType(string conversationId, GenesysRequestTypeDto type) => new(conversationId, RequestType: type);
 
     [Fact]
-    public async Task GenesysUpdate_WithAValidRequestType_ReplacesTheGeneralFallback_AndKeepsTheCsAgent()
+    public async Task GenesysUpdate_WithAValidRequestType_ReplacesTheGeneralFallback_WithoutAProvisionalOwner_AndKeepsTheCsAgentGenesysConfirms()
     {
         var w = Build(callCenterFirst: true, agents: 2);
         var (ticket, _) = await IngestAsync(w, "conv-refine", humanFollowUp: true);
         AssertIsDefault(w, ticket);
-        var owner = ticket.CurrentOwnerEmployeeId;
-        Assert.Equal(w.Agents[0], owner);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                // Genesys, not Round Robin, names the person
 
         var update = await w.F.TicketUpdate.UpdateAsync(
             ServiceAccount, ticket.TicketId, UpdateWithType("conv-refine", new GenesysRequestTypeDto(w.FinanceType.RequestTypeId)));
@@ -400,8 +412,12 @@ public class DefaultClassificationTests
         Assert.Equal(GenesysTicketUpdateOutcome.Applied, update.Outcome);
         Assert.Equal(w.FinanceCategory.CategoryId, ticket.CategoryId);
         Assert.Equal(w.FinanceType.RequestTypeId, ticket.RequestTypeId);
-        Assert.Equal(owner, ticket.CurrentOwnerEmployeeId);                        // classification never clears the CS Agent
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                // classifying by Genesys does not deal a provisional owner
+        Assert.True(RotationUntouched(w));
         Assert.Equal(w.F.CallCenter!.DepartmentId, ticket.CurrentDepartmentId);    // and the Call Center keeps routing
+
+        await AcceptAsync(w, ticket, "conv-refine");                               // the agent Genesys confirms keeps the ticket
+        Assert.Equal(w.FinanceType.RequestTypeId, ticket.RequestTypeId);
     }
 
     [Fact]
@@ -484,6 +500,7 @@ public class DefaultClassificationTests
     {
         var w = Build(callCenterFirst: true, agents: 1);
         var (ticket, _) = await IngestAsync(w, "conv-manual", humanFollowUp: true);
+        await AcceptAsync(w, ticket, "conv-manual");
         var owner = ticket.CurrentOwnerEmployeeId;
         var priority = ticket.PriorityId;
         var period = Assert.Single(w.F.Sla.SlaInstances.All);
@@ -567,7 +584,7 @@ public class DefaultClassificationTests
     // ---- CS Agent ownership ----
 
     [Fact]
-    public async Task HumanNeededGeneralTickets_GetTheNextCsAgentInSequence_NotADepartmentEmployee()
+    public async Task HumanNeededGeneralTickets_WaitInTheCallCenterForGenesys_NoRoundRobinAndNotADepartmentEmployee()
     {
         var w = Build(callCenterFirst: true, agents: 3);
         // A Customer Services employee with an assignment rule configured for General must still not receive the ticket automatically.
@@ -584,8 +601,11 @@ public class DefaultClassificationTests
             owners.Add(ticket.CurrentOwnerEmployeeId);
         }
 
-        Assert.Equal([w.Agents[0], w.Agents[1], w.Agents[2], w.Agents[0]], owners);
-        Assert.DoesNotContain(csEmployee, owners.Cast<Guid>());
+        Assert.All(owners, Assert.Null);                                          // nobody is dealt: Genesys names the handler
+        Assert.True(RotationUntouched(w));
+        Assert.Empty(w.F.TicketAssignments.Added);
+        Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "AutoAssign");
+        Assert.DoesNotContain(csEmployee, owners.Where(o => o is not null).Cast<Guid>());
     }
 
     [Fact]
@@ -603,7 +623,8 @@ public class DefaultClassificationTests
         Assert.Null(ticket.CurrentOwnerEmployeeId);
         AssertIsDefault(w, ticket);                                              // closing keeps the classification it had
         Assert.DoesNotContain(w.F.WorkflowEvents.All, e => e.TicketId == ticket.TicketId && e.EventType == WorkflowEventType.ManualAssignmentRequired);
-        Assert.Equal(w.Agents[0], (await IngestAsync(w, "conv-next", humanFollowUp: true)).Ticket.CurrentOwnerEmployeeId);  // the rotation did not advance
+        Assert.True(RotationUntouched(w));                                       // the rotation did not advance
+        Assert.Null((await IngestAsync(w, "conv-next", humanFollowUp: true)).Ticket.CurrentOwnerEmployeeId);   // and a human-follow-up ticket is not dealt either
     }
 
     [Fact]
@@ -611,15 +632,16 @@ public class DefaultClassificationTests
     {
         var w = Build(callCenterFirst: true, agents: 2);
         var (ticket, _) = await IngestAsync(w, "conv-confirmed", humanFollowUp: true);
-        var automaticOwner = ticket.CurrentOwnerEmployeeId;
-        Assert.Equal(w.Agents[0], automaticOwner);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);
+        await AcceptAsync(w, ticket, "conv-confirmed", agent: 1);
+        var confirmedOwner = ticket.CurrentOwnerEmployeeId;
 
         // Reclassify by an authorized person: the owner is not cleared or replaced.
         await w.F.Classification.ClassifyAsync(
-            w.Agents[0], [Roles.CsAgent], ticket.TicketId,
+            w.Agents[1], [Roles.CsAgent], ticket.TicketId,
             Reclassify(w.FinanceCategory.CategoryId, ticket.PriorityId!.Value, w.FinanceType.RequestTypeId));
 
-        Assert.Equal(automaticOwner, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(confirmedOwner, ticket.CurrentOwnerEmployeeId);
     }
 
     // ---- Department transfers keep the classification ----

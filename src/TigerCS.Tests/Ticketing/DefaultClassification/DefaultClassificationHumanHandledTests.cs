@@ -40,6 +40,7 @@ public class DefaultClassificationHumanHandledTests
         public required Category HandoverCategory { get; init; }
         public required RequestType HandoverType { get; init; }
         public Guid[] Agents { get; init; } = [];
+        public string[] AgentGenesysIds { get; init; } = [];
     }
 
     private static World Build(int agents = 2)
@@ -54,16 +55,18 @@ public class DefaultClassificationHumanHandledTests
         var handoverCategory = f.Categories.Seed(handover.DepartmentId, "Handover Request");
         var t2 = f.WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: 601));
         var handoverType = f.RequestTypes.Add(new RequestType(handover.DepartmentId, "Handover Request", t2.WorkflowId, (byte)PriorityLevel.Medium, false, true, true, true));
-        var ids = Enumerable.Range(0, agents).Select(_ => Guid.NewGuid()).OrderBy(i => i).ToArray();
-        foreach (var id in ids)
-        {
-            f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(id, f.CallCenter!.DepartmentId, true, DateTime.UtcNow, null));
-        }
+        // Call Center CS Agents mapped to Genesys users: a messaging ticket is owned only by the agent Genesys reports as connected.
+        var people = Enumerable.Range(0, agents)
+            .Select(i => (GenesysId: $"g-hh-{i}", Id: f.AddAgent($"g-hh-{i}", $"Agent {i}")))
+            .OrderBy(a => a.Id)
+            .ToArray();
+        var ids = people.Select(a => a.Id).ToArray();
 
         return new World
         {
             F = f, Cs = cs, CsGeneral = csGeneral, Leasing = leasing, LeasingGeneral = leasingGeneral, LeasingGeneralType = leasingType,
-            Handover = handover, HandoverCategory = handoverCategory, HandoverType = handoverType, Agents = ids
+            Handover = handover, HandoverCategory = handoverCategory, HandoverType = handoverType, Agents = ids,
+            AgentGenesysIds = people.Select(a => a.GenesysId).ToArray()
         };
     }
 
@@ -76,6 +79,31 @@ public class DefaultClassificationHumanHandledTests
         return w.F.Tickets.All.Single(t => t.TicketId == result.Ticket!.TicketId);
     }
 
+    /// <summary>Genesys reports an agent connected: the ticket is assigned directly to that CS Agent (no Round Robin, no provisional owner).</summary>
+    private static async Task AcceptAsync(World w, Ticket t, string conv, int agent = 0)
+    {
+        var result = await w.F.TicketUpdate.UpdateAsync(
+            ServiceAccount, t.TicketId, new GenesysTicketUpdateDto(conv, Routing: new GenesysRoutingUpdateDto(AgentId: w.AgentGenesysIds[agent], ConnectedAtUtc: DateTime.UtcNow)));
+        Assert.Equal(GenesysTicketUpdateOutcome.Applied, result.Outcome);
+        Assert.Equal(w.Agents[agent], t.CurrentOwnerEmployeeId);
+    }
+
+    /// <summary>
+    /// A human-handled ticket that an authorised person has assigned to the first CS Agent (an explicit manual assignment / retry - the only
+    /// way besides Genesys confirming an agent that a messaging ticket gets an owner). Used where the test is about a person working the ticket
+    /// and the department it arrived in has no General of its own, which makes a Genesys agent update refuse (classification gap).
+    /// </summary>
+    private static async Task<Ticket> IngestAssignedAsync(
+        World w, string conv, int? departmentId, GenesysChannel channel = GenesysChannel.WhatsApp, GenesysRequestTypeDto? type = null)
+    {
+        var t = await IngestAsync(w, conv, departmentId, channel, type: type);
+        Assert.Null(t.CurrentOwnerEmployeeId);
+        var result = await w.F.AutoAssignment.EnsureCsAgentAsync(t, null, AutoAssignmentTrigger.ManualRetry, DateTime.UtcNow, Guid.NewGuid());
+        Assert.Equal(w.Agents[0], t.CurrentOwnerEmployeeId);
+        Assert.NotEqual(AutoAssignmentOutcome.AwaitingGenesysConfirmation, result.Outcome);
+        return t;
+    }
+
     private static async Task AssertValidAsync(World w, Ticket t) =>
         Assert.Equal(TicketClassificationState.Valid, await w.F.DefaultClassification.AssessAsync(t.CategoryId, t.RequestTypeId));
 
@@ -83,16 +111,20 @@ public class DefaultClassificationHumanHandledTests
 
     [Theory]
     [MemberData(nameof(Channels))]
-    public async Task HumanHandled_OnEveryChannel_HasACsAgentAndAValidClassification_InTheSameDepartment(GenesysChannel channel)
+    public async Task HumanHandled_OnEveryChannel_HasAValidClassification_InTheSameDepartment_AndTheConfirmedCsAgentOwnsIt(GenesysChannel channel)
     {
         var w = Build();
 
         var t = await IngestAsync(w, "conv-h", w.Leasing.DepartmentId, channel);
 
-        Assert.Contains(t.CurrentOwnerEmployeeId, w.Agents.Cast<Guid?>());
+        Assert.Null(t.CurrentOwnerEmployeeId);                       // Genesys, not Round Robin, names the person
         Assert.Equal(w.Leasing.DepartmentId, t.OriginatingDepartmentId);
         Assert.Equal(w.LeasingGeneral.CategoryId, t.CategoryId);
         Assert.Equal(w.LeasingGeneralType.RequestTypeId, t.RequestTypeId);
+        await AssertValidAsync(w, t);
+
+        await AcceptAsync(w, t, "conv-h");                           // Genesys confirms the agent: assigned directly
+        Assert.Equal(w.Leasing.DepartmentId, t.OriginatingDepartmentId);
         await AssertValidAsync(w, t);
     }
 
@@ -106,12 +138,12 @@ public class DefaultClassificationHumanHandledTests
         Assert.Equal(w.HandoverCategory.CategoryId, t.CategoryId);
         Assert.Equal(w.HandoverType.RequestTypeId, t.RequestTypeId);
         Assert.Equal(w.Handover.DepartmentId, t.OriginatingDepartmentId);
-        Assert.NotNull(t.CurrentOwnerEmployeeId);
+        Assert.Null(t.CurrentOwnerEmployeeId);
         Assert.DoesNotContain(w.F.Audit.Entries, e => e.Action == "ApplyDefaultClassification");
     }
 
     [Fact]
-    public async Task AnUnknownDepartment_IsCustomerServicesGeneral_WithACsAgent()
+    public async Task AnUnknownDepartment_IsCustomerServicesGeneral_AndWaitsForGenesysToNameTheCsAgent()
     {
         var w = Build();
 
@@ -119,7 +151,7 @@ public class DefaultClassificationHumanHandledTests
 
         Assert.Equal(w.Cs.DepartmentId, t.OriginatingDepartmentId);
         Assert.Equal(w.CsGeneral.CategoryId, t.CategoryId);
-        Assert.NotNull(t.CurrentOwnerEmployeeId);
+        Assert.Null(t.CurrentOwnerEmployeeId);
         await AssertValidAsync(w, t);
     }
 
@@ -156,7 +188,7 @@ public class DefaultClassificationHumanHandledTests
         Assert.Equal(general.CategoryId, t.CategoryId);
         Assert.Equal(type.RequestTypeId, t.RequestTypeId);
         Assert.Equal(w.Handover.DepartmentId, t.OriginatingDepartmentId);
-        Assert.NotNull(t.CurrentOwnerEmployeeId);
+        Assert.Null(t.CurrentOwnerEmployeeId);
         await AssertValidAsync(w, t);
     }
 
@@ -208,8 +240,7 @@ public class DefaultClassificationHumanHandledTests
         // Created while nothing was configured: legacy Unclassified.
         var f = new GenesysServiceFixture(callCenterFirst: true);
         var leasing = f.Departments.AddDepartment("Leasing Customer Services", "LCS");
-        var agent = Guid.NewGuid();
-        f.DepartmentAssignments.Assignments.Add(new UserDepartmentAssignment(agent, f.CallCenter!.DepartmentId, true, DateTime.UtcNow, null));
+        var agent = f.AddAgent("g-legacy-h", "Legacy Agent");
         var created = await f.Ingestion.IngestAsync(
             ServiceAccount, new GenesysInquiryDto("conv-legacy-h", GenesysChannel.WebsiteChat, CustomerPhone: Phone, DepartmentId: leasing.DepartmentId, HumanFollowUpRequired: false));
         var ticket = f.Tickets.All.Single(t => t.TicketId == created.Ticket!.TicketId);
@@ -219,7 +250,7 @@ public class DefaultClassificationHumanHandledTests
     }
 
     [Fact]
-    public async Task ALegacyTicketWhoseHumanFollowUpIsRequested_GetsItsDepartmentsGeneral_WithoutLosingItsDepartmentOrAgent()
+    public async Task ALegacyTicketWhoseHumanFollowUpIsRequested_GetsItsDepartmentsGeneral_WithoutLosingItsDepartment_AndTheConfirmedAgentOwnsIt()
     {
         var (f, leasing, ticket, agent) = await LegacyTicketAsync();
         var (general, type) = f.SeedGeneral(leasing);
@@ -230,8 +261,14 @@ public class DefaultClassificationHumanHandledTests
         Assert.Equal(general.CategoryId, ticket.CategoryId);
         Assert.Equal(type.RequestTypeId, ticket.RequestTypeId);
         Assert.Equal(leasing.DepartmentId, ticket.OriginatingDepartmentId);
-        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                        // no provisional owner: Genesys names the person
         Assert.Equal(TicketClassificationState.Valid, await f.DefaultClassification.AssessAsync(ticket.CategoryId, ticket.RequestTypeId));
+
+        await f.TicketUpdate.UpdateAsync(
+            ServiceAccount, ticket.TicketId, new GenesysTicketUpdateDto("conv-legacy-h", Routing: new GenesysRoutingUpdateDto(AgentId: "g-legacy-h", ConnectedAtUtc: DateTime.UtcNow)));
+        Assert.Equal(agent, ticket.CurrentOwnerEmployeeId);
+        Assert.Equal(leasing.DepartmentId, ticket.OriginatingDepartmentId);
+        Assert.Equal(general.CategoryId, ticket.CategoryId);
     }
 
     [Fact]
@@ -257,7 +294,7 @@ public class DefaultClassificationHumanHandledTests
     public async Task TheAssignedCsAgent_CanCorrectCategoryAndRequestType_KeepingTheAgent_Sla_Status_AndHistory()
     {
         var w = Build();
-        var t = await IngestAsync(w, "conv-correct", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var t = await IngestAssignedAsync(w, "conv-correct", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
         var otherCategory = w.F.Categories.Seed(w.Handover.DepartmentId, "Other Handover");
         var template = w.F.WorkflowTemplates.Add(TestWorkflows.PublishedStandard(workflowId: 602));
         var otherType = w.F.RequestTypes.Add(new RequestType(w.Handover.DepartmentId, "Other Handover", template.WorkflowId, (byte)PriorityLevel.Medium, false, true, true, true));
@@ -287,7 +324,7 @@ public class DefaultClassificationHumanHandledTests
     public async Task TheAssignedCsAgent_CanCorrectTheDepartment_AndStaysTheOwner()
     {
         var w = Build();
-        var t = await IngestAsync(w, "conv-dept-correct", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var t = await IngestAssignedAsync(w, "conv-dept-correct", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
         var agent = t.CurrentOwnerEmployeeId!.Value;
         var leasingCategory = w.F.Categories.Seed(w.Leasing.DepartmentId, "Leasing Inquiry");
 
@@ -304,7 +341,7 @@ public class DefaultClassificationHumanHandledTests
     public async Task ACorrectionThatNamesNoRequestType_KeepsTheCurrentOneWhenItStillFits()
     {
         var w = Build();
-        var t = await IngestAsync(w, "conv-keep-type", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var t = await IngestAssignedAsync(w, "conv-keep-type", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
         var sameDepartmentCategory = w.F.Categories.Seed(w.Handover.DepartmentId, "Another Handover Category");
 
         await w.F.Classification.ClassifyAsync(t.CurrentOwnerEmployeeId!.Value, [Roles.CsAgent], t.TicketId, Correct(sameDepartmentCategory.CategoryId, t.PriorityId!.Value));
@@ -317,7 +354,7 @@ public class DefaultClassificationHumanHandledTests
     public async Task AReclassification_PreservesTheExistingSlaDeadlines_EvenWhenAMoreUrgentPriorityIsSent_AndNeverRestartsTheClock()
     {
         var w = Build();
-        var t = await IngestAsync(w, "conv-sla", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var t = await IngestAssignedAsync(w, "conv-sla", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
         var other = w.F.Categories.Seed(w.Handover.DepartmentId, "Other");
         var period = Assert.Single(w.F.Sla.SlaInstances.All);
         var (start, firstResponseDue, resolutionDue, priority) = (period.PeriodStartAtUtc, period.FirstResponseDueAtUtc, period.ResolutionDueAtUtc, t.PriorityId);
@@ -337,7 +374,7 @@ public class DefaultClassificationHumanHandledTests
     public async Task ACorrectionToADepartmentWithoutAGeneralRequestType_AndNoRequestTypeNamed_IsRefused_NothingChanges()
     {
         var w = Build();
-        var t = await IngestAsync(w, "conv-correct-no-config", w.Leasing.DepartmentId, type: null);   // Leasing General
+        var t = await IngestAssignedAsync(w, "conv-correct-no-config", w.Leasing.DepartmentId, type: null);   // Leasing General
         var agent = t.CurrentOwnerEmployeeId!.Value;
         var targetCategory = w.F.Categories.Seed(w.Handover.DepartmentId, "Handover Question");     // Handover has no General request type
         var before = (t.CategoryId, t.RequestTypeId, t.CurrentDepartmentId, t.CurrentOwnerEmployeeId);
@@ -366,7 +403,7 @@ public class DefaultClassificationHumanHandledTests
     public async Task OnlyTheAssignedAgentMayCorrectAValidClassification()
     {
         var w = Build();
-        var t = await IngestAsync(w, "conv-not-yours", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var t = await IngestAssignedAsync(w, "conv-not-yours", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
         var category = w.F.Categories.Seed(w.Handover.DepartmentId, "Elsewhere");
 
         var other = await w.F.Classification.ClassifyAsync(Guid.NewGuid(), [Roles.SystemAdministrator], t.TicketId, Correct(category.CategoryId, t.PriorityId!.Value));
@@ -381,7 +418,7 @@ public class DefaultClassificationHumanHandledTests
     public async Task ACorrectionIsRefusedOnAClosedTicket()
     {
         var w = Build();
-        var t = await IngestAsync(w, "conv-closed", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var t = await IngestAssignedAsync(w, "conv-closed", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
         var agent = t.CurrentOwnerEmployeeId!.Value;
         t.ChangeStatus(TicketStatus.InProgress);
         t.Resolve(ResolutionOutcome.Resolved, null);
@@ -398,7 +435,7 @@ public class DefaultClassificationHumanHandledTests
     public async Task TicketDetail_OffersCorrectionOnlyToTheAssignedCsAgent()
     {
         var w = Build();
-        var t = await IngestAsync(w, "conv-flag", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
+        var t = await IngestAssignedAsync(w, "conv-flag", w.Handover.DepartmentId, type: new GenesysRequestTypeDto(w.HandoverType.RequestTypeId));
         var agent = t.CurrentOwnerEmployeeId!.Value;
         var query = new TicketQueryAppService(
             w.F.Tickets, w.F.DepartmentAssignments, new FakeTicketResolutionRepository(), new FakeTicketStatusHistoryRepository(),

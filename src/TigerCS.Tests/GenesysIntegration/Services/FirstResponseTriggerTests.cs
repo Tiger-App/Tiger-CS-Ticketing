@@ -118,7 +118,7 @@ public class FirstResponseTriggerTests
     }
 
     [Fact]
-    public async Task RoutingToTheResponsibleDepartmentAndAutoAssignment_DoNotStopIt()
+    public async Task RoutingToTheResponsibleDepartment_AndTheRuleEmployeeNotBeingDealtTheTicket_DoNotStopIt()
     {
         var f = new GenesysServiceFixture();
         var (arrival, _) = f.SeedGenesysDepartment("Customer Service", "CS");
@@ -136,8 +136,8 @@ public class FirstResponseTriggerTests
         var ticket = Assert.Single(f.Tickets.All);
         Assert.Equal(GenesysIngestionOutcome.TicketCreated, result.Outcome);
         Assert.Equal(finance.DepartmentId, ticket.CurrentDepartmentId);            // transferred
-        Assert.Equal(employee, ticket.CurrentOwnerEmployeeId);                     // assigned
-        Assert.Null(ticket.FirstHumanResponseAtUtc);                               // neither is a reply to the customer
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                                // a Genesys messaging ticket is not dealt to the rule's employee
+        Assert.Null(ticket.FirstHumanResponseAtUtc);                               // routing is not a reply to the customer
         Assert.False(Assert.Single(f.Sla.SlaInstances.All).FirstResponseBreached);
     }
 

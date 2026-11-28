@@ -219,7 +219,7 @@ public class GenesysMultipleTicketsPerConversationTests
     // ---- 4. Request type routing ----
 
     [Fact]
-    public async Task LeasingRequest_RoutesToTheDepartmentTheRequestTypeIsConfiguredFor_AndAutoAssigns()
+    public async Task LeasingRequest_RoutesToTheDepartmentTheRequestTypeIsConfiguredFor_AndIsNotDealtAnOwner()
     {
         var w = Build();
 
@@ -228,7 +228,7 @@ public class GenesysMultipleTicketsPerConversationTests
         var ticket = w.F.Tickets.All.Single();
         Assert.Equal("Classified", result.Classification!.Status);
         Assert.Equal(w.Leasing.DepartmentId, ticket.CurrentDepartmentId);
-        Assert.Equal(w.LeasingEmployee, ticket.CurrentOwnerEmployeeId);          // the normal department auto-assignment ran
+        Assert.Null(ticket.CurrentOwnerEmployeeId);                              // a Genesys messaging ticket is not dealt by the department rule; Genesys names the handler
         Assert.Equal(w.Leasing.DepartmentId, result.Ticket!.CurrentDepartmentId);
     }
 

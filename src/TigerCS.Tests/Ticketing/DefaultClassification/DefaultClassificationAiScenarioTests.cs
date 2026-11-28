@@ -40,6 +40,7 @@ public class DefaultClassificationAiScenarioTests
         public required RequestType LeasingGeneralType { get; init; }
         public required Department Handover { get; init; }   // active, but has NO General of its own
         public Guid[] Agents { get; init; } = [];
+        public string[] AgentGenesysIds { get; init; } = [];
     }
 
     private static (Category, RequestType) SeedGeneral(GenesysServiceFixture f, Department department, int workflowId)
@@ -58,17 +59,16 @@ public class DefaultClassificationAiScenarioTests
         var leasing = f.Departments.AddDepartment("Leasing Customer Services", "LCS");
         var (leasingGeneral, leasingType) = SeedGeneral(f, leasing, 500);
         var handover = f.Departments.AddDepartment("Handover", "HO");
-        var ids = Enumerable.Range(0, agents).Select(_ => Guid.NewGuid()).OrderBy(i => i).ToArray();
-        foreach (var id in ids)
-        {
-            f.DepartmentAssignments.Assignments.Add(
-                new UserDepartmentAssignment(id, f.CallCenter!.DepartmentId, isPrimary: true, DateTime.UtcNow, assignedByEmployeeId: null));
-        }
+        var people = Enumerable.Range(0, agents)
+            .Select(i => (GenesysId: $"g-ai-{i}", Id: f.AddAgent($"g-ai-{i}", $"Agent {i}")))
+            .OrderBy(a => a.Id)
+            .ToArray();
+        var ids = people.Select(a => a.Id).ToArray();
 
         return new World
         {
             F = f, Cs = cs, CsGeneral = csGeneral, CsGeneralType = csType, Leasing = leasing, LeasingGeneral = leasingGeneral,
-            LeasingGeneralType = leasingType, Handover = handover, Agents = ids
+            LeasingGeneralType = leasingType, Handover = handover, Agents = ids, AgentGenesysIds = people.Select(a => a.GenesysId).ToArray()
         };
     }
 
@@ -300,7 +300,7 @@ public class DefaultClassificationAiScenarioTests
     }
 
     [Fact]
-    public async Task AiHandledTickets_DoNotAdvanceTheRotation()
+    public async Task AiHandledAndHumanFollowUpMessagingTickets_NeverAdvanceTheRotation()
     {
         var w = Build(callCenterFirst: true, agents: 2);
         await IngestAsync(w, "conv-ai-1", w.Leasing.DepartmentId, humanFollowUp: false);
@@ -308,13 +308,14 @@ public class DefaultClassificationAiScenarioTests
 
         var human = await IngestAsync(w, "conv-human", w.Leasing.DepartmentId, humanFollowUp: true);
 
-        Assert.Equal(w.Agents[0], human.CurrentOwnerEmployeeId);
+        Assert.Null(human.CurrentOwnerEmployeeId);                       // a human-follow-up messaging ticket waits for Genesys to name the agent
+        Assert.True(w.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null));
     }
 
     // ---- 6. human-handled: existing CS Agent ownership rules ----
 
     [Fact]
-    public async Task HumanHandledGeneralTickets_GoCallCenterFirst_GetTheNextCsAgent_NeverADepartmentEmployee()
+    public async Task HumanHandledGeneralTickets_GoCallCenterFirst_WaitForGenesysToNameTheCsAgent_NeverADepartmentEmployee()
     {
         var w = Build(callCenterFirst: true, agents: 2);
         var leasingEmployee = Guid.NewGuid();
@@ -327,10 +328,17 @@ public class DefaultClassificationAiScenarioTests
         Assert.Equal(w.F.CallCenter!.DepartmentId, first.CurrentDepartmentId);
         Assert.Equal(w.Leasing.DepartmentId, first.OriginatingDepartmentId);
         Assert.Equal(w.LeasingGeneral.CategoryId, first.CategoryId);
-        Assert.Equal(w.Agents[0], first.CurrentOwnerEmployeeId);
+        Assert.Null(first.CurrentOwnerEmployeeId);                       // no provisional owner, no Round Robin
         Assert.Equal(w.CsGeneral.CategoryId, second.CategoryId);
-        Assert.Equal(w.Agents[1], second.CurrentOwnerEmployeeId);
+        Assert.Null(second.CurrentOwnerEmployeeId);
+        Assert.True(w.F.Rotation.Rows.Values.All(r => r.LastAssignedEmployeeId is null));
         Assert.NotEqual(leasingEmployee, first.CurrentOwnerEmployeeId);
+
+        // Genesys confirms who handles the second conversation: that CS Agent gets it directly.
+        await w.F.TicketUpdate.UpdateAsync(
+            ServiceAccount, second.TicketId, new GenesysTicketUpdateDto("conv-h2", Routing: new GenesysRoutingUpdateDto(AgentId: w.AgentGenesysIds[1], ConnectedAtUtc: DateTime.UtcNow)));
+        Assert.Equal(w.Agents[1], second.CurrentOwnerEmployeeId);
+        Assert.Null(first.CurrentOwnerEmployeeId);
     }
 
     // ---- 7. no duplicates, no overwriting ----
