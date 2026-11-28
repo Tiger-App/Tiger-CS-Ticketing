@@ -41,6 +41,13 @@ public enum AutoAssignmentOutcome
     /// <summary>The ticket already had a CS Agent / owner; nothing was written.</summary>
     AlreadyAssigned,
 
+    /// <summary>
+    /// A Genesys MESSAGING conversation (WhatsApp, web chat, Instagram, Facebook, social DM) is waiting for Genesys to confirm who is actually handling it
+    /// (<see cref="GenesysMessagingAssignmentPolicy"/>). Nothing was written and nobody was chosen: no Round Robin, no provisional owner. An authorised person
+    /// can still assign or retry it.
+    /// </summary>
+    AwaitingGenesysConfirmation,
+
     /// <summary>The ticket's previous CS Agent was kept (reopen / classification routing). A department transfer no longer keeps it: the destination department's Round Robin deals the ticket (see AssignDepartmentRoundRobinAsync).</summary>
     PreservedCsAgent,
 
@@ -132,7 +139,8 @@ public sealed class TicketAutoAssignmentService(
     ITicketNoteRepository? ticketNoteRepository = null,
     TigerCS.Application.Modules.Collections.CollectionsOptions? collectionsOptions = null,
     IOutboxWriter? outboxWriter = null,
-    ITicketAssignmentHistoryRepository? assignmentHistoryRepository = null)
+    ITicketAssignmentHistoryRepository? assignmentHistoryRepository = null,
+    ITicketInteractionRepository? interactionRepository = null)
 {
     /// <summary>
     /// Notification events for every assignment made here (rule, Round Robin, preserved agent, confirmed handler, answering agent,
@@ -252,6 +260,42 @@ public sealed class TicketAutoAssignmentService(
         && string.Equals(department.Code, TeamPerformanceAppService.CallCenterDepartmentCode, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
+    /// True when the ticket is a Genesys MESSAGING conversation that no person owns and no person has moved on: Genesys, not TigerCS, decides who handles it
+    /// (<see cref="GenesysMessagingAssignmentPolicy"/>). Every SYSTEM-driven dealing path (intake, handoff, human follow-up, conversation end, the reconciler, the
+    /// backfill) asks this first, so no job or retry can hand such a ticket to the next name in a rotation. Phone tickets (any ticket that has a voice interaction),
+    /// tickets with no Genesys interaction (manual, Queueing, other integrations) and tickets a person already owns or transferred are never matched. Read-only.
+    /// </summary>
+    public async Task<bool> IsAwaitingGenesysMessagingAsync(Ticket ticket, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(ticket);
+
+        if (interactionRepository is null
+            || ticket.TicketId == 0
+            || ticket.CurrentOwnerEmployeeId is not null
+            || ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed)
+        {
+            return false;
+        }
+
+        var genesys = (await interactionRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken))
+            .Where(i => i.Source == InteractionContextSource.Genesys)
+            .ToList();
+        if (genesys.Count == 0 || !genesys.All(i => GenesysMessagingAssignmentPolicy.IsMessagingChannel(i.ChannelId)))
+        {
+            return false;
+        }
+
+        // A person who transferred the ticket decided where it goes: the destination department's own assignment is theirs, not Genesys'.
+        return workflowEventRepository is null
+            || !(await workflowEventRepository.ListByTicketIdAsync(ticket.TicketId, cancellationToken)).Any(e =>
+                e.EventType == WorkflowEventType.TicketTransferred && e.TransferReasonCode != (byte)TicketTransferReason.SystemRouting);
+    }
+
+    /// <summary>The triggers that are the system acting on its own. A person's transfer, category routing, classification or an authorised retry are explicit decisions and are not held back.</summary>
+    private static bool IsSystemDriven(AutoAssignmentTrigger trigger) =>
+        trigger is AutoAssignmentTrigger.CallCenterIntake or AutoAssignmentTrigger.Reconciler or AutoAssignmentTrigger.Backfill or AutoAssignmentTrigger.TicketCreated;
+
+    /// <summary>
     /// Call Center intake: the ticket (already sitting in the Call Center) is given to the next eligible Call Center agent in the
     /// persisted Round Robin rotation. Request-type rules are deliberately NOT consulted — they name employees of the destination
     /// department, and the Call Center agent's Transfer is what reaches them. A department whose settings disable assignment, or one
@@ -260,6 +304,11 @@ public sealed class TicketAutoAssignmentService(
     public async Task<AutoAssignmentResult> AssignCallCenterIntakeAsync(
         Ticket ticket, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken = default, string? requiredRole = null)
     {
+        if (await IsAwaitingGenesysMessagingAsync(ticket, cancellationToken))
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.AwaitingGenesysConfirmation);
+        }
+
         if (await IsHeldForManualAssignmentAsync(ticket, cancellationToken))
         {
             return new AutoAssignmentResult(AutoAssignmentOutcome.HeldForManualAssignment);
@@ -289,9 +338,17 @@ public sealed class TicketAutoAssignmentService(
     /// </summary>
     public async Task<bool> RouteExistingTicketToCallCenterAsync(
         Ticket ticket, DateTime nowUtc, Guid correlationId, string reason, CancellationToken cancellationToken = default, string? requiredRole = null,
-        bool dealToAgent = true, bool voiceOwnership = false)
+        bool dealToAgent = true, bool voiceOwnership = false, bool awaitGenesysConfirmation = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
+
+        // A Genesys messaging conversation is queue-routed like a call: the AI Agent stays the recorded owner, nobody is dealt. The caller says so
+        // (awaitGenesysConfirmation) and so does the ticket's own state (background callers cannot know the channel).
+        awaitGenesysConfirmation = awaitGenesysConfirmation || await IsAwaitingGenesysMessagingAsync(ticket, cancellationToken);
+        if (awaitGenesysConfirmation)
+        {
+            dealToAgent = false;
+        }
 
         if (ticket.TicketStatus is TicketStatus.Resolved or TicketStatus.Closed
             || await ResolveCallCenterAsync(cancellationToken) is not { } callCenter
@@ -334,7 +391,7 @@ public sealed class TicketAutoAssignmentService(
 
         // VOICE: queue routing, NOT assignment - the AI Agent stays the recorded owner of an AI-handled ticket until a person actually answers / is assigned.
         // Other channels: a department queue is human work, the AI Agent no longer owns it (previous behaviour).
-        var keepAiOwner = voiceOwnership && ticket.AiAgentOwnerEmployeeId is not null;
+        var keepAiOwner = (voiceOwnership || awaitGenesysConfirmation) && ticket.AiAgentOwnerEmployeeId is not null;
         var aiOwner = keepAiOwner ? ticket.AiAgentOwnerEmployeeId : null;
         ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: keepAiOwner);   // clears a human owner; OriginatingDepartmentId is write-once
 
@@ -465,6 +522,12 @@ public sealed class TicketAutoAssignmentService(
             return new AutoAssignmentResult(AutoAssignmentOutcome.NotApplicable);
         }
 
+        // A Genesys messaging conversation waits for Genesys to name who handles it: the reconciler (or any system trigger) never deals it.
+        if (IsSystemDriven(trigger) && await IsAwaitingGenesysMessagingAsync(ticket, cancellationToken))
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.AwaitingGenesysConfirmation);
+        }
+
         var settings = await departmentWorkflowSettingsRepository.GetByDepartmentIdAsync(ticket.CurrentDepartmentId, cancellationToken);
         if (settings is { AllowAssignment: false })
         {
@@ -570,6 +633,13 @@ public sealed class TicketAutoAssignmentService(
         if (await IsCollectionsDepartmentAsync(ticket.CurrentDepartmentId, cancellationToken))
         {
             return new AutoAssignmentResult(AutoAssignmentOutcome.NotApplicable);
+        }
+
+        // A Genesys messaging conversation waits for Genesys to name who handles it. Only an authorised person's retry (ManualRetry) or a manual
+        // assignment may give it an owner; the backfill, the reconciler, intake and every other system trigger leave it unassigned.
+        if (IsSystemDriven(trigger) && await IsAwaitingGenesysMessagingAsync(ticket, cancellationToken))
+        {
+            return new AutoAssignmentResult(AutoAssignmentOutcome.AwaitingGenesysConfirmation);
         }
 
         var callCenter = await ResolveCallCenterAsync(cancellationToken);
@@ -1063,7 +1133,8 @@ public sealed class TicketAutoAssignmentService(
     public async Task<AnswerAssignmentResult> ApplyAnsweringAgentAsync(
         Ticket ticket, AnsweringAgent agent, string source, DateTime nowUtc, Guid correlationId, Guid? reportedByEmployeeId,
         bool routeToCallCenterIfAgentUnavailable, CancellationToken cancellationToken = default,
-        bool firstResponseIsFromTheAnsweringAgent = false, GenesysAnswerEvent? genesysEvent = null, bool voiceOwnership = false)
+        bool firstResponseIsFromTheAnsweringAgent = false, GenesysAnswerEvent? genesysEvent = null, bool voiceOwnership = false,
+        bool awaitGenesysConfirmation = false)
     {
         ArgumentNullException.ThrowIfNull(ticket);
         ArgumentNullException.ThrowIfNull(agent);
@@ -1071,6 +1142,14 @@ public sealed class TicketAutoAssignmentService(
         // VOICE (Phone) only: the AI Agent keeps ownership through queue routing, an explicit workflow department is kept, and an answering agent who cannot take
         // the ticket NEVER falls back to Round Robin (flagged + queued instead). Every other channel keeps the previous behaviour.
         var voice = voiceOwnership || genesysEvent?.ChannelId == WellKnownChannels.Phone;
+
+        // A Genesys MESSAGING conversation: the AI Agent stays the recorded owner while the ticket waits in the queue, and an answering agent who cannot take
+        // it is flagged for manual assignment - never replaced by the next name in a rotation (GenesysMessagingAssignmentPolicy). The caller says so
+        // (awaitGenesysConfirmation / the event's channel); the ticket's own state covers background callers.
+        var awaiting = voice
+            || awaitGenesysConfirmation
+            || GenesysMessagingAssignmentPolicy.IsMessagingChannel(genesysEvent?.ChannelId)
+            || await IsAwaitingGenesysMessagingAsync(ticket, cancellationToken);
 
         if (ticket.TicketStatus is TicketStatus.Closed or TicketStatus.Resolved)
         {
@@ -1085,7 +1164,7 @@ public sealed class TicketAutoAssignmentService(
 
         // A person moved it on (Transfer / escalation), or it already passed through the Call Center and left it: that move and the new owner
         // stand. A late Genesys event must never undo them. (Routing INTO the Call Center by the system does not count as a person's transfer.)
-        if (await HasLeftOrBeenTransferredByPersonAsync(ticket, callCenter.DepartmentId, personTransfersOnly: voice && ticket.AiAgentOwnerEmployeeId is not null, cancellationToken))
+        if (await HasLeftOrBeenTransferredByPersonAsync(ticket, callCenter.DepartmentId, personTransfersOnly: awaiting && ticket.AiAgentOwnerEmployeeId is not null, cancellationToken))
         {
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.NotApplicable, Detail: "A person transferred the ticket; it is left as they placed it.");
         }
@@ -1172,7 +1251,7 @@ public sealed class TicketAutoAssignmentService(
         if (ticket.CurrentDepartmentId != callCenter.DepartmentId && !keepWorkflowDepartment)
         {
             var fromDepartmentId = ticket.CurrentDepartmentId;
-            ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: voice);   // AssignTo below clears it when the answering agent actually takes the ticket
+            ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: awaiting);   // AssignTo below clears it when the answering agent actually takes the ticket
             currentAssignment?.MarkSuperseded();
             currentAssignment = null;
             wrote = true;
@@ -1261,7 +1340,7 @@ public sealed class TicketAutoAssignmentService(
         if (alreadyFlagged)
         {
             // Flagged earlier (e.g. no CS Agent was available then): try the shared rotation again; nothing new is flagged.
-            var retried = keepEligibleOwner ? null : await EnsureFallbackAgentAsync(ticket, voice, nowUtc, correlationId, cancellationToken);
+            var retried = keepEligibleOwner ? null : await EnsureFallbackAgentAsync(ticket, awaiting, nowUtc, correlationId, cancellationToken);
             return retried is { } again
                 ? new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedByRoundRobinFallback, again, issue, Wrote: true)
                 : new AnswerAssignmentResult(AnswerAssignmentOutcome.AlreadyFlagged, Issue: issue, Wrote: wrote);
@@ -1292,7 +1371,7 @@ public sealed class TicketAutoAssignmentService(
             return new AnswerAssignmentResult(AnswerAssignmentOutcome.HumanOwnerKept, previousOwner, issue, "Existing eligible CS Agent preserved; the problem is flagged.", Wrote: true);
         }
 
-        var fallbackAgent = await EnsureFallbackAgentAsync(ticket, voice, nowUtc, correlationId, cancellationToken);
+        var fallbackAgent = await EnsureFallbackAgentAsync(ticket, awaiting, nowUtc, correlationId, cancellationToken);
         return fallbackAgent is { } assigned
             ? new AnswerAssignmentResult(AnswerAssignmentOutcome.AssignedByRoundRobinFallback, assigned, issue, Wrote: true)
             : new AnswerAssignmentResult(AnswerAssignmentOutcome.QueuedForManualAssignment, Issue: issue, Wrote: true);
@@ -1377,9 +1456,9 @@ public sealed class TicketAutoAssignmentService(
     /// it to whoever is next in the rotation would assign an employee who did not answer. The reconciler assigns the real answerer once the mapping is corrected.
     /// Every other channel keeps the previous fallback.
     /// </summary>
-    private async Task<Guid?> EnsureFallbackAgentAsync(Ticket ticket, bool voice, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken)
+    private async Task<Guid?> EnsureFallbackAgentAsync(Ticket ticket, bool awaitingGenesys, DateTime nowUtc, Guid correlationId, CancellationToken cancellationToken)
     {
-        if (voice || ticket.CurrentOwnerEmployeeId is not null)
+        if (awaitingGenesys || ticket.CurrentOwnerEmployeeId is not null)
         {
             return null;
         }

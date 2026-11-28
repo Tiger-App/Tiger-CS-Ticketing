@@ -184,6 +184,8 @@ public sealed class TicketCreationAppService(
         // Human work: a manual ticket, a Genesys inquiry that needs a person, or a call a person already answered. (See the Call Center comment below.)
         // An integration that owns the ticket's lifecycle (ExternalOrigin) decides who serves it: nothing here assigns, routes to the Call Center or self-assigns.
         var externallyManaged = request.ExternalOrigin is not null;
+        // A Genesys MESSAGING conversation (never Phone, never a non-Genesys ticket): Genesys names the person who handles it, TigerCS never deals a provisional owner.
+        var awaitsGenesysConfirmation = request.GenesysContext is not null && GenesysMessagingAssignmentPolicy.IsMessagingChannel(intakeRecord.ChannelId);
         var needsHuman = !externallyManaged
             && (request.GenesysContext is null || request.GenesysContext.RequiresHumanFollowUp || answeringAgent is not null);
 
@@ -502,7 +504,14 @@ public sealed class TicketCreationAppService(
             {
                 // VOICE: a call nobody has answered is the AI Agent's (recorded right after this block): it waits in the Call Center queue - NO Round
                 // Robin, nobody is chosen. A person gets it when they actually answer, or are assigned; if the call ends unanswered, the voice no-answer
-                // reconciler deals it by Round Robin once the reconciliation window has passed. Every other channel keeps Round Robin at creation.
+                // reconciler deals it by Round Robin once the reconciliation window has passed.
+            }
+            else if (awaitsGenesysConfirmation)
+            {
+                // GENESYS MESSAGING (WhatsApp, web chat, Instagram, Facebook, social DM): Genesys - not a Round Robin turn - decides who handles the
+                // conversation. The ticket is routed to the Call Center queue as before, the AI Agent is its recorded owner (below), and NOBODY is chosen:
+                // no provisional owner, no rotation cursor movement. A person gets it when Genesys confirms who is actually handling the conversation.
+                // Every other (non-Genesys) ticket keeps Round Robin at creation.
             }
             else
             {
@@ -518,6 +527,12 @@ public sealed class TicketCreationAppService(
             && (await collectionsRouting.RouteAsync(ticket, departmentEntry: true, fromCallCenter: false, now, correlationId, cancellationToken)).Handled)
         {
             // Created directly in Collections: the unit's tower decides (collector, or the Collections queue) - no rule and no CS Agent rotation.
+        }
+        else if (awaitsGenesysConfirmation)
+        {
+            // GENESYS MESSAGING with no Call Center to route through (none configured, or the AI handles the conversation): still no request-type rule
+            // assignment, no category routing and no CS Agent rotation. The department queue + the AI Agent's recorded ownership stand until Genesys
+            // confirms who handles the conversation.
         }
         else
         {

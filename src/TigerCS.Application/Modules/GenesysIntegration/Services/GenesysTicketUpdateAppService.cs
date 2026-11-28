@@ -208,7 +208,8 @@ public sealed class GenesysTicketUpdateAppService(
         {
             classification = await classificationAppService.ClassifyAsync(
                 callerEmployeeId, ticketId, conversationId, requestType, "GenesysUpdate", cancellationToken,
-                voiceOwnership: interaction.ChannelId == WellKnownChannels.Phone);
+                voiceOwnership: interaction.ChannelId == WellKnownChannels.Phone,
+                awaitGenesysConfirmation: GenesysMessagingAssignmentPolicy.IsMessagingChannel(interaction.ChannelId));
 
             var classificationFailure = classification.Outcome switch
             {
@@ -969,15 +970,21 @@ public sealed class GenesysTicketUpdateAppService(
         // VOICE: NO Round Robin and no assignment - the follow-up is flagged and the ticket waits in the queue (or stays in its workflow department) with the AI
         // Agent as owner until a person actually answers it, an authorised person assigns it, or the call ends unanswered and the no-answer window passes.
         // Other channels keep the previous behaviour: Call Center first, then ONE agent by the shared rotation.
+        // GENESYS MESSAGING (WhatsApp, web chat, Instagram, Facebook, social DM) waits like a call: a human-follow-up flag says a person is NEEDED, not who
+        // answered. The ticket is routed to the Call Center queue (AI Agent still the owner) and nobody is dealt; Genesys confirms the person later
+        // (routing.agentId connected, or a mapped person who wrote to the customer). See GenesysMessagingAssignmentPolicy.
         var voice = interaction.ChannelId == WellKnownChannels.Phone;
+        var messaging = GenesysMessagingAssignmentPolicy.IsMessagingChannel(interaction.ChannelId);
+        var awaitGenesys = voice || messaging;
         var routed = autoAssignmentService is not null
             && await autoAssignmentService.RouteExistingTicketToCallCenterAsync(
                 ticket, timeProvider.GetUtcNow().UtcDateTime, correlationId,
-                "Human follow-up required — routed to Call Center first", cancellationToken, requiredRole: null, dealToAgent: !voice, voiceOwnership: voice);
+                "Human follow-up required — routed to Call Center first", cancellationToken, requiredRole: null, dealToAgent: !awaitGenesys, voiceOwnership: voice,
+                awaitGenesysConfirmation: messaging);
 
         // Routing declined (already in / passed through the Call Center, or an automatic owner that is kept) but the person who is needed still
         // has no CS Agent: the shared rotation gives one. No-op for an owned / closed ticket; a failure is recorded once, never silent. NEVER for voice.
-        var ensured = !voice
+        var ensured = !awaitGenesys
             && autoAssignmentService is not null
             && !routed
             && ticket.CurrentOwnerEmployeeId is null

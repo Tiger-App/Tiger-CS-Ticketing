@@ -178,13 +178,18 @@ public sealed class GenesysAgentHandoffAppService(
         // run at handoff time (a human may still answer; the voice no-answer reconciler concludes otherwise after the call ended and the window passed).
         // Every other channel keeps the previous behaviour: Call Center first and one agent by Round Robin.
         var voice = interaction.ChannelId == WellKnownChannels.Phone;
+        // GENESYS MESSAGING (WhatsApp, web chat, Instagram, Facebook, social DM): a handoff REQUEST is not an acceptance. The ticket is queued in the Call Center
+        // with the AI Agent still its owner and waits for Genesys to confirm who actually handles the conversation - no Round Robin, no provisional owner
+        // (GenesysMessagingAssignmentPolicy). Department routing (Call Center first, an explicit workflow department) is exactly what it was.
+        var messaging = GenesysMessagingAssignmentPolicy.IsMessagingChannel(interaction.ChannelId);
+        var awaitGenesys = voice || messaging;
         var callCenter = await ResolveCallCenterRoutingAsync(ticket, trigger, voice, cancellationToken);
         var routedFromDepartmentId = ticket.CurrentDepartmentId;
         var routedFromOwnerEmployeeId = ticket.CurrentOwnerEmployeeId;   // non-null only for an automatic pre-assignment (see ResolveCallCenterRoutingAsync)
         if (callCenter is not null)
         {
             // Queue routing of an AI-handled ticket: the AI Agent stays the recorded owner until a person actually accepts (see below).
-            var aiOwnerBefore = voice ? ticket.AiAgentOwnerEmployeeId : null;
+            var aiOwnerBefore = awaitGenesys ? ticket.AiAgentOwnerEmployeeId : null;
             ticket.TransferToDepartment(callCenter.DepartmentId, keepAiAgentOwner: aiOwnerBefore is not null);
             if (aiOwnerBefore is { } aiOwner && autoAssignmentService is not null)
             {
@@ -255,9 +260,9 @@ public sealed class GenesysAgentHandoffAppService(
                 {
                     await autoAssignmentService.ApplyAnsweringAgentAsync(
                         ticket, answered, "HandoffRequest", now, requestCorrelationId, callerEmployeeId,
-                        routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: voice);
+                        routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: voice, awaitGenesysConfirmation: messaging);
                 }
-                else if (!voice)
+                else if (!awaitGenesys)
                 {
                     await autoAssignmentService.AssignCallCenterIntakeAsync(ticket, now, requestCorrelationId, cancellationToken);
                 }
@@ -277,10 +282,10 @@ public sealed class GenesysAgentHandoffAppService(
             {
                 await autoAssignmentService.ApplyAnsweringAgentAsync(
                     ticket, answeredInPlace, "HandoffRequest", now, requestCorrelationId, callerEmployeeId,
-                    routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: voice);
+                    routeToCallCenterIfAgentUnavailable: true, cancellationToken, voiceOwnership: voice, awaitGenesysConfirmation: messaging);
             }
 
-            if (!voice)
+            if (!awaitGenesys)
             {
                 await autoAssignmentService.EnsureCsAgentAsync(
                     ticket, preferredOwnerEmployeeId: null, AutoAssignmentTrigger.CallCenterIntake, now, requestCorrelationId, cancellationToken);
